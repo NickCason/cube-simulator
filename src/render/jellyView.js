@@ -286,10 +286,16 @@ export class JellyView {
     this.reflScene = new THREE.Scene();
     this.mirror = null;
     this.fxCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+    // the floor's maps: glow mode's light pool over a fixed span (its blur is
+    // its mip levels: their size must not change); the jelly's shadow and
+    // contact fitted round it each frame (see _fitFloorFx) - over the whole
+    // span a texel was 1.25 cm, and the shadow's edge showed it
     this.floorRect = new THREE.Vector4(-FLOOR_SPAN / 2, -FLOOR_SPAN / 2, 1 / FLOOR_SPAN, 1 / FLOOR_SPAN);
-    for (const m of [this.causticMat, this.maskMat, this.heightMat, this.glowMat]) {
+    this.fxRect = this.floorRect.clone();
+    for (const m of [this.causticMat, this.glowMat]) {
       if (m.uniforms.uFloorRect) m.uniforms.uFloorRect.value = this.floorRect;
     }
+    for (const m of [this.maskMat, this.heightMat]) m.uniforms.uFloorRect.value = this.fxRect;
     this.setLightDir(lightDir);
     // (mipmapped: the shadow's fill takes its colour from it, blurred)
     this.rtCaustic = new THREE.WebGLRenderTarget(768, 768, {
@@ -307,6 +313,39 @@ export class JellyView {
       generateMipmaps: true,
       minFilter: THREE.LinearMipmapLinearFilter,
     });
+    // ...blurred (a Gaussian a couple of cm wide, both ways): the floor reads
+    // its shadow edge from this - five taps on the raw map stamped the edge
+    // four times over, in streaks
+    this.rtFloorFxT = new THREE.WebGLRenderTarget(512, 512, { type: THREE.HalfFloatType, depthBuffer: false });
+    this.rtFloorFxB = new THREE.WebGLRenderTarget(512, 512, {
+      type: THREE.HalfFloatType,
+      depthBuffer: false,
+      generateMipmaps: true,
+      minFilter: THREE.LinearMipmapLinearFilter,
+    });
+    this.blurMat = new THREE.ShaderMaterial({
+      depthTest: false,
+      depthWrite: false,
+      uniforms: { tSrc: { value: null }, uStep: { value: new THREE.Vector2() } },
+      vertexShader: 'varying vec2 vUv; void main() { vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }',
+      fragmentShader: /* glsl */ `
+        uniform sampler2D tSrc;
+        uniform vec2 uStep;
+        varying vec2 vUv;
+        void main() {
+          // 9 taps, sigma 2 steps
+          vec4 c = textureLod(tSrc, vUv, 0.0) * 0.2042;
+          c += (textureLod(tSrc, vUv + uStep, 0.0) + textureLod(tSrc, vUv - uStep, 0.0)) * 0.1802;
+          c += (textureLod(tSrc, vUv + 2.0 * uStep, 0.0) + textureLod(tSrc, vUv - 2.0 * uStep, 0.0)) * 0.1238;
+          c += (textureLod(tSrc, vUv + 3.0 * uStep, 0.0) + textureLod(tSrc, vUv - 3.0 * uStep, 0.0)) * 0.0663;
+          c += (textureLod(tSrc, vUv + 4.0 * uStep, 0.0) + textureLod(tSrc, vUv - 4.0 * uStep, 0.0)) * 0.0276;
+          gl_FragColor = c;
+        }`,
+    });
+    this.blurScene = new THREE.Scene();
+    const bq = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), this.blurMat);
+    bq.frustumCulled = false;
+    this.blurScene.add(bq);
     // glow mode: the light it casts on the floor, from above (see createGlowMaterial)
     this.rtGlow = new THREE.WebGLRenderTarget(256, 256, {
       type: THREE.HalfFloatType,
@@ -316,8 +355,10 @@ export class JellyView {
     });
     this.fxUniforms = {
       caustic: { value: this.rtCaustic.texture },
-      floorFx: { value: this.rtFloorFx.texture },
-      floorRect: { value: this.floorRect },
+      floorFx: { value: this.rtFloorFxB.texture },
+      floorRect: { value: this.fxRect }, // (shadow and contact: fitted, see _fitFloorFx)
+      glowRect: { value: this.floorRect },
+      fxLodBias: { value: 0 }, // (log2 of how much finer than the whole span: keeps blurs by mip level the same size)
       bg: { value: new THREE.Color(0.86, 0.85, 0.83) },
       texel: { value: new THREE.Vector2(1 / 512, 1 / 512) },
       ctexel: { value: new THREE.Vector2(1 / 768, 1 / 768) },
@@ -342,7 +383,7 @@ export class JellyView {
     // (the jelly mirrors the floor: it reads the same textures)
     const fx = this.fxUniforms;
     Object.assign(this.frontMat.uniforms, {
-      tCaustic: fx.caustic, tFloorFx: fx.floorFx, tGlowMap: fx.glowTex, uFloorRect: fx.floorRect, uCausRect: fx.causRect, uCausGain: fx.causGain, uTint: fx.tint,
+      tCaustic: fx.caustic, tFloorFx: fx.floorFx, tGlowMap: fx.glowTex, uFloorRect: fx.floorRect, uGlowRect: fx.glowRect, uFxLodBias: fx.fxLodBias, uCausRect: fx.causRect, uCausGain: fx.causGain, uTint: fx.tint,
       uGlowFloor: fx.glowFloor, uBg: fx.bg, uFloorAlbedo: fx.floorAlbedo, uFloorEnv: fx.floorEnv,
     });
     this.rtBack = null;
@@ -713,6 +754,40 @@ export class JellyView {
     return true;
   }
 
+  // The jelly's shadow-and-contact map, framed round the pieces, their
+  // shadow along the key light and room for the floor's widest blur taps
+  // (~40 cm). The floor's tap offsets and the jelly's blur levels are
+  // rescaled so the blurs keep their size in the world.
+  _fitFloorFx(sb) {
+    let x0 = Infinity, y0 = Infinity, z0 = Infinity, x1 = -Infinity, y1 = -Infinity, z1 = -Infinity;
+    if (sb) {
+      for (const pc of sb.pieces) {
+        const b = pc.bbox;
+        if (!b || !(b[3] > b[0])) continue;
+        x0 = Math.min(x0, b[0]); y0 = Math.min(y0, b[1]); z0 = Math.min(z0, b[2]);
+        x1 = Math.max(x1, b[3]); y1 = Math.max(y1, b[4]); z1 = Math.max(z1, b[5]);
+      }
+    }
+    let S = FLOOR_SPAN, cx = 0, cz = 0;
+    if (x1 > x0) {
+      const L = this.lightDir, kx = -L.x / L.y, kz = -L.z / L.y;
+      let fx0 = x0, fz0 = z0, fx1 = x1, fz1 = z1;
+      for (const yy of [Math.max(0, y0), Math.max(0, y1)]) {
+        fx0 = Math.min(fx0, x0 + kx * yy, x1 + kx * yy); fx1 = Math.max(fx1, x0 + kx * yy, x1 + kx * yy);
+        fz0 = Math.min(fz0, z0 + kz * yy, z1 + kz * yy); fz1 = Math.max(fz1, z0 + kz * yy, z1 + kz * yy);
+      }
+      // (in steps, so a moving piece doesn't make the texels crawl)
+      S = Math.min(FLOOR_SPAN, Math.max(1.6, Math.ceil((Math.max(fx1 - fx0, fz1 - fz0) + 1.1) / 0.4) * 0.4));
+      const g = S / 64;
+      cx = Math.round((fx0 + fx1) / 2 / g) * g;
+      cz = Math.round((fz0 + fz1) / 2 / g) * g;
+    }
+    this.fxRect.set(cx - S / 2, cz - S / 2, 1 / S, 1 / S);
+    const k = FLOOR_SPAN / 512 / S;
+    this.fxUniforms.texel.value.set(k, k);
+    this.fxUniforms.fxLodBias.value = Math.log2(FLOOR_SPAN / S);
+  }
+
   renderFloorFx(sb) {
     const r = this.renderer;
     const prevClear = r.getClearColor(new THREE.Color());
@@ -733,6 +808,7 @@ export class JellyView {
     r.setRenderTarget(this.rtCaustic);
     r.clear(true, false, false);
     if (lit) r.render(this.gridScene, this.fxCam);
+    this._fitFloorFx(sb);
     r.setRenderTarget(this.rtFloorFx);
     r.clear(true, false, false);
     const auto = r.autoClear;
@@ -741,6 +817,17 @@ export class JellyView {
     r.render(this.scene, this.fxCam);
     this.scene.overrideMaterial = this.heightMat;
     r.render(this.scene, this.fxCam);
+    this.scene.overrideMaterial = null;
+    // blurred, ~1.2 cm sigma in the world (2 steps of 0.6 cm)
+    const st = (0.006 * this.fxRect.z) || 1 / 512;
+    this.blurMat.uniforms.tSrc.value = this.rtFloorFx.texture;
+    this.blurMat.uniforms.uStep.value.set(st, 0);
+    r.setRenderTarget(this.rtFloorFxT);
+    r.render(this.blurScene, this.fxCam);
+    this.blurMat.uniforms.tSrc.value = this.rtFloorFxT.texture;
+    this.blurMat.uniforms.uStep.value.set(0, st);
+    r.setRenderTarget(this.rtFloorFxB);
+    r.render(this.blurScene, this.fxCam);
     if (this.fxUniforms.glowFloor.value > 0) {
       r.setRenderTarget(this.rtGlow);
       r.clear(true, false, false);

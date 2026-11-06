@@ -268,6 +268,8 @@ export function createJellyMaterial(env, layerUniforms) {
       uniform sampler2D tFloorFx;
       uniform sampler2D tGlowMap;
       uniform vec4 uFloorRect;
+      uniform vec4 uGlowRect;
+      uniform float uFxLodBias;
       uniform vec4 uCausRect;
       uniform float uCausGain;
       uniform vec3 uTint;
@@ -330,15 +332,17 @@ export function createJellyMaterial(env, layerUniforms) {
         vec2 fuv = (xz - uFloorRect.xy) * uFloorRect.zw;
         float mask = 0.0, contact = 0.0;
         vec3 caus = vec3(0.0), glowF = vec3(0.0);
+        float lod = 1.0 + 4.0 * rough;
         if (all(greaterThan(fuv, vec2(0.0))) && all(lessThan(fuv, vec2(1.0)))) {
-          float lod = 1.0 + 4.0 * rough;
           vec2 cuv = (xz - uCausRect.xy) * uCausRect.zw;
           if (all(greaterThan(cuv, vec2(0.0))) && all(lessThan(cuv, vec2(1.0)))) caus = textureLod(tCaustic, cuv, lod + 1.0).rgb;
-          vec4 fx = textureLod(tFloorFx, fuv, lod);
+          vec4 fx = textureLod(tFloorFx, fuv, lod + uFxLodBias);
           mask = fx.r;
           contact = fx.g;
-          if (uGlowFloor > 0.0) glowF = textureLod(tGlowMap, fuv, 1.5).rgb * 0.7 + textureLod(tGlowMap, fuv, 3.5).rgb * 0.9;
         }
+        vec2 guv = (xz - uGlowRect.xy) * uGlowRect.zw;
+        if (uGlowFloor > 0.0 && all(greaterThan(guv, vec2(0.0))) && all(lessThan(guv, vec2(1.0))))
+          glowF = textureLod(tGlowMap, guv, 1.5).rgb * 0.7 + textureLod(tGlowMap, guv, 3.5).rgb * 0.9;
         vec3 transfer = vec3(1.0 - mask) + caus * uCausGain + uTint * mask * 0.22;
         vec3 direct = uLightColor * max(normalize(uLightDir).y, 0.0) * 0.3183 * transfer * (1.0 - contact * 0.2);
         vec3 sky = textureLod(envMap, vec3(0.0, 1.0, 0.0), envMaxLod).rgb * uFloorEnv

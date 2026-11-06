@@ -15,6 +15,7 @@ export function createFloor(env, fx) {
     shader.uniforms.tCaustic = fx.caustic;
     shader.uniforms.tFloorFx = fx.floorFx;
     shader.uniforms.uFloorRect = fx.floorRect;
+    shader.uniforms.uGlowRect = fx.glowRect;
     shader.uniforms.uBg = fx.bg;
     shader.uniforms.uTexel = fx.texel;
     shader.uniforms.uTint = fx.tint;
@@ -43,6 +44,7 @@ export function createFloor(env, fx) {
         uniform sampler2D tCaustic;
         uniform sampler2D tFloorFx;
         uniform vec4 uFloorRect;
+        uniform vec4 uGlowRect;
         uniform vec3 uBg;
         uniform vec2 uTexel;
         uniform vec3 uTint;
@@ -102,13 +104,14 @@ export function createFloor(env, fx) {
           float w1 = textureLod(tFloorFx, fuv + vec2(o5.x, o5.y), 0.0).g + textureLod(tFloorFx, fuv - vec2(o5.x, o5.y), 0.0).g
             + textureLod(tFloorFx, fuv + vec2(-o5.x, o5.y), 0.0).g + textureLod(tFloorFx, fuv + vec2(o5.x, -o5.y), 0.0).g;
           cover = clamp(c0 * 0.35 + c1 * 0.1 + w0 * 0.07 + w1 * 0.045, 0.0, 1.0);
-          // (glow mode) the light it casts: each part in its own colour,
-          // right under it, then spreading wider and wider
-          if (uGlowFloor > 0.0) {
-            glowNear = textureLod(tGlow, fuv, 1.0).rgb;
-            pool = textureLod(tGlow, fuv, 2.5).rgb * 0.5 + textureLod(tGlow, fuv, 4.0).rgb * 0.6
-              + textureLod(tGlow, fuv, 5.3).rgb * 0.75;
-          }
+        }
+        // (glow mode) the light it casts: each part in its own colour,
+        // right under it, then spreading wider and wider
+        vec2 guv = (vFloorPos.xz - uGlowRect.xy) * uGlowRect.zw;
+        if (uGlowFloor > 0.0 && all(greaterThan(guv, vec2(0.0))) && all(lessThan(guv, vec2(1.0)))) {
+          glowNear = textureLod(tGlow, guv, 1.0).rgb;
+          pool = textureLod(tGlow, guv, 2.5).rgb * 0.5 + textureLod(tGlow, guv, 4.0).rgb * 0.6
+            + textureLod(tGlow, guv, 5.3).rgb * 0.75;
         }
         // the colour the jelly gives the light it lets through, here: one
         // colour - or, for layered jelly, the hue of the light that actually
