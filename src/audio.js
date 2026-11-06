@@ -4,12 +4,17 @@
 
 const rnd = (a, b) => a + Math.random() * (b - a);
 
+const MASTER = 0.8;
+
 export class AudioEngine {
   constructor() {
     this.ctx = null;
     this.muted = false;
+    this.volume = 0.75; // master level (Settings > Sound)
+    this.impactLevel = 0.55; // how loud bumps and landings are
     this.last = {};
     this.loops = {};
+    this.buckets = {};
   }
 
   init() {
@@ -21,7 +26,7 @@ export class AudioEngine {
     if (!AC) return;
     const ctx = (this.ctx = new AC());
     this.master = ctx.createGain();
-    this.master.gain.value = this.muted ? 0 : 0.9;
+    this.master.gain.value = this._masterGain();
     const comp = ctx.createDynamicsCompressor();
     comp.threshold.value = -16;
     comp.knee.value = 12;
@@ -54,9 +59,39 @@ export class AudioEngine {
     this.bus.connect(this.verb);
   }
 
+  _masterGain() {
+    return this.muted ? 0 : MASTER * this.volume * this.volume;
+  }
+
   setMuted(m) {
     this.muted = m;
-    if (this.master) this.master.gain.setTargetAtTime(m ? 0 : 0.9, this.ctx.currentTime, 0.05);
+    if (this.master) this.master.gain.setTargetAtTime(this._masterGain(), this.ctx.currentTime, 0.05);
+  }
+
+  // Settings > Sound: overall volume and impact loudness, both 0..1
+  setLevels(volume, impacts) {
+    this.volume = Math.min(1, Math.max(0, volume));
+    this.impactLevel = Math.min(1, Math.max(0, impacts));
+    if (this.master) this.master.gain.setTargetAtTime(this._masterGain(), this.ctx.currentTime, 0.05);
+  }
+
+  // token bucket: at most `rate` per second, bursts of `burst`
+  _bucket(key, rate, burst) {
+    const now = this.ctx.currentTime;
+    const b = this.buckets[key] || (this.buckets[key] = { n: burst, t: now });
+    b.n = Math.min(burst, b.n + (now - b.t) * rate);
+    b.t = now;
+    if (b.n < 1) return false;
+    b.n -= 1;
+    return true;
+  }
+
+  _panned(pan) {
+    if (!pan || !this.ctx.createStereoPanner) return this.bus;
+    const p = this.ctx.createStereoPanner();
+    p.pan.value = Math.max(-1, Math.min(1, pan));
+    p.connect(this.bus);
+    return p;
   }
 
   _ok(key, minGap) {
@@ -113,26 +148,86 @@ export class AudioEngine {
       const f = rnd(450, 1800) * pitch;
       this._noise(t0, rnd(0.025, 0.07), 'bandpass', f, f * rnd(0.5, 1.6), rnd(4, 11), 0.35 * a + 0.05);
     }
-    this._tone(t, 'sine', 210 * pitch, 85 * pitch, 0.14 + a * 0.08, 0.35 * a + 0.08);
+    this._tone(t, 'sine', 260 * pitch, 140 * pitch, 0.1 + a * 0.06, 0.18 * a + 0.05);
   }
 
   poke(amount = 0.6) {
     if (!this._ok('poke', 0.05)) return;
     const t = this.ctx.currentTime;
-    this._tone(t, 'sine', 260, 120, 0.11, 0.45 * amount);
-    this._noise(t, 0.05, 'bandpass', 1400, 600, 5, 0.25 * amount);
+    this._tone(t, 'sine', 300, 170, 0.09, 0.25 * amount);
+    this._noise(t, 0.05, 'bandpass', 1400, 600, 5, 0.28 * amount);
     this.squish(amount * 0.6, 1.2);
   }
 
+  // A piece lands, hits the wall or another piece. dv = how hard (its
+  // change of speed, m/s), size = piece size (m), mat = { firm, wet,
+  // creamy, sugar, ice } each 0..1, pan = -1..1. Soft bumps stay silent;
+  // jelly gets a wet slap with a short "plop", gummy a rubbery bonk, frozen
+  // pieces a glassy clack. No sub-bass thuds.
+  impact(dv, size = 1, mat = {}, pan = 0) {
+    if (!this.ctx || this.muted || this.impactLevel <= 0) return;
+    const a = Math.min(1, Math.max(0, (dv - 0.9) / 4));
+    const loud = Math.pow(a, 1.4) * this.impactLevel * 1.3;
+    if (loud < 0.006) return;
+    if (!this._bucket('impact', 7, 3)) return;
+    const t = this.ctx.currentTime + 0.002;
+    const out = this._panned(pan);
+    const firm = mat.firm || 0, wet = mat.wet ?? 1, creamy = mat.creamy || 0;
+    const pitch = Math.pow(1 / Math.min(1.6, Math.max(0.06, size)), 0.45) * rnd(0.93, 1.07);
+    if ((mat.ice || 0) > 0.5) {
+      const f = 1700 * pitch;
+      this._tone(t, 'sine', f, f * 0.985, 0.05 + 0.05 * a, 0.16 * loud, 0.0008, out);
+      this._tone(t, 'sine', f * 2.33, f * 2.3, 0.035, 0.08 * loud, 0.0008, out);
+      this._noise(t, 0.012, 'highpass', 4800, 4800, 0.7, 0.18 * loud, 0.0005, out);
+      this._tone(t, 'triangle', 380 * pitch, 240 * pitch, 0.05, 0.14 * loud, 0.001, out);
+      return;
+    }
+    // the slap: a short, wet broadband burst (muffled for creamy jelly)
+    const fc = (1250 + 900 * firm) * (1 - 0.45 * creamy) * Math.sqrt(pitch);
+    this._noise(t, 0.035 + 0.04 * a, 'bandpass', fc * 1.7, fc * 0.55, 0.55, 1.1 * loud, 0.001, out);
+    this._noise(t, 0.008, 'highpass', 3200, 3200, 0.7, 0.25 * loud * wet, 0.0004, out);
+    // the body: a quick, quiet low-mid plop, firmer = higher and a touch longer
+    const f0 = (170 + 130 * firm) * pitch;
+    this._tone(t, 'sine', f0 * 1.3, f0 * 0.8, 0.05 + 0.04 * a + 0.05 * firm, 0.16 * loud, 0.002, out);
+    if (firm > 0.35) this._tone(t, 'triangle', f0 * 2.05, f0 * 1.92, 0.045 + 0.05 * firm, 0.12 * loud * firm, 0.002, out);
+    // the squelch: a few tiny wet grains just after
+    const grains = Math.round((1 + 3 * a) * wet);
+    for (let i = 0; i < grains; i++) {
+      const f = rnd(900, 2500) * Math.sqrt(pitch) * (1 - 0.35 * creamy);
+      this._noise(t + rnd(0.012, 0.05 + 0.08 * a), rnd(0.012, 0.03), 'bandpass', f, f * rnd(0.6, 0.9), rnd(6, 12), 0.2 * loud * wet, 0.001, out);
+    }
+    // sugar crust: a little crunch
+    if ((mat.sugar || 0) > 0.3) {
+      for (let i = 0; i < 3; i++) {
+        const f = rnd(3500, 7000);
+        this._noise(t + rnd(0, 0.03), rnd(0.004, 0.01), 'bandpass', f, f, 2.5, 0.12 * loud, 0.0005, out);
+      }
+    }
+  }
+
+  // a droplet lands: a tiny plink, never a squelch
+  drip(speed, size = 0.01, pan = 0) {
+    if (!this.ctx || this.muted || this.impactLevel <= 0) return;
+    const a = Math.min(1, Math.max(0, (speed - 1.5) / 6));
+    if (a <= 0 || !this._bucket('drip', 5, 2)) return;
+    const t = this.ctx.currentTime;
+    const out = this._panned(pan);
+    const f = rnd(900, 1500) * Math.pow(0.012 / Math.max(0.004, size), 0.4);
+    const g = (0.035 + 0.05 * a) * this.impactLevel;
+    this._tone(t, 'sine', f, f * 1.7, 0.05, g, 0.001, out);
+    this._noise(t, 0.008, 'bandpass', 2600, 2600, 3, g * 0.5, 0.0005, out);
+  }
+
+  // big wet splat (bombs)
   splat(amount = 0.5) {
     if (!this._ok('splat', 0.09)) return;
     const t = this.ctx.currentTime;
     const a = Math.min(1, amount);
-    this._tone(t, 'sine', 120, 48, 0.16, 0.5 * a + 0.05);
-    this._noise(t, 0.09, 'lowpass', 1800, 300, 1, 0.3 * a);
-    for (let i = 0; i < 4; i++) {
-      const f = rnd(600, 2200);
-      this._noise(t + rnd(0.0, 0.06), rnd(0.02, 0.05), 'bandpass', f, f * 0.7, 8, 0.22 * a);
+    this._noise(t, 0.12, 'bandpass', 1800, 500, 0.8, 0.5 * a);
+    this._tone(t, 'sine', 210, 120, 0.14, 0.32 * a);
+    for (let i = 0; i < 7; i++) {
+      const f = rnd(700, 2400);
+      this._noise(t + rnd(0.01, 0.14), rnd(0.02, 0.05), 'bandpass', f, f * 0.7, 8, 0.2 * a);
     }
   }
 
@@ -176,16 +271,25 @@ export class AudioEngine {
     this._noise(t, 0.05, 'bandpass', 1600, 700, 7, 0.3 * amount);
   }
 
-  clink(amount = 0.6) {
+  // pan for a world position (the app sets panFn from its camera)
+  _panOf(p) {
+    return p && this.panFn ? this.panFn(p) : 0;
+  }
+
+  // metal on the floor; `at` = world position (for panning)
+  clink(amount = 0.6, at = null) {
     if (!this._ok('clink', 0.035)) return;
+    amount *= Math.min(1, this.impactLevel * 1.8);
+    if (amount < 0.02) return;
     const t = this.ctx.currentTime;
+    const out = this._panned(this._panOf(at));
     const base = rnd(1700, 2700);
     const ratios = [1, 2.76, 5.4, 8.93];
     const nyq = this.ctx.sampleRate * 0.45;
     ratios.forEach((r, i) => {
-      if (base * r < nyq) this._tone(t, 'sine', base * r, base * r * 0.995, 0.25 / (i + 1) + 0.05, (0.14 * amount) / (i + 1), 0.0008);
+      if (base * r < nyq) this._tone(t, 'sine', base * r, base * r * 0.995, 0.25 / (i + 1) + 0.05, (0.12 * amount) / (i + 1), 0.0008, out);
     });
-    this._noise(t, 0.015, 'highpass', 5000, 5000, 0.7, 0.15 * amount, 0.0005);
+    this._noise(t, 0.015, 'highpass', 5000, 5000, 0.7, 0.12 * amount, 0.0005, out);
   }
 
   pop(amount = 0.6) {
@@ -195,13 +299,15 @@ export class AudioEngine {
     this._noise(t, 0.03, 'bandpass', 2400, 1800, 4, 0.2 * amount);
   }
 
+  // mallet: a wooden knock with a wet smack
   thud(amount = 1) {
     if (!this._ok('thud', 0.08)) return;
     const t = this.ctx.currentTime;
-    this._tone(t, 'sine', 95, 38, 0.28, 0.8 * amount, 0.002);
-    this._noise(t, 0.12, 'lowpass', 900, 200, 1, 0.5 * amount);
-    this._noise(t, 0.03, 'bandpass', 2600, 1600, 3, 0.25 * amount);
-    this.squish(amount, 0.8);
+    this._tone(t, 'triangle', 330, 190, 0.06, 0.32 * amount, 0.001);
+    this._tone(t, 'sine', 150, 85, 0.13, 0.4 * amount, 0.002);
+    this._noise(t, 0.05, 'bandpass', 1500, 700, 1, 0.4 * amount);
+    this._noise(t, 0.012, 'highpass', 3500, 3500, 0.7, 0.22 * amount, 0.0005);
+    this.squish(amount * 0.8, 1);
   }
 
   crack(amount = 1) {

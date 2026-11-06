@@ -97,6 +97,7 @@ export class App {
     this.sb.loadCube(0, opts.dropHeight ?? 1.1, 0, 0.18);
 
     this.audio = new AudioEngine();
+    this.audio.panFn = (p) => this._pan(p.x, p.y, p.z);
     this.M = makeMaterials(this.env);
     this.nails = new NailSystem(this);
     this.particles = new Particles(this);
@@ -244,6 +245,7 @@ export class App {
     sb.p.gravity = -st.gravity;
     sb.setDensity(st.weight);
     sb.wakeAll();
+    this.audio.setLevels(st.volume, st.impacts);
     this.bubbles?.configure(st.bubbles, st.bubbleSize);
     this.glitter?.configure({ mode: this.style.glitter, count: st.glitterAmount, size: st.glitterSize, sparkle: st.glitterSparkle });
     this.flavor = f;
@@ -328,7 +330,11 @@ export class App {
 
   resetSettings() {
     const oldSize = this.sb.p.size;
+    // (the jelly resets; your sound levels stay)
+    const { volume, impacts } = this.tune;
     this.tune = {};
+    if (volume !== undefined) this.tune.volume = volume;
+    if (impacts !== undefined) this.tune.impacts = impacts;
     this.applyStyle();
     if (Math.abs(this.settings.size - oldSize) > 1e-6) this.setCubeSize(this.settings.size);
   }
@@ -652,12 +658,53 @@ export class App {
     }
   }
 
+  // Landings and knocks: the physics reports at most one impact per piece
+  // per frame (and only sudden ones). Play the hardest one or two, each
+  // shaped by that piece's size and material, panned to where it happened.
   _impactSounds() {
     const im = this.sb.impacts;
-    if (!im.length) return;
-    let best = 0;
-    for (let k = 0; k < im.length; k += 5) best = Math.max(best, im[k + 3]);
-    if (best > 2.5) this.audio.splat(Math.min(1, (best - 2) / 7));
+    if (!im.length || !this.audio.ctx) return;
+    const healing = this.healer.active;
+    const list = im.filter((e) => !(healing && e.kind === 'piece')).sort((a, b) => b.dv - a.dv);
+    let played = 0;
+    const done = new Set();
+    for (const e of list) {
+      if (played >= 2 || done.has(e.piece)) continue;
+      done.add(e.piece);
+      if (e.partner >= 0) done.add(e.partner); // one sound per collision
+      const pc = this.sb.pieces[e.piece];
+      if (!pc) continue;
+      const size = Math.cbrt(e.mass / Math.max(0.05, this.sb.p.density));
+      this.audio.impact(e.dv, size, this._impactMaterial(pc), this._pan(e.x, e.y, e.z));
+      played++;
+    }
+  }
+
+  // What a piece sounds like: firm/wet from the feel settings, creamy and
+  // sugary from the texture, glassy when frozen, extra soft when melted.
+  _impactMaterial(pc) {
+    const st = this.settings;
+    const tex = TEXTURES[this.style.texture];
+    let firm = Math.min(1, Math.max(0, Math.log(st.mu / 45) / Math.log(1000 / 45)));
+    let temp = 0;
+    const T = this.sb.temp, vs = pc.verts, step = Math.max(1, Math.floor(vs.length / 64));
+    let n = 0;
+    for (let k = 0; k < vs.length; k += step, n++) temp += T[vs[k]];
+    temp /= Math.max(1, n);
+    if (temp > 0.4) firm *= 0.5;
+    return {
+      firm,
+      wet: Math.max(0.25, 1 - 0.6 * firm - 0.3 * (tex.sugar || 0)),
+      creamy: tex.milk || 0,
+      sugar: tex.sugar || 0,
+      ice: temp < -0.45 ? 1 : 0,
+    };
+  }
+
+  // stereo position of a world point (-1 left .. 1 right, kept gentle)
+  _pan(x, y, z) {
+    const v = (this._panV ||= new THREE.Vector3()).set(x, y, z).project(this.camera);
+    return Math.max(-1, Math.min(1, v.x)) * 0.6;
   }
 
   render() {

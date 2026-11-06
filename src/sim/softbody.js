@@ -52,7 +52,7 @@ export class SoftBody {
     this.pieces = [];
     this.time = 0;
     this.hCell = this.p.size / this.p.res;
-    this.impacts = []; // [{x,y,z,speed}] floor/wall impacts this frame (for audio)
+    this.impacts = []; // impacts this frame, one per piece: {x, y, z, dv, piece, kind, mass, partner} (for audio)
     this._ct = { t: -1, f: -1, b0: 0, b1: 0, b2: 0, b3: 0, nx: 0, ny: 0, nz: 0, depth: 0 };
   }
 
@@ -604,6 +604,13 @@ export class SoftBody {
     const h = dt / nS;
     this.time += dt;
     this.impacts.length = 0;
+    const NP0 = this.pieces.length;
+    if (!this._imp || this._imp.length < NP0 * 12) {
+      this._imp = new Float64Array(Math.max(NP0, 64) * 12);
+      this._impPartner = new Int32Array(Math.max(NP0, 64));
+    }
+    this._imp.fill(0, 0, NP0 * 12);
+    this._impPartner.fill(-1, 0, NP0);
     this._updateMaterial(dt);
     if (this.grab) this.wake(this.grab.piece);
     if (this.attract || this.gravityScale !== 1 || this.embeds.length) this.wakeAll();
@@ -630,10 +637,72 @@ export class SoftBody {
       if (this.grab) this._solveGrab(h);
       if (this.attract) this._solveAttract(h);
       if (multi && this._anyContact) this._solvePieceCollisions(h);
-      this._solveBounds(h, s === nS - 1);
+      this._solveBounds(h);
       this._updateVelocities(h);
     }
     this._dampPieces(dt);
+    this._emitImpacts(dt, h);
+  }
+
+  // Impacts for sound, from the impulse floor, walls and other pieces gave
+  // each piece this frame (as a speed change; holding a piece up against
+  // gravity doesn't count). _imp per piece, 3 slots (floor, wall, pieces) of
+  // [J, Jx, Jy, Jz]: J = sum of m*dx, then the J-weighted contact position.
+  // A sudden rise starts an impact; it is reported a frame or two later at
+  // its peak (soft jelly takes a few frames to stop).
+  _emitImpacts(dt, h) {
+    const I = this._imp, g = Math.abs(this.p.gravity * this.gravityScale);
+    const dvs = [0, 0, 0];
+    for (let k = 0; k < this.pieces.length; k++) {
+      const pc = this.pieces[k];
+      if (!(pc.mass > 0)) continue;
+      const o = k * 12;
+      const prev = pc.impPrev || (pc.impPrev = [0, 0, 0]);
+      let best = 0, kind = -1;
+      for (let c = 0; c < 3; c++) {
+        let dv = I[o + c * 4] / h / pc.mass;
+        if (c === 0) dv -= g * dt;
+        if (c === 2) {
+          // between pieces it's the change in their closing speed that counts
+          const q = this._impPartner[k], pq = this.pieces[q];
+          if (q >= 0 && pq && pq.mass > 0 && !pq.asleep) dv += I[q * 12 + 8] / h / pq.mass;
+        }
+        dvs[c] = dv;
+        // only a sudden rise counts (steady pressing/supporting is silent)
+        const rise = dv - 1.8 * prev[c];
+        prev[c] = Math.max(0, dv);
+        if (rise > 0 && dv > 0.8 && dv > best) {
+          best = dv;
+          kind = c;
+        }
+      }
+      const pend = pc.impPend;
+      if (pend) {
+        const dv = dvs[pend.c];
+        if (dv > pend.dv) {
+          const J = I[o + pend.c * 4] || 1;
+          pend.dv = dv;
+          pend.x = I[o + pend.c * 4 + 1] / J; pend.y = I[o + pend.c * 4 + 2] / J; pend.z = I[o + pend.c * 4 + 3] / J;
+        }
+        if (++pend.n >= 2 || dv < pend.dv * 0.7) {
+          pc.impPend = null;
+          if (pend.dv >= 1) {
+            pc.impT = this.time;
+            pc.impDv = pend.dv;
+            this.impacts.push({
+              x: pend.x, y: pend.y, z: pend.z, dv: pend.dv, piece: k, kind: pend.c === 0 ? 'floor' : pend.c === 1 ? 'wall' : 'piece',
+              mass: pc.mass, partner: pend.c === 2 ? this._impPartner[k] : -1,
+            });
+          }
+        }
+        continue;
+      }
+      if (kind < 0 || pc.asleep) continue;
+      // one per contact, not a rattle: a fresh hit needs a pause or to be harder
+      if (this.time - (pc.impT ?? -1) < 0.1 && best < (pc.impDv || 0) * 1.6) continue;
+      const J = I[o + kind * 4] || 1;
+      pc.impPend = { c: kind, dv: best, n: 0, x: I[o + kind * 4 + 1] / J, y: I[o + kind * 4 + 2] / J, z: I[o + kind * 4 + 3] / J };
+    }
   }
 
   _integrate(h) {
@@ -844,12 +913,12 @@ export class SoftBody {
   // friction is applied to the velocities (see _updateVelocities) - doing it
   // on positions after the elastic solve fed energy into resting pieces and
   // kept them rocking forever.
-  _solveBounds(h, last) {
-    const { x, px, w, fpen, wpen } = this;
+  _solveBounds(h) {
+    const { x, w, m, fpen, wpen } = this;
     const R = this.p.arenaRadius, R2 = R * R;
     const top = this.p.ceiling;
     const n = this.nV;
-    const aw = this._awake, vp = this.vPiece;
+    const aw = this._awake, vp = this.vPiece, I = this._imp;
     for (let i = 0; i < n; i++) {
       if (w[i] === 0 || !aw[vp[i]]) continue;
       const o = i * 3;
@@ -859,10 +928,8 @@ export class SoftBody {
       if (y < 0) {
         x[o + 1] = 0;
         fpen[i] = -y;
-        if (last) {
-          const vy = (px[o + 1] - y) / h;
-          if (vy > 2.5) this.impacts.push(x[o], 0, x[o + 2], vy, this.vPiece[i]);
-        }
+        const q = vp[i] * 12, J = -y * m[i];
+        I[q] += J; I[q + 1] += J * x[o]; I[q + 3] += J * x[o + 2];
       } else if (y > top) x[o + 1] = top;
       const r2 = x[o] * x[o] + x[o + 2] * x[o + 2];
       if (r2 > R2) {
@@ -871,7 +938,8 @@ export class SoftBody {
         x[o] *= s;
         x[o + 2] *= s;
         wpen[i] = r - R;
-        if (last && (r - R) / h > 3) this.impacts.push(x[o], x[o + 1], x[o + 2], (r - R) / h, this.vPiece[i]);
+        const q = vp[i] * 12 + 4, J = (r - R) * m[i];
+        I[q] += J; I[q + 1] += J * x[o]; I[q + 2] += J * x[o + 1]; I[q + 3] += J * x[o + 2];
       }
     }
   }
@@ -1690,6 +1758,20 @@ export class SoftBody {
       // rest is a pure position fix (contact must not inject bounce/jitter)
       const cv = Math.min(Math.max(-sn, 0), corr), cp = corr - cv;
       const lam = corr / W, lamP = cp / W;
+      if (cv > 0) {
+        // impulse (as m*dx) each side took from stopping the approach
+        const J = cv / W, I = this._imp, pr = this._impPartner;
+        if (mOwn) {
+          const q = own * 12 + 8;
+          I[q] += J; I[q + 1] += J * cx; I[q + 2] += J * cy; I[q + 3] += J * cz;
+        }
+        if (mTet) {
+          const q = pt * 12 + 8;
+          I[q] += J; I[q + 1] += J * cx; I[q + 2] += J * cy; I[q + 3] += J * cz;
+        }
+        pr[own] = pt;
+        pr[pt] = own;
+      }
       for (let j = 0; j < n; j++) {
         const i = pi3[j], s = w[i] * pw3[j] * mOwn;
         x[i * 3] += nx * s * lam; x[i * 3 + 1] += ny * s * lam; x[i * 3 + 2] += nz * s * lam;

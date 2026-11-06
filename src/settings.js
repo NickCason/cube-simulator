@@ -41,6 +41,14 @@ export const SETTINGS = [
     id: 'size', group: 'World', label: 'Cube size', key: 'size', def: 1, ...linMap(0.6, 1.35), release: true,
     word: (v) => (v < 0.72 ? 'Bite' : v < 0.9 ? 'Small' : v < 1.1 ? 'Regular' : v < 1.25 ? 'Big' : 'Huge'),
   },
+  {
+    id: 'volume', group: 'Sound', label: 'Volume', key: 'volume', def: 0.75, ...linMap(0, 1),
+    word: (v) => (v < 0.02 ? 'Off' : v < 0.3 ? 'Quiet' : v < 0.62 ? 'Medium' : v < 0.88 ? 'Normal' : 'Loud'),
+  },
+  {
+    id: 'impacts', group: 'Sound', label: 'Impacts', key: 'impacts', def: 0.55, ...linMap(0, 1),
+    word: (v) => (v < 0.02 ? 'Off' : v < 0.3 ? 'Subtle' : v < 0.65 ? 'Soft' : v < 0.85 ? 'Lively' : 'Loud'),
+  },
 ];
 
 export function settingWord(s, value) {

@@ -109,7 +109,7 @@ export class Droplets {
       if (d.p.y < floorY) {
         d.p.y = floorY;
         if (d.v.y < -1.5) {
-          if (d.flat < 0.1) this.app.audio?.squish(Math.min(0.5, -d.v.y / 12), 1.6);
+          if (d.flat < 0.1) this.app.audio?.drip(-d.v.y, d.r, this.app.audio?._panOf(d.p));
           d.flat = Math.min(1, d.flat + 0.6);
         }
         d.v.y *= -0.15;
