@@ -106,10 +106,7 @@ export class App {
     this.onHealEnd = [];
     this.onColor = [];
     this.droplets = new Droplets(this);
-    this.onHealStart.push(() => {
-      const main = this.sb.pieces.reduce((a, b) => (b.mass > a.mass ? b : a), this.sb.pieces[0]);
-      if (main) this.droplets.heal(new THREE.Vector3(main.com[0], main.com[1], main.com[2]));
-    });
+    this.healZoom = 0;
     this.flash = 0;
     this.anchorProviders = [() => this.nails.anchors()];
     this.bubbles = new Bubbles(this);
@@ -423,7 +420,7 @@ export class App {
     const o = this.orbit;
     const c = this.camera;
     // pull back while a bottom sheet hides part of a small screen
-    const r = o.radius * (1 + (this._lift || 0) * 1.5);
+    const r = o.radius * (1 + (this._lift || 0) * 1.5) * (1 + (this.healZoom || 0));
     c.position.set(
       o.target.x + r * Math.cos(o.phi) * Math.sin(o.theta),
       o.target.y + r * Math.sin(o.phi),

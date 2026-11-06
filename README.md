@@ -19,8 +19,12 @@ Grab it, throw it, poke it — then go to work on it:
 | Syringe | Pump it up until it bursts |
 | Magnet | Pull the nails — and whatever they're stuck in |
 
-**Heal** ejects every nail, thaws and cools it, pulls every fragment back into
-place and fuses it into a pristine cube.
+**Heal** is a little choreography: nails slide out and clatter away, the
+pieces lift and drift apart into an exploded view while each turns into its
+final orientation, hover for a beat, then glide back together with glowing
+seams, fuse, and settle gently onto the table.
+
+![Heal animation](docs/heal.gif)
 
 **Make it yours** (the colour button in the dock):
 
@@ -32,6 +36,9 @@ place and fuses it into a pristine cube.
 - **Texture** — Jello (clear, wobbly), Gummy (cloudy, chewy, firmer), Sour (sugar-crystal
   coating), Crystal (glass-clear), Creamy (milky panna-cotta).
 - **Edges** — Sharp, Soft, Round or Pillow; the cube re-forms with the new rounding.
+- **Glitter** — Off, Silver, Gold, Holo (rainbow, shifts with angle) or Rose flakes
+  suspended in the jelly; they turn with every wobble, so it twinkles as it moves.
+  Amount, Size and Sparkle live in Settings.
 
 **Settings** (the sliders button) fine-tune everything live — each slider shows what it
 means (Wobbly, Syrupy, Moon, Super ball…):
@@ -41,6 +48,7 @@ means (Wobbly, Syrupy, Moon, Super ball…):
 | Feel | Firmness, Viscosity, Density (weight), Squash (volume keeping → foam), Bounce, Grip |
 | Look | Opacity, Translucency, Colour depth, Gloss, Refraction |
 | Bubbles | Count (0–240), Size |
+| Glitter | Amount (sprinkle → galaxy), Size (dust → sequins), Sparkle |
 | World | Gravity (Moon → Jupiter), Cube size |
 
 Picking a texture resets the material sliders to that texture; **Reset** puts everything back.

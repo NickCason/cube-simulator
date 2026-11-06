@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { cutBody, sphereField, separateClusters, removeTets } from '../sim/cutting.js';
+import { cutBody, sphereField, separateClusters, removeTets, removeSmallPieces } from '../sim/cutting.js';
 import { makeMallet, makeTorch, makeSpray, makeBaller, makeBomb, makeSyringe, makeMagnet, orient } from '../world/models.js';
 
 const V = (a) => new THREE.Vector3(a[0], a[1], a[2]);
@@ -203,6 +203,14 @@ export class MalletTool {
       labels[t] = best;
     }
     separateClusters(sb, labels, app.allAnchors());
+    // wafer-thin crumbs become little ice chips instead of slivers
+    const crumbs = removeSmallPieces(sb, 0.006 * sb.p.size ** 3, app.allAnchors());
+    for (let k = 0; k < crumbs.length; k += 4) {
+      const c = new THREE.Vector3(crumbs[k], crumbs[k + 1], crumbs[k + 2]);
+      const v = c.clone().sub(p).normalize().multiplyScalar(2 + Math.random() * 2);
+      v.y += 2;
+      app.droplets.spawn(c, v, 0.012 + Math.cbrt(crumbs[k + 3]) * 0.35, '#dcefff');
+    }
     app.onTopologyChanged();
     sb.radialImpulse(p.x, p.y, p.z, 1.4, 3.2, 1.5);
     sb.impulse(p.x, p.y, p.z, a.d.x, a.d.y, a.d.z, 0.6, 3.0);

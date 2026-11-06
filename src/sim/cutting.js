@@ -484,3 +484,23 @@ export function removeTets(sb, pred, anchors = []) {
   relocateAnchors(sb, anchors);
   return removed;
 }
+
+// Remove pieces smaller than minVolume (wafer-thin crumbs left by fracture).
+// Returns [cx, cy, cz, volume, ...] for each removed piece.
+export function removeSmallPieces(sb, minVolume, anchors = []) {
+  const small = new Set();
+  const out = [];
+  for (const pc of sb.pieces) {
+    if (pc.volume >= minVolume) continue;
+    small.add(pc.id);
+    let cx = 0, cy = 0, cz = 0;
+    for (const i of pc.verts) {
+      cx += sb.x[i * 3]; cy += sb.x[i * 3 + 1]; cz += sb.x[i * 3 + 2];
+    }
+    const n = pc.verts.length || 1;
+    out.push(cx / n, cy / n, cz / n, pc.volume);
+  }
+  if (!small.size) return out;
+  removeTets(sb, (t) => small.has(sb.tPiece[t]), anchors);
+  return out;
+}

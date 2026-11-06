@@ -324,12 +324,21 @@ export class AudioEngine {
   healStart() {
     if (!this._ok('heal', 0.3)) return;
     const t = this.ctx.currentTime;
-    const notes = [523.25, 659.25, 783.99, 987.77, 1174.66, 1567.98];
+    // a slow, airy rise while the pieces loosen and spread out
+    const notes = [392.0, 523.25, 659.25, 783.99, 987.77];
     notes.forEach((f, i) => {
-      this._tone(t + i * 0.07, 'sine', f, f * 1.002, 1.2, 0.07, 0.03);
-      this._tone(t + i * 0.07, 'triangle', f * 2, f * 2, 0.5, 0.015, 0.01);
+      this._tone(t + i * 0.16, 'sine', f, f * 1.003, 1.8, 0.055, 0.12);
+      this._tone(t + i * 0.16, 'triangle', f * 2, f * 2, 0.7, 0.01, 0.05);
     });
-    this._noise(t, 1.3, 'bandpass', 300, 4000, 1.5, 0.12, 0.6);
+    this._noise(t, 1.4, 'bandpass', 250, 1200, 1.2, 0.07, 0.7);
+  }
+
+  healGather() {
+    if (!this._ok('gather', 0.3)) return;
+    const t = this.ctx.currentTime;
+    // the pieces draw together: a swelling sweep into a bright chord
+    this._noise(t, 0.95, 'bandpass', 500, 5200, 1.4, 0.11, 0.8);
+    [1046.5, 1318.5, 1568].forEach((f, i) => this._tone(t + 0.35 + i * 0.09, 'sine', f, f * 1.002, 1.2, 0.04, 0.25));
   }
 
   healFuse() {

@@ -68,10 +68,13 @@ export class Droplets {
     });
   }
 
-  heal(target) {
+  // Fly home: wait `delay` seconds, then glide in over `travel` seconds.
+  heal(target, delay = 0, travel = 0.8) {
     for (const d of this.items) {
-      d.home = target.clone().add(new THREE.Vector3((Math.random() - 0.5) * 0.5, Math.random() * 0.5, (Math.random() - 0.5) * 0.5));
-      d.homeT = -Math.random() * 0.3;
+      d.home = target.clone().add(new THREE.Vector3((Math.random() - 0.5) * 0.5, (Math.random() - 0.3) * 0.5, (Math.random() - 0.5) * 0.5));
+      d.homeT = -(delay + Math.random() * 0.35);
+      d.travel = travel;
+      d.from = null;
     }
   }
 
@@ -84,12 +87,17 @@ export class Droplets {
       if (d.home) {
         d.homeT += dt;
         if (d.homeT < 0) continue;
-        const u = Math.min(1, d.homeT / 0.8);
-        const k = 1 - Math.exp(-dt * (2 + 14 * u));
-        d.p.lerp(d.home, k);
-        d.flat *= 0.9;
-        d.r *= u > 0.6 ? Math.exp(-dt * 6) : 1;
-        if (u >= 1 || d.r < 0.003) this.items.splice(i, 1);
+        if (!d.from) d.from = d.p.clone();
+        // smooth arc home, un-squashing on the way, absorbed on arrival
+        const u = Math.min(1, d.homeT / (d.travel || 0.8));
+        const e = u * u * u * (u * (u * 6 - 15) + 10);
+        d.p.lerpVectors(d.from, d.home, e);
+        d.p.y += Math.sin(Math.PI * e) * 0.3;
+        d.flat *= Math.exp(-dt * 8);
+        d.rot.x += d.spin.x * dt * 0.3;
+        d.rot.y += d.spin.y * dt * 0.3;
+        if (u > 0.75) d.r *= Math.exp(-dt * 9);
+        if (u >= 1 || d.r < 0.002) this.items.splice(i, 1);
         continue;
       }
       d.v.y += g * dt;

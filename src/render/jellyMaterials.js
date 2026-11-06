@@ -402,7 +402,9 @@ export function createCausticMaterial(layerUniforms) {
       uniform float uIor;
       uniform vec4 uFloorRect;
       attribute vec3 aRest;
+      attribute vec4 aData;
       varying float vRestY;
+      varying float vTemp;
       varying vec3 vOld;
       varying vec3 vNew;
       varying float vNdL;
@@ -422,6 +424,7 @@ export function createCausticMaterial(layerUniforms) {
         vNdL = dot(N, normalize(uLightDir));
         vPath = t;
         vRestY = aRest.y;
+        vTemp = aData.x;
         vec2 uv = (newP.xz - uFloorRect.xy) * uFloorRect.zw;
         gl_Position = vec4(uv * 2.0 - 1.0, 0.0, 1.0);
       }`,
@@ -430,6 +433,7 @@ export function createCausticMaterial(layerUniforms) {
       uniform float uScatter;
       uniform float uIor;
       varying float vRestY;
+      varying float vTemp;
       ${LAYER_GLSL}
       varying vec3 vOld;
       varying vec3 vNew;
@@ -439,11 +443,14 @@ export function createCausticMaterial(layerUniforms) {
         if (vNdL <= 0.0) discard;
         float oldA = length(dFdx(vOld)) * length(dFdy(vOld));
         float newA = length(dFdx(vNew)) * length(dFdy(vNew));
-        float ratio = clamp(oldA / max(newA, 1e-9), 0.0, 6.0);
+        // focusing, capped so sliver faces can't streak
+        float ratio = clamp(oldA / max(newA, 1e-9), 0.0, 3.2);
         float F0 = pow((uIor - 1.0) / (uIor + 1.0), 2.0);
         float Ft = 1.0 - (F0 + (1.0 - F0) * pow(1.0 - vNdL, 5.0));
         vec3 sig = layerSigma(vRestY, uLayerY0, uAbsorb);
         vec3 T = exp(-sig * vPath) * exp(-uScatter * vPath * 0.7);
+        // frosted jelly scatters light: no sharp caustics
+        T *= 1.0 - 0.9 * smoothstep(0.05, 0.6, -vTemp);
         gl_FragColor = vec4(T * ratio * Ft, 1.0);
       }`,
   });
