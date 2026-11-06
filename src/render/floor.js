@@ -24,6 +24,7 @@ export function createFloor(env, fx) {
     shader.uniforms.uReflAmount = fx.reflAmount;
     shader.uniforms.uReflLod = fx.reflLod;
     shader.uniforms.uGlowFloor = fx.glowFloor;
+    shader.uniforms.uTintLocal = fx.tintLocal;
     shader.uniforms.tGlow = fx.glowTex;
     shader.uniforms.uPulseCol = fx.pulseCol;
     shader.uniforms.uPulse = fx.pulse;
@@ -49,6 +50,7 @@ export function createFloor(env, fx) {
         uniform float uReflAmount;
         uniform float uReflLod;
         uniform float uGlowFloor;
+        uniform float uTintLocal;
         uniform sampler2D tGlow;
         uniform vec3 uPulseCol[${MAX_PULSES}];
         uniform vec4 uPulse[${MAX_PULSES}];
@@ -68,11 +70,11 @@ export function createFloor(env, fx) {
           // soft taps (the key light is an area light: its caustics have a
           // penumbra, and the mesh's facets shouldn't show as lines)
           vec2 o = uCTexel * 3.2, od = uCTexel * 3.6;
-          caus = texture2D(tCaustic, fuv).rgb * 0.2
-            + (texture2D(tCaustic, fuv + vec2(o.x, 0.0)).rgb + texture2D(tCaustic, fuv - vec2(o.x, 0.0)).rgb
-            + texture2D(tCaustic, fuv + vec2(0.0, o.y)).rgb + texture2D(tCaustic, fuv - vec2(0.0, o.y)).rgb) * 0.12
-            + (texture2D(tCaustic, fuv + od).rgb + texture2D(tCaustic, fuv - od).rgb
-            + texture2D(tCaustic, fuv + vec2(od.x, -od.y)).rgb + texture2D(tCaustic, fuv + vec2(-od.x, od.y)).rgb) * 0.08;
+          caus = textureLod(tCaustic, fuv, 0.0).rgb * 0.2
+            + (textureLod(tCaustic, fuv + vec2(o.x, 0.0), 0.0).rgb + textureLod(tCaustic, fuv - vec2(o.x, 0.0), 0.0).rgb
+            + textureLod(tCaustic, fuv + vec2(0.0, o.y), 0.0).rgb + textureLod(tCaustic, fuv - vec2(0.0, o.y), 0.0).rgb) * 0.12
+            + (textureLod(tCaustic, fuv + od, 0.0).rgb + textureLod(tCaustic, fuv - od, 0.0).rgb
+            + textureLod(tCaustic, fuv + vec2(od.x, -od.y), 0.0).rgb + textureLod(tCaustic, fuv + vec2(-od.x, od.y), 0.0).rgb) * 0.08;
           vec2 o2 = uTexel * 3.0;
           vec4 fx0 = textureLod(tFloorFx, fuv, 0.0);
           vec4 fx1 = textureLod(tFloorFx, fuv + vec2(o2.x, o2.y), 0.0);
@@ -101,9 +103,20 @@ export function createFloor(env, fx) {
               + textureLod(tGlow, fuv, 5.3).rgb * 0.75;
           }
         }
+        // the colour the jelly gives the light it lets through, here: one
+        // colour - or, for layered jelly, the hue of the light that actually
+        // came through at this spot (a rainbow on its side shades the floor
+        // in bands), at the strength of the overall tint
+        vec3 tint = uTint;
+        if (uTintLocal > 0.0 && mask > 0.0) {
+          vec3 cb = textureLod(tCaustic, fuv, 3.0).rgb + textureLod(tCaustic, fuv, 4.5).rgb * 0.5;
+          float cm = max(cb.r, max(cb.g, cb.b));
+          vec3 hue = mix(cb / max(cm, 1e-4), vec3(1.0), 0.3) * max(uTint.r, max(uTint.g, uTint.b));
+          tint = mix(uTint, hue, smoothstep(0.0005, 0.012, cm));
+        }
         // in the jelly's shadow: the light that came through it (coloured,
         // focused), and a little of its colour from light scattered inside
-        vec3 jellyTransfer = vec3(1.0 - mask) + caus * 2.7 + uTint * mask * 0.22;
+        vec3 jellyTransfer = vec3(1.0 - mask) + caus * 2.7 + tint * mask * 0.22;
         ${THREE.ShaderChunk.lights_fragment_begin.replace(
           'getDirectionalLightInfo( directionalLight, directLight );',
           'getDirectionalLightInfo( directionalLight, directLight );\n\t\tdirectLight.color *= jellyTransfer;',
@@ -113,7 +126,7 @@ export function createFloor(env, fx) {
         '#include <aomap_fragment>',
         `#include <aomap_fragment>
         // (the sky seen from in its shadow is seen through the jelly too)
-        reflectedLight.indirectDiffuse *= mix(vec3(1.0), uTint * 1.1, max(cover * 0.8, mask * 0.68)) * (1.0 - contact * 0.35);
+        reflectedLight.indirectDiffuse *= mix(vec3(1.0), tint * 1.1, max(cover * 0.8, mask * 0.68)) * (1.0 - contact * 0.35);
         reflectedLight.directDiffuse *= 1.0 - contact * 0.2;`,
       )
       .replace(

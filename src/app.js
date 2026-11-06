@@ -213,6 +213,13 @@ export class App {
   warmUp() {
     const t0 = performance.now();
     const r = this.renderer;
+    // the render surface's rebuild (two levels of subdivision) only runs
+    // when the jelly is cut: run it a few times now, so it isn't cold - and
+    // ten times slower - in the middle of a burst
+    for (let k = 0; k < 5; k++) {
+      this.jelly.topoVersion = -1;
+      this.jelly.syncTopology(this.sb);
+    }
     const p0 = r.info.programs?.length || 0;
     const undo = [];
     for (const id in this.tools) {
@@ -890,6 +897,8 @@ export class App {
     fm.color.setRGB(...T.floor);
     fm.roughness = T.rough;
     fm.envMapIntensity = T.envI;
+    this.jelly.fxUniforms.floorAlbedo.value.setRGB(...T.floor);
+    this.jelly.fxUniforms.floorEnv.value = T.envI;
     this.keyLight.intensity = T.key;
     this.keyLight.color.set(T.keyHex);
     this.jelly.frontMat.uniforms.uLightColor.value.setRGB(...T.keyCol).multiplyScalar(T.key);

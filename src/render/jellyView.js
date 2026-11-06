@@ -17,6 +17,211 @@ const FLOOR_SPAN = 6.4;
 // (how milky jelly of that opacity looks: see setStyle)
 const hazeMinOf = (o) => 0.92 * Math.min(1, Math.max(0, (Math.min(1, Math.max(0, o)) - 0.45) / 0.55)) ** 2;
 
+// One level of subdivision over an indexed triangle mesh: a midpoint per
+// edge. geo[v] says where v is (split vertices along a crease share it). An
+// edge whose two sides use the same vertices is smooth: one shared midpoint,
+// Phong-tessellated. Otherwise each side gets its own, on the straight edge,
+// so the surface stays watertight. Midpoints are numbered from `first`.
+function splitEdges(index, geo, first, refine = null) {
+  // pair up the half-edges by where their ends are: an open-addressing
+  // table keyed on the (geo, geo) pair, chaining the half-edges per edge
+  const nH = index.length;
+  let cap = 16;
+  while (cap < nH * 2) cap <<= 1;
+  const ka = new Int32Array(cap).fill(-1), kb = new Int32Array(cap), head = new Int32Array(cap);
+  const next = new Int32Array(nH);
+  for (let h = 0; h < nH; h++) {
+    const t3 = h - (h % 3);
+    let ga = geo[index[h]], gb = geo[index[t3 + ((h - t3 + 1) % 3)]];
+    if (ga > gb) {
+      const tmp = ga;
+      ga = gb;
+      gb = tmp;
+    }
+    let slot = (Math.imul(ga, 0x9e3779b1) ^ Math.imul(gb, 0x85ebca6b)) & (cap - 1);
+    while (ka[slot] !== -1 && (ka[slot] !== ga || kb[slot] !== gb)) slot = (slot + 1) & (cap - 1);
+    if (ka[slot] === -1) {
+      ka[slot] = ga;
+      kb[slot] = gb;
+      next[h] = -1;
+    } else next[h] = head[slot];
+    head[slot] = h;
+  }
+  // (the other end of half-edge h)
+  const endB = (h) => index[h - (h % 3) + ((h % 3) + 1) % 3];
+  const mids = new Int32Array(nH * 3), midGeo = new Int32Array(nH);
+  let nm = 0;
+  const triMid = new Int32Array(nH);
+  let g = 0;
+  // (with a refine mask, only edges of triangles being refined are split:
+  // a smooth edge if either side is, a crease side if its own is)
+  const wants = (h) => !refine || refine[(h - (h % 3)) / 3] === 1;
+  triMid.fill(-1);
+  for (let slot = 0; slot < cap; slot++) {
+    if (ka[slot] === -1) continue;
+    const h0 = head[slot], h1 = next[h0];
+    const n = h1 === -1 ? 1 : next[h1] === -1 ? 2 : 3;
+    let smooth = n === 1;
+    if (n === 2) {
+      const a0 = index[h0], b0 = endB(h0), a1 = index[h1], b1 = endB(h1);
+      smooth = (a0 === a1 && b0 === b1) || (a0 === b1 && b0 === a1);
+    }
+    if (smooth) {
+      if (wants(h0) || (n === 2 && wants(h1))) {
+        const id = first + nm;
+        mids[nm * 3] = index[h0]; mids[nm * 3 + 1] = endB(h0); mids[nm * 3 + 2] = 0;
+        midGeo[nm++] = g;
+        triMid[h0] = id;
+        if (n === 2) triMid[h1] = id;
+      }
+    } else {
+      for (let h = h0; h !== -1; h = next[h]) {
+        if (!wants(h)) continue;
+        mids[nm * 3] = index[h]; mids[nm * 3 + 1] = endB(h); mids[nm * 3 + 2] = 1;
+        triMid[h] = first + nm;
+        midGeo[nm++] = g;
+      }
+    }
+    g++;
+  }
+  // each triangle split by how many of its edges were: 4 ways, 3, 2 or not
+  // at all (so a refined patch meets the rest without cracks)
+  const nTri = nH / 3;
+  const out = new Uint32Array(nTri * 12);
+  const start = new Int32Array(nTri + 1);
+  let o = 0;
+  const tri = (p, q, r) => {
+    out[o] = p; out[o + 1] = q; out[o + 2] = r;
+    o += 3;
+  };
+  for (let t = 0; t < nTri; t++) {
+    start[t] = o;
+    const a = index[t * 3], b = index[t * 3 + 1], c = index[t * 3 + 2];
+    const ab = triMid[t * 3], bc = triMid[t * 3 + 1], ca = triMid[t * 3 + 2];
+    const k = (ab >= 0) + (bc >= 0) + (ca >= 0);
+    if (k === 3) {
+      tri(a, ab, ca); tri(ab, b, bc); tri(ca, bc, c); tri(ab, bc, ca);
+    } else if (k === 0) tri(a, b, c);
+    else if (k === 1) {
+      if (ab >= 0) (tri(a, ab, c), tri(ab, b, c));
+      else if (bc >= 0) (tri(a, b, bc), tri(a, bc, c));
+      else (tri(a, b, ca), tri(ca, b, c));
+    } else if (ca < 0) (tri(ab, b, bc), tri(a, ab, bc), tri(a, bc, c));
+    else if (ab < 0) (tri(bc, c, ca), tri(b, bc, ca), tri(b, ca, a));
+    else (tri(ca, a, ab), tri(c, ca, ab), tri(c, ab, b));
+  }
+  start[nTri] = o;
+  return { mids: mids.slice(0, nm * 3), midGeo: midGeo.subarray(0, nm), nEdges: g, index: out.slice(0, o), start };
+}
+
+// Area-weighted vertex normals of the first n vertices.
+function vertexNormals(index, pos, nrm, n) {
+  nrm.fill(0, 0, n * 3);
+  for (let k = 0; k < index.length; k += 3) {
+    const a = index[k] * 3, b = index[k + 1] * 3, c = index[k + 2] * 3;
+    const ux = pos[b] - pos[a], uy = pos[b + 1] - pos[a + 1], uz = pos[b + 2] - pos[a + 2];
+    const vx = pos[c] - pos[a], vy = pos[c + 1] - pos[a + 1], vz = pos[c + 2] - pos[a + 2];
+    const nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx;
+    nrm[a] += nx; nrm[a + 1] += ny; nrm[a + 2] += nz;
+    nrm[b] += nx; nrm[b + 1] += ny; nrm[b + 2] += nz;
+    nrm[c] += nx; nrm[c + 1] += ny; nrm[c + 2] += nz;
+  }
+  for (let o = 0; o < n * 3; o += 3) {
+    const l = Math.hypot(nrm[o], nrm[o + 1], nrm[o + 2]) || 1;
+    nrm[o] /= l; nrm[o + 1] /= l; nrm[o + 2] /= l;
+  }
+}
+
+// The edge midpoints (see splitEdges), from their ends: Phong-tessellated
+// on smooth edges, straight on creases, then pushed out along the normal by
+// disp (to the true shape - see snapToShape). data (per-vertex extras) may
+// be null.
+const PHONG = 0.75;
+function tessellate(pos, nrm, data, mids, first, disp) {
+  for (let m = 0, k = first, j = 0; m < mids.length; m += 3, k++, j++) {
+    const a = mids[m] * 3, b = mids[m + 1] * 3;
+    const ax = pos[a], ay = pos[a + 1], az = pos[a + 2];
+    const bx = pos[b], by = pos[b + 1], bz = pos[b + 2];
+    let qx = (ax + bx) * 0.5, qy = (ay + by) * 0.5, qz = (az + bz) * 0.5;
+    const nax = nrm[a], nay = nrm[a + 1], naz = nrm[a + 2];
+    const nbx = nrm[b], nby = nrm[b + 1], nbz = nrm[b + 2];
+    if (!mids[m + 2]) {
+      const da = (qx - ax) * nax + (qy - ay) * nay + (qz - az) * naz;
+      const db = (qx - bx) * nbx + (qy - by) * nby + (qz - bz) * nbz;
+      qx -= 0.5 * (da * nax + db * nbx) * PHONG;
+      qy -= 0.5 * (da * nay + db * nby) * PHONG;
+      qz -= 0.5 * (da * naz + db * nbz) * PHONG;
+    }
+    let nx = nax + nbx, ny = nay + nby, nz = naz + nbz;
+    const l2 = nx * nx + ny * ny + nz * nz;
+    const il = l2 > 1e-24 ? 1 / Math.sqrt(l2) : 0; // (Math.hypot is slow in a loop this hot)
+    nx *= il; ny *= il; nz *= il;
+    const d = disp[j];
+    const o = k * 3;
+    pos[o] = qx + nx * d; pos[o + 1] = qy + ny * d; pos[o + 2] = qz + nz * d;
+    nrm[o] = nx; nrm[o + 1] = ny; nrm[o + 2] = nz;
+    if (data) {
+      const da4 = mids[m] * 4, db4 = mids[m + 1] * 4, o4 = k * 4;
+      data[o4] = (data[da4] + data[db4]) * 0.5;
+      data[o4 + 1] = (data[da4 + 1] + data[db4 + 1]) * 0.5;
+      data[o4 + 2] = Math.max(data[da4 + 2], data[db4 + 2]);
+      data[o4 + 3] = 0;
+    }
+  }
+}
+
+// At rest (pos/nrm the rest shape, the midpoints just tessellated with no
+// push): how far each midpoint on the cube's original outside must move
+// along its normal to sit on the true rounded box (half-size a + r, edge
+// radius r), and moves it there. Only smooth edges whose ends are both on
+// that surface and whose normal agrees with it - not cut faces, not seams.
+const _cp = new Float64Array(6);
+function roundedBox(px, py, pz, a, r) {
+  const qx = Math.max(-a, Math.min(a, px)), qy = Math.max(-a, Math.min(a, py)), qz = Math.max(-a, Math.min(a, pz));
+  const dx = px - qx, dy = py - qy, dz = pz - qz;
+  const len = Math.sqrt(dx * dx + dy * dy + dz * dz);
+  if (len > 1e-9) {
+    _cp[3] = dx / len; _cp[4] = dy / len; _cp[5] = dz / len;
+    _cp[0] = qx + _cp[3] * r; _cp[1] = qy + _cp[4] * r; _cp[2] = qz + _cp[5] * r;
+    return len - r;
+  }
+  // inside the core box: the nearest face
+  _cp[0] = px; _cp[1] = py; _cp[2] = pz; _cp[3] = _cp[4] = _cp[5] = 0;
+  let ax = 0, gap = Infinity;
+  for (let c = 0; c < 3; c++) {
+    const g = a + r - Math.abs(_cp[c]);
+    if (g < gap) (gap = g), (ax = c);
+  }
+  const sg = _cp[ax] < 0 ? -1 : 1;
+  _cp[ax] = sg * (a + r);
+  _cp[3 + ax] = sg;
+  return -gap;
+}
+function snapToShape(pos, nrm, mids, first, disp, shape) {
+  const { a, r } = shape;
+  if (!(a > 0) || !(r >= 0)) return;
+  // (whether each vertex below `first` is on the shape, worked out once)
+  const on = new Int8Array(first);
+  const onShape = (v) => {
+    if (!on[v]) on[v] = Math.abs(roundedBox(pos[v * 3], pos[v * 3 + 1], pos[v * 3 + 2], a, r)) > 4e-3 ? -1 : 1;
+    return on[v] > 0;
+  };
+  for (let m = 0, k = first, j = 0; m < mids.length; m += 3, k++, j++) {
+    if (mids[m + 2]) continue;
+    if (!onShape(mids[m]) || !onShape(mids[m + 1])) continue;
+    const ia = mids[m] * 3, ib = mids[m + 1] * 3, o = k * 3;
+    const ex = pos[ia] - pos[ib], ey = pos[ia + 1] - pos[ib + 1], ez = pos[ia + 2] - pos[ib + 2];
+    const len = Math.sqrt(ex * ex + ey * ey + ez * ez);
+    const sd = roundedBox(pos[o], pos[o + 1], pos[o + 2], a, r);
+    const nx = nrm[o], ny = nrm[o + 1], nz = nrm[o + 2];
+    if (sd < -0.35 * len || nx * _cp[3] + ny * _cp[4] + nz * _cp[5] < 0.9) continue;
+    const d = (_cp[0] - pos[o]) * nx + (_cp[1] - pos[o + 1]) * ny + (_cp[2] - pos[o + 2]) * nz;
+    if (Math.abs(d) > 0.25 * len) continue;
+    disp[j] = d;
+    pos[o] += nx * d; pos[o + 1] += ny * d; pos[o + 2] += nz * d;
+  }
+}
+
 // Owns the jelly GPU geometry (one mesh per connected piece, sharing vertex
 // attributes) and the multi-pass jelly rendering.
 export class JellyView {
@@ -43,7 +248,14 @@ export class JellyView {
       if (m.uniforms.uFloorRect) m.uniforms.uFloorRect.value = this.floorRect;
     }
     this.setLightDir(lightDir);
-    this.rtCaustic = new THREE.WebGLRenderTarget(768, 768, { type: THREE.HalfFloatType, depthBuffer: false, samples: 4 });
+    // (mipmapped: the shadow's fill takes its colour from it, blurred)
+    this.rtCaustic = new THREE.WebGLRenderTarget(768, 768, {
+      type: THREE.HalfFloatType,
+      depthBuffer: false,
+      samples: 4,
+      generateMipmaps: true,
+      minFilter: THREE.LinearMipmapLinearFilter,
+    });
     // (mipmapped: glow mode's light pool is its footprint, blurred wide)
     this.rtFloorFx = new THREE.WebGLRenderTarget(512, 512, {
       type: THREE.HalfFloatType,
@@ -78,7 +290,16 @@ export class JellyView {
       pulse: this.frontMat.uniforms.uPulse,
       pulseAmp: this.frontMat.uniforms.uPulseAmp,
       time: this.frontMat.uniforms.uTime,
+      floorAlbedo: { value: new THREE.Color(0.8, 0.79, 0.77) }, // (set with the look)
+      floorEnv: { value: 0.75 },
+      tintLocal: { value: 0 }, // layered jelly: the shadow's fill takes each band's colour
     };
+    // (the jelly mirrors the floor: it reads the same textures)
+    const fx = this.fxUniforms;
+    Object.assign(this.frontMat.uniforms, {
+      tCaustic: fx.caustic, tFloorFx: fx.floorFx, tGlowMap: fx.glowTex, uFloorRect: fx.floorRect, uTint: fx.tint,
+      uGlowFloor: fx.glowFloor, uBg: fx.bg, uFloorAlbedo: fx.floorAlbedo, uFloorEnv: fx.floorEnv,
+    });
     this.rtBack = null;
     this._v = new THREE.Vector3();
     // the weld's seam textures (and the placeholders they replace)
@@ -133,6 +354,7 @@ export class JellyView {
     const cloud = Math.max(m.milk, hazeMin);
     if (cloud) tint.lerp(new THREE.Color(1, 1, 1), 0.35 * cloud).multiplyScalar(1 - 0.35 * cloud);
     this.fxUniforms.tint.value.copy(tint);
+    this.fxUniforms.tintLocal.value = flavor.layers ? 1 : 0;
     // healing light: a luminous, lighter version of the jelly colour
     F.uGlowColor.value.copy(avgSc).lerp(new THREE.Color(1, 1, 1), 0.55).multiplyScalar(0.9);
     F.uScatter.value = scatter + (flavor.layers ? 1.6 * (1 - o) : 0);
@@ -189,71 +411,59 @@ export class JellyView {
     const nB = sb.rCount;
     const rIndex = sb.rIndex, rSim = sb.rSim;
     const nTri = rIndex.length / 3;
-    // --- one level of subdivision: a midpoint per edge. Smooth edges share
-    // a midpoint (Phong-tessellated); crease edges get one per side, placed
-    // on the straight edge so the surface stays watertight.
-    const K = sb.nV + 1;
-    const edgeMap = new Map();
-    const mids = []; // ra, rb, crease
-    const triMid = new Int32Array(nTri * 3);
-    for (let t = 0; t < nTri; t++) {
-      for (let e = 0; e < 3; e++) {
-        const ra = rIndex[t * 3 + e], rb = rIndex[t * 3 + ((e + 1) % 3)];
-        const sa = rSim[ra], sbv = rSim[rb];
-        const key = sa < sbv ? sa * K + sbv : sbv * K + sa;
-        let rec = edgeMap.get(key);
-        if (!rec) {
-          rec = [];
-          edgeMap.set(key, rec);
-        }
-        rec.push(t * 3 + e, ra, rb);
-      }
-    }
-    for (const rec of edgeMap.values()) {
-      const n = rec.length / 3;
-      let smooth = true;
-      if (n === 2) {
-        const a0 = rec[1], b0 = rec[2], a1 = rec[4], b1 = rec[5];
-        smooth = (a0 === a1 && b0 === b1) || (a0 === b1 && b0 === a1);
-      } else smooth = n === 1;
-      if (smooth) {
-        const id = nB + mids.length / 3;
-        mids.push(rec[1], rec[2], 0);
-        for (let k = 0; k < n; k++) triMid[rec[k * 3]] = id;
-      } else {
-        for (let k = 0; k < n; k++) {
-          const id = nB + mids.length / 3;
-          mids.push(rec[k * 3 + 1], rec[k * 3 + 2], 1);
-          triMid[rec[k * 3]] = id;
-        }
-      }
-    }
-    this.mids = Int32Array.from(mids);
-    this.nBase = nB;
-    const n = nB + mids.length / 3;
-    this.nRender = n;
-    this.pos = new Float32Array(n * 3);
-    this.nrm = new Float32Array(n * 3);
-    this.data = new Float32Array(n * 4);
-    const rest = new Float32Array(n * 3);
+    // --- two levels of subdivision (16 triangles per simulated one). The
+    // new points are Phong-tessellated from the moving surface; on the
+    // cube's original outside each is also pushed out along its normal by
+    // a fixed amount, measured at rest, that puts it exactly on the true
+    // rounded-box shape there (the simulation's grid only gets ~2 segments
+    // round a bevel).
+    const L1 = splitEdges(rIndex, rSim, nB);
+    const nL1 = nB + L1.mids.length / 3;
+    const geo1 = new Int32Array(nL1);
+    for (let r = 0; r < nB; r++) geo1[r] = rSim[r];
+    for (let j = 0; j < L1.midGeo.length; j++) geo1[nB + j] = sb.nV + L1.midGeo[j];
+    // the first level at rest, against the true shape
+    const maxN = nL1 + L1.index.length; // (at most one more vertex per level-1 edge side)
+    const rest = new Float32Array(maxN * 3);
+    const restN = new Float32Array(maxN * 3);
     for (let r = 0; r < nB; r++) {
       const i = rSim[r] * 3;
       rest[r * 3] = sb.X[i]; rest[r * 3 + 1] = sb.X[i + 1]; rest[r * 3 + 2] = sb.X[i + 2];
     }
-    for (let m = 0, k = nB; m < this.mids.length; m += 3, k++) {
-      const a = this.mids[m], b = this.mids[m + 1];
-      for (let c = 0; c < 3; c++) rest[k * 3 + c] = (rest[a * 3 + c] + rest[b * 3 + c]) * 0.5;
+    vertexNormals(rIndex, rest, restN, nB);
+    const shape = { a: sb.p.size / 2 - sb.p.bevel, r: sb.p.bevel };
+    this.disp1 = new Float32Array(L1.mids.length / 3);
+    tessellate(rest, restN, null, L1.mids, nB, this.disp1);
+    snapToShape(rest, restN, L1.mids, nB, this.disp1, shape);
+    // the second level only where the surface curves (bevels, corners): flat
+    // faces - and the cut faces a burst leaves - gain nothing from it
+    const t1 = L1.index.length / 3;
+    const refine = new Uint8Array(t1);
+    for (let t = 0; t < t1; t++) {
+      const a = L1.index[t * 3] * 3, b = L1.index[t * 3 + 1] * 3, c = L1.index[t * 3 + 2] * 3;
+      const ab = restN[a] * restN[b] + restN[a + 1] * restN[b + 1] + restN[a + 2] * restN[b + 2];
+      const bc = restN[b] * restN[c] + restN[b + 1] * restN[c + 1] + restN[b + 2] * restN[c + 2];
+      const ca = restN[c] * restN[a] + restN[c + 1] * restN[a + 1] + restN[c + 2] * restN[a + 2];
+      refine[t] = Math.min(ab, bc, ca) < 0.996 ? 1 : 0; // (> ~5 degrees between normals)
     }
-    const index = new Uint32Array(nTri * 12);
-    for (let t = 0; t < nTri; t++) {
-      const a = rIndex[t * 3], b = rIndex[t * 3 + 1], c = rIndex[t * 3 + 2];
-      const ab = triMid[t * 3], bc = triMid[t * 3 + 1], ca = triMid[t * 3 + 2];
-      index.set([a, ab, ca, ab, b, bc, ca, bc, c, ab, bc, ca], t * 12);
-    }
+    const L2 = splitEdges(L1.index, geo1, nL1, refine);
+    const n = nL1 + L2.mids.length / 3;
+    this.mids1 = L1.mids;
+    this.mids2 = L2.mids;
+    this.nBase = nB;
+    this.nL1 = nL1;
+    this.nRender = n;
+    this.pos = new Float32Array(n * 3);
+    this.nrm = new Float32Array(n * 3);
+    this.data = new Float32Array(n * 4);
+    this.disp2 = new Float32Array(L2.mids.length / 3);
+    tessellate(rest, restN, null, L2.mids, nL1, this.disp2);
+    snapToShape(rest, restN, L2.mids, nL1, this.disp2, shape);
+    const index = L2.index;
     this.aPos = new THREE.BufferAttribute(this.pos, 3).setUsage(THREE.DynamicDrawUsage);
     this.aNrm = new THREE.BufferAttribute(this.nrm, 3).setUsage(THREE.DynamicDrawUsage);
     this.aData = new THREE.BufferAttribute(this.data, 4).setUsage(THREE.DynamicDrawUsage);
-    this.aRest = new THREE.BufferAttribute(rest, 3);
+    this.aRest = new THREE.BufferAttribute(rest.slice(0, n * 3), 3);
     // distance from the just-healed seams (see Healer._fuse, weldFieldJob)
     const weld = new Float32Array(n).fill(99);
     if (sb.weld && sb.weld.topo === sb.topoVersion) {
@@ -261,9 +471,11 @@ export class JellyView {
       for (let r = 0; r < nB; r++) weld[r] = d[rSim[r]];
       // the edge midpoints measure for themselves (a seam line often runs
       // between two vertices; averaging would blur it out)
-      for (let m = 0, k = nB; m < this.mids.length; m += 3, k++) {
-        const wa = weld[this.mids[m]], wb = weld[this.mids[m + 1]];
-        weld[k] = Math.min(wa, wb) < 0.12 ? sb.weld.at(rest[k * 3], rest[k * 3 + 1], rest[k * 3 + 2]) : (wa + wb) * 0.5;
+      for (const [mids, first] of [[this.mids1, nB], [this.mids2, nL1]]) {
+        for (let m = 0, k = first; m < mids.length; m += 3, k++) {
+          const wa = weld[mids[m]], wb = weld[mids[m + 1]];
+          weld[k] = Math.min(wa, wb) < 0.12 ? sb.weld.at(rest[k * 3], rest[k * 3 + 1], rest[k * 3 + 2]) : (wa + wb) * 0.5;
+        }
       }
     }
     this.aWeld = new THREE.BufferAttribute(weld, 1);
@@ -276,7 +488,9 @@ export class JellyView {
       g.setAttribute('aData', this.aData);
       g.setAttribute('aRest', this.aRest);
       g.setAttribute('aWeld', this.aWeld);
-      g.setIndex(new THREE.BufferAttribute(index.slice(rg.start * 4, (rg.start + rg.count) * 4), 1));
+      // (a piece's base triangles -> its level-1 ones, 4 each -> its final ones)
+      const s0 = L2.start[(rg.start / 3) * 4], s1 = L2.start[((rg.start + rg.count) / 3) * 4];
+      g.setIndex(new THREE.BufferAttribute(index.slice(s0, s1), 1));
       const mesh = new THREE.Mesh(g, this.frontMat);
       mesh.frustumCulled = false;
       mesh.userData.piece = k;
@@ -296,35 +510,8 @@ export class JellyView {
     const pos = this.pos, nrm = this.nrm, data = this.data;
     sb.writeRender(pos, nrm, data);
     if (sb.fill && sb.fill.topo === sb.topoVersion) this._fill(sb, sb.fill);
-    // Phong tessellation of the edge midpoints
-    const mids = this.mids;
-    const alpha = 0.75;
-    for (let m = 0, k = this.nBase; m < mids.length; m += 3, k++) {
-      const a = mids[m] * 3, b = mids[m + 1] * 3;
-      const ax = pos[a], ay = pos[a + 1], az = pos[a + 2];
-      const bx = pos[b], by = pos[b + 1], bz = pos[b + 2];
-      let qx = (ax + bx) * 0.5, qy = (ay + by) * 0.5, qz = (az + bz) * 0.5;
-      const nax = nrm[a], nay = nrm[a + 1], naz = nrm[a + 2];
-      const nbx = nrm[b], nby = nrm[b + 1], nbz = nrm[b + 2];
-      if (!mids[m + 2]) {
-        const da = (qx - ax) * nax + (qy - ay) * nay + (qz - az) * naz;
-        const db = (qx - bx) * nbx + (qy - by) * nby + (qz - bz) * nbz;
-        const px = qx - 0.5 * (da * nax + db * nbx), py = qy - 0.5 * (da * nay + db * nby), pz = qz - 0.5 * (da * naz + db * nbz);
-        qx += (px - qx) * alpha;
-        qy += (py - qy) * alpha;
-        qz += (pz - qz) * alpha;
-      }
-      const o = k * 3;
-      pos[o] = qx; pos[o + 1] = qy; pos[o + 2] = qz;
-      let nx = nax + nbx, ny = nay + nby, nz = naz + nbz;
-      const l = Math.hypot(nx, ny, nz) || 1;
-      nrm[o] = nx / l; nrm[o + 1] = ny / l; nrm[o + 2] = nz / l;
-      const da4 = mids[m] * 4, db4 = mids[m + 1] * 4, o4 = k * 4;
-      data[o4] = (data[da4] + data[db4]) * 0.5;
-      data[o4 + 1] = (data[da4 + 1] + data[db4 + 1]) * 0.5;
-      data[o4 + 2] = Math.max(data[da4 + 2], data[db4 + 2]);
-      data[o4 + 3] = 0;
-    }
+    tessellate(pos, nrm, data, this.mids1, this.nBase, this.disp1);
+    tessellate(pos, nrm, data, this.mids2, this.nL1, this.disp2);
     this.aPos.needsUpdate = true;
     this.aNrm.needsUpdate = true;
     this.aData.needsUpdate = true;

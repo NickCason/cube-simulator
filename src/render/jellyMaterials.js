@@ -249,6 +249,17 @@ export function createJellyMaterial(env, layerUniforms) {
       uniform vec4 uCav[${MAX_CAVITIES}];
       uniform int uCavN;
       uniform float uEmit;
+      // the floor, for what the jelly mirrors below the horizon (shared with
+      // the floor's own shader - see JellyView.fxUniforms)
+      uniform sampler2D tCaustic;
+      uniform sampler2D tFloorFx;
+      uniform sampler2D tGlowMap;
+      uniform vec4 uFloorRect;
+      uniform vec3 uTint;
+      uniform float uGlowFloor;
+      uniform vec3 uBg;
+      uniform vec3 uFloorAlbedo;
+      uniform float uFloorEnv;
       uniform vec4 uPulse[${MAX_PULSES}];
       uniform float uPulseAmp[${MAX_PULSES}];
       varying vec3 vWorldPos;
@@ -295,6 +306,29 @@ export function createJellyMaterial(env, layerUniforms) {
         if (s1.z >= 0.0) d = min(d, weldSeg(p, s1.z));
         if (s1.w >= 0.0) d = min(d, weldSeg(p, s1.w));
         return d;
+      }
+
+      // The floor at xz as the camera would see it, roughly: its colour lit
+      // by the key light through the jelly's shadow and caustics and by the
+      // room, its glow pool in glow mode, fading into the backdrop.
+      vec3 floorAt(vec2 xz, float rough) {
+        vec2 fuv = (xz - uFloorRect.xy) * uFloorRect.zw;
+        float mask = 0.0, contact = 0.0;
+        vec3 caus = vec3(0.0), glowF = vec3(0.0);
+        if (all(greaterThan(fuv, vec2(0.0))) && all(lessThan(fuv, vec2(1.0)))) {
+          float lod = 1.0 + 4.0 * rough;
+          caus = textureLod(tCaustic, fuv, lod).rgb;
+          vec4 fx = textureLod(tFloorFx, fuv, lod);
+          mask = fx.r;
+          contact = fx.g;
+          if (uGlowFloor > 0.0) glowF = textureLod(tGlowMap, fuv, 1.5).rgb * 0.7 + textureLod(tGlowMap, fuv, 3.5).rgb * 0.9;
+        }
+        vec3 transfer = vec3(1.0 - mask) + caus * 2.7 + uTint * mask * 0.22;
+        vec3 direct = uLightColor * max(normalize(uLightDir).y, 0.0) * 0.3183 * transfer * (1.0 - contact * 0.2);
+        vec3 sky = textureLod(envMap, vec3(0.0, 1.0, 0.0), envMaxLod).rgb * uFloorEnv
+          * mix(vec3(1.0), uTint * 1.1, mask * 0.68) * (1.0 - contact * 0.35);
+        vec3 c = uFloorAlbedo * (direct + sky) + glowF * uGlowFloor;
+        return mix(c, uBg, smoothstep(3.2, 11.0, length(xz)));
       }
 
       vec3 envLookup(vec3 dir, float rough) {
@@ -451,12 +485,14 @@ export function createJellyMaterial(env, layerUniforms) {
         float F = min(F0 + (1.0 - F0) * pow(clamp(1.0 - NdV, 0.0, 1.0), 5.0), 1.0 - 0.5 * rim);
         vec3 Rv = reflect(-V, N);
         vec3 refl = envLookup(Rv, rough);
-        // (what it mirrors below the horizon is the floor beside it - lit
-        // through the jelly, darker right where it sits - not the studio's
-        // grey, which beside a strong colour reads as its opposite)
-        float down = 1.0 - smoothstep(-0.45, 0.05, Rv.y);
-        float nearFloor = exp(-max(Pw.y, 0.0) * 6.0);
-        refl = mix(refl, refl * sc * (1.3 - 0.5 * nearFloor), down * (0.55 + 0.35 * nearFloor));
+        // below the horizon it mirrors the real floor where that ray lands -
+        // the jelly's own coloured shadow and caustics, its glow pool - not
+        // the studio map's flat grey (which beside a strong colour reads as
+        // its opposite: red edges looked green)
+        if (Rv.y < 0.0) {
+          vec3 H = Pw + Rv * (max(Pw.y, 0.0) / max(-Rv.y, 1e-3));
+          refl = mix(refl, floorAt(H.xz, rough) * envIntensity, 1.0 - smoothstep(-0.12, 0.0, Rv.y));
+        }
 
         vec3 H = normalize(L + V);
         float NdH = max(dot(N, H), 0.0);
