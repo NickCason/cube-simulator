@@ -30,7 +30,7 @@ const UP = new THREE.Vector3(0, 1, 0);
 // Rotation that best maps rest offsets onto current offsets
 // (Müller et al. 2016, "A robust method to extract the rotational part of
 // deformations"). Columns: a_j = sum m (x - c) (X - C)_j.
-function fitRotation(a0, a1, a2, q) {
+export function fitRotation(a0, a1, a2, q) {
   const m = new THREE.Matrix4();
   const r = [new THREE.Vector3(), new THREE.Vector3(), new THREE.Vector3()];
   const om = new THREE.Vector3(), t = new THREE.Vector3(), dq = new THREE.Quaternion();

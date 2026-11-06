@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { cutBody, sphereField, planeField, separateClusters, removeTets, removeSmallPieces } from '../sim/cutting.js';
 import { makeMallet, makeTorch, makeSpray, makeBaller, makeBomb, makeSyringe, makeMagnet, orient } from '../world/models.js';
+import { fitRotation } from '../heal.js';
 
 const V = (a) => new THREE.Vector3(a[0], a[1], a[2]);
 const _a = new THREE.Vector3();
@@ -64,6 +65,72 @@ function anchorOk(sb, a) {
 const RES_HITS = 6;
 const RES_NOTES = [392.0, 440.0, 523.25, 587.33, 659.25, 783.99];
 
+// Move piece k `amount` of the way back to its rest shape - turned and
+// sized to fit how it lies now, standing on the floor - and take the same
+// share out of its wobble.
+export function springBack(sb, k, amount) {
+  const vs = sb.pieces[k].verts, x = sb.x, X = sb.X, v = sb.v, m = sb.m;
+  const C = new THREE.Vector3(), c = new THREE.Vector3(), u = new THREE.Vector3();
+  let M = 0;
+  for (const i of vs) {
+    const w = m[i];
+    M += w;
+    C.x += X[i * 3] * w; C.y += X[i * 3 + 1] * w; C.z += X[i * 3 + 2] * w;
+    c.x += x[i * 3] * w; c.y += x[i * 3 + 1] * w; c.z += x[i * 3 + 2] * w;
+    u.x += v[i * 3] * w; u.y += v[i * 3 + 1] * w; u.z += v[i * 3 + 2] * w;
+  }
+  if (M <= 0) return;
+  C.multiplyScalar(1 / M); c.multiplyScalar(1 / M); u.multiplyScalar(1 / M);
+  const a = [new THREE.Vector3(), new THREE.Vector3(), new THREE.Vector3()];
+  let den = 0;
+  for (const i of vs) {
+    const w = m[i];
+    const dx = (x[i * 3] - c.x) * w, dy = (x[i * 3 + 1] - c.y) * w, dz = (x[i * 3 + 2] - c.z) * w;
+    const RX = X[i * 3] - C.x, RY = X[i * 3 + 1] - C.y, RZ = X[i * 3 + 2] - C.z;
+    a[0].x += dx * RX; a[0].y += dy * RX; a[0].z += dz * RX;
+    a[1].x += dx * RY; a[1].y += dy * RY; a[1].z += dz * RY;
+    a[2].x += dx * RZ; a[2].y += dy * RZ; a[2].z += dz * RZ;
+    den += w * (RX * RX + RY * RY + RZ * RZ);
+  }
+  if (den <= 0) return;
+  const q = fitRotation(a[0], a[1], a[2], new THREE.Quaternion());
+  const r = [new THREE.Vector3(), new THREE.Vector3(), new THREE.Vector3()];
+  new THREE.Matrix4().makeRotationFromQuaternion(q).extractBasis(r[0], r[1], r[2]);
+  const s = (r[0].dot(a[0]) + r[1].dot(a[1]) + r[2].dot(a[2])) / den;
+  const tg = new Float64Array(vs.length * 3), t = new THREE.Vector3();
+  let low = Infinity;
+  for (let n = 0; n < vs.length; n++) {
+    const i = vs[n];
+    t.set(X[i * 3] - C.x, X[i * 3 + 1] - C.y, X[i * 3 + 2] - C.z).applyQuaternion(q).multiplyScalar(s).add(c);
+    tg[n * 3] = t.x; tg[n * 3 + 1] = t.y; tg[n * 3 + 2] = t.z;
+    if (t.y < low) low = t.y;
+  }
+  const lift = Math.max(0, -low);
+  for (let n = 0; n < vs.length; n++) {
+    const o = vs[n] * 3;
+    x[o] += amount * (tg[n * 3] - x[o]);
+    x[o + 1] += amount * (tg[n * 3 + 1] + lift - x[o + 1]);
+    x[o + 2] += amount * (tg[n * 3 + 2] - x[o + 2]);
+    v[o] = u.x + (1 - amount) * (v[o] - u.x);
+    v[o + 1] = u.y + (1 - amount) * (v[o + 1] - u.y);
+    v[o + 2] = u.z + (1 - amount) * (v[o + 2] - u.z);
+  }
+  // (its centre and box, for the cuts that follow)
+  const pc = sb.pieces[k], bb = pc.bbox;
+  bb[0] = bb[1] = bb[2] = Infinity;
+  bb[3] = bb[4] = bb[5] = -Infinity;
+  let cx = 0, cy = 0, cz = 0;
+  for (const i of vs) {
+    const o = i * 3, w = m[i];
+    cx += x[o] * w; cy += x[o + 1] * w; cz += x[o + 2] * w;
+    for (let j = 0; j < 3; j++) {
+      if (x[o + j] < bb[j]) bb[j] = x[o + j];
+      if (x[o + j] > bb[j + 3]) bb[j + 3] = x[o + j];
+    }
+  }
+  pc.com[0] = cx / M; pc.com[1] = cy / M; pc.com[2] = cz / M;
+}
+
 export class MalletTool {
   constructor(app) {
     this.app = app;
@@ -75,6 +142,7 @@ export class MalletTool {
     app.scene.add(this.model);
     this.anim = null;
     this.res = null; // resonance streak: { piece, topo, hits, last, T }
+    this.tear = null; // a burst under way: { seams left, c, half }
   }
 
   // The jelly's beat (s): its natural wobble period - stiffer, lighter or
@@ -123,6 +191,7 @@ export class MalletTool {
   }
 
   update(dt) {
+    if (this.tear) this._tear();
     this._resonance();
     const a = this.anim;
     if (!a) return;
@@ -198,7 +267,10 @@ export class MalletTool {
       for (let i = 0; i < sb.nV; i++) {
         if (!sb.w[i] || x[i * 3 + 1] > 0.25) continue;
         const r = Math.hypot(x[i * 3] - p.x, x[i * 3 + 2] - p.z);
-        if (r < 1.3) v[i * 3 + 1] += 3.6 * (1 - r / 1.3);
+        if (r < 1.3) {
+          v[i * 3 + 1] += 3.6 * (1 - r / 1.3);
+          sb.wake(sb.vPiece[i]); // (a sleeping piece wouldn't move)
+        }
       }
       app.audio.thud(0.7);
       app.particles.smoke(p, 3, 0.4, 0.75, 0.1, 0.2);
@@ -261,7 +333,10 @@ export class MalletTool {
   }
 
   // Six on the beat: the jelly shakes itself apart into wet chunks - torn
-  // along a few curved and flat seams through it, then flung outwards.
+  // along a few curved and flat seams through it, then flung outwards. The
+  // tearing is spread over the first frames of the hit-stop (one seam a
+  // frame, while the world all but stands still) and the fling comes the
+  // frame after, so no single frame has to do it all.
   burst(piece, p) {
     const app = this.app;
     const sb = app.sb;
@@ -269,52 +344,75 @@ export class MalletTool {
     if (!pc) return;
     this.res = null;
     if (!app.healer.active) sb.dampBoost = 1;
+    // the dent's spring goes into the burst: the jelly pops most of the way
+    // back into shape as it tears (left squashed, the chunks would start out
+    // inside each other and spend their first moments shoving apart)
+    springBack(sb, piece, 0.85);
     const [cx, cy, cz] = pc.com;
     const bb = pc.bbox.slice();
     const half = 0.5 * Math.max(bb[3] - bb[0], bb[4] - bb[1], bb[5] - bb[2]);
     const inBox = (x, y, z) => x > bb[0] - 0.03 && x < bb[3] + 0.03 && y > bb[1] - 0.03 && y < bb[4] + 0.03 && z > bb[2] - 0.03 && z < bb[5] + 0.03;
-    const anchors = app.allAnchors();
     const rndDir = () => {
       const u = Math.random() * 2 - 1, th = Math.random() * Math.PI * 2, r = Math.sqrt(1 - u * u);
       return new THREE.Vector3(r * Math.cos(th), u, r * Math.sin(th));
     };
-    // a couple of curved seams (big spheres whose rims run through it)...
-    for (let k = 0; k < 2; k++) {
+    // a curved seam (a big sphere whose rim runs through it)...
+    const seams = [];
+    {
       const dir = rndDir(), R = half * (1.1 + Math.random() * 0.5);
       const c = new THREE.Vector3(cx, cy, cz).addScaledVector(dir, R + half * (Math.random() - 0.5) * 0.5);
       const f = sphereField(c.x, c.y, c.z, R);
       f.inRegion = inBox;
-      cutBody(sb, f, { separate: 0.015, anchors });
+      seams.push(f);
     }
-    // ...and two or three flat ones near the middle
-    const K = 2 + (Math.random() < 0.5 ? 1 : 0);
-    for (let k = 0; k < K; k++) {
+    // ...and two flat ones near the middle
+    for (let k = 0; k < 2; k++) {
       const n = rndDir();
       const q = new THREE.Vector3(cx, cy, cz).addScaledVector(rndDir(), half * 0.25 * Math.random());
-      cutBody(sb, planeField(n.x, n.y, n.z, n.dot(q), inBox), { separate: 0.015, anchors });
+      seams.push(planeField(n.x, n.y, n.z, n.dot(q), inBox));
     }
-    const crumbs = removeSmallPieces(sb, 0.004 * sb.p.size ** 3, anchors);
-    const c = new THREE.Vector3(cx, cy, cz);
-    for (let k = 0; k < crumbs.length; k += 4) {
-      const q = new THREE.Vector3(crumbs[k], crumbs[k + 1], crumbs[k + 2]);
-      const v = q.clone().sub(c).normalize().multiplyScalar(2.5 + Math.random() * 2.5);
-      v.y += 2.5;
-      app.droplets.spawn(q, v, 0.014 + Math.cbrt(crumbs[k + 3]) * 0.3);
-    }
+    this.tear = { seams, c: new THREE.Vector3(cx, cy, cz), half };
+    const c = this.tear.c;
     for (let k = 0; k < 36; k++) {
       const dir = new THREE.Vector3(Math.random() - 0.5, Math.random() * 0.9 + 0.1, Math.random() - 0.5).normalize();
       const v = dir.clone().multiplyScalar(3 + Math.random() * 4);
       v.y += 1.5;
       app.droplets.spawn(c.clone().addScaledVector(dir, half * 0.9), v, 0.01 + Math.random() * 0.02);
     }
-    app.onTopologyChanged();
-    sb.radialImpulse(cx, cy, cz, 2.2 * half + 0.4, 5.5, 2.2);
     app.shake(0.05);
     app.hitStop(0.12);
     app.audio.splat(1);
     app.audio.resonate();
     app.ui?.hint('Resonance!', 1600);
     app.markDamaged();
+    this._tear();
+  }
+
+  // One step of a burst: the next seam, then the crumbs, then the fling.
+  _tear() {
+    const T = this.tear, app = this.app, sb = app.sb;
+    if (app.healer.active) {
+      this.tear = null;
+      return;
+    }
+    const anchors = app.allAnchors();
+    if (T.seams.length) {
+      cutBody(sb, T.seams.shift(), { separate: 0.015, anchors });
+      if (!T.seams.length) {
+        // what's too small to be a chunk flies off as drops
+        const crumbs = removeSmallPieces(sb, 0.004 * sb.p.size ** 3, anchors);
+        for (let k = 0; k < crumbs.length; k += 4) {
+          const q = new THREE.Vector3(crumbs[k], crumbs[k + 1], crumbs[k + 2]);
+          const v = q.clone().sub(T.c).normalize().multiplyScalar(2.5 + Math.random() * 2.5);
+          v.y += 2.5;
+          app.droplets.spawn(q, v, 0.014 + Math.cbrt(crumbs[k + 3]) * 0.3);
+        }
+      }
+      app.onTopologyChanged();
+      return;
+    }
+    sb.radialImpulse(T.c.x, T.c.y, T.c.z, 2.2 * T.half + 0.4, 5.5, 2.2, 0.5);
+    this.tear = null;
   }
 
   shatter(a) {

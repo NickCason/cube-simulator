@@ -6,14 +6,14 @@ import { Post } from './render/post.js';
 import { JellyView } from './render/jellyView.js';
 import { NailSystem } from './world/nails.js';
 import { Particles } from './world/particles.js';
-import { Healer, weldFieldJob } from './heal.js';
+import { Healer } from './heal.js';
 import { AudioEngine } from './audio.js';
 import { Overlay } from './ui/overlay.js';
 import { UI } from './ui/ui.js';
 import { HandTool, KnifeTool, NailGunTool } from './tools/basic.js';
 import { MalletTool, TorchTool, FreezeTool, BallerTool, BombTool, SyringeTool, MagnetTool } from './tools/more.js';
 import { makeMaterials, makeBomb } from './world/models.js';
-import { cutBody, planeField, sphereField, separateClusters, removeTets, removeSmallPieces } from './sim/cutting.js';
+import { physicsWarmJob } from './sim/warm.js';
 import { Droplets } from './world/droplets.js';
 import { Bubbles } from './world/bubbles.js';
 import { Glitter, GLITTER_MODES } from './world/glitter.js';
@@ -81,6 +81,7 @@ export class App {
     this.scene.add(key.target);
 
     this.jelly = new JellyView(renderer, this.env, this.lightDir);
+    if (this.coarse) this.jelly.maxLayers = 3;
     // warm dynamic light for flames and blasts (lights the floor and the jelly)
     this.fireLight = new THREE.PointLight(0xff8a3c, 0, 3.5, 2);
     this.fireLight.position.set(0, 1, 0);
@@ -125,6 +126,9 @@ export class App {
     this.isTouch = false;
     this._panV = new THREE.Vector3();
     this._hitStop = 0;
+    // the cube hangs a moment before it drops, while the physics code warms
+    // up on a throwaway body (Safari runs cold code slowly at first)
+    this.intro = { job: physicsWarmJob(), t: 0, done: false };
     this.paused = false;
     this.raycaster = new THREE.Raycaster();
     this._ndc = new THREE.Vector2();
@@ -168,8 +172,7 @@ export class App {
 
   // Compile every shader the tools and effects will need, now and offscreen,
   // so the first use of each doesn't stall the frame (phones compile shaders
-  // slowly), and run the cutting code once on a throwaway body so it is
-  // already warm when the first knife stroke lands.
+  // slowly). The physics code warms up during the intro (see frame).
   warmUp() {
     const t0 = performance.now();
     const r = this.renderer;
@@ -207,23 +210,6 @@ export class App {
       r.setRenderTarget(null);
     } finally {
       for (const f of undo) f();
-    }
-    try {
-      const sb = new SoftBody({ res: 5 });
-      sb.loadCube(0, 0, 0);
-      sb.step(1 / 60);
-      cutBody(sb, planeField(1, 0, 0, 0.03), { separate: 0.01 });
-      cutBody(sb, sphereField(0.2, 0.6, 0.2, 0.3), { separate: 0 });
-      removeTets(sb, (t, x, y) => y > 0.85 && x > 0.3);
-      separateClusters(sb, new Int32Array(sb.nT).map((_, t) => (t * 7) % 3));
-      removeSmallPieces(sb, 0.002);
-      // a few steps with the bits touching (contact code)
-      for (let k = 0; k < 12; k++) sb.step(1 / 60);
-      // and the heal's weld light field
-      const job = weldFieldJob([0, 0.2, 0, 0.3, 0.2, 0, 0, 0.2, 0.3, 0.45, -0.1, 0, 0.45, 0.2, 0, 0.45, -0.1, 0.3], 0.5, new Float64Array([0, 0.5, 0, 0.5, 0, 0.2, -0.5, 0.1, 0]));
-      for (let r = job.next(); !r.done; r = job.next());
-    } catch (e) {
-      /* warming only */
     }
     this.warmStats = { ms: performance.now() - t0, programs: (r.info.programs?.length || 0) - p0 };
   }
@@ -488,6 +474,33 @@ export class App {
     this._shake = Math.min(0.05, this._shake + a);
   }
 
+  // Intro: hold the cube up while the warm-up job runs a few ms per frame,
+  // and let it drop once the job has warmed the falling and landing code and
+  // the first runs of the cutting and contact code (or after 1.2 s, or at
+  // the first touch). The rest of the job finishes in the background, on
+  // quiet frames (see frame).
+  _introStep(dt) {
+    const I = this.intro;
+    I.t += dt;
+    if (this._warmSlice(9) === 'ready' || I.t > 1.2) I.done = true;
+    if (I.done) this.introMs = I.t * 1000;
+  }
+
+  _warmSlice(budget) {
+    const I = this.intro;
+    if (!I.job) return 'ready';
+    const t0 = performance.now();
+    while (performance.now() - t0 < budget) {
+      const r = I.job.next();
+      if (r.done) {
+        I.job = null;
+        return 'ready';
+      }
+      if (r.value === 'ready' && !I.done) return 'ready';
+    }
+    return '';
+  }
+
   // a heavy blow: the world all but freezes for a moment
   hitStop(sec) {
     if (this.reducedMotion) return;
@@ -588,6 +601,7 @@ export class App {
     el.addEventListener('pointerdown', (e) => {
       this.audio.init();
       this.isTouch = e.pointerType === 'touch';
+      this.intro.done = true; // a touch ends the intro hold right away
       el.setPointerCapture(e.pointerId);
       pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
       if (pointers.size === 2) {
@@ -690,12 +704,16 @@ export class App {
       const nS = Math.max(4, Math.min(16, Math.round(this.substepRate * sdt)));
       this.sb.p.substeps = nS;
       const p0 = performance.now();
-      if (sdt > 0) this.sb.step(sdt);
+      if (!this.intro.done) this._introStep(dt);
+      else if (sdt > 0) this.sb.step(sdt);
       const pm = performance.now() - p0;
+      // the rest of the warm-up waits for quiet frames: its first runs of the
+      // contact code are slow, and shouldn't land on a busy frame
+      if (this.intro.done && this.intro.job && (!this.sb.anyAwake || pm < 2)) this._warmSlice(3);
       this.stats.physLast = pm;
-      this.stats.physMs = this.stats.physMs * 0.9 + pm * 0.1;
-      // adapt substep rate to the device
-      if (this.sb.anyAwake) {
+      // adapt substep rate to the device (not to the intro's warm-up work)
+      if (this.intro.done) this.stats.physMs = this.stats.physMs * 0.9 + pm * 0.1;
+      if (this.intro.done && this.sb.anyAwake) {
         if (this.stats.physMs > 9.5) this.substepRate = Math.max(420, this.substepRate * 0.985);
         else if (this.stats.physMs < 6) this.substepRate = Math.min(720, this.substepRate * 1.004);
       }

@@ -133,7 +133,7 @@ export function attachStats(app) {
       'Cube Simulator stats',
       `${navigator.userAgent}`,
       `gpu: ${gpu}   dpr ${window.devicePixelRatio}   cores ${navigator.hardwareConcurrency || '?'}   screen ${innerWidth}x${innerHeight}`,
-      w ? `warm-up at load: ${Math.round(w.ms)} ms, ${w.programs} shaders` : '',
+      w ? `warm-up at load: ${Math.round(w.ms)} ms, ${w.programs} shaders; intro hold ${Math.round(app.introMs || 0)} ms` : '',
       `session ${((performance.now() - t0) / 1000).toFixed(0)} s, ${frames} frames: median ${pct(all, 0.5).toFixed(1)} ms, 95th ${pct(all, 0.95).toFixed(1)} ms, 99th ${pct(all, 0.99).toFixed(1)} ms`,
       ...summary(),
       'slow / eventful frames (time, interval, what happened):',

@@ -34,6 +34,21 @@ function growArr(a, n, C) {
   return b;
 }
 
+// V8 keeps a field that has only ever held whole numbers as a small integer;
+// the first fraction stored in it then changes the hidden class of every
+// object of that kind, throwing away all the code optimised for them (a
+// stutter the first time, say, the mallet sets a fractional damping). Fields
+// that will hold fractions get one straight away.
+function asFloat(o, keys) {
+  for (const k of keys) {
+    const v = o[k];
+    o[k] = 0.5;
+    o[k] = v;
+  }
+  return o;
+}
+const PIECE_FLOATS = ['sleepT', 'rebT', 'impY', 'rebR', 'impR', 'impUx', 'impUz', 'impT', 'impDv'];
+
 export class SoftBody {
   constructor(opts = {}) {
     this.p = Object.assign({}, DEFAULTS, opts);
@@ -54,7 +69,7 @@ export class SoftBody {
     this.time = 0;
     this.hCell = this.p.size / this.p.res;
     this.impacts = []; // impacts this frame, one per piece: {x, y, z, dv, piece, kind, mass, partner} (for audio)
-    this._ct = { t: -1, f: -1, b0: 0, b1: 0, b2: 0, b3: 0, nx: 0, ny: 0, nz: 0, depth: 0 };
+    this._ct = asFloat({ t: -1, f: -1, b0: 0, b1: 0, b2: 0, b3: 0, nx: 0, ny: 0, nz: 0, depth: 0 }, ['b0', 'b1', 'b2', 'b3', 'nx', 'ny', 'nz', 'depth']);
     // Every field this object will ever carry is created here, so its shape
     // never changes later: Safari's JIT throws its optimised code away (and
     // takes seconds to rebuild it) whenever a hot object gains a property.
@@ -65,7 +80,12 @@ export class SoftBody {
     this._heatResidual = 0;
     this.weld = null; // set by the heal: distances to the healed seams
     this.anyAwake = true;
-    this._frameDt = 1 / 60;
+    // the piece-contact candidates cover _hashSpan seconds of motion from
+    // when they were found (_hashAge ago); short frames reuse them
+    this._hashSpan = 1 / 60;
+    this._hashAge = 0;
+    this._hashTopo = -1;
+    this._hashDirty = true;
     this._grabPress = 0;
     this._anyContact = false;
     this._gap = 0;
@@ -107,9 +127,14 @@ export class SoftBody {
     this._pmu = null;
     this._tmpTemp = null;
     this._pbb = null;
-    this._pdev = null;
+    this._pVel = null;
+    this._pMass = null;
     this._pcs = null;
     this._sweep = null;
+    this._disp = null;
+    this._tStat = null;
+    this._sfKey = null;
+    this._sfVal = null;
     this._pieceActive = null;
     this._ptS = null;
     this._hCount = null;
@@ -139,11 +164,12 @@ export class SoftBody {
     this._wfV = null;
     this._wtF = null;
     this._wfF = null;
-    this._pi3 = null;
-    this._pw3 = null;
-    this._ti4 = null;
-    this._tb4 = null;
-    this._fq = { ok: false, dist: 0, prev: 0, nx: 0, ny: 0, nz: 0, on: false, crossS: Infinity };
+    this._pi3 = new Int32Array(3);
+    this._pw3 = new Float64Array(3);
+    this._ti4 = new Int32Array(4);
+    this._tb4 = new Float64Array(4);
+    this._fq = asFloat({ ok: false, dist: 0, prev: 0, nx: 0, ny: 0, nz: 0, on: false, crossS: Infinity }, ['dist', 'prev', 'nx', 'ny', 'nz']);
+    asFloat(this, ['time', 'gravityScale', 'rebuildMs', 'dampBoost', '_heatResidual', '_hashAge', '_grabPress', '_gap']);
   }
 
   // ---------------------------------------------------------------- storage
@@ -236,11 +262,13 @@ export class SoftBody {
       pc.sleepT = 0;
       pc.asleep = false;
     }
+    this._hashDirty = true;
   }
 
   wake(k) {
     const pc = this.pieces[k];
     if (pc) {
+      if (pc.asleep) this._hashDirty = true;
       pc.sleepT = 0;
       pc.asleep = false;
     }
@@ -255,9 +283,54 @@ export class SoftBody {
     this._extractSurface();
     this._computeEscape();
     this._buildRenderClusters();
+    this._sizeContactScratch();
     this.topoVersion++;
     this.rebuildMs += performance.now() - t0; // (read and cleared by ?stats)
     this.rebuilds++;
+  }
+
+  // The contact pass's scratch arrays, sized for the new topology here
+  // (rebuilds are rare) so the per-frame code never takes a growth branch
+  // for the first time - that throws its optimised code away mid-frame.
+  _sizeContactScratch() {
+    const NP = Math.max(this.pieces.length, 64), V = this.vCap, Tc = this.tCap;
+    const F = Math.max(this.nF * 2, 1024), Pr = (V + Math.max(this.nF, 1024)) * 2;
+    const f64 = (a, n) => (a && a.length >= n ? a : new Float64Array(n));
+    const f32 = (a, n) => (a && a.length >= n ? a : new Float32Array(n));
+    const i32 = (a, n) => (a && a.length >= n ? a : new Int32Array(n));
+    const u8 = (a, n) => (a && a.length >= n ? a : new Uint8Array(n));
+    this._pbb = f64(this._pbb, NP * 6);
+    this._pcs = f64(this._pcs, NP);
+    this._pVel = f64(this._pVel, NP * 3);
+    this._pMass = f64(this._pMass, NP);
+    this._pieceActive = u8(this._pieceActive, NP);
+    this._ptS = i32(this._ptS, NP + 1);
+    this._sweep = f32(this._sweep, V * 6);
+    this._disp = f32(this._disp, V * 3);
+    this._hCount = this._hCount || new Int32Array((1 << 15) + 1);
+    this._hFill = this._hFill || new Int32Array(1 << 15);
+    this._tBox0 = f32(this._tBox0, Tc * 6);
+    this._hRanges = i32(this._hRanges, Tc * 6);
+    this._hTets = i32(this._hTets, Tc);
+    this._tStat = f32(this._tStat, Tc * 8);
+    this._hEntries = i32(this._hEntries, Tc * 16);
+    this._probeV = i32(this._probeV, V);
+    this._probeF = i32(this._probeF, F);
+    this._pcStart = i32(this._pcStart, Pr);
+    this._pcEnd = i32(this._pcEnd, Pr);
+    this._pRel = f32(this._pRel, Pr);
+    this._probeSeen = u8(this._probeSeen, V);
+    this._tStamp = i32(this._tStamp, Tc);
+    this._cList = i32(this._cList, 1 << 17);
+    this._vcS = i32(this._vcS, V);
+    this._vcE = i32(this._vcE, V);
+    this._vcR = f32(this._vcR, V);
+    this._fcS = i32(this._fcS, F);
+    this._fcE = i32(this._fcE, F);
+    this._fcR = f32(this._fcR, F);
+    this._skip = f32(this._skip, Pr);
+    this._tBoxNow = f32(this._tBoxNow, Tc * 6);
+    this._tBoxStamp = i32(this._tBoxStamp, Tc);
   }
 
   // For every vertex: rest-space vector to the nearest boundary vertex of its
@@ -468,16 +541,16 @@ export class SoftBody {
       let mass = 0, vol = 0;
       for (const i of vs) mass += this.m[i];
       for (const t of pieceTets[k]) vol += this.vol0[t] * this.tVS[t];
-      return {
+      return asFloat({
         id: k,
         verts: Int32Array.from(vs),
         tets: Int32Array.from(pieceTets[k]),
         mass,
         volume: vol,
-        com: [0, 0, 0],
-        vel: [0, 0, 0],
-        bbox: [0, 0, 0, 0, 0, 0],
-        omega: [0, 0, 0],
+        com: new Float64Array(3),
+        vel: new Float64Array(3),
+        bbox: new Float64Array(6),
+        omega: new Float64Array(3),
         sleepT: 0,
         asleep: false,
         // (all fields up front - see the constructor)
@@ -489,12 +562,12 @@ export class SoftBody {
         impUx: 0,
         impUz: 0,
         boostedR: false,
-        impPrev: [0, 0, 0],
+        impPrev: new Float64Array(3),
         impPend: null,
         impT: -1,
         impDv: 0,
         sleepLogMu: undefined,
-      };
+      }, PIECE_FLOATS);
     });
     // keep largest piece first for stable "main piece" semantics
     void old;
@@ -503,8 +576,19 @@ export class SoftBody {
   _extractSurface() {
     const { T, X } = this;
     const nT = this.nT;
-    const K = this.nV + 1;
-    const map = new Map();
+    // Tet faces met once are on the boundary; ones met twice are shared.
+    // Open-addressing table on the sorted corner triple (a Map with big
+    // numeric keys costs several ms per cut); the boundary faces come out in
+    // tet order.
+    let cap = 1024;
+    while (cap < nT * 8) cap <<= 1;
+    if (!this._sfKey || this._sfKey.length < cap * 3) {
+      this._sfKey = new Int32Array(cap * 3);
+      this._sfVal = new Int32Array(cap);
+    }
+    const hk = this._sfKey, hv = this._sfVal, mask = cap - 1;
+    hv.fill(-1, 0, cap); // -1 empty, -2 shared (keep probing past it), else the face code t*4+f
+    let nF = 0;
     for (let t = 0; t < nT; t++) {
       if (this.vol0[t] <= 0) continue;
       for (let f = 0; f < 4; f++) {
@@ -513,12 +597,27 @@ export class SoftBody {
         if (lo > mid) { tt = lo; lo = mid; mid = tt; }
         if (mid > hi) { tt = mid; mid = hi; hi = tt; }
         if (lo > mid) { tt = lo; lo = mid; mid = tt; }
-        const key = (lo * K + mid) * K + hi;
-        if (map.has(key)) map.delete(key);
-        else map.set(key, t * 4 + f);
+        let h = (Math.imul(lo, 0x9e3779b1) ^ Math.imul(mid, 0x85ebca77) ^ Math.imul(hi, 0xc2b2ae3d)) & mask;
+        for (;;) {
+          const e = hv[h];
+          if (e === -1) {
+            hk[h * 3] = lo; hk[h * 3 + 1] = mid; hk[h * 3 + 2] = hi;
+            hv[h] = t * 4 + f;
+            nF++;
+            break;
+          }
+          if (e >= 0 && hk[h * 3] === lo && hk[h * 3 + 1] === mid && hk[h * 3 + 2] === hi) {
+            hv[h] = -2;
+            nF--;
+            break;
+          }
+          h = (h + 1) & mask;
+        }
       }
     }
-    const nF = map.size;
+    const codes = new Int32Array(nF);
+    for (let h = 0, n = 0; h < cap; h++) if (hv[h] >= 0) codes[n++] = hv[h];
+    codes.sort();
     const sTri = new Int32Array(nF * 3);
     const sTet = new Int32Array(nF);
     const sTag = new Uint8Array(nF);
@@ -528,7 +627,8 @@ export class SoftBody {
     let f = 0;
     const tetBoundary = new Int32Array(nT).fill(-1); // first boundary face of tet (linked)
     const nextBoundary = new Int32Array(nF).fill(-1);
-    for (const code of map.values()) {
+    for (let k = 0; k < nF; k++) {
+      const code = codes[k];
       const t = code >> 2, lf = code & 3;
       const a = T[t * 4 + FACES[lf][0]], b = T[t * 4 + FACES[lf][1]], c = T[t * 4 + FACES[lf][2]];
       sTri[f * 3] = a; sTri[f * 3 + 1] = b; sTri[f * 3 + 2] = c;
@@ -734,10 +834,21 @@ export class SoftBody {
       this._dampPieces(dt);
       return;
     }
-    this._frameDt = dt;
     const multi = this.pieces.length > 1 && P.collide && this.collisionsEnabled;
     this._grabPress = 0;
-    if (multi) this._buildCollisionHash();
+    if (multi) {
+      // A frame's worth (or more) of motion: short frames (slow motion)
+      // keep using the candidates until it is used up - unless something
+      // moved the pieces some other way meanwhile.
+      const age = this._hashAge + dt;
+      if (this._hashDirty || age > this._hashSpan * 1.0001 || this.grab || this.pushers.length || this.attract || this._hashTopo !== this.topoVersion) {
+        this._hashSpan = Math.max(dt, 1 / 60);
+        this._hashAge = dt;
+        this._hashTopo = this.topoVersion;
+        this._hashDirty = false;
+        this._buildCollisionHash();
+      } else this._hashAge = age;
+    } else this._hashDirty = true;
     for (let s = 0; s < nS; s++) {
       this._integrate(h);
       this._solveTets(h);
@@ -1329,22 +1440,39 @@ export class SoftBody {
   _buildCollisionHash() {
     const { x, v, T } = this;
     const nT = this.nT, NP = this.pieces.length, nV = this.nV;
-    const fdt = this._frameDt || 1 / 60;
+    const fdt = this._hashSpan;
     const NP64 = Math.max(NP, 64);
     const bb = this._pbb && this._pbb.length >= NP * 6 ? this._pbb : (this._pbb = new Float64Array(NP64 * 6));
-    const pdev = this._pdev && this._pdev.length >= NP ? this._pdev : (this._pdev = new Float64Array(NP64));
     const pcs = this._pcs && this._pcs.length >= NP ? this._pcs : (this._pcs = new Float64Array(NP64));
     for (let k = 0; k < NP; k++) {
       bb[k * 6] = bb[k * 6 + 1] = bb[k * 6 + 2] = Infinity;
       bb[k * 6 + 3] = bb[k * 6 + 4] = bb[k * 6 + 5] = -Infinity;
-      pdev[k] = 0;
       pcs[k] = 0;
     }
-    // swept vertex boxes: x .. x + v dt, grown a little for the frame's
-    // changes of course; and how fast each piece's vertices stray from its
-    // mean velocity (bounds relative motion between pieces)
+    // Sweeps are relative: each vertex box is swept by how the vertex moves
+    // *within its piece* (its velocity minus the piece's mean velocity), and
+    // pieces add their velocity difference pair by pair - chunks flying
+    // apart together barely sweep at all. D: each vertex's whole move this
+    // frame, for the per-candidate test below.
     const sw = this._sweep && this._sweep.length >= nV * 6 ? this._sweep : (this._sweep = new Float32Array(this.vCap * 6));
+    const D = this._disp && this._disp.length >= nV * 3 ? this._disp : (this._disp = new Float32Array(this.vCap * 3));
     const P = this.pieces;
+    const pV = this._pVel && this._pVel.length >= NP * 3 ? this._pVel : (this._pVel = new Float64Array(NP64 * 3));
+    const pM = this._pMass && this._pMass.length >= NP ? this._pMass : (this._pMass = new Float64Array(NP64));
+    pV.fill(0, 0, NP * 3);
+    pM.fill(0, 0, NP);
+    // (fresh: pieces a cut just made have no velocity history)
+    for (let i = 0; i < nV; i++) {
+      const k = this.vPiece[i];
+      if (k < 0 || !this.w[i]) continue;
+      const o = i * 3, mi = this.m[i];
+      pV[k * 3] += v[o] * mi; pV[k * 3 + 1] += v[o + 1] * mi; pV[k * 3 + 2] += v[o + 2] * mi;
+      pM[k] += mi;
+    }
+    for (let k = 0; k < NP; k++) {
+      const im = pM[k] > 0 ? 1 / pM[k] : 0;
+      pV[k * 3] *= im; pV[k * 3 + 1] *= im; pV[k * 3 + 2] *= im;
+    }
     // a grabbed piece goes where the hand pulls it (up to the per-substep cap)
     let gp = -1, lx = 0, ly = 0, lz = 0;
     const g = this.grab;
@@ -1363,10 +1491,13 @@ export class SoftBody {
     for (let i = 0; i < nV; i++) {
       const o = i * 3, r = i * 6;
       const ax = x[o], ay = x[o + 1], az = x[o + 2];
-      let dx = v[o] * fdt, dy = v[o + 1] * fdt, dz = v[o + 2] * fdt;
+      const kp = Math.max(0, this.vPiece[i]) * 3;
+      let ex = v[o] * fdt, ey = v[o + 1] * fdt, ez = v[o + 2] * fdt;
       if (this.vPiece[i] === gp) {
-        dx += lx; dy += ly; dz += lz;
+        ex += lx; ey += ly; ez += lz;
       }
+      D[o] = ex; D[o + 1] = ey; D[o + 2] = ez;
+      const dx = ex - pV[kp] * fdt, dy = ey - pV[kp + 1] * fdt, dz = ez - pV[kp + 2] * fdt;
       const gr = 0.003 + 0.12 * (Math.abs(dx) + Math.abs(dy) + Math.abs(dz));
       sw[r] = (dx < 0 ? ax + dx : ax) - gr;
       sw[r + 1] = (dy < 0 ? ay + dy : ay) - gr;
@@ -1385,17 +1516,10 @@ export class SoftBody {
       if (sw[r + 3] > bb[b + 3]) bb[b + 3] = sw[r + 3];
       if (sw[r + 4] > bb[b + 4]) bb[b + 4] = sw[r + 4];
       if (sw[r + 5] > bb[b + 5]) bb[b + 5] = sw[r + 5];
-      const pv = P[k].vel;
-      const ux = v[o] - pv[0], uy = v[o + 1] - pv[1], uz = v[o + 2] - pv[2];
-      const d2 = ux * ux + uy * uy + uz * uz;
-      if (d2 > pdev[k]) pdev[k] = d2;
     }
     // hash cells per piece: fine for slow pieces, as coarse as the sweep for
     // fast ones (so a fast tet still lands in only a few cells)
-    for (let k = 0; k < NP; k++) {
-      pdev[k] = Math.sqrt(pdev[k]);
-      pcs[k] = 1 / (this.hCell * 0.75 + pcs[k]);
-    }
+    for (let k = 0; k < NP; k++) pcs[k] = 1 / (this.hCell * 0.75 + pcs[k]);
     // pairs whose swept boxes overlap (and aren't both asleep): partner lists
     const act = this._pieceActive && this._pieceActive.length >= NP ? this._pieceActive : (this._pieceActive = new Uint8Array(NP64));
     act.fill(0);
@@ -1406,7 +1530,12 @@ export class SoftBody {
       for (let b = a + 1; b < NP; b++) {
         if (P[a].asleep && P[b].asleep) continue;
         const A = a * 6, B = b * 6;
-        if (bb[A] - m > bb[B + 3] || bb[B] - m > bb[A + 3] || bb[A + 1] - m > bb[B + 4] || bb[B + 1] - m > bb[A + 4] || bb[A + 2] - m > bb[B + 5] || bb[B + 2] - m > bb[A + 5]) continue;
+        // a's box swept by how it moves relative to b this frame
+        const rx = (pV[a * 3] - pV[b * 3]) * fdt, ry = (pV[a * 3 + 1] - pV[b * 3 + 1]) * fdt, rz = (pV[a * 3 + 2] - pV[b * 3 + 2]) * fdt;
+        const rm = m + 0.12 * (Math.abs(rx) + Math.abs(ry) + Math.abs(rz));
+        const ax0 = bb[A] + Math.min(0, rx), ay0 = bb[A + 1] + Math.min(0, ry), az0 = bb[A + 2] + Math.min(0, rz);
+        const ax1 = bb[A + 3] + Math.max(0, rx), ay1 = bb[A + 4] + Math.max(0, ry), az1 = bb[A + 5] + Math.max(0, rz);
+        if (ax0 - rm > bb[B + 3] || bb[B] - rm > ax1 || ay0 - rm > bb[B + 4] || bb[B + 1] - rm > ay1 || az0 - rm > bb[B + 5] || bb[B + 2] - rm > az1) continue;
         act[a] = act[b] = 1;
         pairs.push(a, b);
       }
@@ -1436,12 +1565,32 @@ export class SoftBody {
     const tbox = this._tBox0 && this._tBox0.length >= nT * 6 ? this._tBox0 : (this._tBox0 = new Float32Array(this.tCap * 6));
     const ranges = this._hRanges && this._hRanges.length >= nT * 6 ? this._hRanges : (this._hRanges = new Int32Array(this.tCap * 6));
     const list = this._hTets && this._hTets.length >= nT ? this._hTets : (this._hTets = new Int32Array(this.tCap));
+    // per tet: centre, radius, the centre's move this frame and how far its
+    // corners stray from that (a cheap sphere test before the exact one)
+    const tS = this._tStat && this._tStat.length >= nT * 8 ? this._tStat : (this._tStat = new Float32Array(this.tCap * 8));
     let nList = 0, total = 0;
     const tp = this.tPiece;
     for (let t = 0; t < nT; t++) {
       if (!act[tp[t]] || this.vol0[t] <= 0) continue;
       const o = t * 4, r = t * 6;
       const a = T[o] * 6, b = T[o + 1] * 6, c = T[o + 2] * 6, d = T[o + 3] * 6;
+      {
+        const a3 = T[o] * 3, b3 = T[o + 1] * 3, c3 = T[o + 2] * 3, d3 = T[o + 3] * 3, s8 = t * 8;
+        const cx = (x[a3] + x[b3] + x[c3] + x[d3]) * 0.25, cy = (x[a3 + 1] + x[b3 + 1] + x[c3 + 1] + x[d3 + 1]) * 0.25, cz = (x[a3 + 2] + x[b3 + 2] + x[c3 + 2] + x[d3 + 2]) * 0.25;
+        const mx = (D[a3] + D[b3] + D[c3] + D[d3]) * 0.25, my = (D[a3 + 1] + D[b3 + 1] + D[c3 + 1] + D[d3 + 1]) * 0.25, mz = (D[a3 + 2] + D[b3 + 2] + D[c3 + 2] + D[d3 + 2]) * 0.25;
+        let r2 = 0, m2 = 0;
+        for (let j = 0; j < 4; j++) {
+          const q = T[o + j] * 3;
+          const ux = x[q] - cx, uy = x[q + 1] - cy, uz = x[q + 2] - cz;
+          const u2 = ux * ux + uy * uy + uz * uz;
+          if (u2 > r2) r2 = u2;
+          const wx = D[q] - mx, wy = D[q + 1] - my, wz = D[q + 2] - mz;
+          const w2 = wx * wx + wy * wy + wz * wz;
+          if (w2 > m2) m2 = w2;
+        }
+        tS[s8] = cx; tS[s8 + 1] = cy; tS[s8 + 2] = cz; tS[s8 + 3] = Math.sqrt(r2);
+        tS[s8 + 4] = mx; tS[s8 + 5] = my; tS[s8 + 6] = mz; tS[s8 + 7] = Math.sqrt(m2);
+      }
       const inv = pcs[tp[t]];
       const x0 = Math.min(sw[a], sw[b], sw[c], sw[d]), y0 = Math.min(sw[a + 1], sw[b + 1], sw[c + 1], sw[d + 1]), z0 = Math.min(sw[a + 2], sw[b + 2], sw[c + 2], sw[d + 2]);
       const x1 = Math.max(sw[a + 3], sw[b + 3], sw[c + 3], sw[d + 3]), y1 = Math.max(sw[a + 4], sw[b + 4], sw[c + 4], sw[d + 4]), z1 = Math.max(sw[a + 5], sw[b + 5], sw[c + 5], sw[d + 5]);
@@ -1453,11 +1602,11 @@ export class SoftBody {
       const rr = nList * 6;
       ranges[rr] = ix0; ranges[rr + 1] = ix1; ranges[rr + 2] = iy0; ranges[rr + 3] = iy1; ranges[rr + 4] = iz0; ranges[rr + 5] = iz1;
       list[nList++] = t;
-      const pk = tp[t] * 1640531513;
+      const pk = Math.imul(tp[t], 1640531513);
       for (let ix = ix0; ix <= ix1; ix++)
         for (let iy = iy0; iy <= iy1; iy++)
           for (let iz = iz0; iz <= iz1; iz++) {
-            counts[(((ix * 92837111) ^ (iy * 689287499) ^ (iz * 283923481) ^ pk) & mask) + 1]++;
+            counts[((Math.imul(ix, 92837111) ^ Math.imul(iy, 689287499) ^ Math.imul(iz, 283923481) ^ pk) & mask) + 1]++;
             total++;
           }
     }
@@ -1467,11 +1616,11 @@ export class SoftBody {
     const fill = this._hFill && this._hFill.length === size ? this._hFill : (this._hFill = new Int32Array(size));
     fill.set(counts.subarray(0, size));
     for (let n = 0; n < nList; n++) {
-      const r = n * 6, t = list[n], pk = tp[t] * 1640531513;
+      const r = n * 6, t = list[n], pk = Math.imul(tp[t], 1640531513);
       for (let ix = ranges[r]; ix <= ranges[r + 1]; ix++)
         for (let iy = ranges[r + 2]; iy <= ranges[r + 3]; iy++)
           for (let iz = ranges[r + 4]; iz <= ranges[r + 5]; iz++)
-            entries[fill[((ix * 92837111) ^ (iy * 689287499) ^ (iz * 283923481) ^ pk) & mask]++] = t;
+            entries[fill[(Math.imul(ix, 92837111) ^ Math.imul(iy, 689287499) ^ Math.imul(iz, 283923481) ^ pk) & mask]++] = t;
     }
     // probes and their candidate tets
     const sTri = this.sTri, nF = this.nF;
@@ -1487,18 +1636,27 @@ export class SoftBody {
     tStamp.fill(0, 0, nT);
     let stamp = 0;
     let cList = this._cList || (this._cList = new Int32Array(1 << 16));
-    let nc = 0, gRel = 0;
-    // other-piece tets whose swept box meets box (x0..z1); gRel = how fast
-    // those pieces can close in on the probe
-    const gather = (x0, y0, z0, x1, y1, z1, own) => {
+    let nc = 0, gRel = 0, gGrab = false;
+    // Other-piece tets the probe at p (moving dp this frame, box x0..z1) could
+    // reach this frame: swept boxes that meet, minus tets it stays clear of -
+    // seen along the line from the tet's centre to p, the gap can only close
+    // as fast as the tet's corners move toward p relative to it (+ 12% and
+    // 3 mm for changes of course). gRel = the fastest any kept tet's corner
+    // moves relative to p (a closing speed bound, per frame).
+    const gather = (qx0, qy0, qz0, qx1, qy1, qz1, own, px, py, pz, dpx, dpy, dpz) => {
       const st = ++stamp;
       const c0 = nc;
-      const ov = P[own].vel;
       gRel = 0;
+      gGrab = own === gp;
       for (let e = ptS[own]; e < ptS[own + 1]; e++) {
         const pb = ptL[e], B = pb * 6;
+        // the probe's box, swept by how its piece moves relative to pb
+        const rx = (pV[own * 3] - pV[pb * 3]) * fdt, ry = (pV[own * 3 + 1] - pV[pb * 3 + 1]) * fdt, rz = (pV[own * 3 + 2] - pV[pb * 3 + 2]) * fdt;
+        const rm = 0.12 * (Math.abs(rx) + Math.abs(ry) + Math.abs(rz));
+        const x0 = qx0 + Math.min(0, rx) - rm, y0 = qy0 + Math.min(0, ry) - rm, z0 = qz0 + Math.min(0, rz) - rm;
+        const x1 = qx1 + Math.max(0, rx) + rm, y1 = qy1 + Math.max(0, ry) + rm, z1 = qz1 + Math.max(0, rz) + rm;
         if (x1 < bb[B] || x0 > bb[B + 3] || y1 < bb[B + 1] || y0 > bb[B + 4] || z1 < bb[B + 2] || z0 > bb[B + 5]) continue;
-        const pk = pb * 1640531513, inv = pcs[pb];
+        const pk = Math.imul(pb, 1640531513), inv = pcs[pb];
         const ix0 = Math.floor(x0 * inv), ix1 = Math.floor(x1 * inv);
         const iy0 = Math.floor(y0 * inv), iy1 = Math.floor(y1 * inv);
         const iz0 = Math.floor(z0 * inv), iz1 = Math.floor(z1 * inv);
@@ -1506,13 +1664,40 @@ export class SoftBody {
         for (let ix = ix0; ix <= ix1; ix++)
           for (let iy = iy0; iy <= iy1; iy++)
             for (let iz = iz0; iz <= iz1; iz++) {
-              const hsh = ((ix * 92837111) ^ (iy * 689287499) ^ (iz * 283923481) ^ pk) & mask;
+              const hsh = (Math.imul(ix, 92837111) ^ Math.imul(iy, 689287499) ^ Math.imul(iz, 283923481) ^ pk) & mask;
               for (let q = counts[hsh]; q < counts[hsh + 1]; q++) {
                 const t = entries[q];
                 if (tStamp[t] === st || tp[t] !== pb) continue;
                 tStamp[t] = st;
                 const r = t * 6;
                 if (x1 < tbox[r] || x0 > tbox[r + 3] || y1 < tbox[r + 1] || y0 > tbox[r + 4] || z1 < tbox[r + 2] || z0 > tbox[r + 5]) continue;
+                const s8 = t * 8;
+                let nx = px - tS[s8], ny = py - tS[s8 + 1], nz = pz - tS[s8 + 2];
+                const L = Math.sqrt(nx * nx + ny * ny + nz * nz);
+                if (L > 1e-7) {
+                  const il = 1 / L;
+                  nx *= il; ny *= il; nz *= il;
+                  // sphere round the tet first
+                  const ux = tS[s8 + 4] - dpx, uy = tS[s8 + 5] - dpy, uz = tS[s8 + 6] - dpz, sd = tS[s8 + 7];
+                  const cs = ux * nx + uy * ny + uz * nz + sd;
+                  if (L - tS[s8 + 3] - (cs > 0 ? cs : 0) > 0.003 + 0.12 * (Math.sqrt(ux * ux + uy * uy + uz * uz) + sd)) continue;
+                }
+                // its corners
+                let ext = -Infinity, cr = -Infinity, m2 = 0;
+                for (let j = 0; j < 4; j++) {
+                  const q = T[t * 4 + j] * 3;
+                  const ex = (x[q] - tS[s8]) * nx + (x[q + 1] - tS[s8 + 1]) * ny + (x[q + 2] - tS[s8 + 2]) * nz;
+                  if (ex > ext) ext = ex;
+                  const ux = D[q] - dpx, uy = D[q + 1] - dpy, uz = D[q + 2] - dpz;
+                  const c = ux * nx + uy * ny + uz * nz;
+                  if (c > cr) cr = c;
+                  const u2 = ux * ux + uy * uy + uz * uz;
+                  if (u2 > m2) m2 = u2;
+                }
+                const mr = Math.sqrt(m2);
+                if (L > 1e-7 && L - ext - (cr > 0 ? cr : 0) > 0.003 + 0.12 * mr) continue;
+                if (mr > gRel) gRel = mr;
+                if (pb === gp) gGrab = true;
                 if (nc >= cList.length) {
                   const grown = new Int32Array(cList.length * 2);
                   grown.set(cList);
@@ -1521,14 +1706,14 @@ export class SoftBody {
                 cList[nc++] = t;
               }
             }
-        if (nc > n0) {
-          const bv = P[pb].vel;
-          const r = Math.hypot(ov[0] - bv[0], ov[1] - bv[1], ov[2] - bv[2]) + pdev[pb];
-          if (r > gRel) gRel = r;
-        }
       }
       return nc > c0;
     };
+    // Closing speed a probe's clearance is spent at (see _solvePieceCollisions):
+    // the frame's speeds can double (a bounce off something else), and a
+    // grabbed piece can be hauled at the grab's per-substep cap on top.
+    const ifdt = 1 / fdt, capV = (0.012 * this.p.size * this.p.substeps) / fdt;
+    const closing = () => 2 * gRel * ifdt + 1 + (gGrab ? capV : 0);
     let nv = 0, nf = 0;
     const vStart = this._vcS && this._vcS.length >= nV ? this._vcS : (this._vcS = new Int32Array(this.vCap));
     const vEnd = this._vcE && this._vcE.length >= nV ? this._vcE : (this._vcE = new Int32Array(this.vCap));
@@ -1544,24 +1729,27 @@ export class SoftBody {
         const i = sTri[f * 3 + j];
         if (seen[i]) continue;
         seen[i] = 1;
-        const r = i * 6;
+        const r = i * 6, o = i * 3;
         const c0 = nc;
-        if (gather(sw[r], sw[r + 1], sw[r + 2], sw[r + 3], sw[r + 4], sw[r + 5], own)) {
+        if (gather(sw[r], sw[r + 1], sw[r + 2], sw[r + 3], sw[r + 4], sw[r + 5], own, x[o], x[o + 1], x[o + 2], D[o], D[o + 1], D[o + 2])) {
           vStart[nv] = c0;
           vEnd[nv] = nc;
-          vRel[nv] = gRel + pdev[own];
+          vRel[nv] = closing();
           pvv[nv++] = i;
         }
       }
       if (!faces) continue;
       // the face centre's swept box (mean of its corners' boxes)
       const a = sTri[f * 3] * 6, b = sTri[f * 3 + 1] * 6, c = sTri[f * 3 + 2] * 6;
+      const a3 = sTri[f * 3] * 3, b3 = sTri[f * 3 + 1] * 3, c3 = sTri[f * 3 + 2] * 3;
       const c0 = nc;
       if (gather((sw[a] + sw[b] + sw[c]) / 3, (sw[a + 1] + sw[b + 1] + sw[c + 1]) / 3, (sw[a + 2] + sw[b + 2] + sw[c + 2]) / 3,
-        (sw[a + 3] + sw[b + 3] + sw[c + 3]) / 3, (sw[a + 4] + sw[b + 4] + sw[c + 4]) / 3, (sw[a + 5] + sw[b + 5] + sw[c + 5]) / 3, own)) {
+        (sw[a + 3] + sw[b + 3] + sw[c + 3]) / 3, (sw[a + 4] + sw[b + 4] + sw[c + 4]) / 3, (sw[a + 5] + sw[b + 5] + sw[c + 5]) / 3, own,
+        (x[a3] + x[b3] + x[c3]) / 3, (x[a3 + 1] + x[b3 + 1] + x[c3 + 1]) / 3, (x[a3 + 2] + x[b3 + 2] + x[c3 + 2]) / 3,
+        (D[a3] + D[b3] + D[c3]) / 3, (D[a3 + 1] + D[b3 + 1] + D[c3 + 1]) / 3, (D[a3 + 2] + D[b3 + 2] + D[c3 + 2]) / 3)) {
         fS[nf] = c0;
         fE[nf] = nc;
-        fR[nf] = gRel + pdev[own];
+        fR[nf] = closing();
         pff[nf++] = f;
       }
     }
@@ -1698,14 +1886,15 @@ export class SoftBody {
   // bary b0..b3, unit normal n, depth.
   _contact(px, py, pz, qx, qy, qz, c0, c1, own, wt, wf) {
     const { T, tPiece } = this;
-    const ct = this._ct, fq = this._fq || (this._fq = { ok: false, dist: 0, prev: 0, nx: 0, ny: 0, nz: 0, on: false, crossS: Infinity });
+    const ct = this._ct, fq = this._fq;
     let t = -1;
-    if (wt >= 0 && wt < this.nT && tPiece[wt] !== own && this.vol0[wt] > 0 && this._tetGap(wt, px, py, pz) < 0) t = wt;
+    const gw = wt >= 0 && wt < this.nT && tPiece[wt] !== own && this.vol0[wt] > 0 ? this._tetGap(wt, px, py, pz) : Infinity;
+    if (gw < 0) t = wt;
     else {
       // scan the candidates; on a miss, remember how far the nearest was
       const cl = this._cList, tb = this._tBoxNow, tbs = this._tBoxStamp, pass = this._pass;
       const x = this.x;
-      let gap = Infinity;
+      let gap = gw;
       for (let e = c0; e < c1; e++) {
         const u = cl[e];
         if (u === wt) continue;
@@ -1823,10 +2012,7 @@ export class SoftBody {
     const pv = this._probeV, pf = this._probeF;
     const P = this.pieces, aw = this._awake;
     // probe = 1 vertex, or a face centre spread over 3 vertices
-    const pi3 = this._pi3 || (this._pi3 = new Int32Array(3));
-    const pw3 = this._pw3 || (this._pw3 = new Float64Array(3));
-    const ti4 = this._ti4 || (this._ti4 = new Int32Array(4));
-    const tb4 = this._tb4 || (this._tb4 = new Float64Array(4));
+    const pi3 = this._pi3, pw3 = this._pw3, ti4 = this._ti4, tb4 = this._tb4;
     const cS = this._pcStart, cE = this._pcEnd;
     const wtV = this._wtV, wfV = this._wfV, wtF = this._wtF, wfF = this._wfF;
     const gp = this.grab ? this.grab.piece : -2;
@@ -2148,11 +2334,17 @@ export class SoftBody {
       if (this.pieces[this.vPiece[i]].asleep) this.wake(this.vPiece[i]);
       hit++;
     }
+    if (hit) this._hashDirty = true;
     return hit;
   }
 
-  radialImpulse(px, py, pz, radius, strength, up = 0) {
+  // A blast out from p (strongest at the centre, gone at radius) plus a
+  // lift. rigid (0..1): how much each piece flies off as a whole instead of
+  // being stretched by the blast's spread over it.
+  radialImpulse(px, py, pz, radius, strength, up = 0, rigid = 0) {
     const { x, v, w } = this;
+    this._hashDirty = true;
+    const dv = rigid > 0 ? new Float64Array(this.nV * 3) : null;
     for (let i = 0; i < this.nV; i++) {
       if (w[i] === 0) continue;
       const o = i * 3;
@@ -2161,8 +2353,25 @@ export class SoftBody {
       if (d > radius || d < 1e-6) continue;
       const f = 1 - d / radius;
       const s = (strength * f * f) / d;
-      v[o] += ex * s; v[o + 1] += ey * s + up * f; v[o + 2] += ez * s;
+      const ux = ex * s, uy = ey * s + up * f, uz = ez * s;
+      v[o] += ux; v[o + 1] += uy; v[o + 2] += uz;
+      if (dv) { dv[o] = ux; dv[o + 1] = uy; dv[o + 2] = uz; }
       if (this.pieces[this.vPiece[i]].asleep) this.wake(this.vPiece[i]);
+    }
+    if (!dv) return;
+    for (const pc of this.pieces) {
+      let mx = 0, my = 0, mz = 0, M = 0;
+      for (const i of pc.verts) {
+        const mi = this.m[i];
+        mx += dv[i * 3] * mi; my += dv[i * 3 + 1] * mi; mz += dv[i * 3 + 2] * mi;
+        M += mi;
+      }
+      if (M <= 0) continue;
+      mx /= M; my /= M; mz /= M;
+      for (const i of pc.verts) {
+        const o = i * 3;
+        v[o] += rigid * (mx - dv[o]); v[o + 1] += rigid * (my - dv[o + 1]); v[o + 2] += rigid * (mz - dv[o + 2]);
+      }
     }
   }
 
@@ -2199,6 +2408,7 @@ export class SoftBody {
     }
     if (!idx.length) return null;
     this.wake(hit.piece);
+    this._hashDirty = true;
     this.grab = {
       n: idx.length,
       idx: Int32Array.from(idx),
@@ -2213,6 +2423,7 @@ export class SoftBody {
 
   endGrab() {
     this.grab = null;
+    this._hashDirty = true;
   }
 
   totalVolume() {

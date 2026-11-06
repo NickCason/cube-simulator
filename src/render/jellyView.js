@@ -15,6 +15,7 @@ const FLOOR_SPAN = 6.4;
 // attributes) and the multi-pass jelly rendering.
 export class JellyView {
   constructor(renderer, env, lightDir) {
+    this.maxLayers = 5; // (phones: fewer; see App)
     this.renderer = renderer;
     this.scene = new THREE.Scene();
     this.meshes = [];
@@ -299,6 +300,10 @@ export class JellyView {
       items.push({ m, d, x0, y0, x1, y1, layer: 0 });
     }
     items.sort((a, b) => b.d - a.d);
+    // pieces overlapping on screen go into successive layers so the nearer
+    // ones refract the farther ones; each layer costs two passes and a
+    // full-screen copy, so piles share the last few (maxLayers)
+    const maxL = this.maxLayers;
     let nLayers = 1;
     for (let i = 0; i < items.length; i++) {
       const a = items[i];
@@ -307,6 +312,7 @@ export class JellyView {
         if (a.x0 > b.x1 || b.x0 > a.x1 || a.y0 > b.y1 || b.y0 > a.y1) continue;
         a.layer = Math.max(a.layer, b.layer + 1);
       }
+      a.layer = Math.min(a.layer, maxL - 1);
       nLayers = Math.max(nLayers, a.layer + 1);
     }
     const auto = r.autoClear;
