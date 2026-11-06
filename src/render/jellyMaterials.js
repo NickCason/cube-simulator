@@ -80,7 +80,7 @@ export function createJellyMaterial(env) {
       uDispersion: { value: 0.018 },
       uLightDir: { value: new THREE.Vector3(-0.45, 0.8, 0.4).normalize() },
       uLightColor: { value: new THREE.Color(1, 0.97, 0.92).multiplyScalar(3.2) },
-      uGlowColor: { value: new THREE.Color(1.0, 0.85, 0.55) },
+      uGlowColor: { value: new THREE.Color(1.0, 0.9, 0.72) },
       uTime: { value: 0 },
       uSceneLodMax: { value: 6 },
       uDebug: { value: 0 },
@@ -136,22 +136,24 @@ export function createJellyMaterial(env) {
       vec3 sampleThrough(vec3 P, vec3 V, vec3 N, vec3 Nb, float thick, float ior, float lod, float rough, int ch) {
         vec3 r1 = refract(-V, N, 1.0 / ior);
         vec3 Pexit = P + r1 * thick;
+        // refraction out of the back surface; fade into total internal reflection near the critical angle
+        float c = dot(r1, Nb);
+        float disc = 1.0 - ior * ior * (1.0 - c * c);
+        float tirMix = smoothstep(0.0, 0.18, disc);
+        vec3 refl = envLookup(reflect(r1, -Nb), min(rough + 0.15, 1.0)) * 0.85;
+        if (tirMix <= 0.0) return refl;
         vec3 r2 = refract(r1, -Nb, ior);
-        if (dot(r2, r2) < 1e-6) {
-          // total internal reflection at the exit surface
-          return envLookup(reflect(r1, -Nb), min(rough + 0.15, 1.0)) * 0.9;
-        }
         float D = 1.2;
         if (r2.y < -0.02) D = min(D, max(Pexit.y, 0.0) / -r2.y);
         vec2 uv = toScreen(Pexit + r2 * D);
-        return textureLod(tScene, uv, lod).rgb;
+        return mix(refl, textureLod(tScene, uv, lod).rgb, tirMix);
       }
 
       void main() {
         float temp = vData.x;
         float glow = vData.y;
         float fresh = vData.z;
-        float frost = smoothstep(-0.05, -0.7, temp);
+        float frost = smoothstep(0.05, 0.7, -temp);
         float melt = smoothstep(0.3, 1.1, temp);
 
         vec3 N = normalize(vNormal);
@@ -230,7 +232,7 @@ export function createJellyMaterial(env) {
         }
 
         // healing glow
-        col += uGlowColor * glow * (0.5 + fresh * 2.0) * 2.0;
+        col += uGlowColor * glow * (0.3 + fresh * 1.1);
         if (uDebug == 1) col = refl * F + spec;
         else if (uDebug == 2) col = trans * Tr;
         else if (uDebug == 3) col = vec3(thick * 0.5);

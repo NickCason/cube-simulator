@@ -143,22 +143,47 @@ export class JellyView {
     r.setClearColor(prevClear, prevAlpha);
   }
 
-  // Render all pieces back-to-front, each refracting what is behind it.
+  // Render pieces back-to-front in layers: pieces that don't overlap on
+  // screen share a pass; a piece that overlaps one behind it goes in a later
+  // layer so it refracts that piece.
   renderPieces(camera, sb, rtScene, rtTrans, copyFn) {
     const r = this.renderer;
-    const order = this.meshes.map((m) => {
+    const v = this._v;
+    const items = [];
+    for (const m of this.meshes) {
       const pc = sb.pieces[m.userData.piece];
-      const d = pc ? this._v.set(pc.com[0], pc.com[1], pc.com[2]).distanceToSquared(camera.position) : 0;
-      return { m, d };
-    });
-    order.sort((a, b) => b.d - a.d);
+      if (!pc) continue;
+      const b = pc.bbox;
+      let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+      for (let k = 0; k < 8; k++) {
+        v.set(k & 1 ? b[3] : b[0], k & 2 ? b[4] : b[1], k & 4 ? b[5] : b[2]).project(camera);
+        if (v.x < x0) x0 = v.x;
+        if (v.x > x1) x1 = v.x;
+        if (v.y < y0) y0 = v.y;
+        if (v.y > y1) y1 = v.y;
+      }
+      const d = v.set(pc.com[0], pc.com[1], pc.com[2]).distanceToSquared(camera.position);
+      items.push({ m, d, x0, y0, x1, y1, layer: 0 });
+    }
+    items.sort((a, b) => b.d - a.d);
+    let nLayers = 1;
+    for (let i = 0; i < items.length; i++) {
+      const a = items[i];
+      for (let j = 0; j < i; j++) {
+        const b = items[j];
+        if (a.x0 > b.x1 || b.x0 > a.x1 || a.y0 > b.y1 || b.y0 > a.y1) continue;
+        a.layer = Math.max(a.layer, b.layer + 1);
+      }
+      nLayers = Math.max(nLayers, a.layer + 1);
+    }
     const auto = r.autoClear;
     const prevClear = r.getClearColor(new THREE.Color());
     const prevAlpha = r.getClearAlpha();
     this.frontMat.uniforms.tScene.value = rtTrans.texture;
     this.frontMat.uniforms.tBack.value = this.rtBack.texture;
-    for (let k = 0; k < order.length; k++) {
-      for (const m of this.meshes) m.visible = m === order[k].m;
+    this.layers = nLayers;
+    for (let L = 0; L < nLayers; L++) {
+      for (const it of items) it.m.visible = it.layer === L;
       r.autoClear = false;
       r.setClearColor(0x000000, 0);
       r.setRenderTarget(this.rtBack);
@@ -168,7 +193,7 @@ export class JellyView {
       this.scene.overrideMaterial = null;
       r.setRenderTarget(rtScene);
       r.render(this.scene, camera);
-      if (k < order.length - 1) copyFn();
+      if (L < nLayers - 1) copyFn();
     }
     for (const m of this.meshes) m.visible = true;
     r.autoClear = auto;

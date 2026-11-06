@@ -4,6 +4,16 @@ import { createStudioEnvironment } from './render/env.js';
 import { createFloor } from './render/floor.js';
 import { Post } from './render/post.js';
 import { JellyView } from './render/jellyView.js';
+import { NailSystem } from './world/nails.js';
+import { Particles } from './world/particles.js';
+import { Healer } from './heal.js';
+import { AudioEngine } from './audio.js';
+import { Overlay } from './ui/overlay.js';
+import { UI } from './ui/ui.js';
+import { HandTool, KnifeTool, NailGunTool } from './tools/basic.js';
+import { MalletTool, TorchTool, FreezeTool, BallerTool, BombTool, SyringeTool, MagnetTool } from './tools/more.js';
+import { makeMaterials } from './world/models.js';
+import { Droplets } from './world/droplets.js';
 
 const BG = new THREE.Color(0.86, 0.85, 0.83);
 
@@ -35,6 +45,8 @@ export class App {
     this.scene = new THREE.Scene();
     this.camera = new THREE.PerspectiveCamera(30, 1, 0.05, 80);
     this.orbit = { theta: 0.38, phi: 0.36, radius: 4.1, target: new THREE.Vector3(0, 0.44, 0) };
+    this.orbitGoal = { theta: this.orbit.theta, phi: this.orbit.phi, radius: this.orbit.radius };
+    this._shake = 0;
     this._applyOrbit();
 
     const key = (this.keyLight = new THREE.DirectionalLight(0xfff6ec, 3.2));
@@ -56,28 +68,130 @@ export class App {
     this.post = new Post(renderer);
     this.sb = new SoftBody(opts.sim || {});
     this.sb.loadCube(0, 0.25, 0, 0.18);
-    this.jelly.setColor(opts.color || '#e0102a');
+
+    this.audio = new AudioEngine();
+    this.M = makeMaterials(this.env);
+    this.nails = new NailSystem(this);
+    this.particles = new Particles(this);
+    this.fxScene = this.particles.scene;
+    this.healer = new Healer(this);
+    this.onHealStart = [];
+    this.onHealEnd = [];
+    this.onColor = [];
+    this.droplets = new Droplets(this);
+    this.onHealStart.push(() => {
+      const main = this.sb.pieces.reduce((a, b) => (b.mass > a.mass ? b : a), this.sb.pieces[0]);
+      if (main) this.droplets.heal(new THREE.Vector3(main.com[0], main.com[1], main.com[2]));
+    });
+    this.flash = 0;
+    this.anchorProviders = [() => this.nails.anchors()];
+    this.onNailHit = () => {
+      this.audio.nailHit(1);
+      this.markDamaged();
+    };
 
     this.clock = { last: performance.now(), t: 0 };
     this.timeScale = 1;
     this.stats = { physMs: 0, frameMs: 0, frames: 0 };
     this.substepRate = 720; // physics substeps per second
     this.paused = false;
-    this.tools = {};
-    this.tool = null;
     this.raycaster = new THREE.Raycaster();
     this._ndc = new THREE.Vector2();
     this.onFrame = [];
+    this.damaged = false;
+
+    const uiRoot = document.getElementById('ui');
+    this.overlay = new Overlay(document.body);
+    if (uiRoot) this.ui = new UI(this, uiRoot);
+
+    this.tools = {
+      hand: new HandTool(this),
+      knife: new KnifeTool(this),
+      nailgun: new NailGunTool(this),
+      mallet: new MalletTool(this),
+      torch: new TorchTool(this),
+      freeze: new FreezeTool(this),
+      baller: new BallerTool(this),
+      bomb: new BombTool(this),
+      syringe: new SyringeTool(this),
+      magnet: new MagnetTool(this),
+    };
+    this.tool = null;
+    this.setTool('hand');
+    this.setColor(opts.color || '#d4102a');
 
     this.resize();
     window.addEventListener('resize', () => this.resize());
+    this._bindInput();
     this._loop = this._loop.bind(this);
+  }
+
+  registerTool(t) {
+    this.tools[t.id] = t;
   }
 
   start() {
     requestAnimationFrame(this._loop);
   }
 
+  // ------------------------------------------------------------ state
+  setTool(id) {
+    const t = this.tools[id];
+    if (!t || t === this.tool) return;
+    if (this.tool) {
+      this.tool.up?.();
+      this.tool.deactivate?.();
+    }
+    this.tool = t;
+    t.activate?.();
+    this.setCursor(t.cursor || 'default');
+    this.ui?.setTool(id);
+  }
+
+  setColor(hex) {
+    this.color = hex;
+    this.jelly.setColor(hex);
+    this.ui?.setColor(hex);
+    for (const f of this.onColor || []) f(hex);
+  }
+
+  setCursor(c) {
+    this.canvas.style.cursor = c;
+  }
+
+  allAnchors() {
+    const out = [];
+    for (const f of this.anchorProviders) out.push(...f());
+    return out;
+  }
+
+  onTopologyChanged() {
+    for (const f of this.onTopology || []) f();
+  }
+
+  markDamaged() {
+    if (!this.damaged) {
+      this.damaged = true;
+      this.ui?.setDamaged(true);
+    }
+  }
+
+  markHealed() {
+    this.damaged = false;
+    this.ui?.setDamaged(false);
+  }
+
+  heal() {
+    if (this.healer.active) return;
+    this.tool?.up?.();
+    this.healer.start();
+  }
+
+  shake(a) {
+    this._shake = Math.min(0.05, this._shake + a);
+  }
+
+  // ------------------------------------------------------------ camera
   _applyOrbit() {
     const o = this.orbit;
     const c = this.camera;
@@ -87,6 +201,20 @@ export class App {
       o.target.z + o.radius * Math.cos(o.phi) * Math.cos(o.theta),
     );
     c.lookAt(o.target);
+    if (this._shake > 1e-4) {
+      c.position.x += (Math.random() - 0.5) * this._shake;
+      c.position.y += (Math.random() - 0.5) * this._shake;
+    }
+  }
+
+  _updateCamera(dt) {
+    const o = this.orbit, g = this.orbitGoal;
+    const k = 1 - Math.exp(-dt * 12);
+    o.theta += (g.theta - o.theta) * k;
+    o.phi += (g.phi - o.phi) * k;
+    o.radius += (g.radius - o.radius) * k;
+    this._shake *= Math.exp(-dt * 14);
+    this._applyOrbit();
   }
 
   resize() {
@@ -116,7 +244,7 @@ export class App {
     this.post.setSize(pw, ph);
   }
 
-  // ------------------------------------------------------------ picking
+  // ------------------------------------------------------------ input
   rayFromClient(x, y) {
     const r = this.canvas.getBoundingClientRect();
     this._ndc.set(((x - r.left) / r.width) * 2 - 1, -((y - r.top) / r.height) * 2 + 1);
@@ -127,6 +255,90 @@ export class App {
   pickJelly(ray) {
     const o = ray.origin, d = ray.direction;
     return this.sb.raycast(o.x, o.y, o.z, d.x, d.y, d.z);
+  }
+
+  _bindInput() {
+    const el = this.canvas;
+    const pointers = new Map();
+    let mode = null; // 'tool' | 'orbit' | 'pinch'
+    let last = null;
+    let pinch0 = 0;
+    el.addEventListener('pointerdown', (e) => {
+      this.audio.init();
+      this.isTouch = e.pointerType === 'touch';
+      el.setPointerCapture(e.pointerId);
+      pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      if (pointers.size === 2) {
+        // second finger: switch to pinch/orbit, cancel tool gesture
+        if (mode === 'tool') this.tool?.up?.(e, this.rayFromClient(e.clientX, e.clientY));
+        mode = 'pinch';
+        const [a, b] = [...pointers.values()];
+        pinch0 = Math.hypot(a.x - b.x, a.y - b.y);
+        last = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+        return;
+      }
+      if (pointers.size > 2) return;
+      if (this.healer.active) {
+        mode = 'orbit';
+        last = { x: e.clientX, y: e.clientY };
+        return;
+      }
+      const ray = this.rayFromClient(e.clientX, e.clientY);
+      const hit = this.pickJelly(ray);
+      const consumed = e.button === 0 && this.tool?.down?.(e, ray, hit);
+      if (consumed) mode = 'tool';
+      else {
+        mode = 'orbit';
+        last = { x: e.clientX, y: e.clientY };
+      }
+    });
+    el.addEventListener('pointermove', (e) => {
+      if (pointers.has(e.pointerId)) pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      if (mode === 'tool') {
+        const ray = this.rayFromClient(e.clientX, e.clientY);
+        this.tool?.move?.(e, ray);
+      } else if (mode === 'orbit' && last) {
+        const dx = e.clientX - last.x, dy = e.clientY - last.y;
+        last = { x: e.clientX, y: e.clientY };
+        this.orbitGoal.theta -= dx * 0.006;
+        this.orbitGoal.phi = Math.min(1.25, Math.max(0.06, this.orbitGoal.phi + dy * 0.004));
+      } else if (mode === 'pinch' && pointers.size >= 2) {
+        const [a, b] = [...pointers.values()];
+        const d = Math.hypot(a.x - b.x, a.y - b.y);
+        if (pinch0 > 0) this.orbitGoal.radius = Math.min(7.5, Math.max(2.4, this.orbitGoal.radius * (pinch0 / d)));
+        pinch0 = d;
+        const c = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+        if (last) {
+          this.orbitGoal.theta -= (c.x - last.x) * 0.006;
+          this.orbitGoal.phi = Math.min(1.25, Math.max(0.06, this.orbitGoal.phi + (c.y - last.y) * 0.004));
+        }
+        last = c;
+      } else if (!mode && e.pointerType === 'mouse') {
+        this.tool?.hover?.(e, this.rayFromClient(e.clientX, e.clientY));
+      }
+    });
+    const end = (e) => {
+      pointers.delete(e.pointerId);
+      if (mode === 'tool') this.tool?.up?.(e, this.rayFromClient(e.clientX, e.clientY));
+      if (pointers.size === 0) {
+        mode = null;
+        last = null;
+      }
+    };
+    el.addEventListener('pointerup', end);
+    el.addEventListener('pointercancel', end);
+    el.addEventListener('pointerleave', (e) => {
+      if (e.pointerType === 'mouse') this.tool?.hover?.(null, null);
+    });
+    el.addEventListener(
+      'wheel',
+      (e) => {
+        e.preventDefault();
+        this.orbitGoal.radius = Math.min(7.5, Math.max(2.4, this.orbitGoal.radius * Math.exp(e.deltaY * 0.0012)));
+      },
+      { passive: false },
+    );
+    el.addEventListener('contextmenu', (e) => e.preventDefault());
   }
 
   // ------------------------------------------------------------ frame
@@ -141,20 +353,43 @@ export class App {
 
   frame(dt) {
     const t0 = performance.now();
-    const sdt = dt * this.timeScale;
+    // slow frames slow the simulation instead of piling on substeps
+    const sdt = Math.min(dt, 1 / 45) * this.timeScale;
     this.clock.t += dt;
     if (!this.paused) {
       for (const f of this.onFrame) f(sdt, dt);
-      if (this.tool && this.tool.update) this.tool.update(sdt, dt);
-      const nS = Math.max(4, Math.min(24, Math.round(this.substepRate * sdt)));
+      this.tool?.update?.(sdt, dt);
+      this.healer.update(sdt);
+      const nS = Math.max(4, Math.min(16, Math.round(this.substepRate * sdt)));
       this.sb.p.substeps = nS;
       const p0 = performance.now();
       if (sdt > 0) this.sb.step(sdt);
-      this.stats.physMs = this.stats.physMs * 0.9 + (performance.now() - p0) * 0.1;
+      const pm = performance.now() - p0;
+      this.stats.physMs = this.stats.physMs * 0.9 + pm * 0.1;
+      // adapt substep rate to the device
+      if (this.sb.anyAwake) {
+        if (this.stats.physMs > 9.5) this.substepRate = Math.max(420, this.substepRate * 0.985);
+        else if (this.stats.physMs < 6) this.substepRate = Math.min(720, this.substepRate * 1.004);
+      }
+      this.nails.update(sdt);
+      this.droplets.update(sdt);
+      for (const k in this.tools) if (this.tools[k] !== this.tool && this.tools[k].background) this.tools[k].update(sdt, dt);
+      this.particles.update(sdt);
+      this._impactSounds();
     }
+    this._updateCamera(dt);
+    this.overlay.draw(dt);
     this.render();
     this.stats.frameMs = this.stats.frameMs * 0.9 + (performance.now() - t0) * 0.1;
     this.stats.frames++;
+  }
+
+  _impactSounds() {
+    const im = this.sb.impacts;
+    if (!im.length) return;
+    let best = 0;
+    for (let k = 0; k < im.length; k += 5) best = Math.max(best, im[k + 3]);
+    if (best > 2.5) this.audio.splat(Math.min(1, (best - 2) / 7));
   }
 
   render() {
@@ -182,6 +417,8 @@ export class App {
       r.autoClear = auto;
     }
 
+    this.flash *= 0.86;
+    this.post.compositeMat.uniforms.uFlash.value = this.flash;
     const bloom = this.post.bloom(this.rtScene.texture, this.size.pw, this.size.ph);
     this.post.composite(this.rtScene.texture, bloom, this.clock.t);
   }

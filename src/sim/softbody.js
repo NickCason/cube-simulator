@@ -125,6 +125,21 @@ export class SoftBody {
   }
 
   // Recompute everything derived from topology.
+  wakeAll() {
+    for (const pc of this.pieces) {
+      pc.sleepT = 0;
+      pc.asleep = false;
+    }
+  }
+
+  wake(k) {
+    const pc = this.pieces[k];
+    if (pc) {
+      pc.sleepT = 0;
+      pc.asleep = false;
+    }
+  }
+
   rebuild() {
     this._computeRest();
     this._computeMass();
@@ -173,8 +188,13 @@ export class SoftBody {
       const o = t * 4;
       m[T[o]] += q; m[T[o + 1]] += q; m[T[o + 2]] += q; m[T[o + 3]] += q;
     }
+    // floor tiny lumped masses (corner vertices of single tets jitter otherwise)
+    let tot = 0, cnt = 0;
+    for (let i = 0; i < this.nV; i++) if (m[i] > 0) { tot += m[i]; cnt++; }
+    const mMin = cnt ? (0.3 * tot) / cnt : 0;
     for (let i = 0; i < this.nV; i++) {
       if (m[i] > 0) {
+        if (m[i] < mMin) m[i] = mMin;
         w[i] = 1 / m[i];
         this.alive[i] = 1;
       } else {
@@ -272,7 +292,8 @@ export class SoftBody {
         com: [0, 0, 0],
         vel: [0, 0, 0],
         bbox: [0, 0, 0, 0, 0, 0],
-        sleep: 0,
+        sleepT: 0,
+        asleep: false,
       };
     });
     // keep largest piece first for stable "main piece" semantics
@@ -476,6 +497,20 @@ export class SoftBody {
     this.time += dt;
     this.impacts.length = 0;
     this._updateMaterial(dt);
+    if (this.grab) this.wake(this.grab.piece);
+    if (this.attract || this.gravityScale !== 1 || this.embeds.length) this.wakeAll();
+    const NP = this.pieces.length;
+    const aw = this._awake && this._awake.length >= NP ? this._awake : (this._awake = new Uint8Array(Math.max(NP, 64)));
+    let anyAwake = false;
+    for (let k = 0; k < NP; k++) {
+      aw[k] = this.pieces[k].asleep ? 0 : 1;
+      if (aw[k]) anyAwake = true;
+    }
+    this.anyAwake = anyAwake;
+    if (!anyAwake) {
+      this._dampPieces(dt);
+      return;
+    }
     const multi = this.pieces.length > 1 && P.collide && this.collisionsEnabled;
     if (multi) this._buildCollisionHash();
     for (let s = 0; s < nS; s++) {
@@ -484,7 +519,7 @@ export class SoftBody {
       if (this.embeds.length) this._solveEmbeds(h);
       if (this.grab) this._solveGrab(h);
       if (this.attract) this._solveAttract(h);
-      if (multi) this._solvePieceCollisions();
+      if (multi && this._anyContact && (s & 1 || s === nS - 1)) this._solvePieceCollisions();
       this._solveBounds(h, s === nS - 1);
       this._updateVelocities(h);
     }
@@ -495,8 +530,9 @@ export class SoftBody {
     const { x, px, v, w } = this;
     const g = this.p.gravity * this.gravityScale * h;
     const n = this.nV;
+    const aw = this._awake, vp = this.vPiece;
     for (let i = 0; i < n; i++) {
-      if (w[i] === 0) continue;
+      if (w[i] === 0 || !aw[vp[i]]) continue;
       const o = i * 3;
       v[o + 1] += g;
       px[o] = x[o]; px[o + 1] = x[o + 1]; px[o + 2] = x[o + 2];
@@ -510,9 +546,10 @@ export class SoftBody {
     const lam = mu0 * this.p.lambdaRatio;
     const ih2 = 1 / (h * h);
     const nT = this.nT;
+    const aw = this._awake, tp = this.tPiece;
     for (let t = 0; t < nT; t++) {
       const V0 = vol0[t];
-      if (V0 <= 0) continue;
+      if (V0 <= 0 || !aw[tp[t]]) continue;
       const t4 = t * 4;
       const a = T[t4], b = T[t4 + 1], c = T[t4 + 2], d = T[t4 + 3];
       const i0 = a * 3, i1 = b * 3, i2 = c * 3, i3 = d * 3;
@@ -617,17 +654,19 @@ export class SoftBody {
     }
   }
 
-  // Embedded rigid segments: keep distance between two barycentric points.
+  // Embedded rigid segments (nails): keep the distance between two anchors
+  // (barycentric points inside tets) fixed.
   _solveEmbeds(h) {
     const { x, w, T } = this;
     for (const e of this.embeds) {
-      if (!e.rigid || e.ta < 0 || e.tb < 0) continue;
-      const ta = e.ta * 4, tb = e.tb * 4;
+      const A = e.a, Bn = e.b;
+      if (A.tet < 0 || Bn.tet < 0 || A.tet >= this.nT || Bn.tet >= this.nT) continue;
+      const ta = A.tet * 4, tb = Bn.tet * 4;
       let ax = 0, ay = 0, az = 0, bx = 0, by = 0, bz = 0;
       let wa = 0, wb = 0;
       for (let k = 0; k < 4; k++) {
         const ia = T[ta + k], ib = T[tb + k];
-        const ba = e.ba[k], bb = e.bb[k];
+        const ba = A.b[k], bb = Bn.b[k];
         ax += x[ia * 3] * ba; ay += x[ia * 3 + 1] * ba; az += x[ia * 3 + 2] * ba;
         bx += x[ib * 3] * bb; by += x[ib * 3 + 1] * bb; bz += x[ib * 3 + 2] * bb;
         wa += ba * ba * w[ia];
@@ -638,16 +677,28 @@ export class SoftBody {
       if (L < 1e-9) continue;
       dx /= L; dy /= L; dz /= L;
       const C = L - e.len;
-      const den = wa + wb + e.compliance / (h * h);
+      const den = wa + wb + (e.compliance || 0) / (h * h);
       if (den <= 0) continue;
       const dl = -C / den;
       for (let k = 0; k < 4; k++) {
         const ia = T[ta + k], ib = T[tb + k];
-        const sa = -dl * e.ba[k] * w[ia];
-        const sb = dl * e.bb[k] * w[ib];
+        const sa = -dl * A.b[k] * w[ia];
+        const sb = dl * Bn.b[k] * w[ib];
         x[ia * 3] += dx * sa; x[ia * 3 + 1] += dy * sa; x[ia * 3 + 2] += dz * sa;
         x[ib * 3] += dx * sb; x[ib * 3 + 1] += dy * sb; x[ib * 3 + 2] += dz * sb;
       }
+    }
+  }
+
+  // External point force on an anchor (e.g. magnet pulling a nail).
+  pushAnchor(a, fx, fy, fz, dt) {
+    if (!a || a.tet < 0 || a.tet >= this.nT) return;
+    this.wake(this.tPiece[a.tet]);
+    const { v, T } = this;
+    for (let k = 0; k < 4; k++) {
+      const i = T[a.tet * 4 + k];
+      const s = a.b[k] * this.w[i] * dt;
+      v[i * 3] += fx * s; v[i * 3 + 1] += fy * s; v[i * 3 + 2] += fz * s;
     }
   }
 
@@ -657,8 +708,9 @@ export class SoftBody {
     const R = this.p.arenaRadius, R2 = R * R;
     const top = this.p.ceiling;
     const n = this.nV;
+    const aw = this._awake, vp = this.vPiece;
     for (let i = 0; i < n; i++) {
-      if (w[i] === 0) continue;
+      if (w[i] === 0 || !aw[vp[i]]) continue;
       const o = i * 3;
       let y = x[o + 1];
       if (y < 0) {
@@ -708,8 +760,9 @@ export class SoftBody {
     const ih = 1 / h;
     const n = this.nV;
     const vmax = this.p.maxSpeed, vmax2 = vmax * vmax;
+    const aw = this._awake, vp = this.vPiece;
     for (let i = 0; i < n; i++) {
-      if (w[i] === 0) continue;
+      if (w[i] === 0 || !aw[vp[i]]) continue;
       const o = i * 3;
       let vx = (x[o] - px[o]) * ih, vy = (x[o + 1] - px[o + 1]) * ih, vz = (x[o + 2] - px[o + 2]) * ih;
       const s2 = vx * vx + vy * vy + vz * vz;
@@ -777,6 +830,24 @@ export class SoftBody {
         wz = i02 * Lx + i12 * Ly + i22 * Lz;
       }
       pc.omega = [wx, wy, wz];
+      if (pc.asleep) continue;
+      let vmax2 = 0;
+      for (let k = 0; k < vs.length; k++) {
+        const o = vs[k] * 3;
+        const s2 = v[o] * v[o] + v[o + 1] * v[o + 1] + v[o + 2] * v[o + 2];
+        if (s2 > vmax2) vmax2 = s2;
+      }
+      if (vmax2 < 0.07 * 0.07) {
+        pc.sleepT += dt;
+        if (pc.sleepT > 0.6) {
+          pc.asleep = true;
+          for (let k = 0; k < vs.length; k++) {
+            const o = vs[k] * 3;
+            v[o] = v[o + 1] = v[o + 2] = 0;
+          }
+          continue;
+        }
+      } else pc.sleepT = 0;
       for (let k = 0; k < vs.length; k++) {
         const i = vs[k], o = i * 3;
         const rx = x[o] - cx, ry = x[o + 1] - cy, rz = x[o + 2] - cz;
@@ -813,6 +884,7 @@ export class SoftBody {
       }
       this._heatResidual = maxAbs;
       this.heatActive = false;
+      if (maxAbs > 0.05) this.wakeAll();
       for (let t = 0; t < this.nT; t++) {
         const o = t * 4;
         const tt = (temp[T[o]] + temp[T[o + 1]] + temp[T[o + 2]] + temp[T[o + 3]]) * 0.25;
@@ -831,6 +903,36 @@ export class SoftBody {
     this._cs = cs;
     const { x, T } = this;
     const nT = this.nT;
+    // which pieces could touch another piece this frame (AABB overlap)
+    const P = this.pieces.length;
+    const bb = new Float64Array(P * 6);
+    for (let k = 0; k < P; k++) {
+      bb[k * 6] = bb[k * 6 + 1] = bb[k * 6 + 2] = Infinity;
+      bb[k * 6 + 3] = bb[k * 6 + 4] = bb[k * 6 + 5] = -Infinity;
+    }
+    for (let i = 0; i < this.nV; i++) {
+      const k = this.vPiece[i];
+      if (k < 0) continue;
+      const o = i * 3, b = k * 6;
+      if (x[o] < bb[b]) bb[b] = x[o];
+      if (x[o + 1] < bb[b + 1]) bb[b + 1] = x[o + 1];
+      if (x[o + 2] < bb[b + 2]) bb[b + 2] = x[o + 2];
+      if (x[o] > bb[b + 3]) bb[b + 3] = x[o];
+      if (x[o + 1] > bb[b + 4]) bb[b + 4] = x[o + 1];
+      if (x[o + 2] > bb[b + 5]) bb[b + 5] = x[o + 2];
+    }
+    const act = this._pieceActive && this._pieceActive.length >= P ? this._pieceActive : (this._pieceActive = new Uint8Array(Math.max(P, 64)));
+    act.fill(0);
+    const m = 0.03;
+    let anyAct = false;
+    for (let a = 0; a < P; a++)
+      for (let b = a + 1; b < P; b++) {
+        const A = a * 6, B = b * 6;
+        if (bb[A] - m > bb[B + 3] || bb[B] - m > bb[A + 3] || bb[A + 1] - m > bb[B + 4] || bb[B + 1] - m > bb[A + 4] || bb[A + 2] - m > bb[B + 5] || bb[B + 2] - m > bb[A + 5]) continue;
+        act[a] = act[b] = 1;
+        anyAct = true;
+      }
+    this._anyContact = anyAct;
     const size = 1 << 15;
     const mask = size - 1;
     const counts = this._hCount && this._hCount.length === size + 1 ? this._hCount : (this._hCount = new Int32Array(size + 1));
@@ -856,7 +958,7 @@ export class SoftBody {
       const iz0 = Math.floor(z0 * inv), iz1 = Math.floor(z1 * inv);
       const r = t * 6;
       ranges[r] = ix0; ranges[r + 1] = ix1; ranges[r + 2] = iy0; ranges[r + 3] = iy1; ranges[r + 4] = iz0; ranges[r + 5] = iz1;
-      if ((ix1 - ix0 + 1) * (iy1 - iy0 + 1) * (iz1 - iz0 + 1) > 64 || this.tetBoundary[t] < 0) {
+      if ((ix1 - ix0 + 1) * (iy1 - iy0 + 1) * (iz1 - iz0 + 1) > 64 || this.tetBoundary[t] < 0 || !act[this.tPiece[t]]) {
         ranges[r] = 1; ranges[r + 1] = 0; // skip huge or interior tets
         continue;
       }
@@ -905,8 +1007,10 @@ export class SoftBody {
     const sv = this._surfVerts;
     const sTri = this.sTri;
     const margin = 0.0015;
+    const act = this._pieceActive;
     for (let q = 0; q < sv.length; q++) {
       const i = sv[q];
+      if (!act[vPiece[i]]) continue;
       const o = i * 3;
       const px = x[o], py = x[o + 1], pz = x[o + 2];
       const ix = Math.floor(px * inv), iy = Math.floor(py * inv), iz = Math.floor(pz * inv);
@@ -949,6 +1053,12 @@ export class SoftBody {
           }
         }
         if (best < 0 || bestD < 0) continue;
+        const tpc = this.pieces[tPiece[t]];
+        if (tpc.asleep) {
+          tpc.asleep = false;
+          tpc.sleepT = 0;
+          this._awake[tPiece[t]] = 1;
+        }
         const depth = bestD + margin;
         const f3 = best * 3;
         const ia = sTri[f3], ib = sTri[f3 + 1], ic = sTri[f3 + 2];
@@ -977,7 +1087,7 @@ export class SoftBody {
       const px = dy * e2z - dz * e2y, py = dz * e2x - dx * e2z, pz = dx * e2y - dy * e2x;
       const det = e1x * px + e1y * py + e1z * pz;
       if (det > -1e-12 && det < 1e-12) continue;
-      if (det > 0) continue; // only front faces (outward normals face the ray)
+      if (det < 0) continue; // only front faces (outward normals face the ray)
       const id = 1 / det;
       const tx = ox - x[a], ty = oy - x[a + 1], tz = oz - x[a + 2];
       const u = (tx * px + ty * py + tz * pz) * id;
@@ -1095,6 +1205,7 @@ export class SoftBody {
       const f = 1 - Math.sqrt(d2) / radius;
       const s = strength * f * f;
       v[o] += dx * s; v[o + 1] += dy * s; v[o + 2] += dz * s;
+      if (this.pieces[this.vPiece[i]].asleep) this.wake(this.vPiece[i]);
       hit++;
     }
     return hit;
@@ -1111,6 +1222,7 @@ export class SoftBody {
       const f = 1 - d / radius;
       const s = (strength * f * f) / d;
       v[o] += ex * s; v[o + 1] += ey * s + up * f; v[o + 2] += ez * s;
+      if (this.pieces[this.vPiece[i]].asleep) this.wake(this.vPiece[i]);
     }
   }
 
@@ -1125,6 +1237,7 @@ export class SoftBody {
       if (d2 > r2) continue;
       const f = 1 - Math.sqrt(d2) / radius;
       temp[i] = Math.max(limitLo, Math.min(limitHi, temp[i] + amount * f));
+      if (this.pieces[this.vPiece[i]]?.asleep) this.wake(this.vPiece[i]);
     }
     this.heatActive = true;
     this._heatResidual = 1;
@@ -1145,6 +1258,7 @@ export class SoftBody {
       off.push(ex, ey, ez);
     }
     if (!idx.length) return null;
+    this.wake(hit.piece);
     this.grab = {
       n: idx.length,
       idx: Int32Array.from(idx),

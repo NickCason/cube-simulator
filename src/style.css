@@ -1,13 +1,24 @@
+:root {
+  --ink: #1c1c1f;
+  --jelly: #d4102a;
+  --glass: rgba(255, 255, 255, 0.56);
+  --line: rgba(255, 255, 255, 0.78);
+  --font: 'SF Pro Display', 'SF Pro Text', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Inter, Roboto, 'Helvetica Neue', Arial, sans-serif;
+}
+
 html,
 body {
   margin: 0;
   height: 100%;
   overflow: hidden;
-  background: #d9d6d2;
+  background: #dcd9d5;
   overscroll-behavior: none;
   -webkit-user-select: none;
   user-select: none;
   -webkit-touch-callout: none;
+  -webkit-tap-highlight-color: transparent;
+  font-family: var(--font);
+  color: var(--ink);
 }
 
 #stage {
@@ -18,4 +29,363 @@ body {
   display: block;
   touch-action: none;
   cursor: grab;
+}
+
+.overlay {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+#ui {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+}
+
+#ui > * {
+  pointer-events: auto;
+}
+
+/* ---------------------------------------------------------------- title */
+.title {
+  position: fixed;
+  top: max(20px, env(safe-area-inset-top));
+  right: max(24px, env(safe-area-inset-right));
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  color: rgba(28, 28, 31, 0.86);
+  pointer-events: none !important;
+}
+
+.title .dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--jelly);
+  box-shadow: inset -1.5px -2px 3px rgba(0, 0, 0, 0.25), inset 1.5px 1.5px 2px rgba(255, 255, 255, 0.55), 0 1px 6px color-mix(in srgb, var(--jelly) 55%, transparent);
+  transition: background 0.3s;
+}
+
+/* ---------------------------------------------------------------- dock */
+.dock {
+  position: fixed;
+  left: 50%;
+  bottom: max(18px, calc(env(safe-area-inset-bottom) + 8px));
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px;
+  max-width: calc(100vw - 24px);
+  box-sizing: border-box;
+  background: var(--glass);
+  -webkit-backdrop-filter: blur(20px) saturate(1.7);
+  backdrop-filter: blur(20px) saturate(1.7);
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  box-shadow: 0 12px 32px rgba(40, 30, 20, 0.14), 0 2px 6px rgba(40, 30, 20, 0.06), inset 0 1px 0 rgba(255, 255, 255, 0.9);
+}
+
+.tools {
+  display: flex;
+  gap: 2px;
+}
+
+.dock button {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  cursor: pointer;
+  padding: 0;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.tool {
+  position: relative;
+  width: 42px;
+  height: 42px;
+  border-radius: 13px;
+  display: grid;
+  place-items: center;
+  transition: background 0.15s, color 0.15s, transform 0.15s;
+}
+
+.tool svg,
+.heal svg,
+.mute svg {
+  width: 22px;
+  height: 22px;
+}
+
+.tool:hover {
+  background: rgba(0, 0, 0, 0.055);
+}
+
+.tool:active {
+  transform: scale(0.94);
+}
+
+.tool.active {
+  background: var(--ink);
+  color: #fff;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+}
+
+.tool .tip {
+  position: absolute;
+  bottom: calc(100% + 12px);
+  left: 50%;
+  transform: translate(-50%, 4px);
+  white-space: nowrap;
+  font-size: 12px;
+  font-weight: 500;
+  padding: 6px 8px 6px 10px;
+  border-radius: 8px;
+  background: rgba(28, 28, 31, 0.9);
+  color: #fff;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.15s, transform 0.15s;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.tool .tip kbd {
+  font: 600 10px/1 var(--font);
+  padding: 3px 5px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.16);
+}
+
+@media (hover: hover) {
+  .tool:hover .tip {
+    opacity: 1;
+    transform: translate(-50%, 0);
+  }
+}
+
+.sep {
+  width: 1px;
+  height: 26px;
+  margin: 0 5px;
+  background: rgba(0, 0, 0, 0.1);
+}
+
+.colors {
+  position: relative;
+}
+
+.swatch-btn {
+  width: 42px;
+  height: 42px;
+  border-radius: 13px;
+  display: grid;
+  place-items: center;
+}
+
+.swatch-btn:hover,
+.swatch-btn.open {
+  background: rgba(0, 0, 0, 0.055);
+}
+
+.swatch {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--jelly);
+  box-shadow: inset -2px -3px 5px rgba(0, 0, 0, 0.28), inset 2px 2px 3px rgba(255, 255, 255, 0.55), 0 0 0 1.5px rgba(255, 255, 255, 0.9), 0 2px 6px rgba(0, 0, 0, 0.18);
+}
+
+.palette {
+  position: absolute;
+  bottom: calc(100% + 14px);
+  left: 50%;
+  transform: translateX(-50%);
+  display: grid;
+  grid-template-columns: repeat(3, 34px);
+  gap: 8px;
+  padding: 12px;
+  background: rgba(255, 255, 255, 0.82);
+  -webkit-backdrop-filter: blur(20px) saturate(1.6);
+  backdrop-filter: blur(20px) saturate(1.6);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  box-shadow: 0 12px 32px rgba(40, 30, 20, 0.18);
+}
+
+.palette[hidden] {
+  display: none;
+}
+
+.chip {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  background: var(--c);
+  box-shadow: inset -3px -4px 7px rgba(0, 0, 0, 0.3), inset 2px 3px 4px rgba(255, 255, 255, 0.5), 0 2px 5px rgba(0, 0, 0, 0.18);
+  transition: transform 0.12s;
+}
+
+.chip:hover {
+  transform: scale(1.08);
+}
+
+.chip.active {
+  outline: 2px solid var(--ink);
+  outline-offset: 2px;
+}
+
+.chip.custom {
+  position: relative;
+  overflow: hidden;
+  cursor: pointer;
+  background: conic-gradient(from 0deg, #ff3b3b, #ffcc12, #5fce1e, #12c8ff, #6b3bff, #ff3bbd, #ff3b3b);
+}
+
+.chip.custom input {
+  position: absolute;
+  inset: -8px;
+  width: 52px;
+  height: 52px;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.heal {
+  height: 42px;
+  padding: 0 16px 0 12px !important;
+  margin-left: 4px;
+  border-radius: 13px;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-weight: 600 !important;
+  font-size: 14px !important;
+  letter-spacing: 0.01em;
+  color: #fff !important;
+  background: linear-gradient(180deg, #2d2d31, #19191b) !important;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.22), inset 0 1px 0 rgba(255, 255, 255, 0.15);
+  transition: transform 0.15s, box-shadow 0.3s;
+}
+
+.heal:active {
+  transform: scale(0.96);
+}
+
+.heal.pulse {
+  animation: healpulse 2.2s ease-in-out infinite;
+}
+
+@keyframes healpulse {
+  0%,
+  100% {
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.22), 0 0 0 0 color-mix(in srgb, var(--jelly) 0%, transparent), inset 0 1px 0 rgba(255, 255, 255, 0.15);
+  }
+  50% {
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.22), 0 0 0 5px color-mix(in srgb, var(--jelly) 30%, transparent), inset 0 1px 0 rgba(255, 255, 255, 0.15);
+  }
+}
+
+.mute {
+  width: 36px;
+  height: 42px;
+  border-radius: 12px;
+  display: grid;
+  place-items: center;
+  margin-left: 2px;
+  opacity: 0.75;
+}
+
+.mute:hover {
+  opacity: 1;
+  background: rgba(0, 0, 0, 0.05);
+}
+
+.mute svg {
+  width: 19px;
+  height: 19px;
+}
+
+/* ---------------------------------------------------------------- hint */
+.hint {
+  position: fixed;
+  left: 50%;
+  bottom: calc(max(18px, calc(env(safe-area-inset-bottom) + 8px)) + 66px);
+  transform: translate(-50%, 6px);
+  font-size: 13px;
+  font-weight: 500;
+  color: rgba(28, 28, 31, 0.78);
+  padding: 7px 13px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.55);
+  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(12px);
+  opacity: 0;
+  transition: opacity 0.3s, transform 0.3s;
+  pointer-events: none !important;
+  white-space: nowrap;
+}
+
+.hint.show {
+  opacity: 1;
+  transform: translate(-50%, 0);
+}
+
+/* ---------------------------------------------------------------- small screens */
+@media (max-width: 720px) {
+  .title {
+    font-size: 14px;
+    top: max(14px, env(safe-area-inset-top));
+    right: max(16px, env(safe-area-inset-right));
+  }
+  .dock {
+    width: calc(100vw - 20px);
+    gap: 2px;
+    padding: 5px;
+    border-radius: 18px;
+  }
+  .tools {
+    flex: 1;
+    overflow-x: auto;
+    scrollbar-width: none;
+    -webkit-mask-image: linear-gradient(90deg, #000 88%, transparent);
+    mask-image: linear-gradient(90deg, #000 88%, transparent);
+  }
+  .tools::-webkit-scrollbar {
+    display: none;
+  }
+  .tool {
+    flex: 0 0 40px;
+    width: 40px;
+    height: 40px;
+  }
+  .tool .tip {
+    display: none;
+  }
+  .sep {
+    margin: 0 2px;
+  }
+  .heal span {
+    display: none;
+  }
+  .heal {
+    padding: 0 11px !important;
+  }
+  .mute {
+    width: 30px;
+  }
+  .hint {
+    bottom: calc(max(18px, calc(env(safe-area-inset-bottom) + 8px)) + 60px);
+    font-size: 12px;
+  }
 }

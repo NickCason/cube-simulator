@@ -1,0 +1,183 @@
+const svg = (inner) =>
+  `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${inner}</svg>`;
+
+export const ICONS = {
+  hand: svg(
+    '<path d="M7 11.5V5.8a1.4 1.4 0 0 1 2.8 0V11"/><path d="M9.8 10.5V4.4a1.4 1.4 0 0 1 2.8 0v6.1"/><path d="M12.6 10.6V5.6a1.4 1.4 0 0 1 2.8 0v5.8"/><path d="M15.4 11.2V8.2a1.4 1.4 0 0 1 2.8 0v6.3c0 4-2.9 7-6.6 7h-.9c-2.2 0-3.7-.8-5-2.4L3.4 15.3a1.3 1.3 0 0 1 2-1.6L7 15.4V11"/>',
+  ),
+  knife: svg('<path d="M13 11 3 21c4.5-.4 9.2-2.6 13-7z"/><path d="m13 11 6.6-6.6a1.9 1.9 0 0 1 2.7 2.7L16 14"/>'),
+  nailgun: svg(
+    '<path d="M2.5 7.5h13a2 2 0 0 1 2 2V11a1 1 0 0 1-1 1H9l-1.4 7a1.2 1.2 0 0 1-1.2 1H4.6a1 1 0 0 1-1-1.2L5 12H2.5z"/><path d="M19.2 9.8h3.3"/><path d="M19.2 8.4v2.8"/><path d="M9.6 12v1.4a1 1 0 0 1-1 1"/>',
+  ),
+  mallet: svg('<g transform="rotate(-32 12 12)"><rect x="4.5" y="2.5" width="15" height="6.5" rx="1.8"/><rect x="10.8" y="9" width="2.4" height="13" rx="1.2"/></g>'),
+  torch: svg(
+    '<path d="M12 21.5c-3.6 0-6-2.4-6-5.7 0-3.6 2.8-5.4 3.6-8.9 1.6 1.2 2.4 3 2.3 4.6 1.4-.9 2.2-2.4 2.3-4.2 2.5 2 3.8 5.1 3.8 8.3 0 3.4-2.4 5.9-6 5.9z"/><path d="M12 21.5c-1.6 0-2.7-1.1-2.7-2.6 0-1.7 1.4-2.6 2.1-4.2 1.9 1.3 3.3 2.6 3.3 4.4 0 1.4-1.1 2.4-2.7 2.4z"/>',
+  ),
+  freeze: svg(
+    '<path d="M12 2.5v19"/><path d="m3.8 7.25 16.4 9.5"/><path d="m3.8 16.75 16.4-9.5"/><path d="m9.6 4.2 2.4 1.8 2.4-1.8"/><path d="m9.6 19.8 2.4-1.8 2.4 1.8"/><path d="m4.1 10.4 2.8-1.2-.4-3"/><path d="m19.9 13.6-2.8 1.2.4 3"/><path d="m4.1 13.6 2.8 1.2-.4 3"/><path d="m19.9 10.4-2.8-1.2.4-3"/>',
+  ),
+  baller: svg(
+    '<circle cx="8" cy="16" r="4.8"/><path d="M5.6 15.2a2.6 2.6 0 0 1 2.9-1.9"/><path d="m11.5 12.5 6.4-6.4a1.8 1.8 0 0 1 2.5 2.5L14 15"/>',
+  ),
+  bomb: svg(
+    '<circle cx="10.5" cy="14" r="6.5"/><path d="m14.6 9 1.6-1.6"/><path d="M16.2 7.4c.4-2.2 2-3.5 4-3.4"/><path d="M21.5 1.8v1.1"/><path d="M23 3.4h-1.1"/><path d="m22.4 2.2-.6.6"/><path d="M7.4 11.4a3.6 3.6 0 0 1 2.4-1.7"/>',
+  ),
+  syringe: svg(
+    '<path d="m18.5 2.5 3 3"/><path d="m20 4-3.3 3.3"/><path d="M17.8 8.4 8.6 17.6a1.4 1.4 0 0 1-2 0l-2.2-2.2a1.4 1.4 0 0 1 0-2l9.2-9.2z"/><path d="m4.5 19.5-2 2"/><path d="m9.2 11.6 1.6 1.6"/><path d="m11.4 9.4 1.6 1.6"/>',
+  ),
+  magnet: svg('<path d="M6 3h3.6v8.2a2.4 2.4 0 0 0 4.8 0V3H18v8.2a6 6 0 0 1-12 0z"/><path d="M6 7.2h3.6"/><path d="M14.4 7.2H18"/>'),
+  heal: svg(
+    '<path d="M11 3.5 12.7 8l4.6 1.7-4.6 1.7L11 16l-1.7-4.6-4.6-1.7L9.3 8z"/><path d="m18.5 14.5.8 2.1 2.2.8-2.2.8-.8 2.3-.8-2.3-2.2-.8 2.2-.8z"/>',
+  ),
+  sound: svg('<path d="M11 5 6.5 8.5H3.5v7h3L11 19z"/><path d="M15.5 9a4.5 4.5 0 0 1 0 6"/><path d="M18.4 6.2a8.4 8.4 0 0 1 0 11.6"/>'),
+  mute: svg('<path d="M11 5 6.5 8.5H3.5v7h3L11 19z"/><path d="m16 9.5 5 5"/><path d="m21 9.5-5 5"/>'),
+};
+
+export const TOOL_DEFS = [
+  { id: 'hand', label: 'Hand', hint: 'Drag to grab & throw · tap to poke', key: '1' },
+  { id: 'knife', label: 'Knife', hint: 'Swipe across the jelly to slice it', key: '2' },
+  { id: 'nailgun', label: 'Nail gun', hint: 'Click to fire · hold for auto', key: '3' },
+  { id: 'mallet', label: 'Mallet', hint: 'Click to smack · frozen jelly shatters', key: '4' },
+  { id: 'torch', label: 'Torch', hint: 'Hold over the jelly to melt it', key: '5' },
+  { id: 'freeze', label: 'Cryo spray', hint: 'Hold to freeze it solid', key: '6' },
+  { id: 'baller', label: 'Melon baller', hint: 'Click to scoop out a ball', key: '7' },
+  { id: 'bomb', label: 'Cherry bomb', hint: 'Click to plant · stand back', key: '8' },
+  { id: 'syringe', label: 'Syringe', hint: 'Hold to pump it up', key: '9' },
+  { id: 'magnet', label: 'Magnet', hint: 'Hold to pull nails (and whatever they are stuck in)', key: '0' },
+];
+
+export const COLORS = [
+  { name: 'Cherry', hex: '#d4102a' },
+  { name: 'Lime', hex: '#5fce1e' },
+  { name: 'Blue raspberry', hex: '#0f8cff' },
+  { name: 'Grape', hex: '#7a24d4' },
+  { name: 'Orange', hex: '#ff7414' },
+  { name: 'Lemon', hex: '#ffcc12' },
+  { name: 'Watermelon', hex: '#ff3f7f' },
+  { name: 'Cola', hex: '#7a2e0e' },
+];
+
+export class UI {
+  constructor(app, root) {
+    this.app = app;
+    this.root = root;
+    this.root.innerHTML = `
+      <header class="title"><span class="dot"></span><span class="name">Cube Simulator</span></header>
+      <div class="hint" aria-live="polite"></div>
+      <nav class="dock" role="toolbar" aria-label="Tools">
+        <div class="tools"></div>
+        <div class="sep"></div>
+        <div class="colors">
+          <button class="swatch-btn" aria-label="Jelly colour" title="Jelly colour"><span class="swatch"></span></button>
+          <div class="palette" hidden></div>
+        </div>
+        <button class="heal" title="Heal (H)">${ICONS.heal}<span>Heal</span></button>
+        <button class="mute" title="Sound (M)" aria-label="Toggle sound">${ICONS.sound}</button>
+      </nav>`;
+    this.toolsEl = root.querySelector('.tools');
+    this.hintEl = root.querySelector('.hint');
+    this.healEl = root.querySelector('.heal');
+    this.muteEl = root.querySelector('.mute');
+    this.swatchBtn = root.querySelector('.swatch-btn');
+    this.paletteEl = root.querySelector('.palette');
+    this.dot = root.querySelector('.title .dot');
+    this.buttons = {};
+    for (const d of TOOL_DEFS) {
+      const b = document.createElement('button');
+      b.className = 'tool';
+      b.dataset.tool = d.id;
+      b.innerHTML = `${ICONS[d.id]}<span class="tip">${d.label}<kbd>${d.key}</kbd></span>`;
+      b.setAttribute('aria-label', d.label);
+      b.addEventListener('click', () => {
+        app.audio.init();
+        app.audio.ui();
+        app.setTool(d.id);
+      });
+      this.toolsEl.appendChild(b);
+      this.buttons[d.id] = b;
+    }
+    for (const c of COLORS) {
+      const b = document.createElement('button');
+      b.className = 'chip';
+      b.style.setProperty('--c', c.hex);
+      b.title = c.name;
+      b.setAttribute('aria-label', c.name);
+      b.addEventListener('click', () => {
+        app.setColor(c.hex);
+        this.closePalette();
+      });
+      this.paletteEl.appendChild(b);
+    }
+    const custom = document.createElement('label');
+    custom.className = 'chip custom';
+    custom.title = 'Custom colour';
+    custom.innerHTML = '<input type="color" value="#d4102a" aria-label="Custom colour">';
+    custom.querySelector('input').addEventListener('input', (e) => app.setColor(e.target.value));
+    this.paletteEl.appendChild(custom);
+
+    this.swatchBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      app.audio.init();
+      if (this.paletteEl.hidden) this.openPalette();
+      else this.closePalette();
+    });
+    document.addEventListener('pointerdown', (e) => {
+      if (!this.paletteEl.hidden && !this.paletteEl.contains(e.target) && e.target !== this.swatchBtn) this.closePalette();
+    });
+    this.healEl.addEventListener('click', () => {
+      app.audio.init();
+      app.heal();
+    });
+    this.muteEl.addEventListener('click', () => {
+      app.audio.init();
+      this.setMuted(!app.audio.muted);
+    });
+    window.addEventListener('keydown', (e) => {
+      if (e.target instanceof HTMLInputElement) return;
+      const d = TOOL_DEFS.find((t) => t.key === e.key);
+      if (d) app.setTool(d.id);
+      else if (e.key === 'h' || e.key === 'H') app.heal();
+      else if (e.key === 'm' || e.key === 'M') this.setMuted(!app.audio.muted);
+    });
+  }
+
+  openPalette() {
+    this.paletteEl.hidden = false;
+    this.swatchBtn.classList.add('open');
+  }
+
+  closePalette() {
+    this.paletteEl.hidden = true;
+    this.swatchBtn.classList.remove('open');
+  }
+
+  setMuted(m) {
+    this.app.audio.setMuted(m);
+    this.muteEl.innerHTML = m ? ICONS.mute : ICONS.sound;
+    this.muteEl.classList.toggle('off', m);
+  }
+
+  setTool(id) {
+    for (const k in this.buttons) this.buttons[k].classList.toggle('active', k === id);
+    const d = TOOL_DEFS.find((t) => t.id === id);
+    if (d) this.hint(d.hint);
+  }
+
+  setColor(hex) {
+    this.root.style.setProperty('--jelly', hex);
+    this.swatchBtn.querySelector('.swatch').style.background = hex;
+    this.dot.style.background = hex;
+    for (const b of this.paletteEl.querySelectorAll('.chip')) b.classList.toggle('active', b.style.getPropertyValue('--c') === hex);
+  }
+
+  setDamaged(d) {
+    this.healEl.classList.toggle('pulse', d);
+  }
+
+  hint(text, ms = 2600) {
+    this.hintEl.textContent = text;
+    this.hintEl.classList.add('show');
+    clearTimeout(this._ht);
+    this._ht = setTimeout(() => this.hintEl.classList.remove('show'), ms);
+  }
+}
