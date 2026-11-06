@@ -223,14 +223,23 @@ function snapToShape(pos, nrm, mids, first, disp, shape) {
   }
 }
 
-// Owns the jelly GPU geometry (one mesh per connected piece, sharing vertex
-// attributes) and the multi-pass jelly rendering.
+// Owns the jelly GPU geometry and the multi-pass jelly rendering. The
+// pieces share their vertex attributes and are drawn together: one mesh of
+// them all (for the passes that draw every piece - the light's view, the
+// floor's masks, the mirror) and one per refraction layer (see
+// renderPieces), each a single draw call. (A mesh per piece cost ~8 draw
+// calls per piece per frame: past a hundred pieces, 200 ms a frame.)
 export class JellyView {
   constructor(renderer, env, lightDir) {
     this.maxLayers = 5; // (phones: fewer; see App)
     this.renderer = renderer;
     this.scene = new THREE.Scene();
-    this.meshes = [];
+    this.allMesh = null; // every piece
+    this.layerMeshes = []; // the pieces of each refraction layer
+    this.pieceIdx = new Int32Array(0); // per piece: its run [start, end) of the index buffer
+    this.fullIndex = null;
+    this.layerOf = new Int8Array(0); // per piece: its layer last frame (-1: none)
+    this.layerCount = new Int32Array(0); // per layer: indices in its mesh
     this.topoVersion = -1;
     this.layerUniforms = createLayerUniforms();
     this.backMat = createBackMaterial();
@@ -264,7 +273,7 @@ export class JellyView {
     this.glowMat = createGlowMaterial(this.layerUniforms, this.reflectMat.uniforms.uScatterColor, this.reflectMat.uniforms.uMilk);
     // the pieces again, upside down below the floor (its reflection)
     this.reflScene = new THREE.Scene();
-    this.reflMeshes = [];
+    this.mirror = null;
     this.fxCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
     this.floorRect = new THREE.Vector4(-FLOOR_SPAN / 2, -FLOOR_SPAN / 2, 1 / FLOOR_SPAN, 1 / FLOOR_SPAN);
     for (const m of [this.causticMat, this.maskMat, this.heightMat, this.glowMat]) {
@@ -427,13 +436,15 @@ export class JellyView {
   syncTopology(sb) {
     if (sb.topoVersion === this.topoVersion) return false;
     this.topoVersion = sb.topoVersion;
-    for (const m of this.meshes) {
+    for (const m of [this.allMesh, ...this.layerMeshes]) {
+      if (!m) continue;
       this.scene.remove(m);
       m.geometry.dispose();
     }
-    this.meshes = [];
-    for (const m of this.reflMeshes) this.reflScene.remove(m);
-    this.reflMeshes = [];
+    this.allMesh = null;
+    this.layerMeshes = [];
+    if (this.mirror) this.reflScene.remove(this.mirror);
+    this.mirror = null;
     const nB = sb.rCount;
     const rIndex = sb.rIndex, rSim = sb.rSim;
     const nTri = rIndex.length / 3;
@@ -507,27 +518,43 @@ export class JellyView {
     this.aWeld = new THREE.BufferAttribute(weld, 1);
     // and the seams themselves, for exact distances close to them per pixel
     this._setWeldSeams(sb.weld && sb.weld.topo === sb.topoVersion ? sb.weld.near : null);
-    sb.pieceRanges.forEach((rg, k) => {
+    const geom = (idx) => {
       const g = new THREE.BufferGeometry();
       g.setAttribute('position', this.aPos);
       g.setAttribute('normal', this.aNrm);
       g.setAttribute('aData', this.aData);
       g.setAttribute('aRest', this.aRest);
       g.setAttribute('aWeld', this.aWeld);
-      // (a piece's base triangles -> its level-1 ones, 4 each -> its final ones)
-      const s0 = L2.start[(rg.start / 3) * 4], s1 = L2.start[((rg.start + rg.count) / 3) * 4];
-      g.setIndex(new THREE.BufferAttribute(index.slice(s0, s1), 1));
-      const mesh = new THREE.Mesh(g, this.frontMat);
-      mesh.frustumCulled = false;
-      mesh.userData.piece = k;
-      this.scene.add(mesh);
-      this.meshes.push(mesh);
-      const mirror = new THREE.Mesh(g, this.reflectMat);
-      mirror.frustumCulled = false;
-      mirror.scale.y = -1;
-      this.reflScene.add(mirror);
-      this.reflMeshes.push(mirror);
+      g.setIndex(new THREE.BufferAttribute(idx, 1));
+      return g;
+    };
+    // each piece's run of the final triangles (index sorted by piece: a
+    // base triangle -> its level-1 ones, 4 each -> its final ones)
+    const NP = sb.pieceRanges.length;
+    this.pieceIdx = new Int32Array(NP * 2);
+    sb.pieceRanges.forEach((rg, k) => {
+      this.pieceIdx[k * 2] = L2.start[(rg.start / 3) * 4];
+      this.pieceIdx[k * 2 + 1] = L2.start[((rg.start + rg.count) / 3) * 4];
     });
+    const full = index.slice(0, this.pieceIdx[NP * 2 - 1] || 0);
+    this.fullIndex = full;
+    const all = geom(full);
+    this.allMesh = new THREE.Mesh(all, this.frontMat);
+    this.allMesh.frustumCulled = false;
+    this.scene.add(this.allMesh);
+    for (let L = 0; L < this.maxLayers; L++) {
+      const m = new THREE.Mesh(geom(new full.constructor(full.length)), this.frontMat);
+      m.frustumCulled = false;
+      m.visible = false;
+      this.scene.add(m);
+      this.layerMeshes.push(m);
+    }
+    this.layerOf = new Int8Array(NP).fill(-1);
+    this.layerCount = new Int32Array(this.maxLayers);
+    this.mirror = new THREE.Mesh(all, this.reflectMat);
+    this.mirror.frustumCulled = false;
+    this.mirror.scale.y = -1;
+    this.reflScene.add(this.mirror);
     return true;
   }
 
@@ -679,10 +706,9 @@ export class JellyView {
     const r = this.renderer;
     const prevClear = r.getClearColor(new THREE.Color());
     const prevAlpha = r.getClearAlpha();
-    for (const m of this.meshes) m.visible = true;
     r.setClearColor(0x000000, 0);
     // caustics: the light's view of the jelly, then its grid of rays
-    const lit = sb && this.meshes.length && this._fitLightView(sb);
+    const lit = sb && this.allMesh && this._fitLightView(sb);
     if (lit) {
       for (const { rt, mat } of this.lightView) {
         mat.uniforms.uOrigin.value.copy(this.lightOrigin);
@@ -721,27 +747,29 @@ export class JellyView {
   renderPieces(camera, sb, rtScene, rtTrans, copyFn) {
     const r = this.renderer;
     const v = this._v;
+    if (!this.allMesh) return;
     const items = [];
-    for (const m of this.meshes) {
-      const pc = sb.pieces[m.userData.piece];
-      if (!pc) continue;
+    const NP = Math.min(sb.pieces.length, this.pieceIdx.length / 2);
+    for (let k = 0; k < NP; k++) {
+      const pc = sb.pieces[k];
+      if (!pc || this.pieceIdx[k * 2 + 1] <= this.pieceIdx[k * 2]) continue;
       const b = pc.bbox;
       let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
-      for (let k = 0; k < 8; k++) {
-        v.set(k & 1 ? b[3] : b[0], k & 2 ? b[4] : b[1], k & 4 ? b[5] : b[2]).project(camera);
+      for (let c = 0; c < 8; c++) {
+        v.set(c & 1 ? b[3] : b[0], c & 2 ? b[4] : b[1], c & 4 ? b[5] : b[2]).project(camera);
         if (v.x < x0) x0 = v.x;
         if (v.x > x1) x1 = v.x;
         if (v.y < y0) y0 = v.y;
         if (v.y > y1) y1 = v.y;
       }
       const d = v.set(pc.com[0], pc.com[1], pc.com[2]).distanceToSquared(camera.position);
-      items.push({ m, d, x0, y0, x1, y1, layer: 0 });
+      items.push({ k, d, x0, y0, x1, y1, layer: 0 });
     }
     items.sort((a, b) => b.d - a.d);
     // pieces overlapping on screen go into successive layers so the nearer
     // ones refract the farther ones; each layer costs two passes and a
     // full-screen copy, so piles share the last few (maxLayers)
-    const maxL = this.maxLayers;
+    const maxL = Math.min(this.maxLayers, this.layerMeshes.length);
     let nLayers = 1;
     for (let i = 0; i < items.length; i++) {
       const a = items[i];
@@ -753,14 +781,50 @@ export class JellyView {
       a.layer = Math.min(a.layer, maxL - 1);
       nLayers = Math.max(nLayers, a.layer + 1);
     }
+    // each layer's mesh: its pieces' runs of the index (rewritten only when
+    // a piece changes layer)
+    let changed = false;
+    const layerOf = this.layerOf;
+    const seen = new Uint8Array(NP);
+    for (const it of items) {
+      seen[it.k] = 1;
+      if (layerOf[it.k] !== it.layer) changed = true;
+      layerOf[it.k] = it.layer;
+    }
+    for (let k = 0; k < NP; k++) {
+      if (!seen[k] && layerOf[k] !== -1) {
+        layerOf[k] = -1;
+        changed = true;
+      }
+    }
+    if (changed) {
+      const full = this.fullIndex, P = this.pieceIdx;
+      for (let L = 0; L < maxL; L++) {
+        const g = this.layerMeshes[L].geometry, idx = g.index;
+        let n = 0;
+        for (let k = 0; k < NP; k++) {
+          if (layerOf[k] !== L) continue;
+          idx.array.set(full.subarray(P[k * 2], P[k * 2 + 1]), n);
+          n += P[k * 2 + 1] - P[k * 2];
+        }
+        if (n !== this.layerCount[L] || n) {
+          idx.clearUpdateRanges();
+          idx.addUpdateRange(0, n);
+          idx.needsUpdate = true;
+        }
+        this.layerCount[L] = n;
+        g.setDrawRange(0, n);
+      }
+    }
     const auto = r.autoClear;
     const prevClear = r.getClearColor(new THREE.Color());
     const prevAlpha = r.getClearAlpha();
     this.frontMat.uniforms.tScene.value = rtTrans.texture;
     this.frontMat.uniforms.tBack.value = this.rtBack.texture;
     this.layers = nLayers;
+    this.allMesh.visible = false;
     for (let L = 0; L < nLayers; L++) {
-      for (const it of items) it.m.visible = it.layer === L;
+      for (let q = 0; q < this.layerMeshes.length; q++) this.layerMeshes[q].visible = q === L && this.layerCount[q] > 0;
       r.autoClear = false;
       r.setClearColor(0x000000, 0);
       r.setRenderTarget(this.rtBack);
@@ -772,8 +836,10 @@ export class JellyView {
       r.render(this.scene, camera);
       if (L < nLayers - 1) copyFn();
     }
-    for (const m of this.meshes) m.visible = true;
+    for (const m of this.layerMeshes) m.visible = false;
+    this.allMesh.visible = true;
     r.autoClear = auto;
     r.setClearColor(prevClear, prevAlpha);
   }
+
 }
