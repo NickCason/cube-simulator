@@ -23,8 +23,9 @@ export function createFloor(env, fx) {
     shader.uniforms.uRes = fx.res;
     shader.uniforms.uReflAmount = fx.reflAmount;
     shader.uniforms.uReflLod = fx.reflLod;
-    shader.uniforms.uGlowCol = fx.glowCol;
     shader.uniforms.uGlowFloor = fx.glowFloor;
+    shader.uniforms.tGlow = fx.glowTex;
+    shader.uniforms.uPulseCol = fx.pulseCol;
     shader.uniforms.uPulse = fx.pulse;
     shader.uniforms.uPulseAmp = fx.pulseAmp;
     shader.uniforms.uTime = fx.time;
@@ -47,8 +48,9 @@ export function createFloor(env, fx) {
         uniform vec2 uRes;
         uniform float uReflAmount;
         uniform float uReflLod;
-        uniform vec3 uGlowCol;
         uniform float uGlowFloor;
+        uniform sampler2D tGlow;
+        uniform vec3 uPulseCol[${MAX_PULSES}];
         uniform vec4 uPulse[${MAX_PULSES}];
         uniform float uPulseAmp[${MAX_PULSES}];
         uniform float uTime;`,
@@ -61,7 +63,7 @@ export function createFloor(env, fx) {
         float mask = 0.0;
         float contact = 0.0;
         float cover = 0.0;
-        float pool = 0.0;
+        vec3 glowNear = vec3(0.0), pool = vec3(0.0);
         if (all(greaterThan(fuv, vec2(0.0))) && all(lessThan(fuv, vec2(1.0)))) {
           // soft taps (the key light is an area light: its caustics have a
           // penumbra, and the mesh's facets shouldn't show as lines)
@@ -91,10 +93,12 @@ export function createFloor(env, fx) {
           float w1 = textureLod(tFloorFx, fuv + vec2(o5.x, o5.y), 0.0).g + textureLod(tFloorFx, fuv - vec2(o5.x, o5.y), 0.0).g
             + textureLod(tFloorFx, fuv + vec2(-o5.x, o5.y), 0.0).g + textureLod(tFloorFx, fuv + vec2(o5.x, -o5.y), 0.0).g;
           cover = clamp(c0 * 0.35 + c1 * 0.1 + w0 * 0.07 + w1 * 0.045, 0.0, 1.0);
-          // (glow mode) the light pool: its footprint, blurred wider and wider
+          // (glow mode) the light it casts: each part in its own colour,
+          // right under it, then spreading wider and wider
           if (uGlowFloor > 0.0) {
-            pool = textureLod(tFloorFx, fuv, 3.5).g * 0.5 + textureLod(tFloorFx, fuv, 5.0).g * 0.6
-              + textureLod(tFloorFx, fuv, 6.3).g * 0.75;
+            glowNear = textureLod(tGlow, fuv, 1.0).rgb;
+            pool = textureLod(tGlow, fuv, 2.5).rgb * 0.5 + textureLod(tGlow, fuv, 4.0).rgb * 0.6
+              + textureLod(tGlow, fuv, 5.3).rgb * 0.75;
           }
         }
         // in the jelly's shadow: the light that came through it (coloured,
@@ -126,16 +130,17 @@ export function createFloor(env, fx) {
         }
         // glow mode: the jelly lights the floor round it
         if (uGlowFloor > 0.0) {
-          // knocks send their ring of light out across the floor too
-          float ring = 0.0;
+          // knocks send their ring of light out across the floor too, in the
+          // colour of where they hit
+          vec3 ring = vec3(0.0);
           for (int i = 0; i < ${MAX_PULSES}; i++) {
             float age = uTime - uPulse[i].w;
             if (age < 0.0 || age > 1.6) continue;
             float d = distance(vFloorPos.xz, uPulse[i].xz);
             float x = (d - age * 2.3) / (0.04 + 0.12 * age);
-            ring += uPulseAmp[i] * exp(-x * x) * exp(-age * 2.6) / (1.0 + d * 1.5);
+            ring += uPulseCol[i] * uPulseAmp[i] * exp(-x * x) * exp(-age * 2.6) / (1.0 + d * 1.5);
           }
-          gl_FragColor.rgb += uGlowCol * uGlowFloor * (contact * 0.7 + pool + ring * 2.6);
+          gl_FragColor.rgb += uGlowFloor * (glowNear * 0.7 + pool + ring * 2.6);
         }
         float fdist = length(vFloorPos.xz);
         float fade = smoothstep(3.2, 11.0, fdist);

@@ -88,6 +88,7 @@ export class App {
 
     this.theme = this._loadTheme(opts);
     this.bg = new THREE.Color();
+    this._pulseC = new THREE.Color();
     this.env = createStudioEnvironment(renderer, this.lightDir, this.theme);
     this.scene = new THREE.Scene();
     this.camera = new THREE.PerspectiveCamera(30, 1, 0.05, 80);
@@ -968,7 +969,10 @@ export class App {
   // glow mode: a ring of light racing through the jelly from a knock
   glowPulse(x, y, z, amp = 1) {
     if (this.jelly.frontMat.uniforms.uEmit.value <= 0.05) return;
-    this.jelly.pulse(x, y, z, amp, this.clock.t);
+    // (its ring on the floor: the colour of where it hit, brightest channel 1)
+    const c = this._pulseC.set(this.flavorColorAt(x, y, z));
+    c.multiplyScalar(1 / Math.max(c.r, c.g, c.b, 1e-3));
+    this.jelly.pulse(x, y, z, amp, this.clock.t, c);
   }
 
   // (landings and collisions light up where they happen)

@@ -7,8 +7,10 @@ import {
   createMaskMaterial,
   createHeightMaterial,
   createReflectMaterial,
+  createGlowMaterial,
   createLayerUniforms,
   absorptionFromColor,
+  MAX_PULSES,
 } from './jellyMaterials.js';
 
 const FLOOR_SPAN = 6.4;
@@ -31,12 +33,13 @@ export class JellyView {
     this.maskMat = createMaskMaterial();
     this.heightMat = createHeightMaterial();
     this.reflectMat = createReflectMaterial(this.layerUniforms);
+    this.glowMat = createGlowMaterial(this.layerUniforms, this.reflectMat.uniforms.uScatterColor, this.reflectMat.uniforms.uMilk);
     // the pieces again, upside down below the floor (its reflection)
     this.reflScene = new THREE.Scene();
     this.reflMeshes = [];
     this.fxCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
     this.floorRect = new THREE.Vector4(-FLOOR_SPAN / 2, -FLOOR_SPAN / 2, 1 / FLOOR_SPAN, 1 / FLOOR_SPAN);
-    for (const m of [this.causticMat, this.maskMat, this.heightMat]) {
+    for (const m of [this.causticMat, this.maskMat, this.heightMat, this.glowMat]) {
       if (m.uniforms.uFloorRect) m.uniforms.uFloorRect.value = this.floorRect;
     }
     this.setLightDir(lightDir);
@@ -46,6 +49,13 @@ export class JellyView {
       type: THREE.HalfFloatType,
       depthBuffer: false,
       samples: 4,
+      generateMipmaps: true,
+      minFilter: THREE.LinearMipmapLinearFilter,
+    });
+    // glow mode: the light it casts on the floor, from above (see createGlowMaterial)
+    this.rtGlow = new THREE.WebGLRenderTarget(256, 256, {
+      type: THREE.HalfFloatType,
+      depthBuffer: false,
       generateMipmaps: true,
       minFilter: THREE.LinearMipmapLinearFilter,
     });
@@ -61,8 +71,9 @@ export class JellyView {
       res: { value: new THREE.Vector2(1, 1) },
       reflAmount: { value: 0.22 },
       reflLod: { value: 1 }, // (how blurred: the floor's gloss)
-      glowCol: { value: new THREE.Color(1, 0.2, 0.2) }, // glow mode: the light the jelly gives off
-      glowFloor: { value: 0 },
+      glowFloor: { value: 0 }, // glow mode: how brightly it lights the floor
+      glowTex: { value: this.rtGlow.texture },
+      pulseCol: { value: Array.from({ length: MAX_PULSES }, () => new THREE.Vector3(1, 0.2, 0.2)) }, // (each ring's colour)
       // (glow mode's rings of light, shared with the jelly)
       pulse: this.frontMat.uniforms.uPulse,
       pulseAmp: this.frontMat.uniforms.uPulseAmp,
@@ -110,9 +121,6 @@ export class JellyView {
     C.uAbsorb.value.copy(avgAbs);
     F.uScatterColor.value.copy(flavor.layers ? avgSc : scs[0]);
     this.reflectMat.uniforms.uScatterColor.value.copy(flavor.layers ? avgSc : scs[0]);
-    // (the light it pools on the floor is its bottom layer's: the average of
-    // a rainbow is white)
-    this.fxUniforms.glowCol.value.copy(scs[0]);
     this.reflectMat.uniforms.uMilk.value = Math.max(m.milk, hazeMinOf(m.opacity));
     // opacity -> cloudiness; near the top end even thin parts go solid
     const o = Math.min(1, Math.max(0, m.opacity));
@@ -365,8 +373,9 @@ export class JellyView {
 
   // a ring of light racing out through it from (x, y, z), starting at time t
   // (glow mode); it takes the slot that's been running longest
-  pulse(x, y, z, amp, t) {
+  pulse(x, y, z, amp, t, col) {
     const P = this.frontMat.uniforms.uPulse.value, A = this.frontMat.uniforms.uPulseAmp.value;
+    const C = this.fxUniforms.pulseCol.value;
     let k = 0;
     for (let i = 0; i < P.length; i++) {
       // (one just started close by: make that one stronger instead)
@@ -378,6 +387,7 @@ export class JellyView {
     }
     P[k].set(x, y, z, t);
     A[k] = amp;
+    if (col) C[k].set(col.r, col.g, col.b);
   }
 
   // The jelly mirrored in the floor, into rt (the floor samples it).
@@ -410,6 +420,12 @@ export class JellyView {
     r.render(this.scene, this.fxCam);
     this.scene.overrideMaterial = this.heightMat;
     r.render(this.scene, this.fxCam);
+    if (this.fxUniforms.glowFloor.value > 0) {
+      r.setRenderTarget(this.rtGlow);
+      r.clear(true, false, false);
+      this.scene.overrideMaterial = this.glowMat;
+      r.render(this.scene, this.fxCam);
+    }
     r.autoClear = auto;
     this.scene.overrideMaterial = null;
     r.setClearColor(prevClear, prevAlpha);

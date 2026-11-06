@@ -752,6 +752,52 @@ export function createReflectMaterial(layerUniforms) {
   });
 }
 
+// Glow mode: the light the jelly casts on the floor, seen from above - each
+// bit of its surface in its own colour (a rainbow lying on its side lights
+// the floor in bands), weighted by how near the floor it is. Summed, then
+// blurred by the floor through the mip levels (see floor.js).
+export function createGlowMaterial(layerUniforms, scatterColor, milk) {
+  return new THREE.ShaderMaterial({
+    side: THREE.DoubleSide,
+    transparent: true,
+    blending: THREE.CustomBlending,
+    blendEquation: THREE.AddEquation,
+    blendSrc: THREE.OneFactor,
+    blendDst: THREE.OneFactor,
+    depthTest: false,
+    depthWrite: false,
+    uniforms: {
+      ...layerUniforms,
+      uScatterColor: scatterColor,
+      uMilk: milk,
+      uFloorRect: { value: new THREE.Vector4(-3, -3, 1 / 6, 1 / 6) },
+    },
+    vertexShader: /* glsl */ `
+      attribute vec3 aRest;
+      uniform vec4 uFloorRect;
+      varying float vH;
+      varying vec3 vRest;
+      void main() {
+        vH = position.y;
+        vRest = aRest;
+        vec2 uv = (position.xz - uFloorRect.xy) * uFloorRect.zw;
+        gl_Position = vec4(uv * 2.0 - 1.0, 0.0, 1.0);
+      }`,
+    fragmentShader: /* glsl */ `
+      uniform vec3 uScatterColor;
+      uniform float uMilk;
+      varying float vH;
+      varying vec3 vRest;
+      ${LAYER_GLSL}
+      void main() {
+        float w = exp(-max(vH, 0.0) * 5.0);
+        vec3 sc = layerScatter(vRest.y, uScatterColor);
+        sc = mix(sc, mix(sc, vec3(1.0), 0.45), uMilk);
+        gl_FragColor = vec4(sc * w, w);
+      }`,
+  });
+}
+
 // Straight shadow footprint along the light (where direct light is blocked).
 export function createMaskMaterial() {
   return new THREE.ShaderMaterial({
