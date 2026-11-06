@@ -31,6 +31,7 @@ export class App {
       preserveDrawingBuffer: !!opts.preserve,
     }));
     this.coarse = window.matchMedia?.('(pointer: coarse)').matches;
+    this.reducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
     this.maxPixelRatio = Math.min(window.devicePixelRatio || 1, opts.maxDpr || (this.coarse ? 1.75 : 2));
     this.pixelRatio = this.maxPixelRatio;
     renderer.setPixelRatio(this.pixelRatio);
@@ -209,6 +210,7 @@ export class App {
   }
 
   shake(a) {
+    if (this.reducedMotion) return;
     this._shake = Math.min(0.05, this._shake + a);
   }
 

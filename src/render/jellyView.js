@@ -29,7 +29,7 @@ export class JellyView {
       if (m.uniforms.uFloorRect) m.uniforms.uFloorRect.value = this.floorRect;
     }
     this.setLightDir(lightDir);
-    this.rtCaustic = new THREE.WebGLRenderTarget(512, 512, { type: THREE.HalfFloatType, depthBuffer: false });
+    this.rtCaustic = new THREE.WebGLRenderTarget(768, 768, { type: THREE.HalfFloatType, depthBuffer: false, samples: 4 });
     this.rtFloorFx = new THREE.WebGLRenderTarget(512, 512, { type: THREE.HalfFloatType, depthBuffer: false, samples: 4 });
     this.fxUniforms = {
       caustic: { value: this.rtCaustic.texture },
@@ -37,6 +37,7 @@ export class JellyView {
       floorRect: { value: this.floorRect },
       bg: { value: new THREE.Color(0.86, 0.85, 0.83) },
       texel: { value: new THREE.Vector2(1 / 512, 1 / 512) },
+      ctexel: { value: new THREE.Vector2(1 / 768, 1 / 768) },
       tint: { value: new THREE.Color(1, 0.2, 0.2) },
     };
     this.rtBack = null;

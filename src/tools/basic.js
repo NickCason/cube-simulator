@@ -15,6 +15,14 @@ export class HandTool {
     this.plane = new THREE.Plane();
   }
 
+  hover(e, ray) {
+    if (!ray || this.drag) return;
+    const now = performance.now();
+    if (now - (this._ht || 0) < 40) return;
+    this._ht = now;
+    this.app.setCursor(this.app.pickJelly(ray) ? 'grab' : 'default');
+  }
+
   down(e, ray, hit) {
     if (!hit) return false;
     const app = this.app;

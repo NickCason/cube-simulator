@@ -17,6 +17,7 @@ export function createFloor(env, fx) {
     shader.uniforms.uBg = fx.bg;
     shader.uniforms.uTexel = fx.texel;
     shader.uniforms.uTint = fx.tint;
+    shader.uniforms.uCTexel = fx.ctexel;
     shader.vertexShader = shader.vertexShader
       .replace('#include <common>', '#include <common>\nvarying vec3 vFloorPos;')
       .replace('#include <worldpos_vertex>', '#include <worldpos_vertex>\nvFloorPos = (modelMatrix * vec4(transformed, 1.0)).xyz;');
@@ -30,7 +31,8 @@ export function createFloor(env, fx) {
         uniform vec4 uFloorRect;
         uniform vec3 uBg;
         uniform vec2 uTexel;
-        uniform vec3 uTint;`,
+        uniform vec3 uTint;
+        uniform vec2 uCTexel;`,
       )
       .replace(
         '#include <lights_fragment_begin>',
@@ -42,7 +44,7 @@ export function createFloor(env, fx) {
         float cover = 0.0;
         if (all(greaterThan(fuv, vec2(0.0))) && all(lessThan(fuv, vec2(1.0)))) {
           // soft taps (area light penumbra)
-          vec2 o = uTexel * 1.6;
+          vec2 o = uCTexel * 2.4;
           caus = texture2D(tCaustic, fuv).rgb * 0.36
             + (texture2D(tCaustic, fuv + vec2(o.x, 0.0)).rgb + texture2D(tCaustic, fuv - vec2(o.x, 0.0)).rgb
             + texture2D(tCaustic, fuv + vec2(0.0, o.y)).rgb + texture2D(tCaustic, fuv - vec2(0.0, o.y)).rgb) * 0.16;

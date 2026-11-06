@@ -26,6 +26,17 @@ export class Healer {
     app.tools?.onHealStart?.();
     for (const f of app.onHealStart) f();
     sb.endGrab();
+    if (!sb.pieces.length || sb.nT === 0) {
+      // everything was blasted away: grow a fresh cube
+      this.cx = 0;
+      this.cz = 0;
+      this.yaw = 0;
+      this.lift = 0.14;
+      this.targets = new Float64Array(0);
+      this.t = 0;
+      this._fuse();
+      return;
+    }
     // destination: upright cube under the centre of mass, yaw of the biggest piece
     let M = 0, cx = 0, cz = 0;
     for (const pc of sb.pieces) {
