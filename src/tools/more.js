@@ -12,6 +12,9 @@ const _p2 = [0, 0, 0];
 // What is under the pointer: jelly, floor, or a point in mid-air.
 function target(app, ray) {
   const hit = app.pickJelly(ray);
+  // (molten jelly in front of it - or on the floor - is what's aimed at)
+  const wet = app.fluid.n ? app.fluid.pick(ray) : null;
+  if (wet && (!hit || wet.distance < hit.t)) return { hit: null, point: wet.point, normal: wet.normal, fluid: true };
   if (hit) return { hit, point: V(hit.point), normal: V(hit.normal), jelly: true };
   if (ray.direction.y < -1e-3) {
     const t = -ray.origin.y / ray.direction.y;
@@ -647,14 +650,28 @@ export class TorchTool extends NozzleTool {
     if (tg.jelly) {
       const sb = app.sb;
       sb.addHeat(tg.point.x, tg.point.y, tg.point.z, 0.3, 2.1 * dt, 1.6, -1.3);
-      // very hot jelly liquefies and runs off: the region slowly caves in
+      // very hot jelly slumps, then turns to liquid and runs off (see Fluid),
+      // from the surface in: its tets go - a batch every 0.15 s, one rebuild
+      // each - and their volume flows on as molten jelly, in its colour
       const T = sb.T, x = sb.x, temp = sb.temp;
+      const melt = (this.melt ||= new Set());
       for (let t = 0; t < sb.nT; t++) {
+        if (sb.vol0[t] <= 0) continue;
         const a = T[t * 4], b = T[t * 4 + 1], c = T[t * 4 + 2], d = T[t * 4 + 3];
         const tt = (temp[a] + temp[b] + temp[c] + temp[d]) * 0.25;
         if (tt < 1.05) continue;
         const dd = Math.hypot(x[a * 3] - tg.point.x, x[a * 3 + 1] - tg.point.y, x[a * 3 + 2] - tg.point.z);
-        if (dd < 0.32) sb.tVS[t] = Math.max(0.4, sb.tVS[t] - 0.42 * dt);
+        if (dd >= 0.32) continue;
+        // (slumping no further than it melts: deeper, it puckers the surface into a star)
+        sb.tVS[t] = Math.max(0.62, sb.tVS[t] - 0.42 * dt);
+        // (it melts from the surface in: only what's bare runs off)
+        if (sb.tVS[t] <= 0.7 && sb.tetBoundary[t] >= 0) melt.add(t);
+      }
+      this.meltClock = (this.meltClock || 0) + dt;
+      if (melt.size && this.meltClock > 0.15) {
+        this.meltClock = 0;
+        this._liquefy(melt);
+        melt.clear();
       }
       this.sizzle += dt;
       if (this.sizzle > 0.07) {
@@ -686,6 +703,141 @@ export class TorchTool extends NozzleTool {
   }
 }
 
+// The corners a melt leaves bare (in the tets going and the ones staying),
+// eased toward the average of their bare neighbours - rest and current
+// shape alike - twice, unless a tet round one would turn inside out or
+// flatten: the hole's rim rounds off rather than standing in shards.
+function smoothMelted(sb, gone) {
+  const T = sb.T, X = sb.X, x = sb.x, px = sb.px;
+  const rim = new Set(), keep = new Map();
+  for (let t = 0; t < sb.nT; t++) {
+    if (gone.has(t) || sb.vol0[t] <= 0) continue;
+    for (let k = 0; k < 4; k++) {
+      const i = T[t * 4 + k];
+      if (!sb.melt[i]) continue;
+      rim.add(i);
+      if (!keep.has(i)) keep.set(i, []);
+      keep.get(i).push(t);
+    }
+  }
+  const vol = (t) => {
+    const a = T[t * 4] * 3, b = T[t * 4 + 1] * 3, c = T[t * 4 + 2] * 3, d = T[t * 4 + 3] * 3;
+    const ux = X[b] - X[a], uy = X[b + 1] - X[a + 1], uz = X[b + 2] - X[a + 2];
+    const vx = X[c] - X[a], vy = X[c + 1] - X[a + 1], vz = X[c + 2] - X[a + 2];
+    const wx = X[d] - X[a], wy = X[d + 1] - X[a + 1], wz = X[d + 2] - X[a + 2];
+    return ux * (vy * wz - vz * wy) - uy * (vx * wz - vz * wx) + uz * (vx * wy - vy * wx);
+  };
+  for (let pass = 0; pass < 2; pass++) {
+    const moves = [];
+    for (const i of rim) {
+      const seen = new Set();
+      let ax = 0, ay = 0, az = 0, m = 0;
+      for (const t of keep.get(i))
+        for (let k = 0; k < 4; k++) {
+          const j = T[t * 4 + k];
+          if (j === i || !rim.has(j) || seen.has(j)) continue;
+          seen.add(j);
+          ax += X[j * 3]; ay += X[j * 3 + 1]; az += X[j * 3 + 2];
+          m++;
+        }
+      if (m < 2) continue;
+      moves.push(i, (ax / m - X[i * 3]) * 0.4, (ay / m - X[i * 3 + 1]) * 0.4, (az / m - X[i * 3 + 2]) * 0.4);
+    }
+    for (let q = 0; q < moves.length; q += 4) {
+      const i = moves[q], o = i * 3, ts = keep.get(i);
+      const before = ts.map(vol);
+      for (let c = 0; c < 3; c++) X[o + c] += moves[q + 1 + c];
+      if (ts.some((t, n) => !(vol(t) > before[n] * 0.35))) {
+        for (let c = 0; c < 3; c++) X[o + c] -= moves[q + 1 + c];
+        continue;
+      }
+      for (let c = 0; c < 3; c++) {
+        x[o + c] += moves[q + 1 + c];
+        px[o + c] += moves[q + 1 + c];
+      }
+    }
+  }
+}
+
+// (TorchTool) these tets to molten jelly: their volume (rest, times how
+// swollen) into the liquid at their middles, moving as they were, coloured
+// by their rest height; then they go.
+TorchTool.prototype._liquefy = function (set) {
+  const app = this.app, sb = app.sb, T = sb.T, x = sb.x, X = sb.X, v = sb.v;
+  const col = new THREE.Color();
+  // (a spike left standing - a hot tet with three of its faces bare, or
+  // two where it's hottest - goes with them, twice over: the crater melts
+  // round, not to shards)
+  let x0 = Infinity, y0 = Infinity, z0 = Infinity, x1 = -Infinity, y1 = -Infinity, z1 = -Infinity;
+  const cen = (t, out) => {
+    out[0] = out[1] = out[2] = 0;
+    for (let k = 0; k < 4; k++) for (let c = 0; c < 3; c++) out[c] += x[T[t * 4 + k] * 3 + c] / 4;
+    return out;
+  };
+  const c3 = [0, 0, 0];
+  for (const t of set) {
+    cen(t, c3);
+    x0 = Math.min(x0, c3[0]); y0 = Math.min(y0, c3[1]); z0 = Math.min(z0, c3[2]);
+    x1 = Math.max(x1, c3[0]); y1 = Math.max(y1, c3[1]); z1 = Math.max(z1, c3[2]);
+  }
+  const inner = [], faces = new Map(), nV = sb.nV;
+  const key = (a, b, c) => {
+    const lo = Math.min(a, b, c), hi = Math.max(a, b, c), mid = a + b + c - lo - hi;
+    return (lo * nV + mid) * nV + hi;
+  };
+  const FACE = [[1, 2, 3], [0, 2, 3], [0, 1, 3], [0, 1, 2]];
+  for (let t = 0; t < sb.nT; t++) {
+    if (sb.vol0[t] <= 0) continue;
+    cen(t, c3);
+    if (c3[0] < x0 - 0.2 || c3[0] > x1 + 0.2 || c3[1] < y0 - 0.2 || c3[1] > y1 + 0.2 || c3[2] < z0 - 0.2 || c3[2] > z1 + 0.2) continue;
+    for (const f of FACE) {
+      const k = key(T[t * 4 + f[0]], T[t * 4 + f[1]], T[t * 4 + f[2]]);
+      const l = faces.get(k);
+      if (l) l.push(t);
+      else faces.set(k, [t]);
+    }
+    if (set.has(t) || c3[0] < x0 - 0.08 || c3[0] > x1 + 0.08 || c3[1] < y0 - 0.08 || c3[1] > y1 + 0.08 || c3[2] < z0 - 0.08 || c3[2] > z1 + 0.08) continue;
+    const tt = (sb.temp[T[t * 4]] + sb.temp[T[t * 4 + 1]] + sb.temp[T[t * 4 + 2]] + sb.temp[T[t * 4 + 3]]) * 0.25;
+    if (tt > 0.8) inner.push(t, tt > 0.95 ? 2 : 3);
+  }
+  for (let pass = 0; pass < 2; pass++) {
+    const add = [];
+    for (let n = 0; n < inner.length; n += 2) {
+      const t = inner[n];
+      if (set.has(t)) continue;
+      let bare = 0;
+      for (const f of FACE) {
+        const l = faces.get(key(T[t * 4 + f[0]], T[t * 4 + f[1]], T[t * 4 + f[2]]));
+        if (!l.some((u) => u !== t && !set.has(u))) bare++;
+      }
+      // (a fin - two bare faces - too, where it's hottest: edges melt first)
+      if (bare >= inner[n + 1]) add.push(t);
+    }
+    if (!add.length) break;
+    for (const t of add) set.add(t);
+  }
+  for (const t of set) {
+    if (t >= sb.nT) continue;
+    let cx = 0, cy = 0, cz = 0, ry = 0, vx = 0, vy = 0, vz = 0;
+    for (let k = 0; k < 4; k++) {
+      const i = T[t * 4 + k] * 3;
+      cx += x[i] / 4; cy += x[i + 1] / 4; cz += x[i + 2] / 4;
+      ry += X[i + 1] / 4;
+      vx += v[i] / 4; vy += v[i + 1] / 4; vz += v[i + 2] / 4;
+    }
+    col.set(app.flavorColorAtRestY(ry));
+    // (as much liquid as the space it leaves: slumped, it's shrunk)
+    const vol = sb.vol0[t] * Math.min(1, sb.tVS[t]);
+    app.fluid.add(cx, cy, cz, vol, vx, vy - 0.3, vz, col.r, col.g, col.b, Math.cbrt(sb.vol0[t]) * 1.5);
+  }
+  // (what's left round the hole is a melted surface - see TAG_MELT - and
+  // it slumps smooth: each of its corners eased toward its neighbours on it)
+  for (const t of set) for (let k = 0; k < 4; k++) sb.melt[T[t * 4 + k]] = 1;
+  smoothMelted(sb, set);
+  removeTets(sb, (t) => set.has(t), app.allAnchors());
+  app.onTopologyChanged();
+};
+
 export class FreezeTool extends NozzleTool {
   constructor(app) {
     super(app, 'freeze', makeSpray(app.M));
@@ -704,6 +856,14 @@ export class FreezeTool extends NozzleTool {
   emit(dt, tg, tip, dir) {
     const app = this.app;
     app.particles.mist(tip, dir, 3);
+    // molten jelly where it's aimed cools - cold enough, it sets (see Fluid)
+    if (app.fluid.n && app.fluid.cool(tg.point.x, tg.point.y, tg.point.z, 0.45, 2.4 * dt)) {
+      this.crackle += dt;
+      if (this.crackle > 0.05) {
+        this.crackle = 0;
+        app.audio.frostCrackle(0.6);
+      }
+    }
     if (tg.jelly) {
       app.sb.addHeat(tg.point.x, tg.point.y, tg.point.z, 0.3, -1.5 * dt, 1.5, -1.3);
       this.crackle += dt;

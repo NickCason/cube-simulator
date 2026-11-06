@@ -8,6 +8,7 @@ import { buildCubeMesh, roundBoxSDF, roundBoxNormal } from './mesh.js';
 export const FACES = [[0, 2, 1], [0, 1, 3], [0, 3, 2], [1, 2, 3]];
 export const TAG_FRESH = 0;
 export const TAG_EXTERIOR = 1;
+export const TAG_MELT = 2; // (a surface the torch melted: smooth, glossy - like the skin)
 
 const DEFAULTS = {
   size: 1,
@@ -220,6 +221,7 @@ export class SoftBody {
     this.glow = growArr(this.glow, cap, Float32Array);
     this.vPiece = growArr(this.vPiece, cap, Int32Array);
     this.alive = growArr(this.alive, cap, Uint8Array);
+    this.melt = growArr(this.melt, cap, Uint8Array); // (on a surface the torch melted)
     this.fpen = growArr(this.fpen, cap, Float32Array); // floor push-out this substep
     this.wpen = growArr(this.wpen, cap, Float32Array); // wall push-out this substep
     this.vCap = cap;
@@ -255,6 +257,7 @@ export class SoftBody {
     this.temp[i] = temp;
     this.glow[i] = 0;
     this.alive[i] = 1;
+    this.melt[i] = 0;
     return i;
   }
 
@@ -883,6 +886,7 @@ export class SoftBody {
         roundBoxNormal(cx, cy, cz, half, bevel, nrm);
         if (nx * nrm[0] + ny * nrm[1] + nz * nrm[2] > 0.55) tag = TAG_EXTERIOR;
       }
+      if (tag === TAG_FRESH && this.melt[a] && this.melt[b] && this.melt[c]) tag = TAG_MELT;
       sTag[f] = tag;
       f++;
     }
@@ -959,7 +963,7 @@ export class SoftBody {
           const b1 = sTri[fb * 3 + ((cb + 1) % 3)], b2 = sTri[fb * 3 + ((cb + 2) % 3)];
           if (!(a1 === b1 || a1 === b2 || a2 === b1 || a2 === b2)) continue;
           const d = N[fa * 3] * N[fb * 3] + N[fa * 3 + 1] * N[fb * 3 + 1] + N[fa * 3 + 2] * N[fb * 3 + 2];
-          const thr = sTag[fa] === TAG_EXTERIOR ? 0.45 : 0.82;
+          const thr = sTag[fa] === TAG_EXTERIOR ? 0.45 : sTag[fa] === TAG_MELT ? 0.15 : 0.82;
           if (d < thr) continue;
           const ra = find(a), rb = find(b);
           if (ra !== rb) par[rb] = ra;
@@ -1035,7 +1039,7 @@ export class SoftBody {
         const i = rSim[r];
         extra[r * 4] = temp[i];
         extra[r * 4 + 1] = glow[i];
-        extra[r * 4 + 2] = rTag[r] === TAG_EXTERIOR ? 0 : 1;
+        extra[r * 4 + 2] = rTag[r] === TAG_FRESH ? 1 : 0;
         extra[r * 4 + 3] = this.X[i * 3 + 1];
       }
     }
@@ -1469,7 +1473,7 @@ export class SoftBody {
       // Coulomb friction: tangential speed drops by mu x the normal speed
       // the contact took away (sticks when that is enough to stop it)
       if (fpen[i] > 0) {
-        const vt = Math.hypot(vx, vz);
+        const vt = Math.sqrt(vx * vx + vz * vz);
         if (vt > 0) {
           const k = Math.max(0, 1 - (mu * fpen[i] * ih) / vt);
           vx *= k;
@@ -1477,11 +1481,11 @@ export class SoftBody {
         }
       }
       if (wpen[i] > 0) {
-        const r = Math.hypot(x[o], x[o + 2]) || 1;
+        const r = Math.sqrt(x[o] * x[o] + x[o + 2] * x[o + 2]) || 1;
         const nx = x[o] / r, nz = x[o + 2] / r;
         const vn = vx * nx + vz * nz;
         const tx = vx - vn * nx, tz = vz - vn * nz;
-        const tl = Math.hypot(tx, vy, tz);
+        const tl = Math.sqrt(tx * tx + vy * vy + tz * tz);
         if (tl > 0) {
           const k = Math.max(0, 1 - (0.4 * wpen[i] * ih) / tl);
           vx = vn * nx + tx * k;
@@ -2608,16 +2612,23 @@ export class SoftBody {
     const rx = px - ax, ry = py - ay, rz = pz - az;
     // s_k = det x barycentric k = det x (distance to the face opposite k) / height
     const s1 = rx * c0x + ry * c0y + rz * c0z;
-    if (s1 < 0) return -s1 / Math.hypot(c0x, c0y, c0z);
+    if (s1 < 0) return -s1 / Math.sqrt(c0x * c0x + c0y * c0y + c0z * c0z);
     const qx = ry * e1z - rz * e1y, qy = rz * e1x - rx * e1z, qz = rx * e1y - ry * e1x; // r x e1
     const s2 = -(e3x * qx + e3y * qy + e3z * qz);
-    if (s2 < 0) return -s2 / Math.hypot(e1y * e3z - e1z * e3y, e1z * e3x - e1x * e3z, e1x * e3y - e1y * e3x);
+    if (s2 < 0) {
+      const nx = e1y * e3z - e1z * e3y, ny = e1z * e3x - e1x * e3z, nz = e1x * e3y - e1y * e3x;
+      return -s2 / Math.sqrt(nx * nx + ny * ny + nz * nz);
+    }
     const s3 = e2x * qx + e2y * qy + e2z * qz;
-    if (s3 < 0) return -s3 / Math.hypot(e1y * e2z - e1z * e2y, e1z * e2x - e1x * e2z, e1x * e2y - e1y * e2x);
+    if (s3 < 0) {
+      const nx = e1y * e2z - e1z * e2y, ny = e1z * e2x - e1x * e2z, nz = e1x * e2y - e1y * e2x;
+      return -s3 / Math.sqrt(nx * nx + ny * ny + nz * nz);
+    }
     const s0 = det - s1 - s2 - s3;
     if (s0 < 0) {
       const fx = e2x - e1x, fy = e2y - e1y, fz = e2z - e1z, gx = e3x - e1x, gy = e3y - e1y, gz = e3z - e1z;
-      return -s0 / Math.hypot(fy * gz - fz * gy, fz * gx - fx * gz, fx * gy - fy * gx);
+      const nx = fy * gz - fz * gy, ny = fz * gx - fx * gz, nz = fx * gy - fy * gx;
+      return -s0 / Math.sqrt(nx * nx + ny * ny + nz * nz);
     }
     const ct = this._ct, id = 1 / det;
     ct.b0 = s0 * id; ct.b1 = s1 * id; ct.b2 = s2 * id; ct.b3 = s3 * id;
@@ -2637,7 +2648,7 @@ export class SoftBody {
     const ux = x[fb] - ax, uy = x[fb + 1] - ay, uz = x[fb + 2] - az;
     const vx = x[fc] - ax, vy = x[fc + 1] - ay, vz = x[fc + 2] - az;
     const nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx;
-    const l = Math.hypot(nx, ny, nz);
+    const l = Math.sqrt(nx * nx + ny * ny + nz * nz);
     const d00 = ux * ux + uy * uy + uz * uz, d01 = ux * vx + uy * vy + uz * vz, d11 = vx * vx + vy * vy + vz * vz;
     const den = d00 * d11 - d01 * d01;
     if (l < 1e-14 || den < 1e-20) {
@@ -2802,7 +2813,8 @@ export class SoftBody {
     }
     // the face it came in through - unless that is much deeper than the
     // nearest one, i.e. it merely slid over an edge (or the face came to it)
-    if (cross >= 0 && (best < 0 || crossD <= bestD + Math.hypot(px - qx, py - qy, pz - qz))) {
+    const mx = px - qx, my = py - qy, mz = pz - qz;
+    if (cross >= 0 && (best < 0 || crossD <= bestD + Math.sqrt(mx * mx + my * my + mz * mz))) {
       ct.f = cross; ct.nx = cnx; ct.ny = cny; ct.nz = cnz; ct.depth = crossD;
       return true;
     }
@@ -2834,11 +2846,11 @@ export class SoftBody {
     const y1 = B[bo + 3] * ex + B[bo + 4] * ey + B[bo + 5] * ez;
     const y2 = B[bo + 6] * ex + B[bo + 7] * ey + B[bo + 8] * ez;
     const wx = e1x * y0 + e2x * y1 + e3x * y2, wy = e1y * y0 + e2y * y1 + e3y * y2, wz = e1z * y0 + e2z * y1 + e3z * y2;
-    const wl = Math.hypot(wx, wy, wz);
+    const wl = Math.sqrt(wx * wx + wy * wy + wz * wz);
     if (wl < 1e-9) return false;
     ct.nx = wx / wl; ct.ny = wy / wl; ct.nz = wz / wl;
     // (a badly squashed tet maps the escape vector to nonsense lengths)
-    ct.depth = Math.min(wl, 1.5 * Math.hypot(ex, ey, ez)) + 0.002;
+    ct.depth = Math.min(wl, 1.5 * Math.sqrt(ex * ex + ey * ey + ez * ez)) + 0.002;
     return true;
   }
 

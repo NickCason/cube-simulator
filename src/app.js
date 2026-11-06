@@ -15,6 +15,7 @@ import { MalletTool, TorchTool, FreezeTool, BallerTool, BombTool, SyringeTool, M
 import { makeMaterials, makeBomb } from './world/models.js';
 import { physicsWarmJob } from './sim/warm.js';
 import { Droplets } from './world/droplets.js';
+import { Fluid } from './world/fluid.js';
 import { Bubbles } from './world/bubbles.js';
 import { Glitter, GLITTER_MODES } from './world/glitter.js';
 import { bevelPoint, unbevelPoint } from './sim/mesh.js';
@@ -143,6 +144,7 @@ export class App {
     this.onHealEnd = [];
     this.onColor = [];
     this.droplets = new Droplets(this);
+    this.fluid = new Fluid(this); // (molten jelly: see TorchTool, FreezeTool)
     this.healZoom = 0;
     this.flash = 0;
     this.anchorProviders = [() => this.nails.anchors()];
@@ -543,6 +545,13 @@ export class App {
     if (!r) return this.color;
     let ry = 0;
     for (let k = 0; k < 4; k++) ry += this.sb.X[this.sb.T[r.tet * 4 + k] * 3 + 1] * r.bary[k];
+    return this.flavorColorAtRestY(ry);
+  }
+
+  // the jelly's colour at a rest height (layered flavours: its band)
+  flavorColorAtRestY(ry) {
+    const f = this.flavor;
+    if (!f || !f.layers) return this.color;
     const n = f.layers.length, m = n * (f.repeat || 1);
     const h = Math.pow(Math.min(1, Math.max(0, ry / this.sb.p.size + 0.5)), biasExp(f.bias));
     return f.layers[Math.min(m - 1, Math.floor(h * m)) % n];
@@ -933,6 +942,7 @@ export class App {
       }
       this.nails.update(sdt);
       this.droplets.update(sdt);
+      this.fluid.update(sdt);
       this.bubbles.update();
       for (const k in this.tools) if (this.tools[k] !== this.tool && this.tools[k].background) this.tools[k].update(sdt, dt);
       this.particles.update(sdt);
@@ -1074,6 +1084,7 @@ export class App {
     this.jelly.setEmit(e);
     this.jelly.fxUniforms.glowFloor.value = e * THEMES.dark.glowFloor;
     this.droplets.setGlow(e);
+    this.fluid.setGlow(e);
   }
 
   _themeTick(dt) {
