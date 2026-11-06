@@ -24,6 +24,7 @@ function boot() {
       blend: params.has('blend') ? +params.get('blend') : undefined,
       repeat: params.has('repeat') ? +params.get('repeat') : undefined,
       bias: params.has('bias') ? +params.get('bias') : undefined,
+      theme: params.get('theme') || undefined,
     });
   } catch (err) {
     console.error(err);

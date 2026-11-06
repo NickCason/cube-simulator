@@ -67,6 +67,7 @@ export class HandTool {
       const [x, y, z] = d.hit.point;
       app.sb.impulse(x, y, z, d.dir.x, d.dir.y, d.dir.z, 0.34, 4.2, d.hit.piece);
       app.audio?.poke(0.7);
+      app.glowPulse?.(x, y, z, 0.9);
     } else {
       // throw: speed of the grabbed region
       const pc = app.sb.pieces[d.hit.piece];

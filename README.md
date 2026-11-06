@@ -73,11 +73,17 @@ Choices are remembered. You can also link straight to a combo, e.g.
 
 ![Rainbow jelly cube](docs/rainbow.jpg)
 
-Keys: `1`–`0` tools, `H` heal, `M` sound, hold `Space` for slow motion, arrow keys tip the table, `S` shakes it. Drag empty space to orbit, scroll or pinch to zoom.
+Keys: `1`–`0` tools, `H` heal, `M` sound, `L` glow mode, hold `Space` for slow motion, arrow keys tip the table, `S` shakes it. Drag empty space to orbit, scroll or pinch to zoom.
 
 **Tilt & shake** (phones, Settings → World): tip the phone and the table tips with it — the
 jelly leans, then slides once the pull beats its grip; shake the phone and the table jolts
 under it.
+
+**Glow mode** (the moon, top right, or `L`): lights out — the jelly shines in its own colour
+over a glossy black floor that mirrors it and pools with its light, and every knock sends a
+ring of light racing through it and out across the floor. Link to it with `?theme=dark`.
+
+![Glow mode](docs/glow.jpg)
 
 ## How it works
 
@@ -95,8 +101,11 @@ under it.
 - **Rendering:** three.js with a custom multi-pass jelly shader — per-pixel
   thickness from back-face depth, two-interface refraction with dispersion and
   total internal reflection, Beer–Lambert absorption, scattering, studio
-  reflections — plus area-ratio caustics and a tinted shadow on the floor,
-  bloom and tone mapping.
+  reflections — plus area-ratio caustics and a tinted shadow on the floor, the
+  jelly mirrored in the floor (drawn upside down into a blurred half-size
+  target), bloom and tone mapping. Glow mode recaptures the studio's lighting
+  as a dark room with neon strips and adds the jelly's own light: brighter
+  through more of it, drifting slowly, pooling on the floor.
 - **Sound:** every sound is synthesized with WebAudio.
 
 ## Develop

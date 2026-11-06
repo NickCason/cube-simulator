@@ -21,7 +21,32 @@ import { DEFAULT_STYLE, TEXTURES, EDGES, LAYER_PRESETS, MIN_LAYERS, MAX_LAYERS, 
 import { SETTINGS, resolveSettings } from './settings.js';
 import { Tilt } from './tilt.js';
 
-const BG = new THREE.Color(0.86, 0.85, 0.83);
+// The two looks: the photo studio, and glow mode - lights out, the jelly
+// shining in the dark over a glossy black floor that mirrors it.
+const THEMES = {
+  light: {
+    bg: [0.86, 0.85, 0.83], floor: [0.8, 0.79, 0.77], rough: 0.82, envI: 0.75,
+    key: 3.2, keyHex: 0xfff6ec, keyCol: [1, 0.97, 0.92], envJelly: 1,
+    glow: 0, glowFloor: 0, refl: 0.22, reflLod: 1, bloom: 0.045, threshold: 1.1, knee: 0.6, vignette: 0.22, css: '#dcd9d5',
+  },
+  dark: {
+    bg: [0.0045, 0.0045, 0.007], floor: [0.022, 0.022, 0.027], rough: 0.34, envI: 1,
+    key: 0.85, keyHex: 0xdde6ff, keyCol: [0.76, 0.82, 1], envJelly: 1.6,
+    glow: 1, glowFloor: 0.35, refl: 0.4, reflLod: 1.6, bloom: 0.38, threshold: 0.6, knee: 0.5, vignette: 0.42, css: '#050507',
+  },
+};
+// a neon tube coming on: a few stutters, then it holds (time s, level)
+const FLICKER = [[0, 0], [0.03, 0.75], [0.07, 0.06], [0.15, 0.9], [0.19, 0.15], [0.23, 0.35], [0.29, 1.05], [0.34, 0.5], [0.4, 1.12], [0.85, 1]];
+function flicker(t) {
+  for (let i = 1; i < FLICKER.length; i++) {
+    const [t1, v1] = FLICKER[i];
+    if (t < t1) {
+      const [t0, v0] = FLICKER[i - 1];
+      return v0 + ((v1 - v0) * (t - t0)) / (t1 - t0);
+    }
+  }
+  return 1;
+}
 
 export class App {
   // Wobble frequency ~ sqrt(mu/rho)/size: above ~sqrt(850)/1 the solver goes
@@ -61,7 +86,9 @@ export class App {
     const LIGHTS = { front: [-0.42, 0.82, 0.39], back: [-0.38, 0.74, -0.56], side: [-0.62, 0.72, -0.18] };
     this.lightDir = new THREE.Vector3(...(LIGHTS[opts.light] || LIGHTS.side)).normalize();
 
-    this.env = createStudioEnvironment(renderer, this.lightDir);
+    this.theme = this._loadTheme(opts);
+    this.bg = new THREE.Color();
+    this.env = createStudioEnvironment(renderer, this.lightDir, this.theme);
     this.scene = new THREE.Scene();
     this.camera = new THREE.PerspectiveCamera(30, 1, 0.05, 80);
     this.orbit = { theta: 0.38, phi: 0.36, radius: 4.1, target: new THREE.Vector3(0, 0.44, 0) };
@@ -115,9 +142,10 @@ export class App {
     this.anchorProviders = [() => this.nails.anchors()];
     this.bubbles = new Bubbles(this);
     this.glitter = new Glitter(this);
-    this.onNailHit = () => {
+    this.onNailHit = (hp) => {
       this.audio.nailHit(1);
       this.markDamaged();
+      if (hp) this.glowPulse(hp.x, hp.y, hp.z, 0.7);
     };
 
     this.clock = { last: performance.now(), t: 0 };
@@ -159,6 +187,7 @@ export class App {
     this.tool = null;
     this.setTool('hand');
     this.applyStyle();
+    this._applyTheme(this.theme);
 
     this.resize();
     // (applied at the start of the next frame: resizing the canvas clears
@@ -599,6 +628,7 @@ export class App {
     if (this.rtScene) {
       this.rtScene.dispose();
       this.rtTrans.dispose();
+      this.rtRefl.dispose();
     }
     const samples = this.opts.msaa ?? (this.coarse || this.pixelRatio > 1.6 ? 0 : 4);
     this.rtScene = new THREE.WebGLRenderTarget(pw, ph, { type: THREE.HalfFloatType, samples, depthBuffer: true });
@@ -608,6 +638,15 @@ export class App {
       generateMipmaps: true,
       minFilter: THREE.LinearMipmapLinearFilter,
     });
+    // the jelly's reflection in the floor (half size, blurred by mip level)
+    this.rtRefl = new THREE.WebGLRenderTarget(Math.max(1, pw >> 1), Math.max(1, ph >> 1), {
+      type: THREE.HalfFloatType,
+      depthBuffer: true,
+      generateMipmaps: true,
+      minFilter: THREE.LinearMipmapLinearFilter,
+    });
+    this.jelly.fxUniforms.refl.value = this.rtRefl.texture;
+    this.jelly.fxUniforms.res.value.set(pw, ph);
     this.jelly.setSize(pw, ph);
     this.jelly.frontMat.uniforms.uSceneLodMax.value = Math.floor(Math.log2(Math.max(pw, ph))) - 2;
     this.post.setSize(pw, ph);
@@ -762,7 +801,9 @@ export class App {
       for (const k in this.tools) if (this.tools[k] !== this.tool && this.tools[k].background) this.tools[k].update(sdt, dt);
       this.particles.update(sdt);
       this._impactSounds();
+      this._impactGlow();
     }
+    this._themeTick(dt);
     this._updateCamera(dt);
     this.overlay.draw(dt);
     const r0 = performance.now();
@@ -808,6 +849,137 @@ export class App {
       a.upAt = a.t;
       this._resizePending = true;
     }
+  }
+
+  // ------------------------------------------------------------ looks
+  _loadTheme(opts) {
+    if (THEMES[opts.theme]) return opts.theme;
+    try {
+      const t = localStorage.getItem('cube-sim-theme');
+      if (THEMES[t]) return t;
+    } catch (e) {}
+    return 'light';
+  }
+
+  // Lights out: the room dims to black, then the jelly flickers on like a
+  // neon tube. Lights on: a flood of daylight that settles into the studio.
+  setTheme(name, animate = true) {
+    if (!THEMES[name] || name === this.theme) return;
+    this.theme = name;
+    try {
+      localStorage.setItem('cube-sim-theme', name);
+    } catch (e) {}
+    if (animate) this._themeAnim = { to: name, t: 0, swapped: false, from: this.jelly.frontMat.uniforms.uEmit.value };
+    else {
+      this._themeAnim = null;
+      this._applyTheme(name);
+    }
+  }
+
+  // everything that differs between the looks (glow: how far the jelly's
+  // light is up, 0..1 - the switch brings it up itself)
+  _applyTheme(name, glow = 1, ease = false) {
+    const T = THEMES[name];
+    this.env.setLook(name);
+    this.bg.setRGB(...T.bg);
+    this.jelly.fxUniforms.bg.value.copy(this.bg);
+    const fm = this.floor.material;
+    fm.color.setRGB(...T.floor);
+    fm.roughness = T.rough;
+    fm.envMapIntensity = T.envI;
+    this.keyLight.intensity = T.key;
+    this.keyLight.color.set(T.keyHex);
+    this.jelly.frontMat.uniforms.uLightColor.value.setRGB(...T.keyCol).multiplyScalar(T.key);
+    this.jelly.frontMat.uniforms.envIntensity.value = T.envJelly;
+    this.jelly.fxUniforms.reflAmount.value = T.refl;
+    this.jelly.fxUniforms.reflLod.value = T.reflLod;
+    const C = this.post.compositeMat.uniforms;
+    C.uBloom.value = T.bloom;
+    C.uVignette.value = T.vignette;
+    this.post.preMat.uniforms.uThreshold.value = T.threshold;
+    this.post.preMat.uniforms.uKnee.value = T.knee;
+    this._setGlow(T.glow * glow);
+    const html = document.documentElement;
+    if (ease) {
+      html.classList.add('theming'); // (the chrome eases over too)
+      clearTimeout(this._themingT);
+      this._themingT = setTimeout(() => html.classList.remove('theming'), 700);
+    }
+    html.classList.toggle('dark', name === 'dark');
+    document.querySelector('meta[name="theme-color"]')?.setAttribute('content', T.css);
+    this.ui?.setTheme?.(name);
+  }
+
+  _setGlow(e) {
+    this.jelly.setEmit(e);
+    this.jelly.fxUniforms.glowFloor.value = e * THEMES.dark.glowFloor;
+    this.droplets.setGlow(e);
+  }
+
+  _themeTick(dt) {
+    const A = this._themeAnim;
+    if (!A) return;
+    A.t += dt;
+    const C = this.post.compositeMat.uniforms;
+    if (A.to === 'dark') {
+      const SWAP = 0.3;
+      if (A.t < SWAP) {
+        const k = A.t / SWAP;
+        C.uDim.value = 1 - 0.97 * k * k;
+        C.uWash.value = Math.max(0, C.uWash.value - dt * 5); // (if it was on its way to light)
+        return;
+      }
+      if (!A.swapped) {
+        A.swapped = true;
+        C.uWash.value = 0;
+        this._applyTheme('dark', 0, true);
+      }
+      C.uDim.value = Math.min(1, 0.03 + (A.t - SWAP) / 0.3);
+      const f = A.t - SWAP - 0.12;
+      this._setGlow(f > 0 ? flicker(f) : 0);
+      if (f > 0.9) {
+        this._setGlow(1);
+        C.uDim.value = 1;
+        this._themeAnim = null;
+      }
+    } else {
+      const SWAP = 0.16;
+      if (A.t < SWAP) {
+        const k = A.t / SWAP;
+        this._setGlow(A.from * (1 - k));
+        C.uWash.value = 0.7 * k * k;
+        return;
+      }
+      if (!A.swapped) {
+        A.swapped = true;
+        C.uDim.value = 1;
+        this._applyTheme('light', 1, true);
+      }
+      C.uWash.value = 0.7 * Math.exp(-(A.t - SWAP) * 6);
+      if (A.t > SWAP + 0.9) {
+        C.uWash.value = 0;
+        this._themeAnim = null;
+      }
+    }
+  }
+
+  // glow mode: a ring of light racing through the jelly from a knock
+  glowPulse(x, y, z, amp = 1) {
+    if (this.jelly.frontMat.uniforms.uEmit.value <= 0.05) return;
+    this.jelly.pulse(x, y, z, amp, this.clock.t);
+  }
+
+  // (landings and collisions light up where they happen)
+  _impactGlow() {
+    const im = this.sb.impacts;
+    if (!im.length || this.jelly.frontMat.uniforms.uEmit.value <= 0.05) return;
+    let best = null, next = null;
+    for (const e of im) {
+      if (e.dv < 1.5) continue;
+      if (!best || e.dv > best.dv) (next = best), (best = e);
+      else if (!next || e.dv > next.dv) next = e;
+    }
+    for (const e of [best, next]) if (e) this.glowPulse(e.x, e.y, e.z, Math.min(1.2, (e.dv - 1) / 4));
   }
 
   // Landings and knocks: the physics reports at most one impact per piece
@@ -872,10 +1044,11 @@ export class App {
     this.jelly.frontMat.uniforms.uPLColor.value.setRGB(1.0 * fl, 0.55 * fl, 0.2 * fl);
 
     this.jelly.renderFloorFx();
+    if (!this.opts.nojelly) this.jelly.renderReflection(this.camera, this.rtRefl);
 
     r.shadowMap.needsUpdate = true;
     r.setRenderTarget(this.rtScene);
-    r.setClearColor(BG, 1);
+    r.setClearColor(this.bg, 1);
     r.clear(true, true, false);
     r.render(this.scene, this.camera);
 

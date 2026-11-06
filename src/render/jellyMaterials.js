@@ -59,6 +59,7 @@ const OCT = /* glsl */ `
 // layers averages the profile over the heights it spans.
 export const MAX_LAYERS = 10;
 export const MAX_CAVITIES = 12;
+export const MAX_PULSES = 6;
 export const LAYER_GLSL = /* glsl */ `
   uniform int uLayers;
   uniform float uLayerY0;
@@ -206,6 +207,11 @@ export function createJellyMaterial(env, layerUniforms) {
       // bubbles a cut has opened: centre and radius (world), see Bubbles
       uCav: { value: Array.from({ length: MAX_CAVITIES }, () => new THREE.Vector4()) },
       uCavN: { value: 0 },
+      // glow mode: how brightly it shines, and rings of light from knocks
+      // (world centre + start time; strength)
+      uEmit: { value: 0 },
+      uPulse: { value: Array.from({ length: MAX_PULSES }, () => new THREE.Vector4(0, 0, 0, -99)) },
+      uPulseAmp: { value: new Array(MAX_PULSES).fill(0) },
     },
     vertexShader: VERT,
     fragmentShader: /* glsl */ `
@@ -242,6 +248,9 @@ export function createJellyMaterial(env, layerUniforms) {
       uniform float uWeldUnit;
       uniform vec4 uCav[${MAX_CAVITIES}];
       uniform int uCavN;
+      uniform float uEmit;
+      uniform vec4 uPulse[${MAX_PULSES}];
+      uniform float uPulseAmp[${MAX_PULSES}];
       varying vec3 vWorldPos;
       varying vec3 vNormal;
       varying vec3 vViewPos;
@@ -380,7 +389,18 @@ export function createJellyMaterial(env, layerUniforms) {
         }
 
         float NdV = dot(N, V);
+        // (the silhouette, from the mesh's own normal: how much of this
+        // pixel the jelly covers - see the end)
+        float NdVg = dot(normalize(vNormal), V);
+        float cover = clamp(NdVg / max(fwidth(NdVg) * 1.3, 1e-4), 0.0, 1.0);
         if (NdV < 0.02) { N = normalize(N + V * (0.02 - NdV)); NdV = max(dot(N, V), 0.02); }
+        // The rim, where the line of sight grazes the surface: jelly keeps
+        // its colour right to the edge (light inside runs along it), but a
+        // sliver this thin shows the room through almost unfiltered and reads
+        // grey - which next to red looks green. So no colour split there, a
+        // little more jelly in the way, and the room's reflection held back.
+        float rim = smoothstep(0.45, 0.98, 1.0 - NdV);
+        float disp = uDispersion * (1.0 - rim);
 
         vec2 uv = gl_FragCoord.xy / resolution;
         vec4 back = texture(tBack, uv);
@@ -393,11 +413,11 @@ export function createJellyMaterial(env, layerUniforms) {
         float lod = clamp(rough * 9.0 + frost * 2.5 + thick * 1.6, 0.0, uSceneLodMax);
 
         vec3 trans;
-        trans.r = sampleThrough(Pw, V, N, Nb, thick, uIor - uDispersion, lod, rough, 0).r;
+        trans.r = sampleThrough(Pw, V, N, Nb, thick, uIor - disp, lod, rough, 0).r;
         trans.g = sampleThrough(Pw, V, N, Nb, thick, uIor, lod, rough, 1).g;
-        trans.b = sampleThrough(Pw, V, N, Nb, thick, uIor + uDispersion, lod, rough, 2).b;
+        trans.b = sampleThrough(Pw, V, N, Nb, thick, uIor + disp, lod, rough, 2).b;
 
-        float pathLen = thick;
+        float pathLen = thick + 0.2 * rim * rim;
         // layered: lean toward the layer you look into, so bands stay crisp
         vec3 sigma = uLayers > 0 ? mix(layerSigma(Rp.y, Rp.y, uAbsorb), layerSigma(Rp.y, exitY, uAbsorb), 0.22) : uAbsorb;
         vec3 Tr = exp(-sigma * pathLen * (1.0 + melt * 0.35));
@@ -421,8 +441,15 @@ export function createJellyMaterial(env, layerUniforms) {
         vec3 body = trans * Tr * (1.0 - haze) + scatterLight * haze;
 
         float F0 = pow((uIor - 1.0) / (uIor + 1.0), 2.0);
-        float F = F0 + (1.0 - F0) * pow(clamp(1.0 - NdV, 0.0, 1.0), 5.0);
-        vec3 refl = envLookup(reflect(-V, N), rough);
+        float F = min(F0 + (1.0 - F0) * pow(clamp(1.0 - NdV, 0.0, 1.0), 5.0), 1.0 - 0.5 * rim);
+        vec3 Rv = reflect(-V, N);
+        vec3 refl = envLookup(Rv, rough);
+        // (what it mirrors below the horizon is the floor beside it - lit
+        // through the jelly, darker right where it sits - not the studio's
+        // grey, which beside a strong colour reads as its opposite)
+        float down = 1.0 - smoothstep(-0.45, 0.05, Rv.y);
+        float nearFloor = exp(-max(Pw.y, 0.0) * 6.0);
+        refl = mix(refl, refl * sc * (1.3 - 0.5 * nearFloor), down * (0.55 + 0.35 * nearFloor));
 
         vec3 H = normalize(L + V);
         float NdH = max(dot(N, H), 0.0);
@@ -433,6 +460,33 @@ export function createJellyMaterial(env, layerUniforms) {
         vec3 spec = min(uLightColor * D_GGX(NdH, a) * V_Smith(nl, NdV, a) * nl * Fh, vec3(48.0));
 
         vec3 col = body * (1.0 - F) + refl * F + spec;
+
+        // Glow mode: it gives off its own light, from all of its body -
+        // brighter through more of it, towards a hotter, paler core. A knock
+        // sends a ring of light racing out through it from where it landed.
+        vec3 emLit = vec3(0.0);
+        if (uEmit > 0.0) {
+          float deep = 1.0 - exp(-pathLen * 1.8);
+          // (light from deeper in has crossed more of it: a richer colour)
+          vec3 rich = pow(max(sc, vec3(1e-3)), vec3(1.0 + 0.8 * deep));
+          // slow currents of brighter light drifting about inside it, and a
+          // slow breath
+          vec3 q = vRest + refract(-V, N, 1.0 / uIor) * thick * 0.5;
+          float cur = vnoise(q * 2.3 + vec3(0.0, uTime * 0.16, uTime * 0.07)) * 0.65
+            + vnoise(q * 5.1 - vec3(uTime * 0.11, 0.0, uTime * 0.13)) * 0.35;
+          float lvl = (0.78 + 0.5 * cur) * (0.95 + 0.05 * sin(uTime * 1.3));
+          vec3 em = rich * (0.08 + 0.8 * deep) * lvl + mix(sc, vec3(1.0), 0.35) * 0.16 * smoothstep(0.7, 1.8, pathLen);
+          float ring = 0.0;
+          for (int i = 0; i < ${MAX_PULSES}; i++) {
+            float age = uTime - uPulse[i].w;
+            if (age < 0.0 || age > 1.6) continue;
+            float x = (distance(Pw, uPulse[i].xyz) - age * 2.3) / (0.035 + 0.09 * age);
+            ring += uPulseAmp[i] * exp(-x * x) * exp(-age * 2.4);
+          }
+          em += mix(sc, vec3(1.0), 0.22) * min(ring, 3.0) * 2.6;
+          emLit = em * uEmit;
+          col += emLit * (1.0 - 0.85 * F);
+        }
 
         // dynamic point light (torch flame, explosion flash)
         if (uPLColor.r + uPLColor.g + uPLColor.b > 0.001) {
@@ -453,7 +507,8 @@ export function createJellyMaterial(env, layerUniforms) {
           float grain = (1.0 - smoothstep(0.38, 0.5, w.x)) * step(0.12, w.y);
           vec3 cn = normalize(N + (vec3(hash13(vec3(w.y * 91.0)), hash13(vec3(w.y * 37.0 + 5.0)), hash13(vec3(w.y * 13.0 + 9.0))) - 0.5) * 1.4);
           float glint = pow(max(dot(reflect(-V, cn), L), 0.0), 70.0) * 22.0;
-          vec3 sugarCol = mix(vec3(1.0), sc, 0.18) * (irr * 0.62 + uLightColor * (max(dot(cn, L), 0.0) * 0.45 + 0.1)) * (0.8 + 0.3 * w.y);
+          vec3 sugarCol = mix(vec3(1.0), sc, 0.18) * (irr * 0.62 + uLightColor * (max(dot(cn, L), 0.0) * 0.45 + 0.1)) * (0.8 + 0.3 * w.y)
+            + emLit * 0.6; // (in glow mode the grains scatter its light)
           col = mix(col, sugarCol + uLightColor * glint, grain * coat * 0.9);
           // fine dusting between the grains
           col = mix(col, mix(vec3(1.0), sc, 0.4) * (irr * 0.5 + uLightColor * nl * 0.3), coat * 0.14 * (1.0 - grain));
@@ -463,7 +518,8 @@ export function createJellyMaterial(env, layerUniforms) {
         if (frost > 0.0) {
           float crystal = fbm3(vRest * 55.0);
           float sparkle = pow(max(vnoise(vRest * 160.0 + floor(uTime * 0.0)), 0.0), 18.0) * 30.0 * nl;
-          vec3 frostCol = vec3(0.86, 0.92, 1.0) * (irr * 0.75 + uLightColor * (nl * 0.5 + 0.15)) * (0.7 + 0.5 * crystal);
+          vec3 frostCol = vec3(0.86, 0.92, 1.0) * (irr * 0.75 + uLightColor * (nl * 0.5 + 0.15)) * (0.7 + 0.5 * crystal)
+            + emLit * (0.4 + 0.25 * crystal); // (lit from inside, in glow mode)
           col = mix(col, frostCol + sparkle, frost * (0.35 + 0.4 * crystal));
         }
 
@@ -526,6 +582,10 @@ export function createJellyMaterial(env, layerUniforms) {
           // (and warmth through the body while the seams are hot)
           col += hotC * (1.0 - exp(-pathLen * 1.2)) * exp(-1.6 * t) * smoothstep(0.0, 0.2, t) * 0.2;
         }
+        // the outline, anti-aliased: the last pixel is part jelly, part
+        // whatever's behind (only where the jelly really is that thin)
+        float silh = 1.0 - smoothstep(0.0, 0.03, thick);
+        col = mix(textureLod(tScene, uv, 0.0).rgb, col, mix(1.0, cover, silh));
         if (uDebug == 1) col = refl * F + spec;
         else if (uDebug == 2) col = trans * Tr;
         else if (uDebug == 3) col = vec3(thick * 0.5);
@@ -612,6 +672,59 @@ export function createCausticMaterial(layerUniforms) {
         // frosted jelly scatters light: no sharp caustics
         T *= 1.0 - 0.9 * smoothstep(0.05, 0.6, -vTemp);
         gl_FragColor = vec4(T * ratio * Ft, 1.0);
+      }`,
+  });
+}
+
+// The jelly mirrored in the floor (drawn upside down below it, for the
+// floor to sample - see JellyView.renderReflection): its colour as it looks
+// (in glow mode, as it shines), the reflection fading with height above the
+// floor. No refraction: it's soft and dim, nobody can tell.
+export function createReflectMaterial(layerUniforms) {
+  return new THREE.ShaderMaterial({
+    side: THREE.FrontSide,
+    uniforms: {
+      ...layerUniforms,
+      uScatterColor: { value: new THREE.Color(1, 0.3, 0.3) },
+      uEmit: { value: 0 },
+      uMilk: { value: 0 },
+      uFade: { value: 2.6 },
+    },
+    vertexShader: /* glsl */ `
+      attribute vec3 aRest;
+      attribute vec4 aData;
+      varying vec3 vRest;
+      varying vec3 vN;
+      varying vec3 vW;
+      varying float vGlow;
+      void main() {
+        vec4 wp = modelMatrix * vec4(position, 1.0);
+        vW = wp.xyz;
+        vN = normalize(mat3(modelMatrix) * normal);
+        vRest = aRest;
+        vGlow = aData.y;
+        gl_Position = projectionMatrix * viewMatrix * wp;
+      }`,
+    fragmentShader: /* glsl */ `
+      uniform vec3 uScatterColor;
+      uniform float uEmit;
+      uniform float uMilk;
+      uniform float uFade;
+      varying vec3 vRest;
+      varying vec3 vN;
+      varying vec3 vW;
+      varying float vGlow;
+      ${LAYER_GLSL}
+      void main() {
+        // (mirrored: -y is how high the real point is above the floor)
+        float h = max(-vW.y, 0.0);
+        float fade = exp(-h * uFade);
+        vec3 sc = layerScatter(vRest.y, uScatterColor);
+        sc = mix(sc, mix(sc, vec3(1.0), 0.45), uMilk);
+        vec3 V = normalize(cameraPosition - vW);
+        float rim = pow(1.0 - abs(dot(normalize(vN), V)), 2.0);
+        vec3 c = sc * mix(0.42 + 0.3 * rim, 0.85 + 0.5 * rim, uEmit) + vec3(1.0, 0.9, 0.75) * vGlow * 0.6;
+        gl_FragColor = vec4(c * fade, fade);
       }`,
   });
 }

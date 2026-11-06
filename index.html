@@ -17,10 +17,18 @@
     <meta name="apple-mobile-web-app-title" content="Cube" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <script>
-      // The opening splash (skipped for screenshots and automation), lit in
-      // the jelly's saved flavour.
+      // The look (studio or glow mode), and the opening splash (skipped for
+      // screenshots and automation), lit in the jelly's saved flavour.
       (function () {
         var q = location.search, d = document.documentElement;
+        // glow mode (dark), before anything paints
+        try {
+          var th = (q.match(/[?&]theme=(dark|light)\b/) || [])[1] || localStorage.getItem('cube-sim-theme');
+          if (th === 'dark') {
+            d.classList.add('dark');
+            document.querySelector('meta[name="theme-color"]').setAttribute('content', '#050507');
+          }
+        } catch (e) {}
         if (/[?&](shot|nosplash)\b/.test(q) || (navigator.webdriver && !/[?&]splash\b/.test(q))) return;
         d.classList.add('splashing');
         try {

@@ -6,11 +6,14 @@ import {
   createCausticMaterial,
   createMaskMaterial,
   createHeightMaterial,
+  createReflectMaterial,
   createLayerUniforms,
   absorptionFromColor,
 } from './jellyMaterials.js';
 
 const FLOOR_SPAN = 6.4;
+// (how milky jelly of that opacity looks: see setStyle)
+const hazeMinOf = (o) => 0.92 * Math.min(1, Math.max(0, (Math.min(1, Math.max(0, o)) - 0.45) / 0.55)) ** 2;
 
 // Owns the jelly GPU geometry (one mesh per connected piece, sharing vertex
 // attributes) and the multi-pass jelly rendering.
@@ -27,6 +30,10 @@ export class JellyView {
     this.causticMat = createCausticMaterial(this.layerUniforms);
     this.maskMat = createMaskMaterial();
     this.heightMat = createHeightMaterial();
+    this.reflectMat = createReflectMaterial(this.layerUniforms);
+    // the pieces again, upside down below the floor (its reflection)
+    this.reflScene = new THREE.Scene();
+    this.reflMeshes = [];
     this.fxCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
     this.floorRect = new THREE.Vector4(-FLOOR_SPAN / 2, -FLOOR_SPAN / 2, 1 / FLOOR_SPAN, 1 / FLOOR_SPAN);
     for (const m of [this.causticMat, this.maskMat, this.heightMat]) {
@@ -34,7 +41,14 @@ export class JellyView {
     }
     this.setLightDir(lightDir);
     this.rtCaustic = new THREE.WebGLRenderTarget(768, 768, { type: THREE.HalfFloatType, depthBuffer: false, samples: 4 });
-    this.rtFloorFx = new THREE.WebGLRenderTarget(512, 512, { type: THREE.HalfFloatType, depthBuffer: false, samples: 4 });
+    // (mipmapped: glow mode's light pool is its footprint, blurred wide)
+    this.rtFloorFx = new THREE.WebGLRenderTarget(512, 512, {
+      type: THREE.HalfFloatType,
+      depthBuffer: false,
+      samples: 4,
+      generateMipmaps: true,
+      minFilter: THREE.LinearMipmapLinearFilter,
+    });
     this.fxUniforms = {
       caustic: { value: this.rtCaustic.texture },
       floorFx: { value: this.rtFloorFx.texture },
@@ -43,6 +57,16 @@ export class JellyView {
       texel: { value: new THREE.Vector2(1 / 512, 1 / 512) },
       ctexel: { value: new THREE.Vector2(1 / 768, 1 / 768) },
       tint: { value: new THREE.Color(1, 0.2, 0.2) },
+      refl: { value: null }, // the jelly mirrored in the floor (App's rtRefl)
+      res: { value: new THREE.Vector2(1, 1) },
+      reflAmount: { value: 0.22 },
+      reflLod: { value: 1 }, // (how blurred: the floor's gloss)
+      glowCol: { value: new THREE.Color(1, 0.2, 0.2) }, // glow mode: the light the jelly gives off
+      glowFloor: { value: 0 },
+      // (glow mode's rings of light, shared with the jelly)
+      pulse: this.frontMat.uniforms.uPulse,
+      pulseAmp: this.frontMat.uniforms.uPulseAmp,
+      time: this.frontMat.uniforms.uTime,
     };
     this.rtBack = null;
     this._v = new THREE.Vector3();
@@ -85,6 +109,9 @@ export class JellyView {
     F.uAbsorb.value.copy(avgAbs);
     C.uAbsorb.value.copy(avgAbs);
     F.uScatterColor.value.copy(flavor.layers ? avgSc : scs[0]);
+    this.reflectMat.uniforms.uScatterColor.value.copy(flavor.layers ? avgSc : scs[0]);
+    this.fxUniforms.glowCol.value.copy(flavor.layers ? avgSc : scs[0]);
+    this.reflectMat.uniforms.uMilk.value = Math.max(m.milk, hazeMinOf(m.opacity));
     // opacity -> cloudiness; near the top end even thin parts go solid
     const o = Math.min(1, Math.max(0, m.opacity));
     const scatter = 9 * o * o;
@@ -147,6 +174,8 @@ export class JellyView {
       m.geometry.dispose();
     }
     this.meshes = [];
+    for (const m of this.reflMeshes) this.reflScene.remove(m);
+    this.reflMeshes = [];
     const nB = sb.rCount;
     const rIndex = sb.rIndex, rSim = sb.rSim;
     const nTri = rIndex.length / 3;
@@ -243,6 +272,11 @@ export class JellyView {
       mesh.userData.piece = k;
       this.scene.add(mesh);
       this.meshes.push(mesh);
+      const mirror = new THREE.Mesh(g, this.reflectMat);
+      mirror.frustumCulled = false;
+      mirror.scale.y = -1;
+      this.reflScene.add(mirror);
+      this.reflMeshes.push(mirror);
     });
     return true;
   }
@@ -319,6 +353,41 @@ export class JellyView {
       const o = r * 3, l = Math.hypot(nrm[o], nrm[o + 1], nrm[o + 2]) || 1;
       nrm[o] /= l; nrm[o + 1] /= l; nrm[o + 2] /= l;
     }
+  }
+
+  // glow mode: how brightly it shines (0 off .. 1)
+  setEmit(v) {
+    this.frontMat.uniforms.uEmit.value = v;
+    this.reflectMat.uniforms.uEmit.value = v;
+  }
+
+  // a ring of light racing out through it from (x, y, z), starting at time t
+  // (glow mode); it takes the slot that's been running longest
+  pulse(x, y, z, amp, t) {
+    const P = this.frontMat.uniforms.uPulse.value, A = this.frontMat.uniforms.uPulseAmp.value;
+    let k = 0;
+    for (let i = 0; i < P.length; i++) {
+      // (one just started close by: make that one stronger instead)
+      if (t - P[i].w < 0.12 && (P[i].x - x) ** 2 + (P[i].y - y) ** 2 + (P[i].z - z) ** 2 < 0.04) {
+        A[i] = Math.min(1.5, Math.max(A[i], amp) + 0.25 * amp);
+        return;
+      }
+      if (P[i].w < P[k].w) k = i;
+    }
+    P[k].set(x, y, z, t);
+    A[k] = amp;
+  }
+
+  // The jelly mirrored in the floor, into rt (the floor samples it).
+  renderReflection(camera, rt) {
+    const r = this.renderer;
+    const prevClear = r.getClearColor(new THREE.Color());
+    const prevAlpha = r.getClearAlpha();
+    r.setRenderTarget(rt);
+    r.setClearColor(0x000000, 0);
+    r.clear(true, true, false);
+    r.render(this.reflScene, camera);
+    r.setClearColor(prevClear, prevAlpha);
   }
 
   renderFloorFx() {

@@ -128,6 +128,9 @@ export class Post {
         uRes: { value: new THREE.Vector2(1, 1) },
         uVignette: { value: 0.22 },
         uFlash: { value: 0 },
+        // (switching looks: the room dims to black, or floods with light)
+        uDim: { value: 1 },
+        uWash: { value: 0 },
       },
       vertexShader: FS_VERT,
       fragmentShader: /* glsl */ `
@@ -138,6 +141,8 @@ export class Post {
         uniform vec2 uRes;
         uniform float uVignette;
         uniform float uFlash;
+        uniform float uDim;
+        uniform float uWash;
         varying vec2 vUv;
         float h12(vec2 p) { vec3 p3 = fract(vec3(p.xyx) * 0.1031); p3 += dot(p3, p3.yzx + 33.33); return fract((p3.x + p3.y) * p3.z); }
         vec3 finite(vec3 c) {
@@ -150,6 +155,7 @@ export class Post {
           c += vec3(1.0, 0.85, 0.6) * uFlash;
           vec2 d = (vUv - 0.5) * vec2(uRes.x / uRes.y, 1.0);
           c *= 1.0 - uVignette * smoothstep(0.35, 1.25, length(d));
+          c = mix(c * uDim, vec3(1.6, 1.55, 1.5), uWash);
           gl_FragColor = vec4(c, 1.0);
           #include <tonemapping_fragment>
           #include <colorspace_fragment>

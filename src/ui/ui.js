@@ -35,6 +35,10 @@ export const ICONS = {
   tune: svg('<path d="M4 7h9"/><path d="M17 7h3"/><path d="M4 17h3"/><path d="M11 17h9"/><circle cx="15" cy="7" r="2"/><circle cx="9" cy="17" r="2"/>'),
   sound: svg('<path d="M11 5 6.5 8.5H3.5v7h3L11 19z"/><path d="M15.5 9a4.5 4.5 0 0 1 0 6"/><path d="M18.4 6.2a8.4 8.4 0 0 1 0 11.6"/>'),
   mute: svg('<path d="M11 5 6.5 8.5H3.5v7h3L11 19z"/><path d="m16 9.5 5 5"/><path d="m21 9.5-5 5"/>'),
+  moon: svg('<path d="M19.5 14.6A7.6 7.6 0 0 1 9.4 4.5a7.6 7.6 0 1 0 10.1 10.1z"/><path d="M16.6 3.6v2.6"/><path d="M15.3 4.9h2.6"/><path d="M20.4 8.2v1.6"/><path d="M19.6 9h1.6"/>'),
+  sun: svg(
+    '<circle cx="12" cy="12" r="4.2"/><path d="M12 2.6v2.2"/><path d="M12 19.2v2.2"/><path d="m5.35 5.35 1.55 1.55"/><path d="m17.1 17.1 1.55 1.55"/><path d="M2.6 12h2.2"/><path d="M19.2 12h2.2"/><path d="m5.35 18.65 1.55-1.55"/><path d="m17.1 6.9 1.55-1.55"/>',
+  ),
 };
 
 export const TOOL_DEFS = [
@@ -69,6 +73,7 @@ export class UI {
           <text x="0" y="58" textLength="146" lengthAdjust="spacing">SIMULATOR</text>
         </svg>
       </header>
+      <button class="theme-btn" aria-label="Glow mode" title="Glow mode (L)"></button>
       <div class="hint" aria-live="polite"></div>
       <nav class="dock" role="toolbar" aria-label="Tools">
         <div class="tools"></div>
@@ -108,6 +113,9 @@ export class UI {
     this.hintEl = root.querySelector('.hint');
     this.healEl = root.querySelector('.heal');
     this.muteEl = root.querySelector('.mute');
+    this.themeEl = root.querySelector('.theme-btn');
+    this.themeEl.addEventListener('click', () => this.toggleTheme());
+    this.setTheme(app.theme || 'light');
     this.swatchBtn = root.querySelector('.swatch-btn');
     this.paletteEl = root.querySelector('.style-panel');
     this.buttons = {};
@@ -326,6 +334,7 @@ export class UI {
       if (d) app.setTool(d.id);
       else if (e.key === 'h' || e.key === 'H') app.heal();
       else if (e.key === 'm' || e.key === 'M') this.setMuted(!app.audio.muted);
+      else if ((e.key === 'l' || e.key === 'L') && !e.repeat) this.toggleTheme();
     });
   }
 
@@ -370,6 +379,21 @@ export class UI {
   closePalette() {
     this.paletteEl.hidden = true;
     this.swatchBtn.classList.remove('open');
+  }
+
+  toggleTheme() {
+    const dark = this.app.theme !== 'dark';
+    this.app.setTheme(dark ? 'dark' : 'light');
+    this.setTheme(this.app.theme);
+    if (dark) this.hint('Glow mode · knock it to send light through it', 2600);
+  }
+
+  // (the button offers the other look)
+  setTheme(name) {
+    const dark = name === 'dark';
+    this.themeEl.innerHTML = dark ? ICONS.sun : ICONS.moon;
+    this.themeEl.title = dark ? 'Lights on (L)' : 'Glow mode (L)';
+    this.themeEl.setAttribute('aria-label', dark ? 'Lights on' : 'Glow mode');
   }
 
   setMuted(m) {

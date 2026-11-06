@@ -26,6 +26,14 @@ export class Droplets {
       sheen: 0.4,
       sheenColor: new THREE.Color(1, 0.6, 0.6),
     });
+    // (glow mode: each shines in its own colour - emissive is set to the
+    // glow level, times the droplet's colour)
+    this.mat.onBeforeCompile = (sh) => {
+      sh.fragmentShader = sh.fragmentShader.replace(
+        '#include <emissivemap_fragment>',
+        '#include <emissivemap_fragment>\n#ifdef USE_COLOR\ntotalEmissiveRadiance *= vColor.rgb * 2.2;\n#endif',
+      );
+    };
     this.mesh = new THREE.InstancedMesh(geo, this.mat, this.max);
     this.mesh.count = 0;
     this.mesh.frustumCulled = false;
@@ -42,6 +50,10 @@ export class Droplets {
     app.onColor = app.onColor || [];
     app.onColor.push((hex) => this.setColor(hex));
     this._c = new THREE.Color();
+  }
+
+  setGlow(e) {
+    this.mat.emissive.setScalar(e);
   }
 
   setColor(hex) {

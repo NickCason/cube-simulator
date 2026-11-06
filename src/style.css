@@ -828,6 +828,43 @@ body {
   height: 19px;
 }
 
+/* ---------------------------------------------------------------- lights (glow mode) */
+.theme-btn {
+  position: fixed;
+  top: max(14px, calc(env(safe-area-inset-top) + 6px));
+  right: max(14px, calc(env(safe-area-inset-right) + 8px));
+  width: 40px;
+  height: 40px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border-radius: 50%;
+  appearance: none;
+  border: 1px solid var(--line);
+  background: var(--glass);
+  -webkit-backdrop-filter: blur(16px) saturate(1.6);
+  backdrop-filter: blur(16px) saturate(1.6);
+  box-shadow: 0 6px 18px rgba(40, 30, 20, 0.12), inset 0 1px 0 rgba(255, 255, 255, 0.85);
+  color: var(--ink);
+  cursor: pointer;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+  transition: opacity 0.3s ease, transform 0.15s;
+}
+
+.theme-btn svg {
+  width: 20px;
+  height: 20px;
+}
+
+.theme-btn:active {
+  transform: scale(0.92);
+}
+
+.splashing .theme-btn {
+  opacity: 0;
+}
+
 /* ---------------------------------------------------------------- hint */
 .hint {
   position: fixed;
@@ -1047,4 +1084,143 @@ body {
 }
 .stats-btns .close {
   margin-left: auto;
+}
+
+/* ---------------------------------------------------------------- glow mode (dark) */
+html.dark {
+  --ink: #f1eff4;
+  --glass: rgba(24, 23, 29, 0.58);
+  --line: rgba(255, 255, 255, 0.09);
+  background: #050507;
+  color-scheme: dark;
+}
+
+/* (while the looks switch, the chrome eases over) */
+html.theming *,
+html.theming *::before,
+html.theming *::after {
+  transition: background-color 0.5s ease, color 0.5s ease, border-color 0.5s ease, box-shadow 0.5s ease, fill 0.5s ease, stroke 0.5s ease !important;
+}
+
+html.dark .dock {
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.55), 0 2px 6px rgba(0, 0, 0, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+}
+
+html.dark .theme-btn {
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.07), 0 0 16px color-mix(in srgb, var(--jelly) 22%, transparent);
+}
+
+html.dark .brand .mark {
+  filter: drop-shadow(0 0 6px color-mix(in srgb, var(--jelly) 70%, transparent)) drop-shadow(0 0 14px color-mix(in srgb, var(--jelly) 35%, transparent));
+}
+
+html.dark .tool:hover,
+html.dark .swatch-btn:hover,
+html.dark .swatch-btn.open,
+html.dark .tune-btn:hover,
+html.dark .tune-btn.open,
+html.dark .mute:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+html.dark .tool.active {
+  color: #111014;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.5), 0 0 16px color-mix(in srgb, var(--jelly) 40%, transparent);
+}
+
+html.dark .tool .tip {
+  background: rgba(30, 29, 35, 0.94);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.1);
+}
+
+html.dark .sep {
+  background: rgba(255, 255, 255, 0.11);
+}
+
+html.dark .swatch {
+  box-shadow: inset -2px -3px 5px rgba(0, 0, 0, 0.3), inset 2px 2px 3px rgba(255, 255, 255, 0.5), 0 0 0 1.5px rgba(255, 255, 255, 0.2), 0 0 12px color-mix(in srgb, var(--jelly) 75%, transparent);
+}
+
+html.dark .heal {
+  color: #121116 !important;
+  background: linear-gradient(180deg, #fbfafd, #dcdae2) !important;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5), 0 0 18px rgba(255, 255, 255, 0.12), inset 0 1px 0 rgba(255, 255, 255, 0.9);
+}
+
+html.dark .palette {
+  background: rgba(20, 19, 25, 0.86);
+  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.6);
+}
+
+html.dark .palette .lbl,
+html.dark .palette .row .word,
+html.dark .tune .word {
+  color: rgba(241, 239, 244, 0.5);
+}
+
+html.dark .layers-sec .lbl em {
+  color: rgba(241, 239, 244, 0.38);
+}
+
+html.dark .palette .row,
+html.dark .tune .row {
+  color: rgba(241, 239, 244, 0.86);
+}
+
+html.dark .palette .stepper button,
+html.dark .palette .preset,
+html.dark .tune .reset {
+  color: rgba(241, 239, 244, 0.82);
+}
+
+html.dark .palette .mat,
+html.dark .palette .opt {
+  color: rgba(241, 239, 244, 0.72);
+}
+
+html.dark .stepper,
+html.dark .palette .preset,
+html.dark .palette .seg,
+html.dark .tune .reset {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+html.dark .palette .preset:hover,
+html.dark .tune .reset:hover,
+html.dark .palette .mat:hover,
+html.dark .palette .opt:hover,
+html.dark .palette .stepper button:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.11);
+}
+
+html.dark .palette .preset.active,
+html.dark .palette .mat.active,
+html.dark .palette .opt.active {
+  background: rgba(255, 255, 255, 0.16);
+  box-shadow: 0 1px 6px rgba(0, 0, 0, 0.4), inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+}
+
+html.dark .palette .switch {
+  background: rgba(255, 255, 255, 0.16);
+}
+
+html.dark .palette .switch.on {
+  background: var(--jelly);
+}
+
+html.dark .palette input[type='range']::-webkit-slider-runnable-track {
+  background: linear-gradient(90deg, var(--ink) var(--p), rgba(255, 255, 255, 0.16) var(--p));
+}
+
+html.dark .palette input[type='range']::-moz-range-track {
+  background: rgba(255, 255, 255, 0.16);
+}
+
+html.dark .tune-foot {
+  border-top-color: rgba(255, 255, 255, 0.07);
+}
+
+html.dark .hint {
+  color: rgba(241, 239, 244, 0.85);
+  background: rgba(22, 21, 27, 0.6);
 }

@@ -258,6 +258,7 @@ export class MalletTool {
       if (!app.healer.active) sb.dampBoost = hits > 1 ? Math.max(0.3, 1 - 0.7 * lv) : 1;
       app.shake(0.012 + 0.025 * lv);
       app.audio.thud(0.8 + 0.2 * lv);
+      app.glowPulse?.(p.x, p.y, p.z, 0.9 + 0.5 * lv);
       if (hits > 1) app.audio.ring(RES_NOTES[Math.min(hits, RES_NOTES.length) - 1], lv);
       app.markDamaged();
       if (hits === 3) app.ui?.hint('Resonance building - keep the beat', 1400);
@@ -828,6 +829,7 @@ export class BombTool {
     app.particles.sparks(p, 50, 5);
     app.particles.smoke(p, 18, 0.9, 0.22, 0.6, 0.5);
     app.audio.boom(1);
+    app.glowPulse?.(p.x, p.y, p.z, 1.5);
     app.shake(0.05);
     app.flash = 0.6;
     app.fireAt(p.clone().add(new THREE.Vector3(0, 0.15, 0)), 9);
