@@ -36,6 +36,10 @@ const THEMES = {
     glow: 1, glowFloor: 0.35, refl: 0.4, reflLod: 1.6, bloom: 0.38, threshold: 0.6, knee: 0.5, vignette: 0.42, css: '#050507',
   },
 };
+const median = (arr) => {
+  const s = Float32Array.from(arr).sort();
+  return s[s.length >> 1];
+};
 // a neon tube coming on: a few stutters, then it holds (time s, level)
 const FLICKER = [[0, 0], [0.03, 0.75], [0.07, 0.06], [0.15, 0.9], [0.19, 0.15], [0.23, 0.35], [0.29, 1.05], [0.34, 0.5], [0.4, 1.12], [0.85, 1]];
 function flicker(t) {
@@ -598,10 +602,41 @@ export class App {
   _introStep(dt) {
     const I = this.intro;
     I.t += dt;
-    if (this._warmSlice(9) === 'ready') I.ready = true;
+    if (!I.jobReady && this._warmSlice(9) === 'ready') I.jobReady = true;
+    // then, behind the splash, the real cube's own code: a first visit's
+    // fresh browser can still be compiling its fast tier, and the drop then
+    // ran at a few frames a second for seconds - so step a twin of the cube
+    // (same settings, same shapes) until its steps settle (at most ~6 s)
+    if (I.jobReady && !I.ready) I.ready = !this.splashHold || this._warmTwin() || I.t > 6;
     // (behind the splash the job just carries on: the drop is its reveal)
     if ((I.ready || I.t > 1.2) && !this.splashHold) I.done = true;
     if (I.done) this.introMs = I.t * 1000;
+  }
+
+  // A twin of the cube stepped where nobody sees it; true once its steps
+  // take about as long as its fastest (the hot code is compiled).
+  _warmTwin() {
+    const I = this.intro;
+    if (!I.twin) {
+      const tw = new SoftBody({ ...(this.opts.sim || {}), size: this.sb.p.size, bevel: this.sb.p.bevel });
+      Object.assign(tw.p, this.sb.p);
+      tw.loadCube(0, 1.1, 0, 0.18);
+      I.twin = { sb: tw, times: [], best: Infinity };
+      return false;
+    }
+    const W = I.twin;
+    W.sb.p.substeps = this.sb.p.substeps || 12;
+    const t0 = performance.now();
+    W.sb.step(1 / 60);
+    const ms = performance.now() - t0;
+    W.best = Math.min(W.best, ms);
+    W.times.push(ms);
+    const n = W.times.length;
+    if ((n >= 4 && W.times.slice(-3).every((t) => t < W.best * 1.5 + 2)) || n > 150) {
+      I.twin = null;
+      return true;
+    }
+    return false;
   }
 
   _warmSlice(budget) {
@@ -837,6 +872,7 @@ export class App {
     let dt = (now - this.clock.last) / 1000;
     this.clock.last = now;
     if (!(dt > 0)) dt = 1 / 60;
+    this._rawDt = dt; // (unclamped: what the resolution adapts to)
     dt = Math.min(dt, 1 / 30);
     this.frame(dt);
   }
@@ -850,7 +886,11 @@ export class App {
     }
     // slow frames slow the simulation instead of piling on substeps
     if (this.slowGoal !== undefined) this.timeScale += (this.slowGoal - this.timeScale) * (1 - Math.exp(-dt * 10));
-    let sdt = Math.min(dt, 1 / 45) * this.timeScale;
+    // (a frame of up to 1/30 s while the physics is light: a screen capped at
+    // 30 fps - iOS's Low Power Mode - otherwise ran everything at two-thirds
+    // speed; back to 1/45 as it gets heavy, so a busy scene keeps its frame rate)
+    const heavy = Math.min(1, Math.max(0, (this.stats.physMs - 14) / 10));
+    let sdt = Math.min(dt, 1 / 30 + (1 / 45 - 1 / 30) * heavy) * this.timeScale;
     if (this._hitStop > 0) {
       this._hitStop -= dt;
       sdt *= 0.1;
@@ -862,7 +902,7 @@ export class App {
       this.healer.update(sdt);
       this.tilt.update(dt);
       this._edgeMorphTick(dt);
-      const nS = Math.max(4, Math.min(16, Math.round(this.substepRate * sdt)));
+      const nS = Math.max(4, Math.min(24, Math.round(this.substepRate * sdt)));
       this.sb.p.substeps = nS;
       const p0 = performance.now();
       if (!this.intro.done) this._introStep(dt);
@@ -874,8 +914,10 @@ export class App {
       // adapt substep rate to the device (not to the intro's warm-up work)
       if (this.intro.done) this.stats.physMs = this.stats.physMs * 0.9 + pm * 0.1;
       if (this.intro.done && this.sb.anyAwake) {
-        if (this.stats.physMs > 9.5) this.substepRate = Math.max(420, this.substepRate * 0.985);
-        else if (this.stats.physMs < 6) this.substepRate = Math.min(720, this.substepRate * 1.004);
+        // (its share of the frame: more of a longer frame)
+        const bud = 9.5 * Math.min(2, Math.max(1, dt * 60));
+        if (this.stats.physMs > bud) this.substepRate = Math.max(420, this.substepRate * 0.985);
+        else if (this.stats.physMs < bud * 0.63) this.substepRate = Math.min(720, this.substepRate * 1.004);
       }
       this.nails.update(sdt);
       this.droplets.update(sdt);
@@ -896,7 +938,7 @@ export class App {
     this.stats.renderLast = performance.now() - r0;
     if (this.splash?.active && this.stats.frames > 1) {
       this.splash.go();
-      if (this.intro.ready || this.intro.t > 4) this.splash.ready();
+      if (this.intro.ready || this.intro.t > 7) this.splash.ready();
     }
     const cpu = performance.now() - t0;
     this.stats.frameMs = this.stats.frameMs * 0.9 + cpu * 0.1;
@@ -911,16 +953,37 @@ export class App {
   // level off the table.
   _adaptResolution(dt, cpuMs = 0) {
     if (this.opts.preserve) return;
-    const a = (this._adapt ||= { t: 0, slow: 0, fast: 0, ceiling: this.maxPixelRatio, upAt: -1e9 });
+    const raw = Math.min(this._rawDt || dt, 0.25);
+    const a = (this._adapt ||= { t: 0, slow: 0, fast: 0, ceiling: this.maxPixelRatio, upAt: -1e9, floor: 0, capDt: 0, ring: new Float32Array(48), n: 0, trial: null });
     a.t += dt;
+    a.ring[a.n++ % a.ring.length] = raw;
     if (a.t < 2.5) return;
-    const gpuSlow = dt > 1 / 42 && cpuMs < dt * 1000 * 0.6;
+    // A step down is a trial: if frames don't come any sooner after it, it
+    // wasn't the GPU holding them back - the browser caps the frame rate
+    // (iOS does, at 30, in Low Power Mode) - so put it back, and stay at
+    // least that sharp unless frames get much slower than that cap.
+    const T = a.trial;
+    if (T) {
+      if (a.t - T.at < 1.5) return;
+      a.trial = null;
+      a.slow = a.fast = 0;
+      if (median(a.ring) > T.before * 0.88) {
+        this.pixelRatio = T.pr;
+        a.floor = T.pr;
+        a.capDt = T.before;
+        this._resizePending = true;
+      }
+      return;
+    }
+    const gpuSlow = raw > 1 / 42 && cpuMs < raw * 1000 * 0.6;
     if (gpuSlow) a.slow += dt;
     else a.slow = Math.max(0, a.slow - dt * 0.5);
-    if (dt < 1 / 57) a.fast += dt;
+    if (raw < 1 / 57) a.fast += dt;
     else if (gpuSlow) a.fast = 0;
-    if (a.slow > 1.2 && this.pixelRatio > 0.75) {
+    const floor = a.floor && median(a.ring) < a.capDt * 1.5 ? a.floor : 0.75;
+    if (a.slow > 1.2 && this.pixelRatio > floor + 1e-6) {
       if (a.t - a.upAt < 12) a.ceiling = this.pixelRatio - 0.25; // that step up was too much
+      a.trial = { pr: this.pixelRatio, before: median(a.ring), at: a.t };
       this.pixelRatio = Math.max(0.75, this.pixelRatio - 0.25);
       a.slow = 0;
       a.fast = 0;

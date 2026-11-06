@@ -619,8 +619,19 @@ export class JellyView {
   _fitLightView(sb) {
     let x0 = Infinity, y0 = Infinity, z0 = Infinity, x1 = -Infinity, y1 = -Infinity, z1 = -Infinity;
     for (const pc of sb.pieces) {
-      const b = pc.bbox;
+      let b = pc.bbox;
       if (!b) continue;
+      // (not stepped yet - the warm-up's render, before the drop: from its
+      // vertices, so the caustics' shaders compile then and not mid-drop)
+      if (!(b[3] > b[0])) {
+        b = [Infinity, Infinity, Infinity, -Infinity, -Infinity, -Infinity];
+        for (const i of pc.verts) {
+          for (let c = 0; c < 3; c++) {
+            b[c] = Math.min(b[c], sb.x[i * 3 + c]);
+            b[c + 3] = Math.max(b[c + 3], sb.x[i * 3 + c]);
+          }
+        }
+      }
       x0 = Math.min(x0, b[0]); y0 = Math.min(y0, b[1]); z0 = Math.min(z0, b[2]);
       x1 = Math.max(x1, b[3]); y1 = Math.max(y1, b[4]); z1 = Math.max(z1, b[5]);
     }

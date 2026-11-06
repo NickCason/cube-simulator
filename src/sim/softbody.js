@@ -48,7 +48,7 @@ function asFloat(o, keys) {
   }
   return o;
 }
-const PIECE_FLOATS = ['sleepT', 'rebT', 'impY', 'rebR', 'impR', 'impUx', 'impUz', 'impT', 'impDv', 'foldUntil'];
+const PIECE_FLOATS = ['sleepT', 'rebT', 'impY', 'rebR', 'impR', 'impUx', 'impUz', 'impT', 'impDv', 'foldUntil', 'buzzT', 'buzzA', 'buzzB'];
 
 export class SoftBody {
   constructor(opts = {}) {
@@ -668,6 +668,9 @@ export class SoftBody {
         hinge: false, // still joined to itself across a cut (see _findHinges)
         foldUntil: 0, // (sim time) has vertices folded into itself till then (see _foldCheck)
         foldAsk: false, // look for folds next frame (it has just fallen asleep)
+        buzzT: 0, // (s) still, but buzzing, for this long (see _dampPieces)
+        buzzA: 0, // (its buzz over the first and the second half of that)
+        buzzB: 0,
       }, PIECE_FLOATS);
     });
     // keep largest piece first for stable "main piece" semantics
@@ -1464,8 +1467,24 @@ export class SoftBody {
         e2 += s2 * m[vs[k]];
       }
       const vrms2 = e2 / M;
-      if (vrms2 < 0.035 * 0.035 && vmax2 < 0.3 * 0.3) {
-        pc.sleepT += dt;
+      // A piece that isn't going anywhere but won't go quiet - a few of its
+      // vertices buzzing against a neighbour it rests on - sleeps anyway: its
+      // middle still and not turning for 1.5 s while the buzz doesn't die
+      // down (its second half as strong as the first; a wobble decays, even
+      // a water balloon's, and is left to settle the usual way).
+      let buzzing = false;
+      const vrms = Math.sqrt(vrms2);
+      if (vx * vx + vy * vy + vz * vz < 0.03 * 0.03 && wx * wx + wy * wy + wz * wz < 0.3 * 0.3 && vrms < 0.15) {
+        if (pc.buzzT < 0.75) pc.buzzA += vrms * dt;
+        else pc.buzzB += vrms * dt;
+        pc.buzzT += dt;
+        if (pc.buzzT > 1.5) {
+          buzzing = pc.buzzB > 0.85 * pc.buzzA;
+          pc.buzzT = pc.buzzA = pc.buzzB = 0;
+        }
+      } else pc.buzzT = pc.buzzA = pc.buzzB = 0;
+      if (buzzing || (vrms2 < 0.035 * 0.035 && vmax2 < 0.3 * 0.3)) {
+        pc.sleepT += buzzing ? 1 : dt;
         if (pc.sleepT > 0.6) {
           pc.asleep = true;
           pc.foldAsk = true; // (not to be left asleep folded into itself)
@@ -2460,11 +2479,16 @@ export class SoftBody {
       WF[key] = ct.f;
       if ((own === gp || tPiece[ct.t] === gp) && ct.depth > press) press = ct.depth;
       const t = ct.t, t4 = t * 4, d = ct.depth, pt = tPiece[t];
-      // a real impact wakes sleepers; otherwise a sleeping side is immovable
+      // a real impact wakes sleepers - something moving into it, or pushed
+      // well in - and otherwise a sleeping side is immovable (a neighbour
+      // buzzing against it mustn't keep waking it)
       const po = P[own], pp = P[pt];
-      if (d > 0.003) {
-        if (po.asleep) { po.asleep = false; po.sleepT = 0; aw[own] = 1; }
-        if (pp.asleep) { pp.asleep = false; pp.sleepT = 0; aw[pt] = 1; }
+      if (d > 0.003 && (po.asleep || pp.asleep)) {
+        const q = po.asleep ? pp.vel : po.vel;
+        if (d > 0.012 || q[0] * q[0] + q[1] * q[1] + q[2] * q[2] > 0.08 * 0.08) {
+          if (po.asleep) { po.asleep = false; po.sleepT = 0; aw[own] = 1; }
+          if (pp.asleep) { pp.asleep = false; pp.sleepT = 0; aw[pt] = 1; }
+        }
       }
       const mOwn = po.asleep ? 0 : 1, mTet = pp.asleep ? 0 : 1;
       ti4[0] = T[t4]; ti4[1] = T[t4 + 1]; ti4[2] = T[t4 + 2]; ti4[3] = T[t4 + 3];
