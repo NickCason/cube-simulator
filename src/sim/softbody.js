@@ -2635,8 +2635,14 @@ export class SoftBody {
     if (!this._faceGeo(f)) return;
     const G = this._fGeo, o = f * 16;
     const ax = G[o], ay = G[o + 1], az = G[o + 2], nx = G[o + 9], ny = G[o + 10], nz = G[o + 11];
-    const dist = -((px - ax) * nx + (py - ay) * ny + (pz - az) * nz);
-    if (dist <= 0) return; // in front of it: not a way out
+    let dist = -((px - ax) * nx + (py - ay) * ny + (pz - az) * nz);
+    // in front of it: not a way out. (Right on it is one, at depth 0: the
+    // two sides of a fresh cut lie exactly on each other's faces, and with
+    // the near face ruled out a thin slice's far face - a few cm away -
+    // was the way out: every vertex of a sliced loaf was shoved through its
+    // neighbour, and the slices blew apart at the speed limit.)
+    if (dist < -1e-7) return;
+    if (dist < 0) dist = 0;
     // pushing out this way would land under the floor / in the arena wall:
     // useless (it just gets pushed back in), so don't. (Against another piece
     // a face only tilted a little down is fine: the floor lifts the last
@@ -2722,7 +2728,9 @@ export class SoftBody {
     // still behind last substep's face?
     if (wf >= 0 && wf < this.nF && tPiece[this.sTet[wf]] === pt) {
       this._faceProbe(wf, px, py, pz, qx, qy, qz);
-      if (fq.ok && fq.on && (fq.prev > 0 || fq.dist < 0.004)) {
+      // (only while shallow: deep in - a thin slice folded over another -
+      // the face it came in by can be the far side of everything, 12 cm off)
+      if (fq.ok && fq.on && (fq.prev > 0 || fq.dist < 0.004) && fq.dist < 0.02) {
         ct.f = wf; ct.nx = fq.nx; ct.ny = fq.ny; ct.nz = fq.nz; ct.depth = fq.dist;
         return true;
       }
@@ -2744,7 +2752,12 @@ export class SoftBody {
         if (fq.crossS < crossS) {
           crossS = fq.crossS; cross = f; crossD = fq.dist; cnx = fq.nx; cny = fq.ny; cnz = fq.nz;
         }
-        if (fq.dist > 0 && fq.dist < bestD && fq.on) {
+        // (a face it's barely behind is a way out even if it lies just
+        // beside the triangle: only the triangles round this tet's corners
+        // are asked, and a thin slice's near face can be the next triangle
+        // over - with only the far face "on", a whole slice's thickness away,
+        // a sliced loaf shoved every vertex through its neighbour)
+        if (fq.dist < bestD && (fq.on || fq.dist < 0.004)) {
           bestD = fq.dist; best = f; bnx = fq.nx; bny = fq.ny; bnz = fq.nz;
         }
       }
