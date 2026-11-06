@@ -35,4 +35,5 @@ if (params.has('density') || params.has('scatter')) {
 }
 if (params.has('dbg')) app.jelly.frontMat.uniforms.uDebug.value = +params.get('dbg');
 window.__app = app;
+if (params.has('stats')) import('./ui/stats.js').then((m) => m.attachStats(app));
 app.start();

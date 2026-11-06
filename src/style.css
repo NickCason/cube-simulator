@@ -827,3 +827,52 @@ body {
 .nogl b {
   font-size: 18px;
 }
+
+/* ---------------------------------------------------------------- ?stats */
+.stats {
+  position: fixed;
+  left: max(10px, env(safe-area-inset-left));
+  top: max(10px, env(safe-area-inset-top));
+  z-index: 50;
+  max-width: min(92vw, 380px);
+  padding: 8px 9px 7px;
+  border-radius: 10px;
+  background: rgba(16, 17, 20, 0.78);
+  color: #e9edf2;
+  -webkit-backdrop-filter: blur(8px);
+  backdrop-filter: blur(8px);
+  font: 10.5px/1.35 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  pointer-events: auto;
+}
+.stats canvas {
+  display: block;
+  width: 200px;
+  height: 44px;
+  margin-bottom: 4px;
+}
+.stats pre {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 46vh;
+  overflow: auto;
+  -webkit-user-select: text;
+  user-select: text;
+}
+.stats-btns {
+  display: flex;
+  gap: 6px;
+  margin-top: 6px;
+}
+.stats-btns button {
+  font: inherit;
+  color: inherit;
+  background: rgba(255, 255, 255, 0.12);
+  border: 0;
+  border-radius: 7px;
+  padding: 5px 9px;
+  cursor: pointer;
+}
+.stats-btns .close {
+  margin-left: auto;
+}

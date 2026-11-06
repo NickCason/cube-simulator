@@ -12,7 +12,8 @@ import { Overlay } from './ui/overlay.js';
 import { UI } from './ui/ui.js';
 import { HandTool, KnifeTool, NailGunTool } from './tools/basic.js';
 import { MalletTool, TorchTool, FreezeTool, BallerTool, BombTool, SyringeTool, MagnetTool } from './tools/more.js';
-import { makeMaterials } from './world/models.js';
+import { makeMaterials, makeBomb } from './world/models.js';
+import { cutBody, planeField, sphereField, separateClusters, removeTets, removeSmallPieces } from './sim/cutting.js';
 import { Droplets } from './world/droplets.js';
 import { Bubbles } from './world/bubbles.js';
 import { Glitter, GLITTER_MODES } from './world/glitter.js';
@@ -158,7 +159,67 @@ export class App {
   }
 
   start() {
+    this.warmUp();
     requestAnimationFrame(this._loop);
+  }
+
+  // Compile every shader the tools and effects will need, now and offscreen,
+  // so the first use of each doesn't stall the frame (phones compile shaders
+  // slowly), and run the cutting code once on a throwaway body so it is
+  // already warm when the first knife stroke lands.
+  warmUp() {
+    const t0 = performance.now();
+    const r = this.renderer;
+    const p0 = r.info.programs?.length || 0;
+    const undo = [];
+    for (const id in this.tools) {
+      const m = this.tools[id].model;
+      if (m && !m.visible) {
+        m.visible = true;
+        undo.push(() => (m.visible = false));
+      }
+    }
+    const bomb = makeBomb(this.M);
+    this.scene.add(bomb);
+    undo.push(() => this.scene.remove(bomb));
+    for (const o of [this.nails.mesh, this.droplets.mesh]) {
+      if (o.count !== 0) continue;
+      o.count = 1;
+      undo.push(() => (o.count = 0));
+    }
+    for (const L of [this.particles.add, this.particles.alpha]) {
+      const g = L.points.geometry, { start, count } = g.drawRange;
+      g.setDrawRange(0, 1);
+      undo.push(() => g.setDrawRange(start, count));
+    }
+    try {
+      r.setRenderTarget(this.rtScene);
+      // twice: three.js draws shadows with the previous render's light setup,
+      // so the first pass compiles shadow shaders for a scene with no lights
+      for (let k = 0; k < 2; k++) {
+        r.shadowMap.needsUpdate = true;
+        r.render(this.scene, this.camera);
+      }
+      r.render(this.fxScene, this.camera);
+      r.setRenderTarget(null);
+    } finally {
+      for (const f of undo) f();
+    }
+    try {
+      const sb = new SoftBody({ res: 5 });
+      sb.loadCube(0, 0, 0);
+      sb.step(1 / 60);
+      cutBody(sb, planeField(1, 0, 0, 0.03), { separate: 0.01 });
+      cutBody(sb, sphereField(0.2, 0.6, 0.2, 0.3), { separate: 0 });
+      removeTets(sb, (t, x, y) => y > 0.85 && x > 0.3);
+      separateClusters(sb, new Int32Array(sb.nT).map((_, t) => (t * 7) % 3));
+      removeSmallPieces(sb, 0.002);
+      // a few steps with the bits touching (contact code)
+      for (let k = 0; k < 12; k++) sb.step(1 / 60);
+    } catch (e) {
+      /* warming only */
+    }
+    this.warmStats = { ms: performance.now() - t0, programs: (r.info.programs?.length || 0) - p0 };
   }
 
   // ------------------------------------------------------------ state
@@ -647,23 +708,32 @@ export class App {
   }
 
   // Drop the render resolution if the device can't keep up (and recover).
+  // Drop the render resolution when the device can't keep up, and only
+  // try a sharper one again after a good while of smooth frames *while
+  // something is going on* (idle frames are cheap and prove nothing). If a
+  // step up has to be undone soon after, that level is off the table.
   _adaptResolution(dt) {
     if (this.opts.preserve) return;
-    const a = (this._adapt ||= { t: 0, slow: 0, fast: 0 });
+    const a = (this._adapt ||= { t: 0, slow: 0, fast: 0, ceiling: this.maxPixelRatio, upAt: -1e9 });
     a.t += dt;
     if (a.t < 2.5) return;
+    const busy = this.sb.anyAwake || this.healer.active;
     if (dt > 1 / 42) a.slow += dt;
     else a.slow = Math.max(0, a.slow - dt * 0.5);
-    if (dt < 1 / 58) a.fast += dt;
-    else a.fast = 0;
+    if (busy) {
+      if (dt < 1 / 57) a.fast += dt;
+      else a.fast = 0;
+    }
     if (a.slow > 1.2 && this.pixelRatio > 0.75) {
+      if (a.t - a.upAt < 12) a.ceiling = this.pixelRatio - 0.25; // that step up was too much
       this.pixelRatio = Math.max(0.75, this.pixelRatio - 0.25);
       a.slow = 0;
       a.fast = 0;
       this.resize();
-    } else if (a.fast > 8 && this.pixelRatio < this.maxPixelRatio) {
-      this.pixelRatio = Math.min(this.maxPixelRatio, this.pixelRatio + 0.25);
+    } else if (a.fast > 6 && this.pixelRatio + 0.25 <= Math.min(this.maxPixelRatio, a.ceiling) + 1e-6) {
+      this.pixelRatio = this.pixelRatio + 0.25;
       a.fast = 0;
+      a.upAt = a.t;
       this.resize();
     }
   }
