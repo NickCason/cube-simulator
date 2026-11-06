@@ -179,7 +179,7 @@ export class NailGunTool {
     // muzzle sits just off-screen bottom-right, aimed at what's under the cursor
     const right = _v.set(1, 0, 0).applyQuaternion(cam.quaternion);
     const up = _w.set(0, 1, 0).applyQuaternion(cam.quaternion);
-    const origin = cam.position.clone().addScaledVector(right, 1.1).addScaledVector(up, -0.05);
+    const origin = cam.position.clone().addScaledVector(right, 1.7).addScaledVector(up, 0.25);
     const r = this.ray;
     const hit = app.pickJelly(r);
     let target;

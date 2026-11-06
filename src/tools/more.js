@@ -300,7 +300,17 @@ export class TorchTool extends NozzleTool {
     app.particles.flame(tip, dir, 1);
     app.particles.flame(tip, dir, 1);
     if (tg.jelly) {
-      app.sb.addHeat(tg.point.x, tg.point.y, tg.point.z, 0.26, 1.7 * dt, 1.5, -1.3);
+      const sb = app.sb;
+      sb.addHeat(tg.point.x, tg.point.y, tg.point.z, 0.3, 2.1 * dt, 1.6, -1.3);
+      // very hot jelly liquefies and runs off: the region slowly caves in
+      const T = sb.T, x = sb.x, temp = sb.temp;
+      for (let t = 0; t < sb.nT; t++) {
+        const a = T[t * 4], b = T[t * 4 + 1], c = T[t * 4 + 2], d = T[t * 4 + 3];
+        const tt = (temp[a] + temp[b] + temp[c] + temp[d]) * 0.25;
+        if (tt < 1.05) continue;
+        const dd = Math.hypot(x[a * 3] - tg.point.x, x[a * 3 + 1] - tg.point.y, x[a * 3 + 2] - tg.point.z);
+        if (dd < 0.32) sb.tVS[t] = Math.max(0.4, sb.tVS[t] - 0.42 * dt);
+      }
       this.sizzle += dt;
       if (this.sizzle > 0.07) {
         this.sizzle = 0;

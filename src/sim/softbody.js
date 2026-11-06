@@ -1168,6 +1168,27 @@ export class SoftBody {
     return { tet: bestT, bary: best, inside: bestScore >= -1e-6, score: bestScore };
   }
 
+  // Locate a point given in rest coordinates (used to re-seed embedded
+  // features after the mesh is rebuilt).
+  locateRest(X, Y, Z) {
+    const R = this.X, T = this.T;
+    for (let t = 0; t < this.nT; t++) {
+      if (this.vol0[t] <= 0) continue;
+      const a = T[t * 4] * 3, b = T[t * 4 + 1] * 3, c = T[t * 4 + 2] * 3, d = T[t * 4 + 3] * 3;
+      const dx = R[a] - X, dy = R[a + 1] - Y, dz = R[a + 2] - Z;
+      if (dx * dx + dy * dy + dz * dz > 0.06) continue;
+      const bo = t * 9, B = this.B;
+      const rx = X - R[a], ry = Y - R[a + 1], rz = Z - R[a + 2];
+      const l1 = B[bo] * rx + B[bo + 1] * ry + B[bo + 2] * rz;
+      const l2 = B[bo + 3] * rx + B[bo + 4] * ry + B[bo + 5] * rz;
+      const l3 = B[bo + 6] * rx + B[bo + 7] * ry + B[bo + 8] * rz;
+      const l0 = 1 - l1 - l2 - l3;
+      if (l0 >= -1e-6 && l1 >= -1e-6 && l2 >= -1e-6 && l3 >= -1e-6) return { tet: t, bary: [l0, l1, l2, l3] };
+      void b; void c; void d;
+    }
+    return null;
+  }
+
   embedPoint(t, b, out) {
     const { x, T } = this;
     let px = 0, py = 0, pz = 0;

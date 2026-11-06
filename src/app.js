@@ -14,6 +14,7 @@ import { HandTool, KnifeTool, NailGunTool } from './tools/basic.js';
 import { MalletTool, TorchTool, FreezeTool, BallerTool, BombTool, SyringeTool, MagnetTool } from './tools/more.js';
 import { makeMaterials } from './world/models.js';
 import { Droplets } from './world/droplets.js';
+import { Bubbles } from './world/bubbles.js';
 
 const BG = new THREE.Color(0.86, 0.85, 0.83);
 
@@ -67,7 +68,7 @@ export class App {
 
     this.post = new Post(renderer);
     this.sb = new SoftBody(opts.sim || {});
-    this.sb.loadCube(0, 0.25, 0, 0.18);
+    this.sb.loadCube(0, opts.dropHeight ?? 1.1, 0, 0.18);
 
     this.audio = new AudioEngine();
     this.M = makeMaterials(this.env);
@@ -85,6 +86,7 @@ export class App {
     });
     this.flash = 0;
     this.anchorProviders = [() => this.nails.anchors()];
+    this.bubbles = new Bubbles(this);
     this.onNailHit = () => {
       this.audio.nailHit(1);
       this.markDamaged();
@@ -373,6 +375,7 @@ export class App {
       }
       this.nails.update(sdt);
       this.droplets.update(sdt);
+      this.bubbles.update();
       for (const k in this.tools) if (this.tools[k] !== this.tool && this.tools[k].background) this.tools[k].update(sdt, dt);
       this.particles.update(sdt);
       this._impactSounds();
