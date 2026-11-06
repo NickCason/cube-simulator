@@ -20,6 +20,68 @@ const NOISE = /* glsl */ `
   }
 `;
 
+// Octahedral normal packing (frees a channel in the back-face target).
+const OCT = /* glsl */ `
+  vec2 octEncode(vec3 n) {
+    n /= (abs(n.x) + abs(n.y) + abs(n.z));
+    vec2 s = vec2(n.x >= 0.0 ? 1.0 : -1.0, n.y >= 0.0 ? 1.0 : -1.0);
+    return n.z >= 0.0 ? n.xy : (1.0 - abs(n.yx)) * s;
+  }
+  vec3 octDecode(vec2 e) {
+    vec3 n = vec3(e, 1.0 - abs(e.x) - abs(e.y));
+    if (n.z < 0.0) {
+      vec2 s = vec2(n.x >= 0.0 ? 1.0 : -1.0, n.y >= 0.0 ? 1.0 : -1.0);
+      n.xy = (1.0 - abs(n.yx)) * s;
+    }
+    return normalize(n);
+  }
+`;
+
+// Layered flavours (rainbow jelly): absorption/scatter vary with rest height.
+// A ray crossing several layers integrates absorption over the heights it spans.
+export const LAYER_GLSL = /* glsl */ `
+  uniform int uLayers;
+  uniform float uLayerY0;
+  uniform float uLayerH;
+  uniform vec3 uLayerAbs[8];
+  uniform vec3 uLayerSc[8];
+  int layerIndex(float y) {
+    return clamp(int(floor((y - uLayerY0) / uLayerH)), 0, max(uLayers - 1, 0));
+  }
+  vec3 layerSigma(float ya, float yb, vec3 uniformSigma) {
+    if (uLayers == 0) return uniformSigma;
+    float lo = min(ya, yb), hi = max(ya, yb);
+    if (hi - lo < 1e-3) return uLayerAbs[layerIndex(lo)];
+    vec3 acc = vec3(0.0);
+    for (int k = 0; k < 8; k++) {
+      if (k >= uLayers) break;
+      float a = k == 0 ? -1e3 : uLayerY0 + float(k) * uLayerH;
+      float b = k == uLayers - 1 ? 1e3 : uLayerY0 + float(k + 1) * uLayerH;
+      acc += uLayerAbs[k] * max(0.0, min(hi, b) - max(lo, a));
+    }
+    return acc / (hi - lo);
+  }
+  vec3 layerScatter(float y, vec3 uniformColor) {
+    if (uLayers == 0) return uniformColor;
+    // a whisker of blending at the seams, like real set gelatin layers
+    float f = (y - uLayerY0) / uLayerH - 0.5;
+    int i0 = clamp(int(floor(f)), 0, uLayers - 1);
+    int i1 = clamp(i0 + 1, 0, uLayers - 1);
+    float t = smoothstep(0.47, 0.53, fract(f));
+    return mix(uLayerSc[i0], uLayerSc[i1], t);
+  }
+`;
+
+export function createLayerUniforms() {
+  return {
+    uLayers: { value: 0 },
+    uLayerY0: { value: -0.5 },
+    uLayerH: { value: 1 / 6 },
+    uLayerAbs: { value: Array.from({ length: 8 }, () => new THREE.Vector3()) },
+    uLayerSc: { value: Array.from({ length: 8 }, () => new THREE.Vector3()) },
+  };
+}
+
 const VERT = /* glsl */ `
   attribute vec3 aRest;
   attribute vec4 aData;
@@ -40,32 +102,32 @@ const VERT = /* glsl */ `
   }
 `;
 
-// Back faces: linear view depth + view-space normal of the exit surface.
+// Back faces: linear view depth, packed view-space exit normal, exit rest height.
 export function createBackMaterial() {
   return new THREE.ShaderMaterial({
     side: THREE.BackSide,
-    vertexShader: /* glsl */ `
-      varying vec3 vViewPos;
-      varying vec3 vViewNormal;
-      void main() {
-        vec4 mv = modelViewMatrix * vec4(position, 1.0);
-        vViewPos = mv.xyz;
-        vViewNormal = normalize(normalMatrix * normal);
-        gl_Position = projectionMatrix * mv;
-      }`,
+    vertexShader: VERT,
     fragmentShader: /* glsl */ `
+      varying vec3 vWorldPos;
+      varying vec3 vNormal;
       varying vec3 vViewPos;
-      varying vec3 vViewNormal;
+      varying vec3 vRest;
+      varying vec4 vData;
+      ${OCT}
       void main() {
-        gl_FragColor = vec4(-vViewPos.z, normalize(vViewNormal));
+        vec3 vn = normalize((viewMatrix * vec4(normalize(vNormal), 0.0)).xyz);
+        gl_FragColor = vec4(-vViewPos.z, octEncode(vn), vRest.y);
       }`,
   });
 }
 
-export function createJellyMaterial(env) {
+export function createJellyMaterial(env, layerUniforms) {
   return new THREE.ShaderMaterial({
     side: THREE.FrontSide,
     uniforms: {
+      ...layerUniforms,
+      uSugar: { value: 0 },
+      uMilk: { value: 0 },
       tScene: { value: null },
       tBack: { value: null },
       envMap: { value: env.texture },
@@ -110,12 +172,16 @@ export function createJellyMaterial(env) {
       uniform int uDebug;
       uniform vec3 uPLPos;
       uniform vec3 uPLColor;
+      uniform float uSugar;
+      uniform float uMilk;
       varying vec3 vWorldPos;
       varying vec3 vNormal;
       varying vec3 vViewPos;
       varying vec3 vRest;
       varying vec4 vData;
       ${NOISE}
+      ${OCT}
+      ${LAYER_GLSL}
 
       vec3 envLookup(vec3 dir, float rough) {
         float lod = envMaxLod * rough * (2.0 - rough);
@@ -173,6 +239,16 @@ export function createJellyMaterial(env) {
                         vnoise(q + vec3(0, 0, e)) + 0.5 * vnoise((q + vec3(0, 0, e)) * 2.1 + 7.0) - n0) / e;
           N = normalize(N + (g - N * dot(g, N)) * 0.018);
         }
+        // sugar coating (sour gummies): only on the moulded outside
+        float coat = uSugar * (1.0 - fresh);
+        float grain = 0.0;
+        if (coat > 0.0) {
+          vec3 q = vRest * 140.0;
+          grain = vnoise(q) * 0.6 + vnoise(q * 2.3) * 0.4;
+          float e = 0.12;
+          vec3 g = vec3(vnoise(q + vec3(e, 0, 0)), vnoise(q + vec3(0, e, 0)), vnoise(q + vec3(0, 0, e))) - vnoise(q);
+          N = normalize(N + (g / e - N * dot(g / e, N)) * 0.05 * coat);
+        }
         // surface micro-structure: faint knife texture on cut faces, ice crystals when frozen
         if (fresh > 0.5 || frost > 0.01) {
           vec3 q = vRest * 38.0;
@@ -189,9 +265,10 @@ export function createJellyMaterial(env) {
         vec4 back = texture(tBack, uv);
         float frontDepth = -vViewPos.z;
         float thick = back.r > 0.0 ? clamp(back.r - frontDepth, 0.0, 4.0) : 0.0;
-        vec3 Nb = back.r > 0.0 ? normalize((vec4(back.gba, 0.0) * viewMatrix).xyz) : -N;
+        vec3 Nb = back.r > 0.0 ? normalize((vec4(octDecode(back.gb), 0.0) * viewMatrix).xyz) : -N;
+        float exitY = back.r > 0.0 ? back.a : vRest.y;
 
-        float rough = clamp(uRoughness + fresh * 0.02 + frost * 0.5 - melt * 0.02, 0.015, 1.0);
+        float rough = clamp(uRoughness + fresh * 0.02 + frost * 0.5 - melt * 0.02 + coat * 0.45, 0.015, 1.0);
         float lod = clamp(rough * 9.0 + frost * 2.5 + thick * 1.6, 0.0, uSceneLodMax);
 
         vec3 trans;
@@ -200,15 +277,21 @@ export function createJellyMaterial(env) {
         trans.b = sampleThrough(vWorldPos, V, N, Nb, thick, uIor + uDispersion, lod, rough, 2).b;
 
         float pathLen = thick;
-        vec3 Tr = exp(-uAbsorb * pathLen * (1.0 + melt * 0.35));
-        float haze = 1.0 - exp(-(uScatter + frost * 2.5) * pathLen);
+        // layered: lean toward the layer you look into, so bands stay crisp
+        vec3 sigma = uLayers > 0 ? mix(layerSigma(vRest.y, vRest.y, uAbsorb), layerSigma(vRest.y, exitY, uAbsorb), 0.22) : uAbsorb;
+        vec3 Tr = exp(-sigma * pathLen * (1.0 + melt * 0.35));
+        float haze = 1.0 - exp(-(uScatter + uMilk * 7.0 + frost * 2.5) * pathLen);
+        haze = max(haze, uMilk * 0.72);
 
         vec3 L = normalize(uLightDir);
         float NdL = dot(N, L);
         float wrap = max((NdL + 0.7) / 1.7, 0.0);
         vec3 irr = envLookup(N, 1.0);
         float backlit = pow(clamp(dot(V, -L), 0.0, 1.0), 3.0);
-        vec3 sc = mix(uScatterColor, vec3(0.92, 0.96, 1.0), frost * 0.85);
+        vec3 baseSc = uLayers > 0 ? mix(layerScatter(vRest.y, uScatterColor), layerScatter(exitY, uScatterColor), 0.25) : uScatterColor;
+        // creamy jelly: pastel, milky body colour
+        baseSc = mix(baseSc, mix(baseSc, vec3(1.0), 0.45) * 1.05, uMilk);
+        vec3 sc = mix(baseSc, vec3(0.92, 0.96, 1.0), frost * 0.85);
         // light that scattered inside the body (thin regions glow more brightly)
         vec3 scatterLight = sc * (irr * 0.55 + uLightColor * (wrap * 0.22 + backlit * 0.5)) * (0.55 + 0.45 * exp(-pathLen * 1.5));
 
@@ -239,6 +322,13 @@ export function createJellyMaterial(env) {
           col += uPLColor * fall * (specP + sc * (max((dot(N, Lp) + 0.6) / 1.6, 0.0) * 0.5 + 0.35));
         }
 
+        // sugar crystals: frosty granular film with glints
+        if (coat > 0.0) {
+          float glint = pow(max(vnoise(vRest * 260.0), 0.0), 14.0) * 40.0 * nl;
+          vec3 sugarCol = mix(vec3(1.0), sc, 0.28) * (irr * 0.7 + uLightColor * (nl * 0.45 + 0.12)) * (0.72 + 0.5 * grain);
+          col = mix(col, sugarCol + glint, coat * (0.38 + 0.4 * grain));
+        }
+
         // frost layer: white crystalline film with sparkles
         if (frost > 0.0) {
           float crystal = fbm3(vRest * 55.0);
@@ -264,7 +354,7 @@ export function createJellyMaterial(env) {
 
 // Caustic splatting from the key light onto the floor (Wallace-style
 // area-ratio caustics). Rendered in floor space.
-export function createCausticMaterial() {
+export function createCausticMaterial(layerUniforms) {
   return new THREE.ShaderMaterial({
     side: THREE.FrontSide,
     transparent: true,
@@ -273,6 +363,7 @@ export function createCausticMaterial() {
     depthWrite: false,
     extensions: { derivatives: true },
     uniforms: {
+      ...layerUniforms,
       uLightDir: { value: new THREE.Vector3(-0.45, 0.8, 0.4).normalize() },
       uIor: { value: 1.36 },
       uAbsorb: { value: new THREE.Vector3(0.2, 2.4, 2.0) },
@@ -283,6 +374,8 @@ export function createCausticMaterial() {
       uniform vec3 uLightDir;
       uniform float uIor;
       uniform vec4 uFloorRect;
+      attribute vec3 aRest;
+      varying float vRestY;
       varying vec3 vOld;
       varying vec3 vNew;
       varying float vNdL;
@@ -301,6 +394,7 @@ export function createCausticMaterial() {
         vNew = newP;
         vNdL = dot(N, normalize(uLightDir));
         vPath = t;
+        vRestY = aRest.y;
         vec2 uv = (newP.xz - uFloorRect.xy) * uFloorRect.zw;
         gl_Position = vec4(uv * 2.0 - 1.0, 0.0, 1.0);
       }`,
@@ -308,6 +402,8 @@ export function createCausticMaterial() {
       uniform vec3 uAbsorb;
       uniform float uScatter;
       uniform float uIor;
+      varying float vRestY;
+      ${LAYER_GLSL}
       varying vec3 vOld;
       varying vec3 vNew;
       varying float vNdL;
@@ -319,7 +415,8 @@ export function createCausticMaterial() {
         float ratio = clamp(oldA / max(newA, 1e-9), 0.0, 6.0);
         float F0 = pow((uIor - 1.0) / (uIor + 1.0), 2.0);
         float Ft = 1.0 - (F0 + (1.0 - F0) * pow(1.0 - vNdL, 5.0));
-        vec3 T = exp(-uAbsorb * vPath) * exp(-uScatter * vPath * 0.7);
+        vec3 sig = layerSigma(vRestY, uLayerY0, uAbsorb);
+        vec3 T = exp(-sig * vPath) * exp(-uScatter * vPath * 0.7);
         gl_FragColor = vec4(T * ratio * Ft, 1.0);
       }`,
   });

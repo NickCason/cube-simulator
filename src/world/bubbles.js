@@ -72,10 +72,16 @@ export class Bubbles {
     }
   }
 
+  setShare(f) {
+    this.share = f;
+  }
+
   update() {
     const sb = this.app.sb;
     let c = 0;
-    for (const b of this.items) {
+    const limit = Math.round(this.items.length * (this.share ?? 1));
+    for (let k = 0; k < limit; k++) {
+      const b = this.items[k];
       if (b.a.tet < 0 || b.a.tet >= sb.nT || b.a.lost) continue;
       sb.embedPoint(b.a.tet, b.a.b, this._t);
       this._p.set(this._t[0], this._t[1], this._t[2]);

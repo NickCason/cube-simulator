@@ -5,6 +5,7 @@ import {
   createCausticMaterial,
   createMaskMaterial,
   createHeightMaterial,
+  createLayerUniforms,
   absorptionFromColor,
 } from './jellyMaterials.js';
 
@@ -18,9 +19,10 @@ export class JellyView {
     this.scene = new THREE.Scene();
     this.meshes = [];
     this.topoVersion = -1;
+    this.layerUniforms = createLayerUniforms();
     this.backMat = createBackMaterial();
-    this.frontMat = createJellyMaterial(env);
-    this.causticMat = createCausticMaterial();
+    this.frontMat = createJellyMaterial(env, this.layerUniforms);
+    this.causticMat = createCausticMaterial(this.layerUniforms);
     this.maskMat = createMaskMaterial();
     this.heightMat = createHeightMaterial();
     this.fxCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
@@ -50,26 +52,43 @@ export class JellyView {
     this.maskMat.uniforms.uLightDir.value.copy(d);
   }
 
-  setColor(hex, opts = {}) {
-    const c = new THREE.Color(hex);
-    const lin = c.clone(); // THREE.Color stores linear values
-    const density = opts.density ?? (this.density || 1.25);
-    const ref = 0.55 / density;
-    const abs = absorptionFromColor(lin, ref);
-    this.frontMat.uniforms.uAbsorb.value.copy(abs);
-    this.causticMat.uniforms.uAbsorb.value.copy(abs);
-    // colour of light that has crossed ~0.45 units of jelly (tints the shadow)
-    this.fxUniforms.tint.value.setRGB(Math.exp(-abs.x * 0.35), Math.exp(-abs.y * 0.35), Math.exp(-abs.z * 0.35));
-    const sc = lin.clone();
-    // scattered light colour: saturated body colour
-    const mx = Math.max(sc.r, sc.g, sc.b, 1e-3);
-    sc.multiplyScalar(1 / mx);
-    this.frontMat.uniforms.uScatterColor.value.copy(sc);
+  // flavor: { hex } or { layers: [hex bottom..top] }; tex: texture preset
+  setStyle(flavor, tex, size = 1) {
+    const ref = 0.55 / tex.density;
+    const colors = (flavor.layers || [flavor.hex]).map((h) => new THREE.Color(h));
+    const abs = colors.map((c) => absorptionFromColor(c, ref));
+    const scs = colors.map((c) => {
+      const s = c.clone();
+      return s.multiplyScalar(1 / Math.max(s.r, s.g, s.b, 1e-3));
+    });
+    const avgAbs = abs.reduce((a, b) => a.add(b), new THREE.Vector3()).multiplyScalar(1 / abs.length);
+    const avgSc = scs.reduce((a, b) => a.add(b), new THREE.Color(0, 0, 0)).multiplyScalar(1 / scs.length);
+    const L = this.layerUniforms;
+    if (flavor.layers) {
+      L.uLayers.value = flavor.layers.length;
+      L.uLayerY0.value = -size / 2;
+      L.uLayerH.value = size / flavor.layers.length;
+      abs.forEach((a, k) => L.uLayerAbs.value[k].copy(a));
+      scs.forEach((c, k) => L.uLayerSc.value[k].set(c.r, c.g, c.b));
+    } else L.uLayers.value = 0;
+    const F = this.frontMat.uniforms;
+    F.uAbsorb.value.copy(avgAbs);
+    this.causticMat.uniforms.uAbsorb.value.copy(avgAbs);
+    F.uScatterColor.value.copy(scs[0]);
+    if (flavor.layers) F.uScatterColor.value.copy(avgSc);
+    // colour of light that has crossed ~0.35 units of jelly (tints the shadow)
+    const tint = new THREE.Color(0, 0, 0);
+    for (const a of abs) tint.r += Math.exp(-a.x * 0.35), tint.g += Math.exp(-a.y * 0.35), tint.b += Math.exp(-a.z * 0.35);
+    tint.multiplyScalar(1 / abs.length);
+    if (tex.milk) tint.lerp(new THREE.Color(1, 1, 1), 0.35 * tex.milk).multiplyScalar(1 - 0.35 * tex.milk);
+    this.fxUniforms.tint.value.copy(tint);
     // healing light: a luminous, lighter version of the jelly colour
-    this.frontMat.uniforms.uGlowColor.value.copy(sc).lerp(new THREE.Color(1, 1, 1), 0.55).multiplyScalar(0.9);
-    const scatter = opts.scatter ?? (this.scatter ?? 0.55);
-    this.frontMat.uniforms.uScatter.value = scatter;
-    this.causticMat.uniforms.uScatter.value = scatter;
+    F.uGlowColor.value.copy(avgSc).lerp(new THREE.Color(1, 1, 1), 0.55).multiplyScalar(0.9);
+    F.uScatter.value = tex.scatter + (flavor.layers ? 1.6 : 0);
+    this.causticMat.uniforms.uScatter.value = tex.scatter + tex.milk * 3;
+    F.uRoughness.value = tex.rough;
+    F.uSugar.value = tex.sugar;
+    F.uMilk.value = tex.milk;
   }
 
   setSize(w, h) {

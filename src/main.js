@@ -13,6 +13,9 @@ try {
     color: params.get('color') ? '#' + params.get('color') : undefined,
     nojelly: params.has('nojelly'),
     light: params.get('light') || undefined,
+    flavor: params.get('flavor') || undefined,
+    texture: params.get('texture') || undefined,
+    edges: params.get('edges') || undefined,
   });
 } catch (err) {
   console.error(err);
@@ -25,7 +28,7 @@ try {
 if (params.has('density') || params.has('scatter')) {
   if (params.has('density')) app.jelly.density = +params.get('density');
   if (params.has('scatter')) app.jelly.scatter = +params.get('scatter');
-  app.setColor(app.color);
+  app.applyStyle();
 }
 if (params.has('dbg')) app.jelly.frontMat.uniforms.uDebug.value = +params.get('dbg');
 window.__app = app;

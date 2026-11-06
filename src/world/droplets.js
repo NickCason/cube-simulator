@@ -37,20 +37,26 @@ export class Droplets {
     this._q = new THREE.Quaternion();
     this._s = new THREE.Vector3();
     this._e = new THREE.Euler();
+    this.mat.color.set(0xffffff);
+    this.mesh.setColorAt(0, new THREE.Color(1, 1, 1));
     app.onColor = app.onColor || [];
     app.onColor.push((hex) => this.setColor(hex));
+    this._c = new THREE.Color();
   }
 
   setColor(hex) {
     const c = new THREE.Color(hex);
-    // droplets are opaque; use a slightly deeper, more saturated tone
-    this.mat.color.copy(c).multiplyScalar(0.75);
     this.mat.sheenColor.copy(c).lerp(new THREE.Color(1, 1, 1), 0.4);
   }
 
-  spawn(p, v, r) {
+  spawn(p, v, r, hex) {
     if (this.items.length >= this.max) this.items.shift();
+    // droplets are opaque; use a slightly deeper tone of the local jelly colour
+    const col = new THREE.Color(hex || this.app.flavorColorAt(p.x, p.y, p.z)).multiplyScalar(0.75);
+    const tex = this.app.style?.texture;
+    if (tex === 'creamy') col.lerp(new THREE.Color(1, 1, 1), 0.35);
     this.items.push({
+      col,
       p: p.clone(),
       v: v.clone(),
       r,
@@ -117,10 +123,12 @@ export class Droplets {
       const f = d.flat;
       this._s.set(d.r * (1 + f * 0.5), d.r * (1 - f * 0.55), d.r * (1 + f * 0.5));
       this._m.compose(d.p, this._q, this._s);
+      this.mesh.setColorAt(c, d.col);
       this.mesh.setMatrixAt(c++, this._m);
     }
     this.mesh.count = c;
     this.mesh.instanceMatrix.needsUpdate = true;
+    if (this.mesh.instanceColor) this.mesh.instanceColor.needsUpdate = true;
   }
 
   clear() {

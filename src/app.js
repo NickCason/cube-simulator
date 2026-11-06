@@ -15,6 +15,7 @@ import { MalletTool, TorchTool, FreezeTool, BallerTool, BombTool, SyringeTool, M
 import { makeMaterials } from './world/models.js';
 import { Droplets } from './world/droplets.js';
 import { Bubbles } from './world/bubbles.js';
+import { DEFAULT_STYLE, TEXTURES, EDGES, flavorById, flavorMainHex } from './styles.js';
 
 const BG = new THREE.Color(0.86, 0.85, 0.83);
 
@@ -77,7 +78,8 @@ export class App {
     this.scene.add(this.floor);
 
     this.post = new Post(renderer);
-    this.sb = new SoftBody(opts.sim || {});
+    this.style = this._loadStyle(opts);
+    this.sb = new SoftBody({ ...(opts.sim || {}), bevel: EDGES[this.style.edges].bevel });
     this.sb.loadCube(0, opts.dropHeight ?? 1.1, 0, 0.18);
 
     this.audio = new AudioEngine();
@@ -130,7 +132,7 @@ export class App {
     };
     this.tool = null;
     this.setTool('hand');
-    this.setColor(opts.color || '#d4102a');
+    this.applyStyle();
 
     this.resize();
     window.addEventListener('resize', () => this.resize());
@@ -160,11 +162,80 @@ export class App {
     this.ui?.setTool(id);
   }
 
+  // ------------------------------------------------------------ jelly style
+  _loadStyle(opts) {
+    let saved = {};
+    try {
+      saved = JSON.parse(localStorage.getItem('cube-sim-style') || '{}') || {};
+    } catch (e) {
+      saved = {};
+    }
+    const st = { ...DEFAULT_STYLE, ...saved };
+    if (opts.flavor) st.flavor = opts.flavor;
+    if (opts.color) st.flavor = opts.color;
+    if (opts.texture) st.texture = opts.texture;
+    if (opts.edges) st.edges = opts.edges;
+    if (!TEXTURES[st.texture]) st.texture = DEFAULT_STYLE.texture;
+    if (!EDGES[st.edges]) st.edges = DEFAULT_STYLE.edges;
+    return st;
+  }
+
+  applyStyle() {
+    const f = flavorById(this.style.flavor);
+    const tex = TEXTURES[this.style.texture];
+    this.jelly.setStyle(f, tex, this.sb.p.size);
+    this.sb.p.mu = tex.mu;
+    this.sb.p.damping = tex.damping;
+    this.sb.wakeAll();
+    this.bubbles?.setShare(tex.bubbles);
+    this.flavor = f;
+    this.color = flavorMainHex(f);
+    for (const fn of this.onColor || []) fn(this.color, f);
+    this.ui?.setStyle(this.style, f);
+    try {
+      localStorage.setItem('cube-sim-style', JSON.stringify(this.style));
+    } catch (e) {
+      /* private mode */
+    }
+  }
+
+  setFlavor(id) {
+    this.style.flavor = id;
+    this.applyStyle();
+  }
+
   setColor(hex) {
-    this.color = hex;
-    this.jelly.setColor(hex);
-    this.ui?.setColor(hex);
-    for (const f of this.onColor || []) f(hex);
+    this.setFlavor(hex);
+  }
+
+  setTexture(id) {
+    if (!TEXTURES[id]) return;
+    this.style.texture = id;
+    this.applyStyle();
+    this.sb.impulse(0, 0.6, 0, 0, -1, 0, 3, 1.2);
+  }
+
+  setEdges(id) {
+    if (!EDGES[id] || this.style.edges === id) return;
+    this.style.edges = id;
+    this.sb.p.bevel = EDGES[id].bevel;
+    this.applyStyle();
+    // reform the cube with the new rounding
+    this.healer.active = false;
+    this.heal();
+  }
+
+  // Jelly colour at a world point (layered flavours vary with rest height).
+  flavorColorAt(x, y, z) {
+    const f = this.flavor;
+    if (!f || !f.layers) return this.color;
+    const r = this.sb.locate(x, y, z);
+    if (!r) return this.color;
+    let ry = 0;
+    for (let k = 0; k < 4; k++) ry += this.sb.X[this.sb.T[r.tet * 4 + k] * 3 + 1] * r.bary[k];
+    const n = f.layers.length;
+    const i = Math.max(0, Math.min(n - 1, Math.floor((ry / this.sb.p.size + 0.5) * n)));
+    return f.layers[i];
   }
 
   setCursor(c) {

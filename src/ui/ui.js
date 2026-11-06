@@ -1,3 +1,5 @@
+import { FLAVORS, TEXTURES, EDGES, flavorSwatchCSS } from '../styles.js';
+
 const svg = (inner) =>
   `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${inner}</svg>`;
 
@@ -46,17 +48,6 @@ export const TOOL_DEFS = [
   { id: 'magnet', label: 'Magnet', hint: 'Hold to pull nails (and whatever they are stuck in)', key: '0' },
 ];
 
-export const COLORS = [
-  { name: 'Cherry', hex: '#d4102a' },
-  { name: 'Lime', hex: '#5fce1e' },
-  { name: 'Blue raspberry', hex: '#0f8cff' },
-  { name: 'Grape', hex: '#7a24d4' },
-  { name: 'Orange', hex: '#ff7414' },
-  { name: 'Lemon', hex: '#ffcc12' },
-  { name: 'Watermelon', hex: '#ff3f7f' },
-  { name: 'Cola', hex: '#7a2e0e' },
-];
-
 export class UI {
   constructor(app, root) {
     this.app = app;
@@ -68,8 +59,12 @@ export class UI {
         <div class="tools"></div>
         <div class="sep"></div>
         <div class="colors">
-          <button class="swatch-btn" aria-label="Jelly colour" title="Jelly colour"><span class="swatch"></span></button>
-          <div class="palette" hidden></div>
+          <button class="swatch-btn" aria-label="Jelly style" title="Flavor, texture & edges"><span class="swatch"></span></button>
+          <div class="palette" hidden>
+            <div class="sec"><span class="lbl">Flavor</span><div class="chips"></div></div>
+            <div class="sec"><span class="lbl">Texture</span><div class="seg tex"></div></div>
+            <div class="sec"><span class="lbl">Edges</span><div class="seg edges"></div></div>
+          </div>
         </div>
         <button class="heal" title="Heal (H)">${ICONS.heal}<span>Heal</span></button>
         <button class="mute" title="Sound (M)" aria-label="Toggle sound">${ICONS.sound}</button>
@@ -96,24 +91,51 @@ export class UI {
       this.toolsEl.appendChild(b);
       this.buttons[d.id] = b;
     }
-    for (const c of COLORS) {
+    const chips = this.paletteEl.querySelector('.chips');
+    for (const f of FLAVORS) {
       const b = document.createElement('button');
-      b.className = 'chip';
-      b.style.setProperty('--c', c.hex);
-      b.title = c.name;
-      b.setAttribute('aria-label', c.name);
+      b.className = 'chip' + (f.layers ? ' layered' : '');
+      b.dataset.flavor = f.id;
+      b.style.setProperty('--c', flavorSwatchCSS(f));
+      b.title = f.name;
+      b.setAttribute('aria-label', f.name);
       b.addEventListener('click', () => {
-        app.setColor(c.hex);
-        this.closePalette();
+        app.audio.ui();
+        app.setFlavor(f.id);
       });
-      this.paletteEl.appendChild(b);
+      chips.appendChild(b);
     }
     const custom = document.createElement('label');
     custom.className = 'chip custom';
     custom.title = 'Custom colour';
     custom.innerHTML = '<input type="color" value="#d4102a" aria-label="Custom colour">';
-    custom.querySelector('input').addEventListener('input', (e) => app.setColor(e.target.value));
-    this.paletteEl.appendChild(custom);
+    custom.querySelector('input').addEventListener('input', (e) => app.setFlavor(e.target.value));
+    chips.appendChild(custom);
+    const texSeg = this.paletteEl.querySelector('.seg.tex');
+    for (const [id, t] of Object.entries(TEXTURES)) {
+      const b = document.createElement('button');
+      b.className = 'opt';
+      b.dataset.tex = id;
+      b.textContent = t.name;
+      b.addEventListener('click', () => {
+        app.audio.ui();
+        app.setTexture(id);
+      });
+      texSeg.appendChild(b);
+    }
+    const edgeSeg = this.paletteEl.querySelector('.seg.edges');
+    for (const [id, e] of Object.entries(EDGES)) {
+      const b = document.createElement('button');
+      b.className = 'opt';
+      b.dataset.edges = id;
+      const rx = Math.round(e.bevel * 36);
+      b.innerHTML = `<svg viewBox="0 0 20 20" aria-hidden="true"><rect x="2.5" y="2.5" width="15" height="15" rx="${rx}" fill="none" stroke="currentColor" stroke-width="1.7"/></svg><span>${e.name}</span>`;
+      b.addEventListener('click', () => {
+        app.audio.ui();
+        app.setEdges(id);
+      });
+      edgeSeg.appendChild(b);
+    }
 
     this.swatchBtn.addEventListener('click', (e) => {
       e.stopPropagation();
@@ -171,11 +193,15 @@ export class UI {
     if (d) this.hint(d.hint);
   }
 
-  setColor(hex) {
-    this.root.style.setProperty('--jelly', hex);
-    this.swatchBtn.querySelector('.swatch').style.background = hex;
-    this.dot.style.background = hex;
-    for (const b of this.paletteEl.querySelectorAll('.chip')) b.classList.toggle('active', b.style.getPropertyValue('--c') === hex);
+  setStyle(style, flavor) {
+    const css = flavorSwatchCSS(flavor);
+    this.root.style.setProperty('--jelly', flavor.layers ? flavor.layers[flavor.layers.length - 1] : flavor.hex);
+    this.swatchBtn.querySelector('.swatch').style.background = css;
+    this.dot.style.background = css;
+    for (const b of this.paletteEl.querySelectorAll('.chip[data-flavor]')) b.classList.toggle('active', b.dataset.flavor === style.flavor);
+    this.paletteEl.querySelector('.chip.custom').classList.toggle('active', String(style.flavor).startsWith('#'));
+    for (const b of this.paletteEl.querySelectorAll('.opt[data-tex]')) b.classList.toggle('active', b.dataset.tex === style.texture);
+    for (const b of this.paletteEl.querySelectorAll('.opt[data-edges]')) b.classList.toggle('active', b.dataset.edges === style.edges);
   }
 
   setDamaged(d) {
