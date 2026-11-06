@@ -52,6 +52,8 @@ export function relocateAnchors(sb, anchors) {
  * field.inRegion(x,y,z) -> bool (optional; outside the region the cut is re-glued)
  * opts.snap: snapping threshold in units of cell size
  * opts.separate: separation speed applied along the normal
+ * opts.light: only the rebuild the next cut needs (the caller rebuilds fully
+ *   before the body is stepped or drawn)
  * Returns { changed, pieces: [pieceIds touched], sideOfVertex }
  */
 export function cutBody(sb, field, opts = {}) {
@@ -401,7 +403,9 @@ export function cutBody(sb, field, opts = {}) {
     sb.tVS[t] = newVS[t];
     sb.tMu[t] = newMu[t];
   }
-  sb.rebuild();
+  // (opts.light: another cut follows at once - see rebuildLight)
+  if (opts.light) sb.rebuildLight();
+  else sb.rebuild();
   relocateAnchors(sb, anchors);
 
   // --- side of every vertex, separation kick
