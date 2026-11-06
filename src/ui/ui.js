@@ -1,4 +1,4 @@
-import { FLAVORS, TEXTURES, EDGES, flavorSwatchCSS } from '../styles.js';
+import { FLAVORS, TEXTURES, EDGES, LAYER_PRESETS, MIN_LAYERS, MAX_LAYERS, flavorSwatchCSS } from '../styles.js';
 import { SETTINGS, settingWord } from '../settings.js';
 
 const svg = (inner) =>
@@ -50,6 +50,8 @@ export const TOOL_DEFS = [
   { id: 'magnet', label: 'Magnet', hint: 'Hold to pull nails (and whatever they are stuck in)', key: '0' },
 ];
 
+const blendWord = (b) => (b < 0.12 ? 'Crisp' : b < 0.38 ? 'Soft' : b < 0.7 ? 'Blended' : 'Gradient');
+
 export class UI {
   constructor(app, root) {
     this.app = app;
@@ -70,6 +72,17 @@ export class UI {
       </nav>
       <div class="palette style-panel" hidden>
         <div class="sec"><span class="lbl">Flavor</span><div class="chips"></div></div>
+        <div class="sec layers-sec" hidden>
+          <div class="lbl-row">
+            <span class="lbl">Layers <em>tap a band to recolour</em></span>
+            <div class="stepper">
+              <button class="minus" aria-label="Fewer layers">&minus;</button><span class="n"></span><button class="plus" aria-label="More layers">+</button>
+            </div>
+          </div>
+          <div class="stack" role="group" aria-label="Layer colours, top to bottom"></div>
+          <div class="presets"></div>
+          <label class="row blend"><span class="name">Blend</span><input type="range" min="0" max="1" step="0.01" aria-label="Blend between layers"><span class="word"></span></label>
+        </div>
         <div class="sec"><span class="lbl">Texture</span><div class="seg tex"></div></div>
         <div class="sec"><span class="lbl">Edges</span><div class="seg edges"></div></div>
       </div>
@@ -102,7 +115,7 @@ export class UI {
     const chips = this.paletteEl.querySelector('.chips');
     for (const f of FLAVORS) {
       const b = document.createElement('button');
-      b.className = 'chip' + (f.layers ? ' layered' : '');
+      b.className = 'chip' + (f.layered ? ' layered' : '');
       b.dataset.flavor = f.id;
       b.style.setProperty('--c', flavorSwatchCSS(f));
       b.title = f.name;
@@ -113,6 +126,40 @@ export class UI {
       });
       chips.appendChild(b);
     }
+    // ---- layer editor
+    this.layersSec = this.paletteEl.querySelector('.layers-sec');
+    this.stackEl = this.layersSec.querySelector('.stack');
+    this.nEl = this.layersSec.querySelector('.n');
+    this.minusEl = this.layersSec.querySelector('.minus');
+    this.plusEl = this.layersSec.querySelector('.plus');
+    this.blendEl = this.layersSec.querySelector('.blend input');
+    this.blendWord = this.layersSec.querySelector('.blend .word');
+    this.minusEl.addEventListener('click', () => {
+      app.audio.ui();
+      app.setLayerCount(app.style.layers.colors.length - 1);
+    });
+    this.plusEl.addEventListener('click', () => {
+      app.audio.ui();
+      app.setLayerCount(app.style.layers.colors.length + 1);
+    });
+    this.blendEl.addEventListener('input', () => {
+      this.blendWord.textContent = blendWord(+this.blendEl.value);
+      this.blendEl.style.setProperty('--p', `${this.blendEl.value * 100}%`);
+      app.setLayerBlur(+this.blendEl.value);
+    });
+    const presets = this.layersSec.querySelector('.presets');
+    for (const p of LAYER_PRESETS) {
+      const b = document.createElement('button');
+      b.className = 'preset';
+      b.dataset.preset = p.id;
+      b.innerHTML = `<i style="background:${flavorSwatchCSS({ layers: p.colors })}"></i>${p.name}`;
+      b.addEventListener('click', () => {
+        app.audio.ui();
+        app.setLayerPreset(p.id);
+      });
+      presets.appendChild(b);
+    }
+
     const custom = document.createElement('label');
     custom.className = 'chip custom';
     custom.title = 'Custom colour';
@@ -276,11 +323,51 @@ export class UI {
     if (d) this.hint(d.hint);
   }
 
+  // Layer editor: bands top -> bottom; the stack background shows the
+  // actual blend, the bands are transparent tap targets with colour inputs.
+  renderLayers(L) {
+    const cols = L.colors;
+    const n = cols.length;
+    this.nEl.textContent = n;
+    this.minusEl.disabled = n <= MIN_LAYERS;
+    this.plusEl.disabled = n >= MAX_LAYERS;
+    if (this.stackEl.children.length !== n) {
+      this.stackEl.innerHTML = '';
+      for (let j = 0; j < n; j++) {
+        const k = n - 1 - j; // top band first
+        const bar = document.createElement('label');
+        bar.className = 'bar';
+        bar.title = k === n - 1 ? 'Top layer' : k === 0 ? 'Bottom layer' : `Layer ${k + 1}`;
+        bar.innerHTML = '<input type="color" aria-label="Layer colour">';
+        bar.querySelector('input').addEventListener('input', (e) => this.app.setLayerColor(k, e.target.value));
+        this.stackEl.appendChild(bar);
+      }
+    }
+    for (let j = 0; j < n; j++) {
+      const input = this.stackEl.children[j].querySelector('input');
+      const c = cols[n - 1 - j];
+      if (input.value.toLowerCase() !== c.toLowerCase()) input.value = c;
+    }
+    this.stackEl.style.background = flavorSwatchCSS({ layers: cols, blur: L.blur });
+    if (document.activeElement !== this.blendEl) this.blendEl.value = L.blur;
+    this.blendEl.style.setProperty('--p', `${L.blur * 100}%`);
+    this.blendWord.textContent = blendWord(L.blur);
+    const key = cols.join(',').toLowerCase();
+    for (const b of this.layersSec.querySelectorAll('.preset')) {
+      const p = LAYER_PRESETS.find((q) => q.id === b.dataset.preset);
+      b.classList.toggle('active', p.colors.join(',').toLowerCase() === key);
+    }
+  }
+
   setStyle(style, flavor) {
     const css = flavorSwatchCSS(flavor);
     this.root.style.setProperty('--jelly', flavor.layers ? flavor.layers[flavor.layers.length - 1] : flavor.hex);
     this.swatchBtn.querySelector('.swatch').style.background = css;
     this.dot.style.background = css;
+    const layerChip = this.paletteEl.querySelector('.chip.layered');
+    if (layerChip) layerChip.style.setProperty('--c', flavorSwatchCSS({ layers: style.layers.colors, blur: style.layers.blur }));
+    this.layersSec.hidden = !flavor.layers;
+    if (flavor.layers) this.renderLayers(style.layers);
     for (const b of this.paletteEl.querySelectorAll('.chip[data-flavor]')) b.classList.toggle('active', b.dataset.flavor === style.flavor);
     this.paletteEl.querySelector('.chip.custom').classList.toggle('active', String(style.flavor).startsWith('#'));
     for (const b of this.paletteEl.querySelectorAll('.opt[data-tex]')) b.classList.toggle('active', b.dataset.tex === style.texture);

@@ -69,6 +69,7 @@ export class JellyView {
       L.uLayers.value = flavor.layers.length;
       L.uLayerY0.value = -size / 2;
       L.uLayerH.value = size / flavor.layers.length;
+      L.uLayerBlur.value = flavor.blur || 0;
       abs.forEach((a, k) => L.uLayerAbs.value[k].copy(a));
       scs.forEach((c, k) => L.uLayerSc.value[k].set(c.r, c.g, c.b));
     } else L.uLayers.value = 0;

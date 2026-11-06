@@ -16,6 +16,8 @@ try {
     flavor: params.get('flavor') || undefined,
     texture: params.get('texture') || undefined,
     edges: params.get('edges') || undefined,
+    layers: params.get('layers') || undefined,
+    blend: params.has('blend') ? +params.get('blend') : undefined,
   });
 } catch (err) {
   console.error(err);

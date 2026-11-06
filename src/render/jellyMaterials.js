@@ -53,38 +53,44 @@ const OCT = /* glsl */ `
   }
 `;
 
-// Layered flavours (rainbow jelly): absorption/scatter vary with rest height.
-// A ray crossing several layers integrates absorption over the heights it spans.
+// Layered flavours: absorption/scatter vary with rest height. Up to 10
+// layers; uLayerBlur widens the blend between neighbours from a crisp seam
+// (0) to a smooth gradient between layer centres (1). A ray crossing several
+// layers averages the profile over the heights it spans.
+export const MAX_LAYERS = 10;
 export const LAYER_GLSL = /* glsl */ `
   uniform int uLayers;
   uniform float uLayerY0;
   uniform float uLayerH;
-  uniform vec3 uLayerAbs[8];
-  uniform vec3 uLayerSc[8];
-  int layerIndex(float y) {
-    return clamp(int(floor((y - uLayerY0) / uLayerH)), 0, max(uLayers - 1, 0));
+  uniform float uLayerBlur;
+  uniform vec3 uLayerAbs[10];
+  uniform vec3 uLayerSc[10];
+  // neighbouring layers around height y and the blend between them
+  void layerPair(float y, out int a, out int b, out float s) {
+    float f = (y - uLayerY0) / uLayerH - 0.5;
+    float i0 = floor(f);
+    float w = max(uLayerBlur * 0.5, 0.012);
+    s = smoothstep(0.5 - w, 0.5 + w, f - i0);
+    a = clamp(int(i0), 0, uLayers - 1);
+    b = clamp(int(i0) + 1, 0, uLayers - 1);
+  }
+  vec3 sigmaAt(float y) {
+    int a, b; float s;
+    layerPair(y, a, b, s);
+    return mix(uLayerAbs[a], uLayerAbs[b], s);
   }
   vec3 layerSigma(float ya, float yb, vec3 uniformSigma) {
     if (uLayers == 0) return uniformSigma;
-    float lo = min(ya, yb), hi = max(ya, yb);
-    if (hi - lo < 1e-3) return uLayerAbs[layerIndex(lo)];
+    if (abs(yb - ya) < 1e-3) return sigmaAt(ya);
     vec3 acc = vec3(0.0);
-    for (int k = 0; k < 8; k++) {
-      if (k >= uLayers) break;
-      float a = k == 0 ? -1e3 : uLayerY0 + float(k) * uLayerH;
-      float b = k == uLayers - 1 ? 1e3 : uLayerY0 + float(k + 1) * uLayerH;
-      acc += uLayerAbs[k] * max(0.0, min(hi, b) - max(lo, a));
-    }
-    return acc / (hi - lo);
+    for (int k = 0; k < 10; k++) acc += sigmaAt(mix(ya, yb, (float(k) + 0.5) / 10.0));
+    return acc * 0.1;
   }
   vec3 layerScatter(float y, vec3 uniformColor) {
     if (uLayers == 0) return uniformColor;
-    // a whisker of blending at the seams, like real set gelatin layers
-    float f = (y - uLayerY0) / uLayerH - 0.5;
-    int i0 = clamp(int(floor(f)), 0, uLayers - 1);
-    int i1 = clamp(i0 + 1, 0, uLayers - 1);
-    float t = smoothstep(0.47, 0.53, fract(f));
-    return mix(uLayerSc[i0], uLayerSc[i1], t);
+    int a, b; float s;
+    layerPair(y, a, b, s);
+    return mix(uLayerSc[a], uLayerSc[b], s);
   }
 `;
 
@@ -93,8 +99,9 @@ export function createLayerUniforms() {
     uLayers: { value: 0 },
     uLayerY0: { value: -0.5 },
     uLayerH: { value: 1 / 6 },
-    uLayerAbs: { value: Array.from({ length: 8 }, () => new THREE.Vector3()) },
-    uLayerSc: { value: Array.from({ length: 8 }, () => new THREE.Vector3()) },
+    uLayerBlur: { value: 0 },
+    uLayerAbs: { value: Array.from({ length: MAX_LAYERS }, () => new THREE.Vector3()) },
+    uLayerSc: { value: Array.from({ length: MAX_LAYERS }, () => new THREE.Vector3()) },
   };
 }
 

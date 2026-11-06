@@ -24,8 +24,11 @@ place and fuses it into a pristine cube.
 
 **Make it yours** (the colour button in the dock):
 
-- **Flavor** — cherry, lime, blue raspberry, grape, orange, lemon, watermelon, cola,
-  **rainbow** (six layered slices — the layers show on every cut face) or any custom colour.
+- **Flavor** — cherry, lime, blue raspberry, grape, orange, lemon, watermelon, cola, any
+  custom colour, or **Layers**: 2–10 stacked layers you colour yourself (tap a band in the
+  little cross-section to pick its colour), starting from Rainbow, Sunset, Ocean, Neon,
+  Candy or Duo, with a **Blend** slider from crisp seams to a smooth gradient. The layers
+  show on every cut face.
 - **Texture** — Jello (clear, wobbly), Gummy (cloudy, chewy, firmer), Sour (sugar-crystal
   coating), Crystal (glass-clear), Creamy (milky panna-cotta).
 - **Edges** — Sharp, Soft, Round or Pillow; the cube re-forms with the new rounding.
@@ -43,7 +46,10 @@ means (Wobbly, Syrupy, Moon, Super ball…):
 Picking a texture resets the material sliders to that texture; **Reset** puts everything back.
 
 Choices are remembered. You can also link straight to a combo, e.g.
-`?flavor=rainbow&texture=gummy&edges=pillow`.
+`?flavor=rainbow&texture=gummy&edges=pillow`, or to your own layers (top → bottom):
+`?layers=ffbe0b,ff6d00,f72585,7209b7,3a0ca3&blend=0.55`.
+
+![Layered jelly looks](docs/layers-looks.jpg)
 
 ![Rainbow jelly cube](docs/rainbow.jpg)
 

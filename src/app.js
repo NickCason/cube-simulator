@@ -15,7 +15,7 @@ import { MalletTool, TorchTool, FreezeTool, BallerTool, BombTool, SyringeTool, M
 import { makeMaterials } from './world/models.js';
 import { Droplets } from './world/droplets.js';
 import { Bubbles } from './world/bubbles.js';
-import { DEFAULT_STYLE, TEXTURES, EDGES, flavorById, flavorMainHex } from './styles.js';
+import { DEFAULT_STYLE, TEXTURES, EDGES, LAYER_PRESETS, MIN_LAYERS, MAX_LAYERS, resolveFlavor, flavorMainHex, nextLayerColor } from './styles.js';
 import { SETTINGS, resolveSettings } from './settings.js';
 
 const BG = new THREE.Color(0.86, 0.85, 0.83);
@@ -184,10 +184,33 @@ export class App {
       saved = {};
     }
     const st = { ...DEFAULT_STYLE, ...saved };
+    st.layers = { ...DEFAULT_STYLE.layers, ...(saved.layers || {}) };
+    st.layers.colors = [...st.layers.colors];
     if (opts.flavor) st.flavor = opts.flavor;
     if (opts.color) st.flavor = opts.color;
     if (opts.texture) st.texture = opts.texture;
     if (opts.edges) st.edges = opts.edges;
+    if (st.flavor === 'rainbow') {
+      st.flavor = 'layers';
+      if (opts.flavor === 'rainbow') st.layers.colors = [...LAYER_PRESETS[0].colors];
+    }
+    const preset = LAYER_PRESETS.find((p) => p.id === opts.flavor);
+    if (preset) {
+      st.flavor = 'layers';
+      st.layers.colors = [...preset.colors];
+    }
+    if (opts.layers) {
+      const cols = opts.layers.split(',').map((c) => '#' + c.replace('#', '').trim()).filter((c) => /^#[0-9a-f]{6}$/i.test(c));
+      if (cols.length >= MIN_LAYERS) {
+        st.flavor = 'layers';
+        // URL lists layers top -> bottom (reading order); stored bottom -> top
+        st.layers.colors = cols.slice(0, MAX_LAYERS).reverse();
+      }
+    }
+    if (opts.blend !== undefined && Number.isFinite(opts.blend)) st.layers.blur = Math.min(1, Math.max(0, opts.blend));
+    const L = st.layers;
+    if (!Array.isArray(L.colors) || L.colors.length < MIN_LAYERS) L.colors = [...DEFAULT_STYLE.layers.colors];
+    L.colors = L.colors.slice(0, MAX_LAYERS);
     if (!TEXTURES[st.texture]) st.texture = DEFAULT_STYLE.texture;
     if (!EDGES[st.edges]) st.edges = DEFAULT_STYLE.edges;
     return st;
@@ -207,7 +230,7 @@ export class App {
   }
 
   applyStyle() {
-    const f = flavorById(this.style.flavor);
+    const f = resolveFlavor(this.style);
     const tex = TEXTURES[this.style.texture];
     const st = this.settings;
     this.jelly.setStyle(f, { ...tex, ...st }, this.sb.p.size);
@@ -241,6 +264,38 @@ export class App {
 
   setColor(hex) {
     this.setFlavor(hex);
+  }
+
+  // ---- layered jelly editing (colours listed bottom -> top)
+  setLayerColor(i, hex) {
+    const L = this.style.layers;
+    if (i < 0 || i >= L.colors.length) return;
+    L.colors[i] = hex;
+    this.style.flavor = 'layers';
+    this.applyStyle();
+  }
+
+  setLayerCount(n) {
+    const L = this.style.layers;
+    n = Math.max(MIN_LAYERS, Math.min(MAX_LAYERS, n));
+    while (L.colors.length < n) L.colors.push(nextLayerColor(L.colors[L.colors.length - 1]));
+    if (L.colors.length > n) L.colors.length = n;
+    this.style.flavor = 'layers';
+    this.applyStyle();
+  }
+
+  setLayerPreset(id) {
+    const p = LAYER_PRESETS.find((q) => q.id === id);
+    if (!p) return;
+    this.style.layers.colors = [...p.colors];
+    this.style.flavor = 'layers';
+    this.applyStyle();
+  }
+
+  setLayerBlur(b) {
+    this.style.layers.blur = Math.min(1, Math.max(0, b));
+    this.style.flavor = 'layers';
+    this.applyStyle();
   }
 
   setTexture(id) {
