@@ -1,4 +1,4 @@
-import { FLAVORS, TEXTURES, EDGES, LAYER_PRESETS, MIN_LAYERS, MAX_LAYERS, flavorSwatchCSS } from '../styles.js';
+import { FLAVORS, TEXTURES, EDGES, GLITTERS, LAYER_PRESETS, MIN_LAYERS, MAX_LAYERS, flavorSwatchCSS } from '../styles.js';
 import { SETTINGS, settingWord } from '../settings.js';
 
 const svg = (inner) =>
@@ -84,6 +84,7 @@ export class UI {
           <label class="row blend"><span class="name">Blend</span><input type="range" min="0" max="1" step="0.01" aria-label="Blend between layers"><span class="word"></span></label>
         </div>
         <div class="sec"><span class="lbl">Texture</span><div class="seg tex"></div></div>
+        <div class="sec"><span class="lbl">Glitter</span><div class="seg glit"></div></div>
         <div class="sec"><span class="lbl">Edges</span><div class="seg edges"></div></div>
       </div>
       <div class="palette tune" hidden>
@@ -177,6 +178,18 @@ export class UI {
         app.setTexture(id);
       });
       texSeg.appendChild(b);
+    }
+    const glitSeg = this.paletteEl.querySelector('.seg.glit');
+    for (const gl of GLITTERS) {
+      const b = document.createElement('button');
+      b.className = 'opt';
+      b.dataset.glit = gl.id;
+      b.innerHTML = gl.id === 'off' ? gl.name : `<i class="gdot" style="background:${gl.dot}"></i>${gl.name}`;
+      b.addEventListener('click', () => {
+        app.audio.ui();
+        app.setGlitter(gl.id);
+      });
+      glitSeg.appendChild(b);
     }
     const edgeSeg = this.paletteEl.querySelector('.seg.edges');
     for (const [id, e] of Object.entries(EDGES)) {
@@ -372,6 +385,7 @@ export class UI {
     this.paletteEl.querySelector('.chip.custom').classList.toggle('active', String(style.flavor).startsWith('#'));
     for (const b of this.paletteEl.querySelectorAll('.opt[data-tex]')) b.classList.toggle('active', b.dataset.tex === style.texture);
     for (const b of this.paletteEl.querySelectorAll('.opt[data-edges]')) b.classList.toggle('active', b.dataset.edges === style.edges);
+    for (const b of this.paletteEl.querySelectorAll('.opt[data-glit]')) b.classList.toggle('active', b.dataset.glit === style.glitter);
   }
 
   setDamaged(d) {

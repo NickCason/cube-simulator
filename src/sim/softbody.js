@@ -1297,6 +1297,58 @@ export class SoftBody {
     return { tet: bestT, bary: best, inside: bestScore >= -1e-6, score: bestScore };
   }
 
+  // Rest-space grid of tets, for fast rest-coordinate lookups of many points
+  // (glitter). Rebuilt lazily after topology changes.
+  _restGrid() {
+    if (this._rg && this._rg.v === this.topoVersion) return this._rg;
+    const cs = this.hCell * 1.5, inv = 1 / cs;
+    const T = this.T, X = this.X;
+    const map = new Map();
+    for (let t = 0; t < this.nT; t++) {
+      if (this.vol0[t] <= 0) continue;
+      let x0 = Infinity, y0 = Infinity, z0 = Infinity, x1 = -Infinity, y1 = -Infinity, z1 = -Infinity;
+      for (let k = 0; k < 4; k++) {
+        const i = T[t * 4 + k] * 3;
+        x0 = Math.min(x0, X[i]); x1 = Math.max(x1, X[i]);
+        y0 = Math.min(y0, X[i + 1]); y1 = Math.max(y1, X[i + 1]);
+        z0 = Math.min(z0, X[i + 2]); z1 = Math.max(z1, X[i + 2]);
+      }
+      for (let a = Math.floor(x0 * inv); a <= Math.floor(x1 * inv); a++)
+        for (let b = Math.floor(y0 * inv); b <= Math.floor(y1 * inv); b++)
+          for (let c = Math.floor(z0 * inv); c <= Math.floor(z1 * inv); c++) {
+            const key = (a + 512) * 1048576 + (b + 512) * 1024 + (c + 512);
+            let l = map.get(key);
+            if (!l) map.set(key, (l = []));
+            l.push(t);
+          }
+    }
+    this._rg = { v: this.topoVersion, map, inv };
+    return this._rg;
+  }
+
+  // Fast rest-space point location: {tet, bary} or null.
+  locateRestFast(X, Y, Z, out) {
+    const g = this._restGrid();
+    const key = (Math.floor(X * g.inv) + 512) * 1048576 + (Math.floor(Y * g.inv) + 512) * 1024 + (Math.floor(Z * g.inv) + 512);
+    const list = g.map.get(key);
+    if (!list) return null;
+    const R = this.X, T = this.T, B = this.B;
+    for (const t of list) {
+      const a = T[t * 4] * 3, bo = t * 9;
+      const rx = X - R[a], ry = Y - R[a + 1], rz = Z - R[a + 2];
+      const l1 = B[bo] * rx + B[bo + 1] * ry + B[bo + 2] * rz;
+      const l2 = B[bo + 3] * rx + B[bo + 4] * ry + B[bo + 5] * rz;
+      const l3 = B[bo + 6] * rx + B[bo + 7] * ry + B[bo + 8] * rz;
+      const l0 = 1 - l1 - l2 - l3;
+      if (l0 >= -1e-7 && l1 >= -1e-7 && l2 >= -1e-7 && l3 >= -1e-7) {
+        out.tet = t;
+        out.b0 = l0; out.b1 = l1; out.b2 = l2; out.b3 = l3;
+        return out;
+      }
+    }
+    return null;
+  }
+
   // Locate a point given in rest coordinates (used to re-seed embedded
   // features after the mesh is rebuilt).
   locateRest(X, Y, Z) {

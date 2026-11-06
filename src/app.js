@@ -15,6 +15,7 @@ import { MalletTool, TorchTool, FreezeTool, BallerTool, BombTool, SyringeTool, M
 import { makeMaterials } from './world/models.js';
 import { Droplets } from './world/droplets.js';
 import { Bubbles } from './world/bubbles.js';
+import { Glitter, GLITTER_MODES } from './world/glitter.js';
 import { DEFAULT_STYLE, TEXTURES, EDGES, LAYER_PRESETS, MIN_LAYERS, MAX_LAYERS, resolveFlavor, flavorMainHex, nextLayerColor } from './styles.js';
 import { SETTINGS, resolveSettings } from './settings.js';
 
@@ -112,6 +113,7 @@ export class App {
     this.flash = 0;
     this.anchorProviders = [() => this.nails.anchors()];
     this.bubbles = new Bubbles(this);
+    this.glitter = new Glitter(this);
     this.onNailHit = () => {
       this.audio.nailHit(1);
       this.markDamaged();
@@ -190,6 +192,8 @@ export class App {
     if (opts.color) st.flavor = opts.color;
     if (opts.texture) st.texture = opts.texture;
     if (opts.edges) st.edges = opts.edges;
+    if (opts.glitter) st.glitter = opts.glitter;
+    if (!(st.glitter in GLITTER_MODES)) st.glitter = 'off';
     if (st.flavor === 'rainbow') {
       st.flavor = 'layers';
       if (opts.flavor === 'rainbow') st.layers.colors = [...LAYER_PRESETS[0].colors];
@@ -244,6 +248,7 @@ export class App {
     sb.setDensity(st.weight);
     sb.wakeAll();
     this.bubbles?.configure(st.bubbles, st.bubbleSize);
+    this.glitter?.configure({ mode: this.style.glitter, count: st.glitterAmount, size: st.glitterSize, sparkle: st.glitterSparkle });
     this.flavor = f;
     this.color = flavorMainHex(f);
     for (const fn of this.onColor || []) fn(this.color, f);
@@ -296,6 +301,13 @@ export class App {
     this.style.layers.blur = Math.min(1, Math.max(0, b));
     this.style.flavor = 'layers';
     this.applyStyle();
+  }
+
+  setGlitter(id) {
+    if (!(id in GLITTER_MODES)) return;
+    this.style.glitter = id;
+    this.applyStyle();
+    if (id !== 'off') this.sb.impulse(0, 0.6, 0, 0, -1, 0, 3, 0.8); // a jiggle to show it off
   }
 
   setTexture(id) {
@@ -675,6 +687,7 @@ export class App {
     copy();
     if (!this.opts.nojelly) this.jelly.renderPieces(this.camera, this.sb, this.rtScene, this.rtTrans, copy);
 
+    this.glitter.update(this.clock.t);
     if (this.fxScene) {
       const auto = r.autoClear;
       r.autoClear = false;

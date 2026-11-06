@@ -45,10 +45,19 @@ export const EDGES = {
   pillow: { name: 'Pillow', bevel: 0.21 },
 };
 
+export const GLITTERS = [
+  { id: 'off', name: 'Off', dot: 'transparent' },
+  { id: 'silver', name: 'Silver', dot: 'linear-gradient(135deg, #ffffff, #9aa3ad 55%, #eef2f6)' },
+  { id: 'gold', name: 'Gold', dot: 'linear-gradient(135deg, #fff1b8, #d39a2c 55%, #ffe08a)' },
+  { id: 'holo', name: 'Holo', dot: 'conic-gradient(#ff5f9e, #ffd25f, #6dffb0, #5fc8ff, #b28cff, #ff5f9e)' },
+  { id: 'rose', name: 'Rose', dot: 'linear-gradient(135deg, #ffe0dc, #d9827a 55%, #ffd3cc)' },
+];
+
 export const DEFAULT_STYLE = {
   flavor: 'cherry',
   texture: 'jello',
   edges: 'round',
+  glitter: 'off',
   layers: { colors: [...LAYER_PRESETS[0].colors], blur: 0 },
 };
 

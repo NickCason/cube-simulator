@@ -17,6 +17,7 @@ try {
     texture: params.get('texture') || undefined,
     edges: params.get('edges') || undefined,
     layers: params.get('layers') || undefined,
+    glitter: params.get('glitter') || undefined,
     blend: params.has('blend') ? +params.get('blend') : undefined,
   });
 } catch (err) {
