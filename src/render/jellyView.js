@@ -110,7 +110,9 @@ export class JellyView {
     C.uAbsorb.value.copy(avgAbs);
     F.uScatterColor.value.copy(flavor.layers ? avgSc : scs[0]);
     this.reflectMat.uniforms.uScatterColor.value.copy(flavor.layers ? avgSc : scs[0]);
-    this.fxUniforms.glowCol.value.copy(flavor.layers ? avgSc : scs[0]);
+    // (the light it pools on the floor is its bottom layer's: the average of
+    // a rainbow is white)
+    this.fxUniforms.glowCol.value.copy(scs[0]);
     this.reflectMat.uniforms.uMilk.value = Math.max(m.milk, hazeMinOf(m.opacity));
     // opacity -> cloudiness; near the top end even thin parts go solid
     const o = Math.min(1, Math.max(0, m.opacity));

@@ -467,15 +467,26 @@ export function createJellyMaterial(env, layerUniforms) {
         vec3 emLit = vec3(0.0);
         if (uEmit > 0.0) {
           float deep = 1.0 - exp(-pathLen * 1.8);
-          // (light from deeper in has crossed more of it: a richer colour)
-          vec3 rich = pow(max(sc, vec3(1e-3)), vec3(1.0 + 0.8 * deep));
+          // its colour just inside the surface: in layered jelly the light
+          // from the layers further in is mostly absorbed on the way out
+          // (mixing in theirs turns a rainbow's middle to white)
+          vec3 scE = sc;
+          if (uLayers > 0) {
+            scE = layerScatter(mix(Rp.y, exitY, 0.12), uScatterColor);
+            scE = mix(scE, mix(scE, vec3(1.0), 0.45) * 1.05, uMilk);
+            scE = mix(scE, vec3(0.92, 0.96, 1.0), frost * 0.85);
+          }
+          // (light from deeper in has crossed more of it: a richer colour -
+          // more saturated, but the same hue, so a rainbow keeps its yellow)
+          float scL = dot(scE, vec3(0.2126, 0.7152, 0.0722));
+          vec3 rich = max(mix(vec3(scL), scE, 1.0 + 0.25 * deep), 0.0);
           // slow currents of brighter light drifting about inside it, and a
           // slow breath
           vec3 q = vRest + refract(-V, N, 1.0 / uIor) * thick * 0.5;
           float cur = vnoise(q * 2.3 + vec3(0.0, uTime * 0.16, uTime * 0.07)) * 0.65
             + vnoise(q * 5.1 - vec3(uTime * 0.11, 0.0, uTime * 0.13)) * 0.35;
           float lvl = (0.78 + 0.5 * cur) * (0.95 + 0.05 * sin(uTime * 1.3));
-          vec3 em = rich * (0.08 + 0.8 * deep) * lvl + mix(sc, vec3(1.0), 0.35) * 0.16 * smoothstep(0.7, 1.8, pathLen);
+          vec3 em = rich * (0.08 + 0.8 * deep) * lvl + scE * 0.16 * smoothstep(0.7, 1.8, pathLen);
           float ring = 0.0;
           for (int i = 0; i < ${MAX_PULSES}; i++) {
             float age = uTime - uPulse[i].w;
@@ -483,7 +494,7 @@ export function createJellyMaterial(env, layerUniforms) {
             float x = (distance(Pw, uPulse[i].xyz) - age * 2.3) / (0.035 + 0.09 * age);
             ring += uPulseAmp[i] * exp(-x * x) * exp(-age * 2.4);
           }
-          em += mix(sc, vec3(1.0), 0.22) * min(ring, 3.0) * 2.6;
+          em += mix(scE, vec3(1.0), 0.22) * min(ring, 3.0) * 2.6;
           emLit = em * uEmit;
           col += emLit * (1.0 - 0.85 * F);
         }
