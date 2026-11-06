@@ -108,12 +108,15 @@ export function createLayerUniforms() {
 const VERT = /* glsl */ `
   attribute vec3 aRest;
   attribute vec4 aData;
+  attribute float aWeld;
   varying vec3 vWorldPos;
   varying vec3 vNormal;
   varying vec3 vViewPos;
   varying vec3 vRest;
   varying vec4 vData;
+  varying float vWeld;
   void main() {
+    vWeld = aWeld;
     vec4 wp = modelMatrix * vec4(position, 1.0);
     vWorldPos = wp.xyz;
     vNormal = normalize(mat3(modelMatrix) * normal);
@@ -173,6 +176,7 @@ export function createJellyMaterial(env, layerUniforms) {
       uDebug: { value: 0 },
       uPLPos: { value: new THREE.Vector3(0, 2, 0) },
       uPLColor: { value: new THREE.Color(0, 0, 0) },
+      uWeldT: { value: 99 },
     },
     vertexShader: VERT,
     fragmentShader: /* glsl */ `
@@ -201,11 +205,13 @@ export function createJellyMaterial(env, layerUniforms) {
       uniform float uMilk;
       uniform float uGlow;
       uniform float uHazeMin;
+      uniform float uWeldT;
       varying vec3 vWorldPos;
       varying vec3 vNormal;
       varying vec3 vViewPos;
       varying vec3 vRest;
       varying vec4 vData;
+      varying float vWeld;
       ${NOISE}
       ${OCT}
       ${LAYER_GLSL}
@@ -366,6 +372,26 @@ export function createJellyMaterial(env, layerUniforms) {
 
         // healing glow
         col += uGlowColor * glow * (0.25 + fresh * 0.75);
+
+        // the weld's aftermath: the healed seams stay white-hot for a moment,
+        // their light spreading out across each face as a widening, dimming
+        // band (vWeld = distance along the surface from the old seam) and
+        // through the body, cooling from white to the jelly's warm glow
+        if (uWeldT < 5.0) {
+          float t = uWeldT;
+          vec3 hot = mix(vec3(1.0, 0.98, 0.94), uGlowColor * vec3(1.15, 1.0, 0.85), smoothstep(0.05, 1.1, t));
+          // the crack line itself carries straight on from the pieces' glow;
+          // a band of light spills off it and travels out, an inner glow swells
+          float front = 0.02 + 0.9 * t * (1.0 - 0.25 * t);
+          float width = 0.025 + 0.09 * t;
+          float band = exp(-pow((vWeld - front) / width, 2.0)) * exp(-1.8 * t) * smoothstep(0.0, 0.14, t);
+          // (the seam lingers as a faint scar for a few seconds)
+          float seam = exp(-pow(vWeld / (0.022 + 0.03 * min(t, 1.2)), 2.0)) * (exp(-1.4 * t) + 0.09 * exp(-0.5 * t));
+          // a soft shimmer riding on the spreading band
+          float grain = 0.82 + 0.36 * vnoise(vRest * 18.0 + vec3(0.0, t * 2.0, 0.0));
+          float inner = (1.0 - exp(-pathLen * 1.2)) * exp(-2.4 * t) * smoothstep(0.0, 0.22, t);
+          col += hot * (seam * 1.35 + band * 0.9 * grain + inner * 0.28);
+        }
         if (uDebug == 1) col = refl * F + spec;
         else if (uDebug == 2) col = trans * Tr;
         else if (uDebug == 3) col = vec3(thick * 0.5);

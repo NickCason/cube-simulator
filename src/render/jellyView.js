@@ -185,12 +185,26 @@ export class JellyView {
     this.aNrm = new THREE.BufferAttribute(this.nrm, 3).setUsage(THREE.DynamicDrawUsage);
     this.aData = new THREE.BufferAttribute(this.data, 4).setUsage(THREE.DynamicDrawUsage);
     this.aRest = new THREE.BufferAttribute(rest, 3);
+    // distance along the surface from a just-healed seam (see Healer._fuse)
+    const weld = new Float32Array(n).fill(99);
+    if (sb.weld && sb.weld.topo === sb.topoVersion) {
+      const d = sb.weld.dist;
+      for (let r = 0; r < nB; r++) weld[r] = d[rSim[r]];
+      // the edge midpoints measure for themselves (a seam line often runs
+      // between two vertices; averaging would blur it out)
+      for (let m = 0, k = nB; m < this.mids.length; m += 3, k++) {
+        const wa = weld[this.mids[m]], wb = weld[this.mids[m + 1]];
+        weld[k] = Math.min(wa, wb) < 0.12 ? sb.weld.at(rest[k * 3], rest[k * 3 + 1], rest[k * 3 + 2]) : (wa + wb) * 0.5;
+      }
+    }
+    this.aWeld = new THREE.BufferAttribute(weld, 1);
     sb.pieceRanges.forEach((rg, k) => {
       const g = new THREE.BufferGeometry();
       g.setAttribute('position', this.aPos);
       g.setAttribute('normal', this.aNrm);
       g.setAttribute('aData', this.aData);
       g.setAttribute('aRest', this.aRest);
+      g.setAttribute('aWeld', this.aWeld);
       g.setIndex(new THREE.BufferAttribute(index.slice(rg.start * 4, (rg.start + rg.count) * 4), 1));
       const mesh = new THREE.Mesh(g, this.frontMat);
       mesh.frustumCulled = false;

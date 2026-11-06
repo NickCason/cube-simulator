@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { buildCubeMesh } from './sim/mesh.js';
 
 const clamp01 = (x) => Math.min(1, Math.max(0, x));
 const smooth = (a, b, x) => {
@@ -46,6 +47,138 @@ function fitRotation(a0, a1, a2, q) {
     q.premultiply(dq).normalize();
   }
   return q;
+}
+
+// Distance (rest space) to the nearest healed seam - the cut faces the body
+// was put back together along, inside it as well as on its skin - so the
+// weld's light can travel out from them through the material and show where
+// it crosses each face. Seams come as triangles (9 floats each); they are
+// sampled densely so a seam line stays a clean line, with a coarse copy for
+// points further away.
+export function* weldFieldJob(tris, half = 0.5, template = null) {
+  // one grid over the body (5 cm cells): the seam samples in each cell (for
+  // exact distances close in), and each cell's nearest sample (for further)
+  const G = 0.05, lo = -half - 0.1, N = Math.ceil((2 * half + 0.2) / G) + 1, NN = N * N, N3 = NN * N;
+  const cell = (v) => Math.min(N - 1, Math.max(0, Math.floor((v - lo) / G)));
+  // samples: densely (1.2 cm) on seam triangles near the skin, where seam
+  // lines show; just the corners for ones deep inside
+  const px = [], py = [], pz = [];
+  const fine = new Set();
+  const FINE = 0.012, skin = 0.07;
+  const add = (x, y, z) => {
+    const kf = ((Math.floor(x / FINE) + 512) * 1024 + (Math.floor(y / FINE) + 512)) * 1024 + (Math.floor(z / FINE) + 512);
+    if (fine.has(kf)) return;
+    fine.add(kf);
+    px.push(x); py.push(y); pz.push(z);
+  };
+  const depth = (x, y, z) => half - Math.max(Math.abs(x), Math.abs(y), Math.abs(z));
+  for (let t = 0; t < tris.length; t += 9) {
+    if (t && t % 900 === 0) yield;
+    const ax = tris[t], ay = tris[t + 1], az = tris[t + 2];
+    const bx = tris[t + 3], by = tris[t + 4], bz = tris[t + 5];
+    const cx = tris[t + 6], cy = tris[t + 7], cz = tris[t + 8];
+    const deep = Math.min(depth(ax, ay, az), depth(bx, by, bz), depth(cx, cy, cz)) > skin;
+    const L = Math.max(Math.hypot(bx - ax, by - ay, bz - az), Math.hypot(cx - bx, cy - by, cz - bz), Math.hypot(ax - cx, ay - cy, az - cz));
+    const n = deep ? Math.min(3, Math.max(1, Math.ceil(L / 0.04))) : Math.min(24, Math.max(1, Math.ceil(L / FINE)));
+    for (let i = 0; i <= n; i++)
+      for (let j = 0; j <= n - i; j++) {
+        const u = i / n, v = j / n, w = 1 - u - v;
+        add(ax * w + bx * u + cx * v, ay * w + by * u + cy * v, az * w + bz * u + cz * v);
+      }
+  }
+  const M = px.length;
+  // bucket the samples by cell (CSR)
+  const start = new Int32Array(N3 + 1), idx = new Int32Array(M), cof = new Int32Array(M);
+  yield;
+  for (let k = 0; k < M; k++) {
+    cof[k] = (cell(px[k]) * N + cell(py[k])) * N + cell(pz[k]);
+    start[cof[k] + 1]++;
+  }
+  for (let c = 0; c < N3; c++) start[c + 1] += start[c];
+  const fill = start.slice(0, N3);
+  for (let k = 0; k < M; k++) idx[fill[cof[k]]++] = k;
+  // nearest sample per cell: seed from its own samples, then sweep
+  const near = new Int32Array(N3).fill(-1), d2 = new Float32Array(N3).fill(Infinity);
+  yield;
+  for (let i = 0, c = 0; i < N; i++) {
+    if (i % 6 === 5) yield;
+    for (let j = 0; j < N; j++)
+      for (let k = 0; k < N; k++, c++) {
+        const ox = lo + (i + 0.5) * G, oy = lo + (j + 0.5) * G, oz = lo + (k + 0.5) * G;
+        for (let e = start[c]; e < start[c + 1]; e++) {
+          const s = idx[e];
+          const dd = (px[s] - ox) ** 2 + (py[s] - oy) ** 2 + (pz[s] - oz) ** 2;
+          if (dd < d2[c]) {
+            d2[c] = dd;
+            near[c] = s;
+          }
+        }
+      }
+  }
+  const offs = [];
+  for (let a = -1; a <= 1; a++) for (let b = -1; b <= 1; b++) for (let e = -1; e <= 1; e++) if (a || b || e) offs.push(a, b, e);
+  for (let pass = 0; pass < 2; pass++) {
+    for (let q = 0; q < N3; q++) {
+      if (q % 4096 === 4095) yield;
+      const c = pass ? N3 - 1 - q : q;
+      const i = (c / NN) | 0, j = ((c / N) | 0) % N, k = c % N;
+      const ox = lo + (i + 0.5) * G, oy = lo + (j + 0.5) * G, oz = lo + (k + 0.5) * G;
+      for (let o = 0; o < offs.length; o += 3) {
+        const ii = i + offs[o], jj = j + offs[o + 1], kk = k + offs[o + 2];
+        if (ii < 0 || jj < 0 || kk < 0 || ii >= N || jj >= N || kk >= N) continue;
+        const s = near[(ii * N + jj) * N + kk];
+        if (s < 0) continue;
+        const dd = (px[s] - ox) ** 2 + (py[s] - oy) ** 2 + (pz[s] - oz) ** 2;
+        if (dd < d2[c]) {
+          d2[c] = dd;
+          near[c] = s;
+        }
+      }
+    }
+  }
+  const at = (x, y, z) => {
+    if (!M) return 99;
+    const i = cell(x), j = cell(y), k = cell(z);
+    let best = Infinity;
+    for (let a = -1; a <= 1; a++)
+      for (let b = -1; b <= 1; b++)
+        for (let e = -1; e <= 1; e++) {
+          const ii = i + a, jj = j + b, kk = k + e;
+          if (ii < 0 || jj < 0 || kk < 0 || ii >= N || jj >= N || kk >= N) continue;
+          const c = (ii * N + jj) * N + kk;
+          // every sample in the neighbouring cells, and their nearest ones
+          for (let q = start[c]; q < start[c + 1]; q++) {
+            const s = idx[q];
+            const dd = (px[s] - x) ** 2 + (py[s] - y) ** 2 + (pz[s] - z) ** 2;
+            if (dd < best) best = dd;
+          }
+          const s = near[c];
+          if (s >= 0) {
+            const dd = (px[s] - x) ** 2 + (py[s] - y) ** 2 + (pz[s] - z) ** 2;
+            if (dd < best) best = dd;
+          }
+        }
+    return Math.sqrt(best);
+  };
+  // the cube it will become is known already: measure its vertices now too
+  let dist = null;
+  if (template) {
+    const n = template.length / 3;
+    dist = new Float32Array(n);
+    for (let i = 0; i < n; i++) {
+      if (i % 300 === 299) yield;
+      dist[i] = at(template[i * 3], template[i * 3 + 1], template[i * 3 + 2]);
+    }
+  }
+  return { at, dist };
+}
+
+// Run a job to the end (now).
+function finish(job) {
+  let r;
+  do r = job.next();
+  while (!r.done);
+  return r.value;
 }
 
 // The heal sequence: eject foreign objects, cool/thaw, choreograph every
@@ -115,6 +248,7 @@ export class Healer {
     this.cz = cz;
     this.qF = new THREE.Quaternion().setFromAxisAngle(UP, this.yaw);
     this._plan();
+    this._startWeld();
     sb.attract = { targets: this.targets, n: sb.nV, rate: 0 };
     sb.collisionsEnabled = false;
     // an immediate soft shimmer so the heal is felt the moment it starts
@@ -213,6 +347,15 @@ export class Healer {
   update(dt) {
     const app = this.app;
     const sb = app.sb;
+    const U = app.jelly.frontMat.uniforms;
+    if (this.weldT !== undefined) {
+      this.weldT += dt;
+      U.uWeldT.value = this.weldT;
+      if (this.weldT > 5 || !sb.weld || sb.weld.topo !== sb.topoVersion) {
+        this.weldT = undefined;
+        U.uWeldT.value = 99;
+      }
+    }
     if (this.settling) {
       // lower the reformed cube gently onto the table
       this.settleT += dt;
@@ -239,7 +382,19 @@ export class Healer {
     // pieces: re-plan from wherever things are now and keep the timeline
     if (sb.topoVersion !== this.planTopo) {
       this._plan();
+      this._startWeld();
       sb.attract = { targets: this.targets, n: sb.nV, rate: sb.attract ? sb.attract.rate : 0 };
+    }
+    // the weld's light field is built a little at a time while the pieces fly
+    if (this.weldJob) {
+      const t0 = performance.now();
+      let r;
+      do r = this.weldJob.next();
+      while (!r.done && performance.now() - t0 < 2.5);
+      if (r.done) {
+        this.weldField = r.value;
+        this.weldJob = null;
+      }
     }
     this._updateTargets(t);
     sb.attract.n = sb.nV;
@@ -269,6 +424,25 @@ export class Healer {
     if ((t > end && this._maxError() < 0.025) || t > end + 0.45) this._fuse();
   }
 
+  // The cut faces (rest space, triangles) the pieces will be welded along,
+  // and a job building the distance field the weld's light travels by.
+  _startWeld() {
+    const sb = this.app.sb;
+    const seams = [];
+    const k = this.scaleK, rI = sb.rIndex, rS = sb.rSim, X = sb.X;
+    for (let t = 0; t < rI.length; t += 3) {
+      const a = rI[t], b = rI[t + 1], c = rI[t + 2];
+      if (sb.rTag[a] !== 0 || sb.rTag[b] !== 0 || sb.rTag[c] !== 0) continue;
+      for (const r of [a, b, c]) {
+        const i = rS[r] * 3;
+        seams.push(X[i] * k, X[i + 1] * k, X[i + 2] * k);
+      }
+    }
+    this.weldField = null;
+    const p = sb.p;
+    this.weldJob = seams.length ? weldFieldJob(seams, (p.size / 2) * 1.1, buildCubeMesh(p.res, p.size, p.bevel).pos) : null;
+  }
+
   _maxError() {
     const sb = this.app.sb;
     const tg = this.targets;
@@ -285,36 +459,32 @@ export class Healer {
   _fuse() {
     const app = this.app;
     const sb = app.sb;
-    // remember where the seams were (rest space) so they can glow after fusing
-    const seams = [];
-    for (let r = 0; r < sb.rCount; r++) {
-      if (sb.rTag[r] === 0) {
-        const i = sb.rSim[r];
-        seams.push(sb.X[i * 3], sb.X[i * 3 + 1], sb.X[i * 3 + 2]);
-      }
-    }
+    // the seams' light field (usually built during the flight already)
+    if (!this.weldField && !this.weldJob && this.plan?.length) this._startWeld();
+    const field = this.weldField || (this.weldJob ? finish(this.weldJob) : null);
+    this.weldJob = null;
+    this.weldField = null;
     sb.attract = null;
     sb.loadCube(this.cx, LIFT_FUSE, this.cz, this.yaw);
     sb.collisionsEnabled = true;
     sb.dampBoost = 1;
     sb.gravityScale = 0;
-    if (seams.length) {
-      const cell = 0.06 * this.scaleK;
-      const grid = new Set();
-      for (let k = 0; k < seams.length; k += 3) {
-        grid.add(`${Math.floor((seams[k] * this.scaleK) / cell)},${Math.floor((seams[k + 1] * this.scaleK) / cell)},${Math.floor((seams[k + 2] * this.scaleK) / cell)}`);
+    // the weld's light spreads from where the seams met the outside (the
+    // jelly shader animates it from these distances; see uWeldT)
+    if (field) {
+      let dist = field.dist;
+      if (!dist || dist.length !== sb.nV) {
+        dist = new Float32Array(sb.nV);
+        for (let i = 0; i < sb.nV; i++) dist[i] = field.at(sb.X[i * 3], sb.X[i * 3 + 1], sb.X[i * 3 + 2]);
       }
-      for (let i = 0; i < sb.nV; i++) {
-        const gx = Math.floor(sb.X[i * 3] / cell), gy = Math.floor(sb.X[i * 3 + 1] / cell), gz = Math.floor(sb.X[i * 3 + 2] / cell);
-        let near = false;
-        for (let a = -1; a <= 1 && !near; a++)
-          for (let b = -1; b <= 1 && !near; b++)
-            for (let c = -1; c <= 1 && !near; c++) if (grid.has(`${gx + a},${gy + b},${gz + c}`)) near = true;
-        sb.glow[i] = near ? 1.0 : 0.12;
-      }
+      sb.weld = { dist, at: field.at, topo: sb.topoVersion };
+      sb.glow.fill(0.1, 0, sb.nV);
     } else {
+      sb.weld = null;
       sb.glow.fill(0.25, 0, sb.nV);
     }
+    this.weldT = field ? 0 : undefined;
+    app.jelly.frontMat.uniforms.uWeldT.value = field ? 0 : 99;
     this.fused = true;
     this.active = false;
     this.settling = true;

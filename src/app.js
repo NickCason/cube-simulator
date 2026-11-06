@@ -6,7 +6,7 @@ import { Post } from './render/post.js';
 import { JellyView } from './render/jellyView.js';
 import { NailSystem } from './world/nails.js';
 import { Particles } from './world/particles.js';
-import { Healer } from './heal.js';
+import { Healer, weldFieldJob } from './heal.js';
 import { AudioEngine } from './audio.js';
 import { Overlay } from './ui/overlay.js';
 import { UI } from './ui/ui.js';
@@ -216,6 +216,9 @@ export class App {
       removeSmallPieces(sb, 0.002);
       // a few steps with the bits touching (contact code)
       for (let k = 0; k < 12; k++) sb.step(1 / 60);
+      // and the heal's weld light field
+      const job = weldFieldJob([0, 0.2, 0, 0.3, 0.2, 0, 0, 0.2, 0.3, 0.45, -0.1, 0, 0.45, 0.2, 0, 0.45, -0.1, 0.3], 0.5, new Float64Array([0, 0.5, 0, 0.5, 0, 0.2, -0.5, 0.1, 0]));
+      for (let r = job.next(); !r.done; r = job.next());
     } catch (e) {
       /* warming only */
     }
