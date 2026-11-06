@@ -791,10 +791,21 @@ export class App {
       this.isTouch = e.pointerType === 'touch';
       this.intro.done = true; // a touch ends the intro hold right away
       this.splash?.leave(true);
-      el.setPointerCapture(e.pointerId);
+      try {
+        el.setPointerCapture(e.pointerId);
+      } catch (err) {
+        // (a pointer the browser no longer knows: carry on without capture)
+      }
       pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
       if (pointers.size === 2) {
-        // second finger: switch to pinch/orbit, cancel tool gesture
+        // a second finger on the jelly while the hand holds it: a second
+        // hand (squish it, pull it apart); anywhere else: pinch/orbit,
+        // cancelling the tool's gesture
+        if (mode === 'tool' && this.tool?.multiTouch) {
+          const ray = this.rayFromClient(e.clientX, e.clientY);
+          const hit = this.pickJelly(ray);
+          if (hit && this.tool.down(e, ray, hit)) return;
+        }
         if (mode === 'tool') this.tool?.up?.(e, this.rayFromClient(e.clientX, e.clientY));
         mode = 'pinch';
         const [a, b] = [...pointers.values()];

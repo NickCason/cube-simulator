@@ -42,7 +42,7 @@ export const ICONS = {
 };
 
 export const TOOL_DEFS = [
-  { id: 'hand', label: 'Hand', hint: 'Drag to grab & throw · tap to poke', key: '1' },
+  { id: 'hand', label: 'Hand', hint: 'Drag to grab & throw · tap to poke · two fingers: squish or pull it apart', key: '1' },
   { id: 'knife', label: 'Knife', hint: 'Swipe across the jelly to slice it', key: '2' },
   { id: 'nailgun', label: 'Nail gun', hint: 'Click to fire · hold for auto', key: '3' },
   { id: 'mallet', label: 'Mallet', hint: 'Click to smack · hit on its beat to build resonance · frozen jelly shatters', key: '4' },

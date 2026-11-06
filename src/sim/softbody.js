@@ -64,7 +64,7 @@ export class SoftBody {
     this._carried = null; // per piece: carried over unchanged by the last rebuild (see _buildPieces)
     this._allocV(4096);
     this._allocT(16384);
-    this.grab = null;
+    this.grabs = []; // hands holding the jelly (two fingers: two) - see startGrab
     this.embeds = [];
     this.pushers = []; // moving flat faces pressing into the jelly (mallet head)
     this.attract = null;
@@ -276,7 +276,7 @@ export class SoftBody {
     this.tVS.fill(1, 0, this.nT);
     this.tMu.fill(1, 0, this.nT);
     this.embeds.length = 0;
-    this.grab = null;
+    this.grabs.length = 0;
     this._bpNV = 0;
     this.rebuild();
   }
@@ -1056,10 +1056,14 @@ export class SoftBody {
     this._impPartner.fill(-1, 0, NP0);
     this._updateMaterial(dt);
     this._foldCheck(dt);
-    if (this.grab) {
-      this.wake(this.grab.piece);
-      if (this.pieces[this.grab.piece]) this.pieces[this.grab.piece].touchT = this.time;
-    }
+    if (this.grabs.length) {
+      const G = this._markGrabbed();
+      for (let k = 0; k < this.pieces.length; k++) {
+        if (!G[k]) continue;
+        this.wake(k);
+        this.pieces[k].touchT = this.time;
+      }
+    } else if (this._grabbedP) this._grabbedP.fill(0);
     if (this.attract || this.gravityScale !== 1 || this.embeds.length) this.wakeAll();
     const NP = this.pieces.length;
     const aw = this._awake && this._awake.length >= NP ? this._awake : (this._awake = new Uint8Array(Math.max(NP, 64)));
@@ -1075,12 +1079,15 @@ export class SoftBody {
     }
     const multi = (this.pieces.length > 1 || P.selfCollide) && P.collide && this.collisionsEnabled;
     this._grabPress = 0;
+    const NPp = this.pieces.length;
+    if (!this._pressP || this._pressP.length < NPp) this._pressP = new Float64Array(Math.max(NPp, 64));
+    this._pressP.fill(0, 0, NPp);
     if (multi) {
       // A frame's worth (or more) of motion: short frames (slow motion)
       // keep using the candidates until it is used up - unless something
       // moved the pieces some other way meanwhile.
       const age = this._hashAge + dt;
-      if (this._hashDirty || age > this._hashSpan * 1.0001 || this.grab || this.pushers.length || this.attract || this._hashTopo !== this.topoVersion) {
+      if (this._hashDirty || age > this._hashSpan * 1.0001 || this.grabs.length || this.pushers.length || this.attract || this._hashTopo !== this.topoVersion) {
         this._hashSpan = Math.max(dt, 1 / 60);
         this._hashAge = dt;
         this._hashTopo = this.topoVersion;
@@ -1095,7 +1102,7 @@ export class SoftBody {
       // crushed flat each substep - a thin slice turned inside out and blew
       // up like a balloon - and a corner could be dragged straight through
       // the body, leaving it passed through itself)
-      if (this.grab) this._solveGrab(h);
+      for (let n = 0; n < this.grabs.length; n++) this._solveGrab(this.grabs[n], h);
       this._solveTets(h);
       if (this.embeds.length) this._solveEmbeds(h);
       if (this.attract) this._solveAttract(h);
@@ -1284,13 +1291,12 @@ export class SoftBody {
     }
   }
 
-  _solveGrab(h) {
-    const g = this.grab;
+  _solveGrab(g, h) {
     const { x, px, w } = this;
     const ih2 = 1 / (h * h);
     // pressing hard into another piece: slow the pull down so contact can
     // shove that piece along instead of the grabbed core ploughing into it
-    const press = this._grabPress || 0;
+    const press = (this._pressP && this._pressP[g.piece]) || 0;
     const ease = Math.max(0.08, 1 - Math.max(0, press - 0.006) / 0.02);
     // (firmer jelly pulls the held patch back harder before the next pull:
     // a longer reach keeps it with the hand)
@@ -1742,11 +1748,15 @@ export class SoftBody {
       const im = pM[k] > 0 ? 1 / pM[k] : 0;
       pV[k * 3] *= im; pV[k * 3 + 1] *= im; pV[k * 3 + 2] *= im;
     }
-    // a grabbed piece goes where the hand pulls it (up to the per-substep cap)
-    let gp = -1, lx = 0, ly = 0, lz = 0;
-    const g = this.grab;
-    if (g) {
-      gp = g.piece;
+    // a held piece goes where the hand pulls it (up to the per-substep
+    // cap); two hands on one piece: the stronger pull for the piece, the
+    // other's on its own held vertices
+    const lead = this._leadP && this._leadP.length >= NP * 4 ? this._leadP : (this._leadP = new Float64Array(NP64 * 4));
+    const vLead = this.grabs.length > 1 ? (this._leadV && this._leadV.length >= nV * 3 ? this._leadV : (this._leadV = new Float32Array(this.vCap * 3))) : null;
+    if (vLead) vLead.fill(0, 0, nV * 3);
+    lead.fill(0, 0, NP * 4);
+    for (const g of this.grabs) {
+      let lx = 0, ly = 0, lz = 0;
       for (let j = 0; j < g.n; j++) {
         const o = g.idx[j] * 3;
         lx += g.tx + g.off[j * 3] - x[o];
@@ -1756,14 +1766,33 @@ export class SoftBody {
       const l = Math.hypot(lx, ly, lz) / g.n, lm = 0.012 * this.p.size * this.p.substeps;
       const s = l > lm ? lm / l / g.n : 1 / g.n;
       lx *= s; ly *= s; lz *= s;
+      const q = g.piece * 4, m = Math.hypot(lx, ly, lz);
+      if (g.piece < 0 || g.piece >= NP) continue;
+      if (m >= lead[q + 3]) {
+        // (the weaker one, if any, goes onto its own vertices)
+        if (vLead && lead[q + 3] > 0) {
+          for (const g2 of this.grabs) if (g2 !== g && g2.piece === g.piece) for (let j = 0; j < g2.n; j++) { const o = g2.idx[j] * 3; vLead[o] = lead[q] ; vLead[o + 1] = lead[q + 1]; vLead[o + 2] = lead[q + 2]; }
+        }
+        lead[q] = lx; lead[q + 1] = ly; lead[q + 2] = lz; lead[q + 3] = m;
+      } else if (vLead) {
+        for (let j = 0; j < g.n; j++) { const o = g.idx[j] * 3; vLead[o] = lx; vLead[o + 1] = ly; vLead[o + 2] = lz; }
+      }
     }
+    const anyGrab = this.grabs.length > 0;
     for (let i = 0; i < nV; i++) {
       const o = i * 3, r = i * 6;
       const ax = x[o], ay = x[o + 1], az = x[o + 2];
       const kp = Math.max(0, this.vPiece[i]) * 3;
       let ex = v[o] * fdt, ey = v[o + 1] * fdt, ez = v[o + 2] * fdt;
-      if (this.vPiece[i] === gp) {
-        ex += lx; ey += ly; ez += lz;
+      if (anyGrab && this.vPiece[i] >= 0) {
+        const q = this.vPiece[i] * 4;
+        if (lead[q + 3] > 0) {
+          if (vLead && (vLead[o] || vLead[o + 1] || vLead[o + 2])) {
+            ex += vLead[o]; ey += vLead[o + 1]; ez += vLead[o + 2];
+          } else {
+            ex += lead[q]; ey += lead[q + 1]; ez += lead[q + 2];
+          }
+        }
       }
       D[o] = ex; D[o + 1] = ey; D[o + 2] = ez;
       const dx = ex - pV[kp] * fdt, dy = ey - pV[kp + 1] * fdt, dz = ez - pV[kp + 2] * fdt;
@@ -1985,11 +2014,11 @@ export class SoftBody {
     const out = this._tgOut && this._tgOut.length >= NP ? this._tgOut : (this._tgOut = new Int32Array(Math.max(NP, 64)));
     look.fill(0, 0, NP);
     out.fill(0, 0, NP);
-    const gp = this.grab ? this.grab.piece : -1;
+    const GP = this.grabs.length ? this._grabbedP : null;
     let budget = 9000, any = false;
     for (let n = 0; n < NP && budget > 0; n++) {
       const k = (this._tangleNext + n) % NP, pc = P[k];
-      if (pc.asleep || k === gp || pc.untangle > 0 || pc.verts.length < 30 || this.time - pc.touchT > 4) continue;
+      if (pc.asleep || (GP && GP[k]) || pc.untangle > 0 || pc.verts.length < 30 || this.time - pc.touchT > 4) continue;
       look[k] = 1;
       any = true;
       budget -= pc.tets.length;
@@ -2019,7 +2048,7 @@ export class SoftBody {
     for (let k = 0; k < P.length; k++) {
       const pc = P[k];
       if (!(pc.untangle > 0)) continue;
-      if (this.grab && this.grab.piece === k) {
+      if (this.grabs.length && this._grabbedP && this._grabbedP[k]) {
         pc.untangle = 0;
         continue;
       }
@@ -2361,7 +2390,7 @@ export class SoftBody {
   _gatherProbes(ptL) {
     const { x, T } = this;
     const nT = this.nT, nV = this.nV, NP = this.pieces.length, tp = this.tPiece;
-    const fdt = this._hashSpan, gp = this.grab ? this.grab.piece : -1;
+    const fdt = this._hashSpan, GP = this.grabs.length ? this._grabbedP : null;
     const D = this._disp, pV = this._pVel, sw = this._sweep, bb = this._pbb, pcs = this._pcs;
     const act = this._pieceActive, ptS = this._ptS, selfOK = this._selfOK, selfFlag = this._selfFlag;
     const counts = this._hCount, entries = this._hEntries, tbox = this._tBox0, tS = this._tStat, mask = this._hMask;
@@ -2404,7 +2433,7 @@ export class SoftBody {
       const st = ++stamp;
       const c0 = nc;
       gRel = 0;
-      gGrab = own === gp;
+      gGrab = !!(GP && GP[own]);
       const self = selfOK[own] > 0 && (vi >= 0 ? selfFlag[vi] === 1 : selfFaces && vi < -1 && (selfFlag[sTri[(-2 - vi) * 3]] | selfFlag[sTri[(-2 - vi) * 3 + 1]] | selfFlag[sTri[(-2 - vi) * 3 + 2]]) === 1);
       if (self) {
         hs++;
@@ -2472,7 +2501,7 @@ export class SoftBody {
                 const mr = Math.sqrt(m2);
                 if (L > 1e-7 && L - ext - (cr > 0 ? cr : 0) > 0.003 + 0.12 * mr) continue;
                 if (mr > gRel) gRel = mr;
-                if (pb === gp) gGrab = true;
+                if (GP && GP[pb]) gGrab = true;
                 if (nc >= cList.length) {
                   const grown = new Int32Array(cList.length * 2);
                   grown.set(cList);
@@ -2815,7 +2844,7 @@ export class SoftBody {
     const pi3 = this._pi3, pw3 = this._pw3, ti4 = this._ti4, tb4 = this._tb4;
     const cS = this._pcStart, cE = this._pcEnd;
     const wtV = this._wtV, wfV = this._wfV, wtF = this._wtF, wfF = this._wfF;
-    const gp = this.grab ? this.grab.piece : -2;
+    const GP = this.grabs.length ? this._grabbedP : null, PP = this._pressP;
     let press = 0;
     const nProbes = this._nProbeV + this._nProbeF;
     for (let k = 0; k < nProbes; k++) {
@@ -2853,7 +2882,12 @@ export class SoftBody {
       skip[k] = 0;
       WT[key] = ct.t;
       WF[key] = ct.f;
-      if ((own === gp || tPiece[ct.t] === gp) && ct.depth > press) press = ct.depth;
+      if (GP && (GP[own] || GP[tPiece[ct.t]])) {
+        if (ct.depth > press) press = ct.depth;
+        // (per held piece: each hand eases off on its own)
+        if (GP[own] && ct.depth > PP[own]) PP[own] = ct.depth;
+        if (GP[tPiece[ct.t]] && ct.depth > PP[tPiece[ct.t]]) PP[tPiece[ct.t]] = ct.depth;
+      }
       const t = ct.t, t4 = t * 4, d = ct.depth, pt = tPiece[t];
       // a real impact wakes sleepers - something moving into it, or pushed
       // well in - and otherwise a sleeping side is immovable (a neighbour
@@ -3202,6 +3236,11 @@ export class SoftBody {
     this._heatResidual = 1;
   }
 
+  // the first hand (most callers only ever have one)
+  get grab() {
+    return this.grabs.length ? this.grabs[0] : null;
+  }
+
   startGrab(hit, tx, ty, tz, radius = 0.2) {
     const { x } = this;
     const idx = [], wt = [], off = [];
@@ -3219,7 +3258,7 @@ export class SoftBody {
     if (!idx.length) return null;
     this.wake(hit.piece);
     this._hashDirty = true;
-    this.grab = {
+    const g = {
       n: idx.length,
       idx: Int32Array.from(idx),
       wt: Float64Array.from(wt),
@@ -3228,12 +3267,39 @@ export class SoftBody {
       compliance: 2e-6,
       piece: hit.piece,
     };
-    return this.grab;
+    this.grabs.push(g);
+    return g;
   }
 
-  endGrab() {
-    this.grab = null;
+  // Let go of one hand's grab (none given: all of them).
+  endGrab(g) {
+    if (g) {
+      const k = this.grabs.indexOf(g);
+      if (k >= 0) this.grabs.splice(k, 1);
+    } else this.grabs.length = 0;
     this._hashDirty = true;
+  }
+
+  // Which pieces hands are holding (any piece with a held vertex: a tear can
+  // leave one hand holding two), into _grabbedP; each grab's piece follows
+  // its first live vertex.
+  _markGrabbed() {
+    const NP = this.pieces.length;
+    const G = this._grabbedP && this._grabbedP.length >= NP ? this._grabbedP : (this._grabbedP = new Uint8Array(Math.max(NP, 64)));
+    G.fill(0, 0, NP);
+    for (let n = this.grabs.length - 1; n >= 0; n--) {
+      const g = this.grabs[n];
+      let first = -1;
+      for (let j = 0; j < g.n; j++) {
+        const k = this.vPiece[g.idx[j]];
+        if (k < 0) continue;
+        if (first < 0) first = k;
+        G[k] = 1;
+      }
+      if (first < 0) this.grabs.splice(n, 1); // (all it held is gone)
+      else g.piece = first;
+    }
+    return G;
   }
 
   totalVolume() {
