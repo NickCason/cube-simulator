@@ -25,6 +25,7 @@ function boot() {
       repeat: params.has('repeat') ? +params.get('repeat') : undefined,
       bias: params.has('bias') ? +params.get('bias') : undefined,
       theme: params.get('theme') || undefined,
+      upscale: params.has('upscale'),
     });
   } catch (err) {
     console.error(err);

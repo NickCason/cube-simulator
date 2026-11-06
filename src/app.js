@@ -675,7 +675,15 @@ export class App {
     // pixel budget: huge screens render at a lower ratio
     const budget = Math.sqrt(3.6e6 / Math.max(1, w * h));
     if (this.pixelRatio > budget) this.pixelRatio = Math.max(0.6, budget);
-    this.renderer.setPixelRatio(this.pixelRatio);
+    // Phones render the scene below the screen's density and the browser
+    // stretches it: it's sharpened a little first (CAS, in the edge pass).
+    // ?upscale: the screen gets its full density and the last pass upscales
+    // instead (FSR's EASU - crisper, but that pass at full density costs
+    // about as much again as the whole frame).
+    const native = Math.min(window.devicePixelRatio || 1, 3);
+    const stretched = native > this.pixelRatio * 1.15;
+    const upscale = this.coarse && !!this.opts.upscale && stretched;
+    this.renderer.setPixelRatio(upscale ? native : this.pixelRatio);
     const pw = Math.floor(w * this.pixelRatio), ph = Math.floor(h * this.pixelRatio);
     this.size = { w, h, pw, ph };
     if (this.rtScene) {
@@ -685,8 +693,23 @@ export class App {
     }
     const samples = this.opts.msaa ?? (this.coarse || this.pixelRatio > 1.6 ? 0 : 4);
     this.rtScene = new THREE.WebGLRenderTarget(pw, ph, { type: THREE.HalfFloatType, samples, depthBuffer: true });
-    // (no multisampling - phones, high-density screens: smooth edges in post)
-    this.post.compositeMat.uniforms.uFxaa.value = samples ? 0 : 1;
+    // (no multisampling - phones, high-density screens: smooth edges in
+    // post, in a pass of their own before an upscale)
+    const C = this.post.compositeMat.uniforms;
+    this.rtAA?.dispose();
+    this.rtAA = null;
+    if (upscale) {
+      this.rtAA = new THREE.WebGLRenderTarget(pw, ph, { type: THREE.HalfFloatType, depthBuffer: false });
+      const db = this.renderer.getDrawingBufferSize(new THREE.Vector2());
+      C.uEasu.value = 1;
+      C.uFxaa.value = 0;
+      C.uInSize.value.set(pw, ph);
+      C.uOutSize.value.copy(db);
+    } else {
+      C.uEasu.value = 0;
+      C.uFxaa.value = samples ? 0 : 1;
+    }
+    C.uSharp.value = this.coarse && stretched && !upscale ? 0.45 : 0;
     this.rtTrans = new THREE.WebGLRenderTarget(pw, ph, {
       type: THREE.HalfFloatType,
       depthBuffer: false,
@@ -1129,6 +1152,9 @@ export class App {
     this.flash *= 0.86;
     this.post.compositeMat.uniforms.uFlash.value = this.flash;
     const bloom = this.post.bloom(this.rtScene.texture, this.size.pw, this.size.ph);
-    this.post.composite(this.rtScene.texture, bloom, this.clock.t);
+    if (this.rtAA) {
+      this.post.fxaa(this.rtScene.texture, this.rtAA);
+      this.post.composite(this.rtAA.texture, bloom, this.clock.t);
+    } else this.post.composite(this.rtScene.texture, bloom, this.clock.t);
   }
 }
