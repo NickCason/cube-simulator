@@ -95,6 +95,7 @@ export class SoftBody {
     this._anyContact = false;
     this._gap = 0;
     this._fSelf = false;
+    this.topoStale = false; // a light rebuild done, the full one still owed (see rebuildLight)
     this._pass = 0;
     this._fStamp = 0;
     this._nHTets = 0;
@@ -297,8 +298,20 @@ export class SoftBody {
     }
   }
 
+  // Just what the next cut needs (rest shapes, masses, adjacency, pieces):
+  // for a run of cuts in one go, ending with a full rebuild() before the
+  // body is stepped or drawn again.
+  rebuildLight() {
+    this.topoStale = true;
+    this._computeRest();
+    this._computeMass();
+    this._buildAdjacency();
+    this._buildPieces();
+  }
+
   rebuild() {
     const t0 = performance.now();
+    this.topoStale = false;
     this._computeRest();
     this._computeMass();
     this._buildAdjacency();
@@ -957,9 +970,14 @@ export class SoftBody {
     } else this._hashDirty = true;
     for (let s = 0; s < nS; s++) {
       this._integrate(h);
+      // (the hand pulls first, then the jelly answers: pulled after its
+      // elasticity had its say, a held patch pressed against something was
+      // crushed flat each substep - a thin slice turned inside out and blew
+      // up like a balloon - and a corner could be dragged straight through
+      // the body, leaving it passed through itself)
+      if (this.grab) this._solveGrab(h);
       this._solveTets(h);
       if (this.embeds.length) this._solveEmbeds(h);
-      if (this.grab) this._solveGrab(h);
       if (this.attract) this._solveAttract(h);
       if (this.pushers.length) this._solvePushers((s + 1) / nS);
       if (multi && this._anyContact) this._solvePieceCollisions(h);
@@ -1151,7 +1169,9 @@ export class SoftBody {
     // shove that piece along instead of the grabbed core ploughing into it
     const press = this._grabPress || 0;
     const ease = Math.max(0.08, 1 - Math.max(0, press - 0.006) / 0.02);
-    const maxStep = 0.012 * this.p.size * ease;
+    // (firmer jelly pulls the held patch back harder before the next pull:
+    // a longer reach keeps it with the hand)
+    const maxStep = 0.012 * this.p.size * ease * (1 + Math.min(2, Math.max(0, (this.p.mu - 100) / 70)));
     for (let j = 0; j < g.n; j++) {
       const i = g.idx[j];
       const wi = w[i];
