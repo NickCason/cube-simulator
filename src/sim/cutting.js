@@ -423,6 +423,7 @@ export function sphereField(cx, cy, cz, r) {
 export function separateClusters(sb, labels, anchors = []) {
   captureAnchors(sb, anchors);
   const { T } = sb;
+  tidyLabels(sb, labels);
   const nV0 = sb.nV;
   const copies = new Map(); // vertex*1024+label -> id
   const firstLabel = new Int32Array(nV0).fill(-2147483648);
@@ -448,6 +449,62 @@ export function separateClusters(sb, labels, anchors = []) {
   sb.rebuild();
   relocateAnchors(sb, anchors);
   return copies.size;
+}
+
+// Smooth a tet labelling in place: a tet that hangs off its cluster by one
+// face (or none) joins the cluster most of its face-neighbours belong to.
+// Such fins and loose tets make shards that ring and flap.
+function tidyLabels(sb, labels) {
+  const { T } = sb;
+  const nT = sb.nT, K = sb.nV + 1;
+  const nb = new Int32Array(nT * 4).fill(-1);
+  const map = new Map();
+  for (let t = 0; t < nT; t++) {
+    for (let f = 0; f < 4; f++) {
+      let a = T[t * 4 + FACES[f][0]], b = T[t * 4 + FACES[f][1]], c = T[t * 4 + FACES[f][2]], tt;
+      if (a > b) { tt = a; a = b; b = tt; }
+      if (b > c) { tt = b; b = c; c = tt; }
+      if (a > b) { tt = a; a = b; b = tt; }
+      const key = (a * K + b) * K + c;
+      const o = map.get(key);
+      if (o === undefined) map.set(key, t * 4 + f);
+      else {
+        nb[t * 4 + f] = o >> 2;
+        nb[o] = t;
+        map.delete(key);
+      }
+    }
+  }
+  for (let pass = 0; pass < 3; pass++) {
+    let changed = 0;
+    for (let t = 0; t < nT; t++) {
+      const L = labels[t];
+      let same = 0, best = L, bestN = 0;
+      for (let f = 0; f < 4; f++) {
+        const u = nb[t * 4 + f];
+        if (u < 0) continue;
+        const M = labels[u];
+        if (M === L) {
+          same++;
+          continue;
+        }
+        let n = 0;
+        for (let g = 0; g < 4; g++) {
+          const w = nb[t * 4 + g];
+          if (w >= 0 && labels[w] === M) n++;
+        }
+        if (n > bestN) {
+          bestN = n;
+          best = M;
+        }
+      }
+      if (same <= 1 && bestN > same) {
+        labels[t] = best;
+        changed++;
+      }
+    }
+    if (!changed) break;
+  }
 }
 
 // Remove tets matching predicate(t, cx, cy, cz). Returns removed centroids.

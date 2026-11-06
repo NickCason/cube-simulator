@@ -53,6 +53,7 @@ export class SoftBody {
     this.time = 0;
     this.hCell = this.p.size / this.p.res;
     this.impacts = []; // [{x,y,z,speed}] floor/wall impacts this frame (for audio)
+    this._ct = { t: -1, f: -1, b0: 0, b1: 0, b2: 0, b3: 0, nx: 0, ny: 0, nz: 0, depth: 0 };
   }
 
   // ---------------------------------------------------------------- storage
@@ -67,6 +68,8 @@ export class SoftBody {
     this.glow = growArr(this.glow, cap, Float32Array);
     this.vPiece = growArr(this.vPiece, cap, Int32Array);
     this.alive = growArr(this.alive, cap, Uint8Array);
+    this.fpen = growArr(this.fpen, cap, Float32Array); // floor push-out this substep
+    this.wpen = growArr(this.wpen, cap, Float32Array); // wall push-out this substep
     this.vCap = cap;
   }
 
@@ -159,8 +162,84 @@ export class SoftBody {
     this._buildAdjacency();
     this._buildPieces();
     this._extractSurface();
+    this._computeEscape();
     this._buildRenderClusters();
     this.topoVersion++;
+  }
+
+  // For every vertex: rest-space vector to the nearest boundary vertex of its
+  // own piece (multi-source Dijkstra carrying the nearest source, i.e. a
+  // graph approximation of the Euclidean distance transform). Lets contact
+  // push a deeply-penetrated point out the right way.
+  _computeEscape() {
+    const nV = this.nV, X = this.X;
+    const near = new Int32Array(nV).fill(-1);
+    const dist = new Float64Array(nV).fill(Infinity);
+    let cap = Math.max(1024, nV * 6);
+    let hI = new Int32Array(cap), hK = new Float64Array(cap), n = 0;
+    const push = (i, k) => {
+      if (n >= cap) {
+        cap *= 2;
+        const a = new Int32Array(cap); a.set(hI); hI = a;
+        const b = new Float64Array(cap); b.set(hK); hK = b;
+      }
+      let c = n++;
+      while (c > 0) {
+        const p = (c - 1) >> 1;
+        if (hK[p] <= k) break;
+        hI[c] = hI[p]; hK[c] = hK[p]; c = p;
+      }
+      hI[c] = i; hK[c] = k;
+    };
+    const pop = () => {
+      const top = hI[0];
+      const li = hI[--n], lk = hK[n];
+      let c = 0;
+      for (;;) {
+        let ch = c * 2 + 1;
+        if (ch >= n) break;
+        if (ch + 1 < n && hK[ch + 1] < hK[ch]) ch++;
+        if (hK[ch] >= lk) break;
+        hI[c] = hI[ch]; hK[c] = hK[ch]; c = ch;
+      }
+      hI[c] = li; hK[c] = lk;
+      return top;
+    };
+    for (let k = 0; k < this.nF * 3; k++) {
+      const i = this.sTri[k];
+      if (dist[i] !== 0) {
+        dist[i] = 0;
+        near[i] = i;
+        push(i, 0);
+      }
+    }
+    const nbS = this.nbStart, nbL = this.nbList;
+    while (n > 0) {
+      const d0 = hK[0];
+      const i = pop();
+      if (d0 > dist[i]) continue;
+      const c = near[i], cx = X[c * 3], cy = X[c * 3 + 1], cz = X[c * 3 + 2];
+      for (let e = nbS[i]; e < nbS[i + 1]; e++) {
+        const j = nbL[e];
+        const d = Math.hypot(X[j * 3] - cx, X[j * 3 + 1] - cy, X[j * 3 + 2] - cz);
+        if (d < dist[j]) {
+          dist[j] = d;
+          near[j] = c;
+          push(j, d);
+        }
+      }
+    }
+    const esc = this.esc && this.esc.length >= nV * 3 ? this.esc : (this.esc = new Float32Array(this.vCap * 3));
+    for (let i = 0; i < nV; i++) {
+      const c = near[i];
+      if (c < 0) {
+        esc[i * 3] = esc[i * 3 + 1] = esc[i * 3 + 2] = 0;
+        continue;
+      }
+      esc[i * 3] = X[c * 3] - X[i * 3];
+      esc[i * 3 + 1] = X[c * 3 + 1] - X[i * 3 + 1];
+      esc[i * 3 + 2] = X[c * 3 + 2] - X[i * 3 + 2];
+    }
   }
 
   _computeRest(from = 0) {
@@ -373,6 +452,22 @@ export class SoftBody {
     this.sRestN = sRestN;
     this.tetBoundary = tetBoundary;
     this.nextBoundary = nextBoundary;
+    // boundary faces around each vertex (contact looks at the faces near a tet)
+    const vfStart = new Int32Array(this.nV + 1);
+    for (let k = 0; k < nF * 3; k++) vfStart[sTri[k] + 1]++;
+    for (let i = 0; i < this.nV; i++) vfStart[i + 1] += vfStart[i];
+    const vfFill = vfStart.slice(0, this.nV);
+    const vfList = new Int32Array(nF * 3);
+    for (let k = 0; k < nF * 3; k++) vfList[vfFill[sTri[k]]++] = (k / 3) | 0;
+    this.vfStart = vfStart;
+    this.vfList = vfList;
+    this._fSeen = new Int32Array(nF);
+    this._fStamp = 0;
+    // per-substep cache of face geometry for contact (anchor, edges, unit
+    // normal, projection terms), valid while _fGeoStamp[f] === _pass
+    this._fGeo = new Float64Array(nF * 16);
+    this._fGeoStamp = new Int32Array(nF);
+    this._pass = (this._pass || 0) + 1;
   }
 
   // Split surface vertices into render vertices by smoothing group: faces
@@ -526,6 +621,7 @@ export class SoftBody {
     }
     this._frameDt = dt;
     const multi = this.pieces.length > 1 && P.collide && this.collisionsEnabled;
+    this._grabPress = 0;
     if (multi) this._buildCollisionHash();
     for (let s = 0; s < nS; s++) {
       this._integrate(h);
@@ -533,7 +629,7 @@ export class SoftBody {
       if (this.embeds.length) this._solveEmbeds(h);
       if (this.grab) this._solveGrab(h);
       if (this.attract) this._solveAttract(h);
-      if (multi && this._anyContact) this._solvePieceCollisions();
+      if (multi && this._anyContact) this._solvePieceCollisions(h);
       this._solveBounds(h, s === nS - 1);
       this._updateVelocities(h);
     }
@@ -558,6 +654,11 @@ export class SoftBody {
     const { T, B, vol0, x, w, tMu, tVS } = this;
     const mu0 = this.p.mu;
     const lam = mu0 * this.p.lambdaRatio;
+    // frozen tets stiffen, but only up to what these substeps can hold
+    // (beyond it jagged shards ring at the speed limit)
+    const sr = 1 / (h * 720), foam = Math.min(1, this.p.lambdaRatio / 6);
+    const muHi = Math.max(mu0, 850 * this.p.density * this.p.size * this.p.size * (0.35 + 0.65 * foam) * Math.min(1, sr * sr));
+    const boostHi = muHi / mu0;
     const ih2 = 1 / (h * h);
     const nT = this.nT;
     const aw = this._awake, tp = this.tPiece;
@@ -575,7 +676,11 @@ export class SoftBody {
       const b10 = B[bo + 3] * sc, b11 = B[bo + 4] * sc, b12 = B[bo + 5] * sc;
       const b20 = B[bo + 6] * sc, b21 = B[bo + 7] * sc, b22 = B[bo + 8] * sc;
       const V = V0 * vs;
-      const mu = mu0 * tMu[t];
+      // frozen (stiffer) tets stiffen in volume too, keeping lambda/mu: a stiff
+      // shear term against a soft volume term rings violently
+      const boost = tMu[t] > 1 ? Math.min(tMu[t], boostHi) : tMu[t];
+      const mu = mu0 * boost;
+      const lamT = boost > 1 ? lam * boost : lam;
 
       // ---- deviatoric: C = sqrt(tr(F^T F))
       let e1x = x[i1] - x[i0], e1y = x[i1 + 1] - x[i0 + 1], e1z = x[i1 + 2] - x[i0 + 2];
@@ -614,7 +719,7 @@ export class SoftBody {
       const k1x = f12 * f20 - f22 * f10, k1y = f22 * f00 - f02 * f20, k1z = f02 * f10 - f12 * f00;
       const k2x = f10 * f21 - f20 * f11, k2y = f20 * f01 - f00 * f21, k2z = f00 * f11 - f10 * f01;
       const J = f00 * k0x + f10 * k0y + f20 * k0z;
-      const gamma = 1 + mu / lam;
+      const gamma = 1 + mu / lamT;
       C = J - gamma;
       {
         const g1x = k0x * b00 + k1x * b01 + k2x * b02, g1y = k0y * b00 + k1y * b01 + k2y * b02, g1z = k0z * b00 + k1z * b01 + k2z * b02;
@@ -622,7 +727,7 @@ export class SoftBody {
         const g3x = k0x * b20 + k1x * b21 + k2x * b22, g3y = k0y * b20 + k1y * b21 + k2y * b22, g3z = k0z * b20 + k1z * b21 + k2z * b22;
         const g0x = -g1x - g2x - g3x, g0y = -g1y - g2y - g3y, g0z = -g1z - g2z - g3z;
         // compression barrier: below ~1/3 volume the tet resists ever harder
-        let alpha = ih2 / (lam * V);
+        let alpha = ih2 / (lamT * V);
         if (J < 0.35) {
           const q = Math.max(J / 0.35, 0.25);
           alpha *= q * q;
@@ -642,8 +747,13 @@ export class SoftBody {
 
   _solveGrab(h) {
     const g = this.grab;
-    const { x, w } = this;
+    const { x, px, w } = this;
     const ih2 = 1 / (h * h);
+    // pressing hard into another piece: slow the pull down so contact can
+    // shove that piece along instead of the grabbed core ploughing into it
+    const press = this._grabPress || 0;
+    const ease = Math.max(0.08, 1 - Math.max(0, press - 0.006) / 0.02);
+    const maxStep = 0.012 * this.p.size * ease;
     for (let j = 0; j < g.n; j++) {
       const i = g.idx[j];
       const wi = w[i];
@@ -651,10 +761,19 @@ export class SoftBody {
       const o = i * 3;
       const tx = g.tx + g.off[j * 3], ty = g.ty + g.off[j * 3 + 1], tz = g.tz + g.off[j * 3 + 2];
       const alpha = (g.compliance / g.wt[j]) * ih2;
-      const k = wi / (wi + alpha);
+      const k = (wi / (wi + alpha)) * ease;
       x[o] += (tx - x[o]) * k;
       x[o + 1] += (ty - x[o + 1]) * k;
       x[o + 2] += (tz - x[o + 2]) * k;
+      // drags can't outrun contact: cap how far a held vertex moves per substep
+      const dx = x[o] - px[o], dy = x[o + 1] - px[o + 1], dz = x[o + 2] - px[o + 2];
+      const dl = Math.hypot(dx, dy, dz);
+      if (dl > maxStep) {
+        const s = maxStep / dl;
+        x[o] = px[o] + dx * s;
+        x[o + 1] = px[o + 1] + dy * s;
+        x[o + 2] = px[o + 2] + dz * s;
+      }
     }
   }
 
@@ -721,10 +840,12 @@ export class SoftBody {
     }
   }
 
+  // Floor, ceiling and arena wall. Contacts are projected here; their
+  // friction is applied to the velocities (see _updateVelocities) - doing it
+  // on positions after the elastic solve fed energy into resting pieces and
+  // kept them rocking forever.
   _solveBounds(h, last) {
-    const { x, px, w } = this;
-    const mu = this.p.friction;
-
+    const { x, px, w, fpen, wpen } = this;
     const R = this.p.arenaRadius, R2 = R * R;
     const top = this.p.ceiling;
     const n = this.nV;
@@ -732,20 +853,12 @@ export class SoftBody {
     for (let i = 0; i < n; i++) {
       if (w[i] === 0 || !aw[vp[i]]) continue;
       const o = i * 3;
-      let y = x[o + 1];
+      const y = x[o + 1];
+      fpen[i] = 0;
+      wpen[i] = 0;
       if (y < 0) {
-        const pen = -y;
         x[o + 1] = 0;
-        const dx = x[o] - px[o], dz = x[o + 2] - px[o + 2];
-        const d = Math.hypot(dx, dz);
-        if (d < mu * pen * 1.4) {
-          x[o] = px[o];
-          x[o + 2] = px[o + 2];
-        } else if (d > 0) {
-          const k = Math.min((mu * pen) / d, 1);
-          x[o] -= dx * k;
-          x[o + 2] -= dz * k;
-        }
+        fpen[i] = -y;
         if (last) {
           const vy = (px[o + 1] - y) / h;
           if (vy > 2.5) this.impacts.push(x[o], 0, x[o + 2], vy, this.vPiece[i]);
@@ -755,36 +868,48 @@ export class SoftBody {
       if (r2 > R2) {
         const r = Math.sqrt(r2);
         const s = R / r;
-        const nx = x[o] / r, nz = x[o + 2] / r;
         x[o] *= s;
         x[o + 2] *= s;
-        // tangential friction against the wall
-        const dx = x[o] - px[o], dy = x[o + 1] - px[o + 1], dz = x[o + 2] - px[o + 2];
-        const dn = dx * nx + dz * nz;
-        const tx = dx - dn * nx, tz = dz - dn * nz;
-        const pen = r - R;
-        const tl = Math.hypot(tx, dy, tz);
-        if (tl > 0) {
-          const k = Math.min((0.4 * pen) / tl, 1);
-          x[o] -= tx * k;
-          x[o + 1] -= dy * k;
-          x[o + 2] -= tz * k;
-        }
-        if (last && pen / h > 3) this.impacts.push(x[o], x[o + 1], x[o + 2], pen / h, this.vPiece[i]);
+        wpen[i] = r - R;
+        if (last && (r - R) / h > 3) this.impacts.push(x[o], x[o + 1], x[o + 2], (r - R) / h, this.vPiece[i]);
       }
     }
   }
 
   _updateVelocities(h) {
-    const { x, px, v, w } = this;
+    const { x, px, v, w, fpen, wpen } = this;
     const ih = 1 / h;
     const n = this.nV;
     const vmax = this.p.maxSpeed, vmax2 = vmax * vmax;
+    const mu = this.p.friction;
     const aw = this._awake, vp = this.vPiece;
     for (let i = 0; i < n; i++) {
       if (w[i] === 0 || !aw[vp[i]]) continue;
       const o = i * 3;
       let vx = (x[o] - px[o]) * ih, vy = (x[o + 1] - px[o + 1]) * ih, vz = (x[o + 2] - px[o + 2]) * ih;
+      // Coulomb friction: tangential speed drops by mu x the normal speed
+      // the contact took away (sticks when that is enough to stop it)
+      if (fpen[i] > 0) {
+        const vt = Math.hypot(vx, vz);
+        if (vt > 0) {
+          const k = Math.max(0, 1 - (mu * fpen[i] * ih) / vt);
+          vx *= k;
+          vz *= k;
+        }
+      }
+      if (wpen[i] > 0) {
+        const r = Math.hypot(x[o], x[o + 2]) || 1;
+        const nx = x[o] / r, nz = x[o + 2] / r;
+        const vn = vx * nx + vz * nz;
+        const tx = vx - vn * nx, tz = vz - vn * nz;
+        const tl = Math.hypot(tx, vy, tz);
+        if (tl > 0) {
+          const k = Math.max(0, 1 - (0.4 * wpen[i] * ih) / tl);
+          vx = vn * nx + tx * k;
+          vy *= k;
+          vz = vn * nz + tz * k;
+        }
+      }
       const s2 = vx * vx + vy * vy + vz * vz;
       if (s2 > vmax2) {
         const k = vmax / Math.sqrt(s2);
@@ -958,12 +1083,24 @@ export class SoftBody {
         if (a > maxAbs) maxAbs = a;
       }
       this._heatResidual = maxAbs;
+      if (this.heatActive) this.wakeAll();
       this.heatActive = false;
-      if (maxAbs > 0.05) this.wakeAll();
+      const NP = this.pieces.length, tp = this.tPiece;
+      const pmu = this._pmu && this._pmu.length >= NP ? this._pmu : (this._pmu = new Float64Array(Math.max(NP, 64)));
+      pmu.fill(0, 0, NP);
       for (let t = 0; t < this.nT; t++) {
         const o = t * 4;
         const tt = (temp[T[o]] + temp[T[o + 1]] + temp[T[o + 2]] + temp[T[o + 3]]) * 0.25;
         tMu[t] = tt >= 0 ? Math.max(0.035, Math.exp(-3.2 * tt)) : 1 + 14 * Math.min(1, -tt) * Math.min(1, -tt);
+        if (tp[t] >= 0) pmu[tp[t]] += Math.log(tMu[t]);
+      }
+      // a sleeping piece wakes once it has warmed/cooled enough to change
+      // its firmness noticeably (thawing alone shouldn't keep it awake)
+      for (let k = 0; k < NP; k++) {
+        const pc = this.pieces[k];
+        const lm = pmu[k] / Math.max(1, pc.tets.length);
+        if (!pc.asleep || pc.sleepLogMu === undefined) pc.sleepLogMu = lm;
+        else if (Math.abs(lm - pc.sleepLogMu) > 0.2) this.wake(k);
       }
     }
     // glow decays
@@ -973,236 +1110,612 @@ export class SoftBody {
   }
 
   // ---------------------------------------------------------------- piece contact
+  // Broad phase for piece-vs-piece contact, once per frame. Everything is
+  // swept over the frame (from x to x + v dt) so fast pieces are caught:
+  // pairs of pieces whose swept boxes meet, a spatial hash of their tets'
+  // swept boxes (keyed by cell and piece), and per probe (surface vertex or
+  // face centre) the other-piece tets its own swept box overlaps.
   _buildCollisionHash() {
-    const cs = this.hCell * 1.25;
-    this._cs = cs;
-    const { x, T } = this;
-    const nT = this.nT;
-    // which pieces could touch another piece this frame (AABB overlap)
-    const P = this.pieces.length;
-    const bb = new Float64Array(P * 6);
-    for (let k = 0; k < P; k++) {
+    const { x, v, T } = this;
+    const nT = this.nT, NP = this.pieces.length, nV = this.nV;
+    const fdt = this._frameDt || 1 / 60;
+    const NP64 = Math.max(NP, 64);
+    const bb = this._pbb && this._pbb.length >= NP * 6 ? this._pbb : (this._pbb = new Float64Array(NP64 * 6));
+    const pdev = this._pdev && this._pdev.length >= NP ? this._pdev : (this._pdev = new Float64Array(NP64));
+    const pcs = this._pcs && this._pcs.length >= NP ? this._pcs : (this._pcs = new Float64Array(NP64));
+    for (let k = 0; k < NP; k++) {
       bb[k * 6] = bb[k * 6 + 1] = bb[k * 6 + 2] = Infinity;
       bb[k * 6 + 3] = bb[k * 6 + 4] = bb[k * 6 + 5] = -Infinity;
+      pdev[k] = 0;
+      pcs[k] = 0;
     }
-    for (let i = 0; i < this.nV; i++) {
+    // swept vertex boxes: x .. x + v dt, grown a little for the frame's
+    // changes of course; and how fast each piece's vertices stray from its
+    // mean velocity (bounds relative motion between pieces)
+    const sw = this._sweep && this._sweep.length >= nV * 6 ? this._sweep : (this._sweep = new Float32Array(this.vCap * 6));
+    const P = this.pieces;
+    // a grabbed piece goes where the hand pulls it (up to the per-substep cap)
+    let gp = -1, lx = 0, ly = 0, lz = 0;
+    const g = this.grab;
+    if (g) {
+      gp = g.piece;
+      for (let j = 0; j < g.n; j++) {
+        const o = g.idx[j] * 3;
+        lx += g.tx + g.off[j * 3] - x[o];
+        ly += g.ty + g.off[j * 3 + 1] - x[o + 1];
+        lz += g.tz + g.off[j * 3 + 2] - x[o + 2];
+      }
+      const l = Math.hypot(lx, ly, lz) / g.n, lm = 0.012 * this.p.size * this.p.substeps;
+      const s = l > lm ? lm / l / g.n : 1 / g.n;
+      lx *= s; ly *= s; lz *= s;
+    }
+    for (let i = 0; i < nV; i++) {
+      const o = i * 3, r = i * 6;
+      const ax = x[o], ay = x[o + 1], az = x[o + 2];
+      let dx = v[o] * fdt, dy = v[o + 1] * fdt, dz = v[o + 2] * fdt;
+      if (this.vPiece[i] === gp) {
+        dx += lx; dy += ly; dz += lz;
+      }
+      const gr = 0.003 + 0.12 * (Math.abs(dx) + Math.abs(dy) + Math.abs(dz));
+      sw[r] = (dx < 0 ? ax + dx : ax) - gr;
+      sw[r + 1] = (dy < 0 ? ay + dy : ay) - gr;
+      sw[r + 2] = (dz < 0 ? az + dz : az) - gr;
+      sw[r + 3] = (dx > 0 ? ax + dx : ax) + gr;
+      sw[r + 4] = (dy > 0 ? ay + dy : ay) + gr;
+      sw[r + 5] = (dz > 0 ? az + dz : az) + gr;
       const k = this.vPiece[i];
-      if (k < 0) continue;
-      const o = i * 3, b = k * 6;
-      if (x[o] < bb[b]) bb[b] = x[o];
-      if (x[o + 1] < bb[b + 1]) bb[b + 1] = x[o + 1];
-      if (x[o + 2] < bb[b + 2]) bb[b + 2] = x[o + 2];
-      if (x[o] > bb[b + 3]) bb[b + 3] = x[o];
-      if (x[o + 1] > bb[b + 4]) bb[b + 4] = x[o + 1];
-      if (x[o + 2] > bb[b + 5]) bb[b + 5] = x[o + 2];
+      if (k < 0 || !this.w[i]) continue;
+      const sl = Math.max(Math.abs(dx), Math.abs(dy), Math.abs(dz)) + gr;
+      if (sl > pcs[k]) pcs[k] = sl;
+      const b = k * 6;
+      if (sw[r] < bb[b]) bb[b] = sw[r];
+      if (sw[r + 1] < bb[b + 1]) bb[b + 1] = sw[r + 1];
+      if (sw[r + 2] < bb[b + 2]) bb[b + 2] = sw[r + 2];
+      if (sw[r + 3] > bb[b + 3]) bb[b + 3] = sw[r + 3];
+      if (sw[r + 4] > bb[b + 4]) bb[b + 4] = sw[r + 4];
+      if (sw[r + 5] > bb[b + 5]) bb[b + 5] = sw[r + 5];
+      const pv = P[k].vel;
+      const ux = v[o] - pv[0], uy = v[o + 1] - pv[1], uz = v[o + 2] - pv[2];
+      const d2 = ux * ux + uy * uy + uz * uz;
+      if (d2 > pdev[k]) pdev[k] = d2;
     }
-    const act = this._pieceActive && this._pieceActive.length >= P ? this._pieceActive : (this._pieceActive = new Uint8Array(Math.max(P, 64)));
+    // hash cells per piece: fine for slow pieces, as coarse as the sweep for
+    // fast ones (so a fast tet still lands in only a few cells)
+    for (let k = 0; k < NP; k++) {
+      pdev[k] = Math.sqrt(pdev[k]);
+      pcs[k] = 1 / (this.hCell * 0.75 + pcs[k]);
+    }
+    // pairs whose swept boxes overlap (and aren't both asleep): partner lists
+    const act = this._pieceActive && this._pieceActive.length >= NP ? this._pieceActive : (this._pieceActive = new Uint8Array(NP64));
     act.fill(0);
-    // margin covers this frame's travel, so fast pieces start colliding before they overlap
-    let vmax2 = 0;
-    const v = this.v;
-    for (let i = 0; i < this.nV; i++) {
-      const o = i * 3;
-      const s2 = v[o] * v[o] + v[o + 1] * v[o + 1] + v[o + 2] * v[o + 2];
-      if (s2 > vmax2) vmax2 = s2;
-    }
-    const m = 0.03 + 2.2 * Math.sqrt(vmax2) * (this._frameDt || 1 / 60);
-    let anyAct = false;
-    for (let a = 0; a < P; a++)
-      for (let b = a + 1; b < P; b++) {
+    const ptS = this._ptS && this._ptS.length >= NP + 1 ? this._ptS : (this._ptS = new Int32Array(NP64 + 1));
+    const pairs = [];
+    const m = 0.006;
+    for (let a = 0; a < NP; a++)
+      for (let b = a + 1; b < NP; b++) {
+        if (P[a].asleep && P[b].asleep) continue;
         const A = a * 6, B = b * 6;
         if (bb[A] - m > bb[B + 3] || bb[B] - m > bb[A + 3] || bb[A + 1] - m > bb[B + 4] || bb[B + 1] - m > bb[A + 4] || bb[A + 2] - m > bb[B + 5] || bb[B + 2] - m > bb[A + 5]) continue;
         act[a] = act[b] = 1;
-        anyAct = true;
+        pairs.push(a, b);
       }
-    this._anyContact = anyAct;
-    const size = 1 << 15;
-    const mask = size - 1;
+    this._anyContact = pairs.length > 0;
+    if (!pairs.length) return;
+    ptS.fill(0, 0, NP + 1);
+    for (let k = 0; k < pairs.length; k++) ptS[pairs[k] + 1]++;
+    for (let k = 0; k < NP; k++) ptS[k + 1] += ptS[k];
+    const ptL = new Int32Array(pairs.length);
+    const ptF = ptS.slice(0, NP);
+    for (let k = 0; k < pairs.length; k += 2) {
+      ptL[ptF[pairs[k]]++] = pairs[k + 1];
+      ptL[ptF[pairs[k + 1]]++] = pairs[k];
+    }
+    // contact found last substep, per probe (tet, face): usually still right
+    if (this._warmVersion !== this.topoVersion || !this._wtV || this._wtV.length < nV) {
+      this._wtV = new Int32Array(this.vCap).fill(-1);
+      this._wfV = new Int32Array(this.vCap).fill(-1);
+      this._wtF = new Int32Array(Math.max(this.nF, 1)).fill(-1);
+      this._wfF = new Int32Array(Math.max(this.nF, 1)).fill(-1);
+      this._warmVersion = this.topoVersion;
+    }
+    // hash the swept boxes of the active pieces' tets, keyed by cell + piece
+    const size = 1 << 15, mask = size - 1;
     const counts = this._hCount && this._hCount.length === size + 1 ? this._hCount : (this._hCount = new Int32Array(size + 1));
     counts.fill(0);
+    const tbox = this._tBox0 && this._tBox0.length >= nT * 6 ? this._tBox0 : (this._tBox0 = new Float32Array(this.tCap * 6));
     const ranges = this._hRanges && this._hRanges.length >= nT * 6 ? this._hRanges : (this._hRanges = new Int32Array(this.tCap * 6));
-    const inv = 1 / cs;
-    let total = 0;
+    const list = this._hTets && this._hTets.length >= nT ? this._hTets : (this._hTets = new Int32Array(this.tCap));
+    let nList = 0, total = 0;
+    const tp = this.tPiece;
     for (let t = 0; t < nT; t++) {
-      const o = t * 4;
-      let x0 = Infinity, y0 = Infinity, z0 = Infinity, x1 = -Infinity, y1 = -Infinity, z1 = -Infinity;
-      for (let k = 0; k < 4; k++) {
-        const i = T[o + k] * 3;
-        const a = x[i], b = x[i + 1], c = x[i + 2];
-        if (a < x0) x0 = a;
-        if (a > x1) x1 = a;
-        if (b < y0) y0 = b;
-        if (b > y1) y1 = b;
-        if (c < z0) z0 = c;
-        if (c > z1) z1 = c;
-      }
+      if (!act[tp[t]] || this.vol0[t] <= 0) continue;
+      const o = t * 4, r = t * 6;
+      const a = T[o] * 6, b = T[o + 1] * 6, c = T[o + 2] * 6, d = T[o + 3] * 6;
+      const inv = pcs[tp[t]];
+      const x0 = Math.min(sw[a], sw[b], sw[c], sw[d]), y0 = Math.min(sw[a + 1], sw[b + 1], sw[c + 1], sw[d + 1]), z0 = Math.min(sw[a + 2], sw[b + 2], sw[c + 2], sw[d + 2]);
+      const x1 = Math.max(sw[a + 3], sw[b + 3], sw[c + 3], sw[d + 3]), y1 = Math.max(sw[a + 4], sw[b + 4], sw[c + 4], sw[d + 4]), z1 = Math.max(sw[a + 5], sw[b + 5], sw[c + 5], sw[d + 5]);
+      tbox[r] = x0; tbox[r + 1] = y0; tbox[r + 2] = z0; tbox[r + 3] = x1; tbox[r + 4] = y1; tbox[r + 5] = z1;
       const ix0 = Math.floor(x0 * inv), ix1 = Math.floor(x1 * inv);
       const iy0 = Math.floor(y0 * inv), iy1 = Math.floor(y1 * inv);
       const iz0 = Math.floor(z0 * inv), iz1 = Math.floor(z1 * inv);
-      const r = t * 6;
-      ranges[r] = ix0; ranges[r + 1] = ix1; ranges[r + 2] = iy0; ranges[r + 3] = iy1; ranges[r + 4] = iz0; ranges[r + 5] = iz1;
-      if ((ix1 - ix0 + 1) * (iy1 - iy0 + 1) * (iz1 - iz0 + 1) > 64 || this.tetBoundary[t] < 0 || !act[this.tPiece[t]]) {
-        ranges[r] = 1; ranges[r + 1] = 0; // skip huge or interior tets
-        continue;
-      }
+      if ((ix1 - ix0 + 1) * (iy1 - iy0 + 1) * (iz1 - iz0 + 1) > 4096) continue; // torn to bits
+      const rr = nList * 6;
+      ranges[rr] = ix0; ranges[rr + 1] = ix1; ranges[rr + 2] = iy0; ranges[rr + 3] = iy1; ranges[rr + 4] = iz0; ranges[rr + 5] = iz1;
+      list[nList++] = t;
+      const pk = tp[t] * 1640531513;
       for (let ix = ix0; ix <= ix1; ix++)
         for (let iy = iy0; iy <= iy1; iy++)
           for (let iz = iz0; iz <= iz1; iz++) {
-            counts[(((ix * 92837111) ^ (iy * 689287499) ^ (iz * 283923481)) & mask) + 1]++;
+            counts[(((ix * 92837111) ^ (iy * 689287499) ^ (iz * 283923481) ^ pk) & mask) + 1]++;
             total++;
           }
     }
+    this._nHTets = nList;
     for (let k = 0; k < size; k++) counts[k + 1] += counts[k];
     const entries = this._hEntries && this._hEntries.length >= total ? this._hEntries : (this._hEntries = new Int32Array(Math.max(total, 1024) * 2));
     const fill = this._hFill && this._hFill.length === size ? this._hFill : (this._hFill = new Int32Array(size));
     fill.set(counts.subarray(0, size));
-    for (let t = 0; t < nT; t++) {
-      const r = t * 6;
-      if (ranges[r] > ranges[r + 1]) continue;
+    for (let n = 0; n < nList; n++) {
+      const r = n * 6, t = list[n], pk = tp[t] * 1640531513;
       for (let ix = ranges[r]; ix <= ranges[r + 1]; ix++)
         for (let iy = ranges[r + 2]; iy <= ranges[r + 3]; iy++)
-          for (let iz = ranges[r + 4]; iz <= ranges[r + 5]; iz++) {
-            const hsh = ((ix * 92837111) ^ (iy * 689287499) ^ (iz * 283923481)) & mask;
-            entries[fill[hsh]++] = t;
-          }
+          for (let iz = ranges[r + 4]; iz <= ranges[r + 5]; iz++)
+            entries[fill[((ix * 92837111) ^ (iy * 689287499) ^ (iz * 283923481) ^ pk) & mask]++] = t;
     }
-    this._hMask = mask;
-    // candidate vertices: surface vertices whose piece bbox overlaps another piece
-    if (!this._surfVerts || this._surfVertsVersion !== this.topoVersion) {
-      const seen = new Uint8Array(this.nV);
-      const list = [];
-      for (let k = 0; k < this.nF * 3; k++) {
-        const i = this.sTri[k];
-        if (!seen[i]) {
-          seen[i] = 1;
-          list.push(i);
+    // probes and their candidate tets
+    const sTri = this.sTri, nF = this.nF;
+    const pvv = this._probeV && this._probeV.length >= nV ? this._probeV : (this._probeV = new Int32Array(Math.max(this.vCap, 1024)));
+    const pff = this._probeF && this._probeF.length >= nF ? this._probeF : (this._probeF = new Int32Array(Math.max(nF * 2, 1024)));
+    const nPmax = nV + nF;
+    const nS = this._pcStart && this._pcStart.length >= nPmax ? this._pcStart : (this._pcStart = new Int32Array((this.vCap + Math.max(nF, 1024)) * 2));
+    const nE = this._pcEnd && this._pcEnd.length >= nPmax ? this._pcEnd : (this._pcEnd = new Int32Array((this.vCap + Math.max(nF, 1024)) * 2));
+    const rel = this._pRel && this._pRel.length >= nPmax ? this._pRel : (this._pRel = new Float32Array((this.vCap + Math.max(nF, 1024)) * 2));
+    const seen = this._probeSeen && this._probeSeen.length >= nV ? this._probeSeen : (this._probeSeen = new Uint8Array(this.vCap));
+    seen.fill(0, 0, nV);
+    const tStamp = this._tStamp && this._tStamp.length >= nT ? this._tStamp : (this._tStamp = new Int32Array(this.tCap));
+    tStamp.fill(0, 0, nT);
+    let stamp = 0;
+    let cList = this._cList || (this._cList = new Int32Array(1 << 16));
+    let nc = 0, gRel = 0;
+    // other-piece tets whose swept box meets box (x0..z1); gRel = how fast
+    // those pieces can close in on the probe
+    const gather = (x0, y0, z0, x1, y1, z1, own) => {
+      const st = ++stamp;
+      const c0 = nc;
+      const ov = P[own].vel;
+      gRel = 0;
+      for (let e = ptS[own]; e < ptS[own + 1]; e++) {
+        const pb = ptL[e], B = pb * 6;
+        if (x1 < bb[B] || x0 > bb[B + 3] || y1 < bb[B + 1] || y0 > bb[B + 4] || z1 < bb[B + 2] || z0 > bb[B + 5]) continue;
+        const pk = pb * 1640531513, inv = pcs[pb];
+        const ix0 = Math.floor(x0 * inv), ix1 = Math.floor(x1 * inv);
+        const iy0 = Math.floor(y0 * inv), iy1 = Math.floor(y1 * inv);
+        const iz0 = Math.floor(z0 * inv), iz1 = Math.floor(z1 * inv);
+        const n0 = nc;
+        for (let ix = ix0; ix <= ix1; ix++)
+          for (let iy = iy0; iy <= iy1; iy++)
+            for (let iz = iz0; iz <= iz1; iz++) {
+              const hsh = ((ix * 92837111) ^ (iy * 689287499) ^ (iz * 283923481) ^ pk) & mask;
+              for (let q = counts[hsh]; q < counts[hsh + 1]; q++) {
+                const t = entries[q];
+                if (tStamp[t] === st || tp[t] !== pb) continue;
+                tStamp[t] = st;
+                const r = t * 6;
+                if (x1 < tbox[r] || x0 > tbox[r + 3] || y1 < tbox[r + 1] || y0 > tbox[r + 4] || z1 < tbox[r + 2] || z0 > tbox[r + 5]) continue;
+                if (nc >= cList.length) {
+                  const grown = new Int32Array(cList.length * 2);
+                  grown.set(cList);
+                  cList = this._cList = grown;
+                }
+                cList[nc++] = t;
+              }
+            }
+        if (nc > n0) {
+          const bv = P[pb].vel;
+          const r = Math.hypot(ov[0] - bv[0], ov[1] - bv[1], ov[2] - bv[2]) + pdev[pb];
+          if (r > gRel) gRel = r;
         }
       }
-      this._surfVerts = Int32Array.from(list);
-      this._surfVertsVersion = this.topoVersion;
+      return nc > c0;
+    };
+    let nv = 0, nf = 0;
+    const vStart = this._vcS && this._vcS.length >= nV ? this._vcS : (this._vcS = new Int32Array(this.vCap));
+    const vEnd = this._vcE && this._vcE.length >= nV ? this._vcE : (this._vcE = new Int32Array(this.vCap));
+    const vRel = this._vcR && this._vcR.length >= nV ? this._vcR : (this._vcR = new Float32Array(this.vCap));
+    const fS = this._fcS && this._fcS.length >= nF ? this._fcS : (this._fcS = new Int32Array(Math.max(nF * 2, 1024)));
+    const fE = this._fcE && this._fcE.length >= nF ? this._fcE : (this._fcE = new Int32Array(Math.max(nF * 2, 1024)));
+    const fR = this._fcR && this._fcR.length >= nF ? this._fcR : (this._fcR = new Float32Array(Math.max(nF * 2, 1024)));
+    const faces = this.faceProbes !== false;
+    for (let f = 0; f < nF; f++) {
+      const own = tp[this.sTet[f]];
+      if (!act[own]) continue;
+      for (let j = 0; j < 3; j++) {
+        const i = sTri[f * 3 + j];
+        if (seen[i]) continue;
+        seen[i] = 1;
+        const r = i * 6;
+        const c0 = nc;
+        if (gather(sw[r], sw[r + 1], sw[r + 2], sw[r + 3], sw[r + 4], sw[r + 5], own)) {
+          vStart[nv] = c0;
+          vEnd[nv] = nc;
+          vRel[nv] = gRel + pdev[own];
+          pvv[nv++] = i;
+        }
+      }
+      if (!faces) continue;
+      // the face centre's swept box (mean of its corners' boxes)
+      const a = sTri[f * 3] * 6, b = sTri[f * 3 + 1] * 6, c = sTri[f * 3 + 2] * 6;
+      const c0 = nc;
+      if (gather((sw[a] + sw[b] + sw[c]) / 3, (sw[a + 1] + sw[b + 1] + sw[c + 1]) / 3, (sw[a + 2] + sw[b + 2] + sw[c + 2]) / 3,
+        (sw[a + 3] + sw[b + 3] + sw[c + 3]) / 3, (sw[a + 4] + sw[b + 4] + sw[c + 4]) / 3, (sw[a + 5] + sw[b + 5] + sw[c + 5]) / 3, own)) {
+        fS[nf] = c0;
+        fE[nf] = nc;
+        fR[nf] = gRel + pdev[own];
+        pff[nf++] = f;
+      }
+    }
+    // one candidate range per probe: vertex probes first, then faces
+    for (let k = 0; k < nv; k++) {
+      nS[k] = vStart[k];
+      nE[k] = vEnd[k];
+      rel[k] = vRel[k];
+    }
+    for (let k = 0; k < nf; k++) {
+      nS[nv + k] = fS[k];
+      nE[nv + k] = fE[k];
+      rel[nv + k] = fR[k];
+    }
+    this._nProbeV = nv;
+    this._nProbeF = nf;
+    // clearance left per probe: a probe that missed by a margin skips the
+    // following substeps until the pieces could have closed that gap
+    const nPr = nv + nf;
+    if (!this._skip || this._skip.length < nPr) this._skip = new Float32Array(Math.max(nPr * 2, 4096));
+    this._skip.fill(0, 0, nPr);
+    if (!this._tBoxNow || this._tBoxNow.length < nT * 6) {
+      this._tBoxNow = new Float32Array(this.tCap * 6);
+      this._tBoxStamp = new Int32Array(this.tCap);
     }
   }
 
-  _solvePieceCollisions() {
-    const { x, w, T, vPiece, tPiece } = this;
-    const inv = 1 / this._cs, mask = this._hMask;
-    const counts = this._hCount, entries = this._hEntries;
-    const sv = this._surfVerts;
-    const sTri = this.sTri;
-    const margin = this.contactMargin ?? 0;
-    const act = this._pieceActive;
-    for (let q = 0; q < sv.length; q++) {
-      const i = sv[q];
-      if (!act[vPiece[i]]) continue;
-      const o = i * 3;
-      const px = x[o], py = x[o + 1], pz = x[o + 2];
-      const ix = Math.floor(px * inv), iy = Math.floor(py * inv), iz = Math.floor(pz * inv);
-      const hsh = ((ix * 92837111) ^ (iy * 689287499) ^ (iz * 283923481)) & mask;
-      const pi = vPiece[i];
-      for (let e = counts[hsh]; e < counts[hsh + 1]; e++) {
-        const t = entries[e];
-        if (tPiece[t] === pi) continue;
-        const t4 = t * 4;
-        const a = T[t4] * 3, b = T[t4 + 1] * 3, c = T[t4 + 2] * 3, d = T[t4 + 3] * 3;
-        // barycentric test
-        const e1x = x[b] - x[a], e1y = x[b + 1] - x[a + 1], e1z = x[b + 2] - x[a + 2];
-        const e2x = x[c] - x[a], e2y = x[c + 1] - x[a + 1], e2z = x[c + 2] - x[a + 2];
-        const e3x = x[d] - x[a], e3y = x[d + 1] - x[a + 1], e3z = x[d + 2] - x[a + 2];
-        const det = e1x * (e2y * e3z - e2z * e3y) - e2x * (e1y * e3z - e1z * e3y) + e3x * (e1y * e2z - e1z * e2y);
-        if (det <= 1e-15) continue;
-        const rx = px - x[a], ry = py - x[a + 1], rz = pz - x[a + 2];
-        const id = 1 / det;
-        const l1 = (rx * (e2y * e3z - e2z * e3y) - e2x * (ry * e3z - rz * e3y) + e3x * (ry * e2z - rz * e2y)) * id;
-        if (l1 < 0) continue;
-        const l2 = (e1x * (ry * e3z - rz * e3y) - rx * (e1y * e3z - e1z * e3y) + e3x * (e1y * rz - e1z * ry)) * id;
-        if (l2 < 0) continue;
-        const l3 = (e1x * (e2y * rz - e2z * ry) - e2x * (e1y * rz - e1z * ry) + rx * (e1y * e2z - e1z * e2y)) * id;
-        if (l3 < 0 || l1 + l2 + l3 > 1) continue;
-        // inside: push out through the boundary face the vertex came in
-        // through this substep (falls back to the closest boundary face)
-        let best = -1, bestD = Infinity, bnx = 0, bny = 0, bnz = 0;
-        let cross = -1, crossD = Infinity, cnx = 0, cny = 0, cnz = 0;
-        const qx = this.px[o], qy = this.px[o + 1], qz = this.px[o + 2];
-        for (let f = this.tetBoundary[t]; f >= 0; f = this.nextBoundary[f]) {
-          const fa = sTri[f * 3] * 3, fb = sTri[f * 3 + 1] * 3, fc = sTri[f * 3 + 2] * 3;
-          const ux = x[fb] - x[fa], uy = x[fb + 1] - x[fa + 1], uz = x[fb + 2] - x[fa + 2];
-          const vx = x[fc] - x[fa], vy = x[fc + 1] - x[fa + 1], vz = x[fc + 2] - x[fa + 2];
-          let nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx;
-          const l = Math.hypot(nx, ny, nz);
-          if (l < 1e-14) continue;
-          nx /= l; ny /= l; nz /= l;
-          const dist = -((px - x[fa]) * nx + (py - x[fa + 1]) * ny + (pz - x[fa + 2]) * nz);
-          const prev = -((qx - x[fa]) * nx + (qy - x[fa + 1]) * ny + (qz - x[fa + 2]) * nz);
-          if (prev <= 1e-4 && dist < crossD) {
-            crossD = dist;
-            cross = f;
-            cnx = nx; cny = ny; cnz = nz;
-          }
-          if (dist < bestD) {
-            bestD = dist;
-            best = f;
-            bnx = nx; bny = ny; bnz = nz;
-          }
+  // Is p inside tet t? Returns -1 if so (barycentric coordinates into
+  // this._ct), else a lower bound on its distance to the tet: how far it is
+  // outside the first face plane found that separates them.
+  _tetGap(t, px, py, pz) {
+    const x = this.x, T = this.T, t4 = t * 4;
+    const a = T[t4] * 3, b = T[t4 + 1] * 3, c = T[t4 + 2] * 3, d = T[t4 + 3] * 3;
+    const ax = x[a], ay = x[a + 1], az = x[a + 2];
+    const e1x = x[b] - ax, e1y = x[b + 1] - ay, e1z = x[b + 2] - az;
+    const e2x = x[c] - ax, e2y = x[c + 1] - ay, e2z = x[c + 2] - az;
+    const e3x = x[d] - ax, e3y = x[d + 1] - ay, e3z = x[d + 2] - az;
+    const c0x = e2y * e3z - e2z * e3y, c0y = e2z * e3x - e2x * e3z, c0z = e2x * e3y - e2y * e3x;
+    const det = e1x * c0x + e1y * c0y + e1z * c0z;
+    if (det <= 1e-15) return Infinity;
+    const rx = px - ax, ry = py - ay, rz = pz - az;
+    // s_k = det x barycentric k = det x (distance to the face opposite k) / height
+    const s1 = rx * c0x + ry * c0y + rz * c0z;
+    if (s1 < 0) return -s1 / Math.hypot(c0x, c0y, c0z);
+    const qx = ry * e1z - rz * e1y, qy = rz * e1x - rx * e1z, qz = rx * e1y - ry * e1x; // r x e1
+    const s2 = -(e3x * qx + e3y * qy + e3z * qz);
+    if (s2 < 0) return -s2 / Math.hypot(e1y * e3z - e1z * e3y, e1z * e3x - e1x * e3z, e1x * e3y - e1y * e3x);
+    const s3 = e2x * qx + e2y * qy + e2z * qz;
+    if (s3 < 0) return -s3 / Math.hypot(e1y * e2z - e1z * e2y, e1z * e2x - e1x * e2z, e1x * e2y - e1y * e2x);
+    const s0 = det - s1 - s2 - s3;
+    if (s0 < 0) {
+      const fx = e2x - e1x, fy = e2y - e1y, fz = e2z - e1z, gx = e3x - e1x, gy = e3y - e1y, gz = e3z - e1z;
+      return -s0 / Math.hypot(fy * gz - fz * gy, fz * gx - fx * gz, fx * gy - fy * gx);
+    }
+    const ct = this._ct, id = 1 / det;
+    ct.b0 = s0 * id; ct.b1 = s1 * id; ct.b2 = s2 * id; ct.b3 = s3 * id;
+    return -1;
+  }
+
+  // Geometry of boundary face f this contact pass (cached): anchor a, edges
+  // u v, unit outward normal, Gram terms for projecting onto it. False for
+  // degenerate faces.
+  _faceGeo(f) {
+    const G = this._fGeo, o = f * 16;
+    if (this._fGeoStamp[f] === this._pass) return G[o + 15] !== 0;
+    this._fGeoStamp[f] = this._pass;
+    const x = this.x, sTri = this.sTri;
+    const fa = sTri[f * 3] * 3, fb = sTri[f * 3 + 1] * 3, fc = sTri[f * 3 + 2] * 3;
+    const ax = x[fa], ay = x[fa + 1], az = x[fa + 2];
+    const ux = x[fb] - ax, uy = x[fb + 1] - ay, uz = x[fb + 2] - az;
+    const vx = x[fc] - ax, vy = x[fc + 1] - ay, vz = x[fc + 2] - az;
+    const nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx;
+    const l = Math.hypot(nx, ny, nz);
+    const d00 = ux * ux + uy * uy + uz * uz, d01 = ux * vx + uy * vy + uz * vz, d11 = vx * vx + vy * vy + vz * vz;
+    const den = d00 * d11 - d01 * d01;
+    if (l < 1e-14 || den < 1e-20) {
+      G[o + 15] = 0;
+      return false;
+    }
+    G[o] = ax; G[o + 1] = ay; G[o + 2] = az;
+    G[o + 3] = ux; G[o + 4] = uy; G[o + 5] = uz;
+    G[o + 6] = vx; G[o + 7] = vy; G[o + 8] = vz;
+    G[o + 9] = nx / l; G[o + 10] = ny / l; G[o + 11] = nz / l;
+    G[o + 12] = d00; G[o + 13] = d01; G[o + 14] = d11;
+    G[o + 15] = 1 / den;
+    return true;
+  }
+
+  // Is the point (wx, wy, wz) relative to face f's anchor within the face's
+  // outline grown by tol (in barycentric units)?
+  _onFace(o, wx, wy, wz, tol) {
+    const G = this._fGeo;
+    const d20 = wx * G[o + 3] + wy * G[o + 4] + wz * G[o + 5], d21 = wx * G[o + 6] + wy * G[o + 7] + wz * G[o + 8];
+    const id = G[o + 15];
+    const be = (G[o + 14] * d20 - G[o + 13] * d21) * id, ga = (G[o + 12] * d21 - G[o + 13] * d20) * id;
+    return be >= -tol && ga >= -tol && be + ga <= 1 + tol;
+  }
+
+  // Boundary face f against point p (previous q): depth behind its plane now
+  // and before (> 0 = inside), whether p's projection lies on the face, and
+  // where the path crossed the plane (crossS, if it came in through it).
+  // `need` = 1: only the depth/on test, 2: also the crossing.
+  _faceProbe(f, px, py, pz, qx, qy, qz) {
+    const fq = this._fq;
+    fq.ok = false;
+    if (!this._faceGeo(f)) return;
+    const G = this._fGeo, o = f * 16;
+    const ax = G[o], ay = G[o + 1], az = G[o + 2], nx = G[o + 9], ny = G[o + 10], nz = G[o + 11];
+    const dist = -((px - ax) * nx + (py - ay) * ny + (pz - az) * nz);
+    if (dist <= 0) return; // in front of it: not a way out
+    // pushing out this way would land under the floor / in the arena wall:
+    // useless (it just gets pushed back in), so don't
+    const ex = px + nx * dist, ey = py + ny * dist, ez = pz + nz * dist;
+    const R = this.p.arenaRadius;
+    if ((ny < 0 && ey < 0.002) || ex * ex + ez * ez > R * R) return;
+    const prev = -((qx - ax) * nx + (qy - ay) * ny + (qz - az) * nz);
+    fq.ok = true;
+    fq.dist = dist; fq.prev = prev; fq.nx = nx; fq.ny = ny; fq.nz = nz;
+    fq.on = this._onFace(o, ex - ax, ey - ay, ez - az, 0.15);
+    fq.crossS = Infinity;
+    if (prev <= 0) {
+      // where the path met the plane
+      const s = prev / (prev - dist);
+      if (this._onFace(o, qx + (px - qx) * s - ax, qy + (py - qy) * s - ay, qz + (pz - qz) * s - az, 0.08)) fq.crossS = s;
+    }
+  }
+
+  // Is point p (previous position q) of piece `own` inside another piece?
+  // Tries the tet it was in last substep (wt), then the frame's candidate
+  // tets cList[c0..c1). Push-out direction: the boundary face the path
+  // entered through this substep, else the nearest face it lies behind
+  // (last substep's face wf first), else - deep inside - the interpolated
+  // escape field. Result in this._ct: tet t, face f (-1 = escape field),
+  // bary b0..b3, unit normal n, depth.
+  _contact(px, py, pz, qx, qy, qz, c0, c1, own, wt, wf) {
+    const { T, tPiece } = this;
+    const ct = this._ct, fq = this._fq || (this._fq = { ok: false, dist: 0, prev: 0, nx: 0, ny: 0, nz: 0, on: false, crossS: Infinity });
+    let t = -1;
+    if (wt >= 0 && wt < this.nT && tPiece[wt] !== own && this.vol0[wt] > 0 && this._tetGap(wt, px, py, pz) < 0) t = wt;
+    else {
+      // scan the candidates; on a miss, remember how far the nearest was
+      const cl = this._cList, tb = this._tBoxNow, tbs = this._tBoxStamp, pass = this._pass;
+      const x = this.x;
+      let gap = Infinity;
+      for (let e = c0; e < c1; e++) {
+        const u = cl[e];
+        if (u === wt) continue;
+        const r = u * 6;
+        if (tbs[u] !== pass) {
+          // this pass's box of the tet: a cheap reject, and a lower bound on
+          // the distance when it does reject
+          tbs[u] = pass;
+          const o = u * 4;
+          const a = T[o] * 3, b = T[o + 1] * 3, c = T[o + 2] * 3, d = T[o + 3] * 3;
+          let v0 = x[a], v1 = x[b], v2 = x[c], v3 = x[d];
+          tb[r] = Math.min(v0, v1, v2, v3); tb[r + 3] = Math.max(v0, v1, v2, v3);
+          v0 = x[a + 1]; v1 = x[b + 1]; v2 = x[c + 1]; v3 = x[d + 1];
+          tb[r + 1] = Math.min(v0, v1, v2, v3); tb[r + 4] = Math.max(v0, v1, v2, v3);
+          v0 = x[a + 2]; v1 = x[b + 2]; v2 = x[c + 2]; v3 = x[d + 2];
+          tb[r + 2] = Math.min(v0, v1, v2, v3); tb[r + 5] = Math.max(v0, v1, v2, v3);
         }
-        if (cross >= 0) {
-          best = cross;
-          bestD = crossD;
-          bnx = cnx; bny = cny; bnz = cnz;
+        const ox = Math.max(tb[r] - px, px - tb[r + 3]), oy = Math.max(tb[r + 1] - py, py - tb[r + 4]), oz = Math.max(tb[r + 2] - pz, pz - tb[r + 5]);
+        const out = Math.max(ox, oy, oz);
+        if (out > 0) {
+          if (out < gap) gap = out;
+          continue;
         }
-        if (best < 0 || bestD < 0) continue;
-        // a real impact wakes both sides; steady resting contact treats a
-        // sleeping piece as immovable (and leaves it asleep and undisturbed)
-        const tpc = this.pieces[tPiece[t]];
-        const ppc = this.pieces[pi];
-        if (bestD > 0.003) {
-          if (tpc.asleep) {
-            tpc.asleep = false;
-            tpc.sleepT = 0;
-            this._awake[tPiece[t]] = 1;
-          }
-          if (ppc.asleep) {
-            ppc.asleep = false;
-            ppc.sleepT = 0;
-            this._awake[pi] = 1;
-          }
+        const g = this._tetGap(u, px, py, pz);
+        if (g < 0) {
+          t = u;
+          break;
         }
-        const depth = (bestD + margin) * (this.contactRelax ?? 0.42);
-        const f3 = best * 3;
-        const ia = sTri[f3], ib = sTri[f3 + 1], ic = sTri[f3 + 2];
-        const wv = ppc.asleep ? 0 : w[i];
-        const wfa = tpc.asleep ? 0 : w[ia], wfb = tpc.asleep ? 0 : w[ib], wfc = tpc.asleep ? 0 : w[ic];
-        const wf = (wfa + wfb + wfc) / 9;
-        const den = wv + wf;
-        if (den <= 0) continue;
-        const sv1 = (depth * wv) / den;
-        const sf = (depth * (wfa / 3)) / den, sg = (depth * (wfb / 3)) / den, sh = (depth * (wfc / 3)) / den;
-        x[o] += bnx * sv1; x[o + 1] += bny * sv1; x[o + 2] += bnz * sv1;
-        x[ia * 3] -= bnx * sf; x[ia * 3 + 1] -= bny * sf; x[ia * 3 + 2] -= bnz * sf;
-        x[ib * 3] -= bnx * sg; x[ib * 3 + 1] -= bny * sg; x[ib * 3 + 2] -= bnz * sg;
-        x[ic * 3] -= bnx * sh; x[ic * 3 + 1] -= bny * sh; x[ic * 3 + 2] -= bnz * sh;
-        // friction: gelatin on gelatin is grippy; cancel relative sliding
-        const q = this.px;
-        let sx = x[o] - q[o], sy = x[o + 1] - q[o + 1], sz = x[o + 2] - q[o + 2];
-        sx -= ((x[ia * 3] - q[ia * 3]) + (x[ib * 3] - q[ib * 3]) + (x[ic * 3] - q[ic * 3])) / 3;
-        sy -= ((x[ia * 3 + 1] - q[ia * 3 + 1]) + (x[ib * 3 + 1] - q[ib * 3 + 1]) + (x[ic * 3 + 1] - q[ic * 3 + 1])) / 3;
-        sz -= ((x[ia * 3 + 2] - q[ia * 3 + 2]) + (x[ib * 3 + 2] - q[ib * 3 + 2]) + (x[ic * 3 + 2] - q[ic * 3 + 2])) / 3;
-        const sn = sx * bnx + sy * bny + sz * bnz;
-        sx -= sn * bnx; sy -= sn * bny; sz -= sn * bnz;
-        const sl = Math.hypot(sx, sy, sz);
-        if (sl > 1e-9) {
-          const k = Math.min(1, (1.6 * depth) / sl) * 0.9;
-          const cv = (k * wv) / den;
-          if (ppc.asleep && tpc.asleep) continue;
-          x[o] -= sx * cv; x[o + 1] -= sy * cv; x[o + 2] -= sz * cv;
-          const fs = ((1 - wv / den) * k) / 3;
-          for (const fi of [ia, ib, ic]) {
-            if (w[fi] === 0 || tpc.asleep) continue;
-            x[fi * 3] += sx * fs; x[fi * 3 + 1] += sy * fs; x[fi * 3 + 2] += sz * fs;
-          }
-        }
-        break;
+        if (g < gap) gap = g;
+      }
+      if (t < 0) {
+        this._gap = gap;
+        return false;
       }
     }
+    ct.t = t;
+    const pt = tPiece[t];
+    // still behind last substep's face?
+    if (wf >= 0 && wf < this.nF && tPiece[this.sTet[wf]] === pt) {
+      this._faceProbe(wf, px, py, pz, qx, qy, qz);
+      if (fq.ok && fq.on && (fq.prev > 0 || fq.dist < 0.004)) {
+        ct.f = wf; ct.nx = fq.nx; ct.ny = fq.ny; ct.nz = fq.nz; ct.depth = fq.dist;
+        return true;
+      }
+    }
+    // the boundary faces around this tet's vertices
+    const t4 = t * 4;
+    const vfS = this.vfStart, vfL = this.vfList, seen = this._fSeen;
+    const stamp = ++this._fStamp;
+    let cross = -1, crossS = Infinity, crossD = 0, cnx = 0, cny = 0, cnz = 0;
+    let best = -1, bestD = Infinity, bnx = 0, bny = 0, bnz = 0;
+    for (let k = 0; k < 4; k++) {
+      const vi = T[t4 + k];
+      for (let ef = vfS[vi]; ef < vfS[vi + 1]; ef++) {
+        const f = vfL[ef];
+        if (seen[f] === stamp) continue;
+        seen[f] = stamp;
+        this._faceProbe(f, px, py, pz, qx, qy, qz);
+        if (!fq.ok) continue; // (only faces it lies behind)
+        if (fq.crossS < crossS) {
+          crossS = fq.crossS; cross = f; crossD = fq.dist; cnx = fq.nx; cny = fq.ny; cnz = fq.nz;
+        }
+        if (fq.dist > 0 && fq.dist < bestD && fq.on) {
+          bestD = fq.dist; best = f; bnx = fq.nx; bny = fq.ny; bnz = fq.nz;
+        }
+      }
+    }
+    // the face it came in through - unless that is much deeper than the
+    // nearest one, i.e. it merely slid over an edge (or the face came to it)
+    if (cross >= 0 && (best < 0 || crossD <= bestD + Math.hypot(px - qx, py - qy, pz - qz))) {
+      ct.f = cross; ct.nx = cnx; ct.ny = cny; ct.nz = cnz; ct.depth = crossD;
+      return true;
+    }
+    if (best >= 0) {
+      ct.f = best; ct.nx = bnx; ct.ny = bny; ct.nz = bnz; ct.depth = bestD;
+      return true;
+    }
+    // deep: follow the escape field (rest space), mapped through F = Ds Dm^-1
+    ct.f = -1;
+    const x = this.x, E = this.esc;
+    const ia = T[t4], ib = T[t4 + 1], ic = T[t4 + 2], idd = T[t4 + 3];
+    const b0 = ct.b0, b1 = ct.b1, b2 = ct.b2, b3 = ct.b3;
+    let ex = E[ia * 3] * b0 + E[ib * 3] * b1 + E[ic * 3] * b2 + E[idd * 3] * b3;
+    let ey = E[ia * 3 + 1] * b0 + E[ib * 3 + 1] * b1 + E[ic * 3 + 1] * b2 + E[idd * 3 + 1] * b3;
+    let ez = E[ia * 3 + 2] * b0 + E[ib * 3 + 2] * b1 + E[ic * 3 + 2] * b2 + E[idd * 3 + 2] * b3;
+    if (ex * ex + ey * ey + ez * ez < 1e-8) {
+      // on a medial line the field cancels: use the strongest vertex's
+      const bs = [b0, b1, b2, b3], vs = [ia, ib, ic, idd];
+      let km = 0;
+      for (let k = 1; k < 4; k++) if (bs[k] > bs[km]) km = k;
+      ex = E[vs[km] * 3]; ey = E[vs[km] * 3 + 1]; ez = E[vs[km] * 3 + 2];
+    }
+    const a = ia * 3, b = ib * 3, c = ic * 3, d = idd * 3;
+    const e1x = x[b] - x[a], e1y = x[b + 1] - x[a + 1], e1z = x[b + 2] - x[a + 2];
+    const e2x = x[c] - x[a], e2y = x[c + 1] - x[a + 1], e2z = x[c + 2] - x[a + 2];
+    const e3x = x[d] - x[a], e3y = x[d + 1] - x[a + 1], e3z = x[d + 2] - x[a + 2];
+    const B = this.B, bo = t * 9;
+    const y0 = B[bo] * ex + B[bo + 1] * ey + B[bo + 2] * ez;
+    const y1 = B[bo + 3] * ex + B[bo + 4] * ey + B[bo + 5] * ez;
+    const y2 = B[bo + 6] * ex + B[bo + 7] * ey + B[bo + 8] * ez;
+    const wx = e1x * y0 + e2x * y1 + e3x * y2, wy = e1y * y0 + e2y * y1 + e3y * y2, wz = e1z * y0 + e2z * y1 + e3z * y2;
+    const wl = Math.hypot(wx, wy, wz);
+    if (wl < 1e-9) return false;
+    ct.nx = wx / wl; ct.ny = wy / wl; ct.nz = wz / wl;
+    // (a badly squashed tet maps the escape vector to nonsense lengths)
+    ct.depth = Math.min(wl, 1.5 * Math.hypot(ex, ey, ez)) + 0.002;
+    return true;
+  }
+
+  _solvePieceCollisions(h) {
+    const { x, px: q, w, T, tPiece, sTri } = this;
+    const skip = this._skip, rel = this._pRel;
+    this._pass++;
+    const ct = this._ct;
+    const pv = this._probeV, pf = this._probeF;
+    const P = this.pieces, aw = this._awake;
+    // probe = 1 vertex, or a face centre spread over 3 vertices
+    const pi3 = this._pi3 || (this._pi3 = new Int32Array(3));
+    const pw3 = this._pw3 || (this._pw3 = new Float64Array(3));
+    const ti4 = this._ti4 || (this._ti4 = new Int32Array(4));
+    const tb4 = this._tb4 || (this._tb4 = new Float64Array(4));
+    const cS = this._pcStart, cE = this._pcEnd;
+    const wtV = this._wtV, wfV = this._wfV, wtF = this._wtF, wfF = this._wfF;
+    const gp = this.grab ? this.grab.piece : -2;
+    let press = 0;
+    const nProbes = this._nProbeV + this._nProbeF;
+    for (let k = 0; k < nProbes; k++) {
+      let n, own, cx, cy, cz, qx, qy, qz;
+      if (k < this._nProbeV) {
+        const i = pv[k], o = i * 3;
+        n = 1;
+        pi3[0] = i; pw3[0] = 1;
+        own = this.vPiece[i];
+        cx = x[o]; cy = x[o + 1]; cz = x[o + 2];
+        qx = q[o]; qy = q[o + 1]; qz = q[o + 2];
+      } else {
+        const f = pf[k - this._nProbeV];
+        n = 3;
+        const a = sTri[f * 3], b = sTri[f * 3 + 1], c = sTri[f * 3 + 2];
+        pi3[0] = a; pi3[1] = b; pi3[2] = c;
+        pw3[0] = pw3[1] = pw3[2] = 1 / 3;
+        own = tPiece[this.sTet[f]];
+        cx = (x[a * 3] + x[b * 3] + x[c * 3]) / 3; cy = (x[a * 3 + 1] + x[b * 3 + 1] + x[c * 3 + 1]) / 3; cz = (x[a * 3 + 2] + x[b * 3 + 2] + x[c * 3 + 2]) / 3;
+        qx = (q[a * 3] + q[b * 3] + q[c * 3]) / 3; qy = (q[a * 3 + 1] + q[b * 3 + 1] + q[c * 3 + 1]) / 3; qz = (q[a * 3 + 2] + q[b * 3 + 2] + q[c * 3 + 2]) / 3;
+      }
+      const isV = k < this._nProbeV;
+      const key = isV ? pi3[0] : pf[k - this._nProbeV];
+      const WT = isV ? wtV : wtF, WF = isV ? wfV : wfF;
+      // closing speed bound (+ headroom for this frame's changes)
+      const room = skip[k] - (rel[k] + 0.5) * h * 1.25;
+      if (room > 0) {
+        skip[k] = room;
+        continue;
+      }
+      if (!this._contact(cx, cy, cz, qx, qy, qz, cS[k], cE[k], own, WT[key], WF[key])) {
+        skip[k] = this._gap;
+        continue;
+      }
+      skip[k] = 0;
+      WT[key] = ct.t;
+      WF[key] = ct.f;
+      if ((own === gp || tPiece[ct.t] === gp) && ct.depth > press) press = ct.depth;
+      const t = ct.t, t4 = t * 4, d = ct.depth, pt = tPiece[t];
+      // a real impact wakes sleepers; otherwise a sleeping side is immovable
+      const po = P[own], pp = P[pt];
+      if (d > 0.003) {
+        if (po.asleep) { po.asleep = false; po.sleepT = 0; aw[own] = 1; }
+        if (pp.asleep) { pp.asleep = false; pp.sleepT = 0; aw[pt] = 1; }
+      }
+      const mOwn = po.asleep ? 0 : 1, mTet = pp.asleep ? 0 : 1;
+      ti4[0] = T[t4]; ti4[1] = T[t4 + 1]; ti4[2] = T[t4 + 2]; ti4[3] = T[t4 + 3];
+      tb4[0] = ct.b0; tb4[1] = ct.b1; tb4[2] = ct.b2; tb4[3] = ct.b3;
+      let wP = 0, wT = 0;
+      for (let j = 0; j < n; j++) wP += pw3[j] * pw3[j] * w[pi3[j]];
+      wP *= mOwn;
+      for (let j = 0; j < 4; j++) wT += tb4[j] * tb4[j] * w[ti4[j]];
+      wT *= mTet;
+      const W = wP + wT;
+      if (W <= 0) continue;
+      const nx = ct.nx, ny = ct.ny, nz = ct.nz;
+      // relative motion this substep (probe vs the point of the tet under it)
+      let sx = cx - qx, sy = cy - qy, sz = cz - qz;
+      for (let j = 0; j < 4; j++) {
+        const i = ti4[j] * 3;
+        sx -= tb4[j] * (x[i] - q[i]); sy -= tb4[j] * (x[i + 1] - q[i + 1]); sz -= tb4[j] * (x[i + 2] - q[i + 2]);
+      }
+      const sn = sx * nx + sy * ny + sz * nz;
+      // gentle for resting contact, full strength when really penetrating
+      const relax = d < 0.004 ? 0.5 : d > 0.02 ? 1 : 0.5 + ((d - 0.004) / 0.016) * 0.5;
+      // (deep ones come out over a few substeps, not in one violent jump)
+      const corr = Math.min(d * relax, 0.035 * this.p.size);
+      // split: the part that cancels the approach may change velocity, the
+      // rest is a pure position fix (contact must not inject bounce/jitter)
+      const cv = Math.min(Math.max(-sn, 0), corr), cp = corr - cv;
+      const lam = corr / W, lamP = cp / W;
+      for (let j = 0; j < n; j++) {
+        const i = pi3[j], s = w[i] * pw3[j] * mOwn;
+        x[i * 3] += nx * s * lam; x[i * 3 + 1] += ny * s * lam; x[i * 3 + 2] += nz * s * lam;
+        q[i * 3] += nx * s * lamP; q[i * 3 + 1] += ny * s * lamP; q[i * 3 + 2] += nz * s * lamP;
+      }
+      if (mTet) for (let j = 0; j < 4; j++) {
+        const i = ti4[j], s = w[i] * tb4[j];
+        x[i * 3] -= nx * s * lam; x[i * 3 + 1] -= ny * s * lam; x[i * 3 + 2] -= nz * s * lam;
+        q[i * 3] -= nx * s * lamP; q[i * 3 + 1] -= ny * s * lamP; q[i * 3 + 2] -= nz * s * lamP;
+      }
+      // light friction on the sliding part of the relative motion
+      sx -= sn * nx; sy -= sn * ny; sz -= sn * nz;
+      const sl = Math.hypot(sx, sy, sz);
+      if (sl > 1e-9) {
+        const kf = (Math.min(1, (0.5 * d) / sl) * 0.7) / W;
+        for (let j = 0; j < n; j++) {
+          const i = pi3[j], s = w[i] * pw3[j] * mOwn * kf;
+          x[i * 3] -= sx * s; x[i * 3 + 1] -= sy * s; x[i * 3 + 2] -= sz * s;
+        }
+        if (mTet) for (let j = 0; j < 4; j++) {
+          const i = ti4[j], s = w[i] * tb4[j] * kf;
+          x[i * 3] += sx * s; x[i * 3 + 1] += sy * s; x[i * 3 + 2] += sz * s;
+        }
+      }
+    }
+    this._grabPress = press;
   }
 
   // ---------------------------------------------------------------- queries
