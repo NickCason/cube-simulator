@@ -18,7 +18,7 @@ const DEFAULTS = {
   lambdaRatio: 24, // lambda / mu (near-incompressible)
   gravity: -22,
   substeps: 12,
-  damping: 2.4, // decay rate of non-rigid velocity (1/s)
+  damping: 1.7, // decay rate of non-rigid velocity (1/s)
   airDrag: 0.05,
   friction: 0.85,
   restitutionWall: 0.2,

@@ -10,6 +10,7 @@ const app = new App(canvas, {
   exposure: params.has('exp') ? +params.get('exp') : undefined,
   color: params.get('color') ? '#' + params.get('color') : undefined,
   nojelly: params.has('nojelly'),
+  light: params.get('light') || undefined,
 });
 if (params.has('density') || params.has('scatter')) {
   app.jelly.density = +(params.get('density') || 1);

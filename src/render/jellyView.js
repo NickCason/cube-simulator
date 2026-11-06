@@ -52,13 +52,13 @@ export class JellyView {
   setColor(hex, opts = {}) {
     const c = new THREE.Color(hex);
     const lin = c.clone(); // THREE.Color stores linear values
-    const density = opts.density ?? (this.density || 1.5);
+    const density = opts.density ?? (this.density || 1.25);
     const ref = 0.55 / density;
     const abs = absorptionFromColor(lin, ref);
     this.frontMat.uniforms.uAbsorb.value.copy(abs);
     this.causticMat.uniforms.uAbsorb.value.copy(abs);
     // colour of light that has crossed ~0.45 units of jelly (tints the shadow)
-    this.fxUniforms.tint.value.setRGB(Math.exp(-abs.x * 0.45), Math.exp(-abs.y * 0.45), Math.exp(-abs.z * 0.45));
+    this.fxUniforms.tint.value.setRGB(Math.exp(-abs.x * 0.35), Math.exp(-abs.y * 0.35), Math.exp(-abs.z * 0.35));
     const sc = lin.clone();
     // scattered light colour: saturated body colour
     const mx = Math.max(sc.r, sc.g, sc.b, 1e-3);

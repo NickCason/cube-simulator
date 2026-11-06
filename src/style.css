@@ -227,7 +227,8 @@ body {
   display: none;
 }
 
-.chip {
+.chip,
+.dock .chip {
   width: 34px;
   height: 34px;
   border-radius: 50%;
@@ -245,7 +246,8 @@ body {
   outline-offset: 2px;
 }
 
-.chip.custom {
+.chip.custom,
+.dock .chip.custom {
   position: relative;
   overflow: hidden;
   cursor: pointer;

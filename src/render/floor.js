@@ -67,7 +67,7 @@ export function createFloor(env, fx) {
             + texture2D(tFloorFx, fuv + vec2(-o5.x, o5.y)).g + texture2D(tFloorFx, fuv + vec2(o5.x, -o5.y)).g;
           cover = clamp(c0 * 0.35 + c1 * 0.1 + w0 * 0.07 + w1 * 0.045, 0.0, 1.0);
         }
-        vec3 jellyTransfer = vec3(1.0 - mask) + caus + uTint * mask * 0.28;
+        vec3 jellyTransfer = vec3(1.0 - mask) + caus * 1.7 + uTint * mask * 0.45;
         ${THREE.ShaderChunk.lights_fragment_begin.replace(
           'getDirectionalLightInfo( directionalLight, directLight );',
           'getDirectionalLightInfo( directionalLight, directLight );\n\t\tdirectLight.color *= jellyTransfer;',

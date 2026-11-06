@@ -28,7 +28,7 @@ export class Bubbles {
           float ndv = clamp(dot(N, vV), 0.0, 1.0);
           float rim = pow(1.0 - ndv, 2.2);
           float spec = pow(max(dot(reflect(-normalize(uLight), N), vV), 0.0), 60.0);
-          vec3 c = vec3(0.55, 0.57, 0.6) * (0.25 + 0.75 * ndv) + vec3(2.2) * rim + vec3(9.0) * spec;
+          vec3 c = vec3(1.25, 1.27, 1.3) * (0.55 + 0.45 * ndv) + vec3(3.2) * rim + vec3(12.0) * spec;
           gl_FragColor = vec4(c, 1.0);
         }`,
     });
@@ -43,7 +43,7 @@ export class Bubbles {
     for (let i = 0; i < count; i++) {
       // most bubbles float up near the top while the jelly sets
       const y = half - 0.06 - Math.pow(rnd(), 2.2) * (half * 2 - 0.14);
-      const r = 0.005 + Math.pow(rnd(), 3) * 0.02;
+      const r = 0.004 + Math.pow(rnd(), 3) * 0.013;
       this.items.push({
         X: [(rnd() - 0.5) * (half * 2 - 0.16), y, (rnd() - 0.5) * (half * 2 - 0.16)],
         r,

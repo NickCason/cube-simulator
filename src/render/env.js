@@ -2,7 +2,7 @@ import * as THREE from 'three';
 
 // Procedural photo-studio environment: a soft gradient sweep with a few
 // rectangular softboxes. Captured into a PMREM cube for reflections.
-export function createStudioEnvironment(renderer) {
+export function createStudioEnvironment(renderer, lightDir) {
   const scene = new THREE.Scene();
 
   const sky = new THREE.Mesh(
@@ -41,7 +41,8 @@ export function createStudioEnvironment(renderer) {
     scene.add(m);
   };
   // key softbox (matches the key light), overhead panel, strips, back panel
-  box(9, 6, 9, [-7, 11, 7], [0, 0, 0], 0xfff6ec);
+  const k = lightDir ? lightDir.clone().multiplyScalar(14) : { x: -7, y: 11, z: 7 };
+  box(9, 6, 9, [k.x, k.y, k.z], [0, 0, 0], 0xfff6ec);
   box(14, 9, 1.6, [0, 16, 0], [0, 0, 0], 0xf4f7ff);
   box(2.2, 12, 5.5, [12, 4, 2], [0, 2, 0], 0xeef3ff);
   box(8, 2.6, 2.6, [-3, 5, -12], [0, 1, 0], 0xffffff);

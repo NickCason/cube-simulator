@@ -30,7 +30,9 @@ export class App {
       powerPreference: 'high-performance',
       preserveDrawingBuffer: !!opts.preserve,
     }));
-    this.pixelRatio = Math.min(window.devicePixelRatio || 1, opts.maxDpr || 2);
+    this.coarse = window.matchMedia?.('(pointer: coarse)').matches;
+    this.maxPixelRatio = Math.min(window.devicePixelRatio || 1, opts.maxDpr || (this.coarse ? 1.75 : 2));
+    this.pixelRatio = this.maxPixelRatio;
     renderer.setPixelRatio(this.pixelRatio);
     const tm = { agx: THREE.AgXToneMapping, aces: THREE.ACESFilmicToneMapping, neutral: THREE.NeutralToneMapping }[opts.tm || 'neutral'];
     renderer.toneMapping = tm;
@@ -40,9 +42,10 @@ export class App {
     renderer.shadowMap.type = THREE.PCFShadowMap;
     renderer.shadowMap.autoUpdate = false;
 
-    this.env = createStudioEnvironment(renderer);
-    this.lightDir = new THREE.Vector3(-0.42, 0.82, 0.39).normalize();
+    const LIGHTS = { front: [-0.42, 0.82, 0.39], back: [-0.38, 0.74, -0.56], side: [-0.62, 0.72, -0.18] };
+    this.lightDir = new THREE.Vector3(...(LIGHTS[opts.light] || LIGHTS.side)).normalize();
 
+    this.env = createStudioEnvironment(renderer, this.lightDir);
     this.scene = new THREE.Scene();
     this.camera = new THREE.PerspectiveCamera(30, 1, 0.05, 80);
     this.orbit = { theta: 0.38, phi: 0.36, radius: 4.1, target: new THREE.Vector3(0, 0.44, 0) };
@@ -225,15 +228,20 @@ export class App {
     this.renderer.setSize(w, h, false);
     this.camera.aspect = w / h;
     // keep the cube comfortably framed on portrait screens
-    this.camera.fov = w / h < 0.8 ? 30 / Math.min(1, (w / h) * 1.35) : 30;
+    this.camera.fov = w / h < 0.8 ? 30 / Math.min(1, (w / h) * 1.18) : 30;
     this.camera.updateProjectionMatrix();
+    // keep the arena inside what the default view can see
+    const halfV = Math.tan((this.camera.fov * Math.PI) / 360) * this.orbitGoal.radius;
+    const halfW = halfV * (w / h);
+    this.sb.p.arenaRadius = Math.max(1.15, Math.min(2.3, halfW * 0.92 - 0.35));
+    this.renderer.setPixelRatio(this.pixelRatio);
     const pw = Math.floor(w * this.pixelRatio), ph = Math.floor(h * this.pixelRatio);
     this.size = { w, h, pw, ph };
     if (this.rtScene) {
       this.rtScene.dispose();
       this.rtTrans.dispose();
     }
-    const samples = this.opts.msaa ?? 4;
+    const samples = this.opts.msaa ?? (this.coarse || this.pixelRatio > 1.6 ? 0 : 4);
     this.rtScene = new THREE.WebGLRenderTarget(pw, ph, { type: THREE.HalfFloatType, samples, depthBuffer: true });
     this.rtTrans = new THREE.WebGLRenderTarget(pw, ph, {
       type: THREE.HalfFloatType,
@@ -385,6 +393,29 @@ export class App {
     this.render();
     this.stats.frameMs = this.stats.frameMs * 0.9 + (performance.now() - t0) * 0.1;
     this.stats.frames++;
+    this._adaptResolution(dt);
+  }
+
+  // Drop the render resolution if the device can't keep up (and recover).
+  _adaptResolution(dt) {
+    if (this.opts.preserve) return;
+    const a = (this._adapt ||= { t: 0, slow: 0, fast: 0 });
+    a.t += dt;
+    if (a.t < 2.5) return;
+    if (dt > 1 / 42) a.slow += dt;
+    else a.slow = Math.max(0, a.slow - dt * 0.5);
+    if (dt < 1 / 58) a.fast += dt;
+    else a.fast = 0;
+    if (a.slow > 1.2 && this.pixelRatio > 0.75) {
+      this.pixelRatio = Math.max(0.75, this.pixelRatio - 0.25);
+      a.slow = 0;
+      a.fast = 0;
+      this.resize();
+    } else if (a.fast > 8 && this.pixelRatio < this.maxPixelRatio) {
+      this.pixelRatio = Math.min(this.maxPixelRatio, this.pixelRatio + 0.25);
+      a.fast = 0;
+      this.resize();
+    }
   }
 
   _impactSounds() {
