@@ -1104,7 +1104,7 @@ export class App {
     this.jelly.frontMat.uniforms.uPLPos.value.copy(this.fireLight.position);
     this.jelly.frontMat.uniforms.uPLColor.value.setRGB(1.0 * fl, 0.55 * fl, 0.2 * fl);
 
-    this.jelly.renderFloorFx();
+    this.jelly.renderFloorFx(this.sb);
     if (!this.opts.nojelly) this.jelly.renderReflection(this.camera, this.rtRefl);
 
     r.shadowMap.needsUpdate = true;

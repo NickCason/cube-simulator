@@ -255,6 +255,8 @@ export function createJellyMaterial(env, layerUniforms) {
       uniform sampler2D tFloorFx;
       uniform sampler2D tGlowMap;
       uniform vec4 uFloorRect;
+      uniform vec4 uCausRect;
+      uniform float uCausGain;
       uniform vec3 uTint;
       uniform float uGlowFloor;
       uniform vec3 uBg;
@@ -317,13 +319,14 @@ export function createJellyMaterial(env, layerUniforms) {
         vec3 caus = vec3(0.0), glowF = vec3(0.0);
         if (all(greaterThan(fuv, vec2(0.0))) && all(lessThan(fuv, vec2(1.0)))) {
           float lod = 1.0 + 4.0 * rough;
-          caus = textureLod(tCaustic, fuv, lod).rgb;
+          vec2 cuv = (xz - uCausRect.xy) * uCausRect.zw;
+          if (all(greaterThan(cuv, vec2(0.0))) && all(lessThan(cuv, vec2(1.0)))) caus = textureLod(tCaustic, cuv, lod + 1.0).rgb;
           vec4 fx = textureLod(tFloorFx, fuv, lod);
           mask = fx.r;
           contact = fx.g;
           if (uGlowFloor > 0.0) glowF = textureLod(tGlowMap, fuv, 1.5).rgb * 0.7 + textureLod(tGlowMap, fuv, 3.5).rgb * 0.9;
         }
-        vec3 transfer = vec3(1.0 - mask) + caus * 2.7 + uTint * mask * 0.22;
+        vec3 transfer = vec3(1.0 - mask) + caus * uCausGain + uTint * mask * 0.22;
         vec3 direct = uLightColor * max(normalize(uLightDir).y, 0.0) * 0.3183 * transfer * (1.0 - contact * 0.2);
         vec3 sky = textureLod(envMap, vec3(0.0, 1.0, 0.0), envMaxLod).rgb * uFloorEnv
           * mix(vec3(1.0), uTint * 1.1, mask * 0.68) * (1.0 - contact * 0.35);
@@ -658,16 +661,60 @@ export function createJellyMaterial(env, layerUniforms) {
   });
 }
 
-// Caustic splatting from the key light onto the floor (Wallace-style
-// area-ratio caustics). Rendered in floor space.
+// Caustics, step 1: the jelly seen from the key light. kind 0: where each
+// ray first enters it (world position, relative to uOrigin for precision,
+// and its rest height + 10, so 0 means "no jelly"); kind 1: the smooth
+// surface normal there (and the temperature); kind 2: where it first
+// leaves (as kind 0).
+export function createLightViewMaterial(kind) {
+  return new THREE.ShaderMaterial({
+    side: kind === 2 ? THREE.BackSide : THREE.FrontSide,
+    uniforms: { uOrigin: { value: new THREE.Vector3() } },
+    vertexShader: /* glsl */ `
+      attribute vec3 aRest;
+      attribute vec4 aData;
+      varying vec3 vW;
+      varying vec3 vN;
+      varying float vRestY;
+      varying float vTemp;
+      void main() {
+        vec4 wp = modelMatrix * vec4(position, 1.0);
+        vW = wp.xyz;
+        vN = mat3(modelMatrix) * normal;
+        vRestY = aRest.y;
+        vTemp = aData.x;
+        gl_Position = projectionMatrix * viewMatrix * wp;
+      }`,
+    fragmentShader: /* glsl */ `
+      uniform vec3 uOrigin;
+      varying vec3 vW;
+      varying vec3 vN;
+      varying float vRestY;
+      varying float vTemp;
+      void main() {
+        ${kind === 1 ? 'gl_FragColor = vec4(normalize(vN), vTemp);' : 'gl_FragColor = vec4(vW - uOrigin, vRestY + 10.0);'}
+      }`,
+  });
+}
+
+// Caustics, step 2 (caustics mapping, after Shah et al. / Wallace): a dense
+// grid of the key light's rays, each looked up in the light's view of the
+// jelly, bent by the smooth surface normal where it enters and carried to
+// the floor; drawn there additively, each little cell's brightness the
+// ratio of the area its light had to the area it lands on. Its colour is
+// what survives the jelly along the way - through the layers the ray really
+// crosses, from where it enters to where it leaves. The detail no longer
+// depends on the size of the mesh's triangles.
 export function createCausticMaterial(layerUniforms) {
   return new THREE.ShaderMaterial({
-    side: THREE.FrontSide,
+    side: THREE.DoubleSide,
     transparent: true,
-    blending: THREE.AdditiveBlending,
+    blending: THREE.CustomBlending,
+    blendEquation: THREE.AddEquation,
+    blendSrc: THREE.OneFactor,
+    blendDst: THREE.OneFactor,
     depthTest: false,
     depthWrite: false,
-    extensions: { derivatives: true },
     uniforms: {
       ...layerUniforms,
       uLightDir: { value: new THREE.Vector3(-0.45, 0.8, 0.4).normalize() },
@@ -675,62 +722,121 @@ export function createCausticMaterial(layerUniforms) {
       uAbsorb: { value: new THREE.Vector3(0.2, 2.4, 2.0) },
       uScatter: { value: 0.35 },
       uFloorRect: { value: new THREE.Vector4(-3, -3, 1 / 6, 1 / 6) },
+      tEntry: { value: null },
+      tNormal: { value: null },
+      tExit: { value: null },
+      uOrigin: { value: new THREE.Vector3() },
+      uLightInvVP: { value: new THREE.Matrix4() },
+      uGridN: { value: 256 },
+      uCausRect: { value: new THREE.Vector4(-3, -3, 1 / 6, 1 / 6) },
     },
     vertexShader: /* glsl */ `
+      uniform sampler2D tEntry;
+      uniform sampler2D tNormal;
+      uniform sampler2D tExit;
+      uniform vec3 uOrigin;
+      uniform mat4 uLightInvVP;
       uniform vec3 uLightDir;
       uniform float uIor;
       uniform vec4 uFloorRect;
-      attribute vec3 aRest;
-      attribute vec4 aData;
-      varying float vRestY;
-      varying float vTemp;
+      uniform float uGridN;
+      uniform vec4 uCausRect;
       varying vec3 vOld;
       varying vec3 vNew;
-      varying float vNdL;
+      varying float vValid;
+      varying float vRestA;
+      varying float vRestB;
       varying float vPath;
+      varying float vNdL;
+      varying float vTemp;
       void main() {
-        vec3 P = position;
-        vec3 N = normalize(normal);
+        // (grid point i reads texel (i * step) exactly: an uneven pick of
+        // texels shows up as stripes)
+        ivec2 sz = textureSize(tEntry, 0);
+        int stp = max(1, sz.x / int(uGridN));
+        ivec2 ij = clamp(ivec2(floor(uv * (uGridN - 1.0) + 0.5)) * stp, ivec2(0), sz - 1);
+        vec2 tuv = (vec2(ij) + 0.5) / vec2(sz);
+        vec4 E = texelFetch(tEntry, ij, 0);
         vec3 Ld = -normalize(uLightDir);
-        vec3 oldP = P + Ld * (-P.y / Ld.y);
-        vec3 r = refract(Ld, N, 1.0 / uIor);
-        if (dot(r, r) < 1e-6) r = Ld;
-        float ry = min(r.y, -0.08);
-        float t = max(P.y, 0.0) / -ry;
-        vec3 newP = P + r * t;
-        vOld = oldP;
-        vNew = newP;
-        vNdL = dot(N, normalize(uLightDir));
-        vPath = t;
-        vRestY = aRest.y;
-        vTemp = aData.x;
-        vec2 uv = (newP.xz - uFloorRect.xy) * uFloorRect.zw;
-        gl_Position = vec4(uv * 2.0 - 1.0, 0.0, 1.0);
+        vec3 P, F;
+        if (E.w < 0.5) {
+          // (this ray misses the jelly: it lands on the floor unbent, and
+          // adds nothing - it only keeps the grid's cells small)
+          vec4 p0 = uLightInvVP * vec4(tuv * 2.0 - 1.0, -1.0, 1.0);
+          P = p0.xyz / p0.w;
+          F = P + Ld * (-P.y / Ld.y);
+          vOld = F;
+          vNew = F;
+          vValid = 0.0;
+          vRestA = 0.0;
+          vRestB = 0.0;
+          vPath = 0.0;
+          vNdL = 1.0;
+          vTemp = 0.0;
+        } else {
+          P = E.xyz + uOrigin;
+          vec4 Nt = texelFetch(tNormal, ij, 0);
+          // the normal smoothed over ~2 cm (the mesh's normals bend only at
+          // its triangle edges, and caustics are all about how the normal
+          // bends: unsmoothed, every edge draws a line of light)
+          vec3 Ns = vec3(0.0);
+          for (int dy = -2; dy <= 2; dy++)
+            for (int dx = -2; dx <= 2; dx++) {
+              ivec2 q = clamp(ij + ivec2(dx, dy) * stp, ivec2(0), sz - 1);
+              if (texelFetch(tEntry, q, 0).w > 0.5) Ns += texelFetch(tNormal, q, 0).xyz * (3.0 - 0.5 * float(abs(dx) + abs(dy)));
+            }
+          vec3 N = normalize(Ns);
+          vec4 X = texelFetch(tExit, ij, 0);
+          vec3 r = refract(Ld, N, 1.0 / uIor);
+          if (dot(r, r) < 1e-6) r = Ld;
+          float t = max(P.y, 0.0) / -min(r.y, -0.08);
+          F = P + r * t;
+          // (its colour deepens with the way from where it enters to the
+          // floor, as before: the light leaving through a side isn't bent
+          // again here, so a short way through would be pale in the wrong
+          // place; the layers it crosses are the ones between where it
+          // enters and where it leaves)
+          vPath = t;
+          // (light that only grazes the jelly's foot lands right where it
+          // went in - in the contact shadow - not as a white spark)
+          vValid = smoothstep(0.0, 0.05, P.y);
+          vOld = P + Ld * (-P.y / Ld.y);
+          vNew = F;
+          vRestA = E.w - 10.0;
+          vRestB = X.w > 0.5 ? X.w - 10.0 : vRestA;
+          vNdL = dot(N, normalize(uLightDir));
+          vTemp = Nt.w;
+        }
+        vec2 cuv = (F.xz - uCausRect.xy) * uCausRect.zw;
+        gl_Position = vec4(cuv * 2.0 - 1.0, 0.0, 1.0);
       }`,
     fragmentShader: /* glsl */ `
       uniform vec3 uAbsorb;
       uniform float uScatter;
       uniform float uIor;
-      varying float vRestY;
-      varying float vTemp;
       ${LAYER_GLSL}
       varying vec3 vOld;
       varying vec3 vNew;
-      varying float vNdL;
+      varying float vValid;
+      varying float vRestA;
+      varying float vRestB;
       varying float vPath;
+      varying float vNdL;
+      varying float vTemp;
       void main() {
-        if (vNdL <= 0.0) discard;
+        // (only cells whose rays all went through the jelly)
+        if (vValid < 0.01 || vNdL <= 0.0) discard;
         float oldA = length(dFdx(vOld)) * length(dFdy(vOld));
         float newA = length(dFdx(vNew)) * length(dFdy(vNew));
-        // focusing, capped so sliver faces can't streak
-        float ratio = clamp(oldA / max(newA, 1e-9), 0.0, 3.2);
+        // focusing (capped: a cell squeezed to nothing would be a spike)
+        float ratio = clamp(oldA / max(newA, 1e-9), 0.0, 3.5);
         float F0 = pow((uIor - 1.0) / (uIor + 1.0), 2.0);
         float Ft = 1.0 - (F0 + (1.0 - F0) * pow(clamp(1.0 - vNdL, 0.0, 1.0), 5.0));
-        vec3 sig = layerSigma(vRestY, uLayerY0, uAbsorb);
+        vec3 sig = layerSigma(vRestA, vRestB, uAbsorb);
         vec3 T = exp(-sig * vPath) * exp(-uScatter * vPath * 0.7);
         // frosted jelly scatters light: no sharp caustics
         T *= 1.0 - 0.9 * smoothstep(0.05, 0.6, -vTemp);
-        gl_FragColor = vec4(T * ratio * Ft, 1.0);
+        gl_FragColor = vec4(T * ratio * Ft * vValid, 1.0);
       }`,
   });
 }

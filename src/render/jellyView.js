@@ -4,6 +4,7 @@ import {
   createBackMaterial,
   createJellyMaterial,
   createCausticMaterial,
+  createLightViewMaterial,
   createMaskMaterial,
   createHeightMaterial,
   createReflectMaterial,
@@ -235,6 +236,28 @@ export class JellyView {
     this.backMat = createBackMaterial();
     this.frontMat = createJellyMaterial(env, this.layerUniforms);
     this.causticMat = createCausticMaterial(this.layerUniforms);
+    // the caustics' view from the key light (entry, normal, exit) and their
+    // grid of rays (see createCausticMaterial); the grid's density
+    const coarse = !!window.matchMedia?.('(pointer: coarse)').matches;
+    const lvRes = coarse ? 384 : 512, gridN = coarse ? 192 : 256;
+    const lvType = renderer.extensions.has('EXT_color_buffer_float') ? THREE.FloatType : THREE.HalfFloatType;
+    const lvOpts = { type: lvType, minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter, depthBuffer: true };
+    this.lightView = [0, 1, 2].map((kind) => ({
+      rt: new THREE.WebGLRenderTarget(lvRes, lvRes, kind === 1 ? { ...lvOpts, type: THREE.HalfFloatType } : lvOpts),
+      mat: createLightViewMaterial(kind),
+    }));
+    this.causticMat.uniforms.tEntry.value = this.lightView[0].rt.texture;
+    this.causticMat.uniforms.tNormal.value = this.lightView[1].rt.texture;
+    this.causticMat.uniforms.tExit.value = this.lightView[2].rt.texture;
+    this.causticMat.uniforms.uGridN.value = gridN;
+    this.lightCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 40);
+    this.lightOrigin = new THREE.Vector3();
+    this.lightDir = new THREE.Vector3(0, 1, 0);
+    this.gridScene = new THREE.Scene();
+    const grid = new THREE.Mesh(new THREE.PlaneGeometry(1, 1, gridN - 1, gridN - 1), this.causticMat);
+    grid.frustumCulled = false;
+    this.gridScene.add(grid);
+    this._corner = new THREE.Vector3();
     this.maskMat = createMaskMaterial();
     this.heightMat = createHeightMaterial();
     this.reflectMat = createReflectMaterial(this.layerUniforms);
@@ -278,6 +301,8 @@ export class JellyView {
       bg: { value: new THREE.Color(0.86, 0.85, 0.83) },
       texel: { value: new THREE.Vector2(1 / 512, 1 / 512) },
       ctexel: { value: new THREE.Vector2(1 / 768, 1 / 768) },
+      causRect: { value: new THREE.Vector4(-3.2, -3.2, 1 / 6.4, 1 / 6.4) }, // (the caustics' texture: fitted round the jelly)
+      causGain: { value: 1.5 }, // (how bright the caustic light lands)
       tint: { value: new THREE.Color(1, 0.2, 0.2) },
       refl: { value: null }, // the jelly mirrored in the floor (App's rtRefl)
       res: { value: new THREE.Vector2(1, 1) },
@@ -297,7 +322,7 @@ export class JellyView {
     // (the jelly mirrors the floor: it reads the same textures)
     const fx = this.fxUniforms;
     Object.assign(this.frontMat.uniforms, {
-      tCaustic: fx.caustic, tFloorFx: fx.floorFx, tGlowMap: fx.glowTex, uFloorRect: fx.floorRect, uTint: fx.tint,
+      tCaustic: fx.caustic, tFloorFx: fx.floorFx, tGlowMap: fx.glowTex, uFloorRect: fx.floorRect, uCausRect: fx.causRect, uCausGain: fx.causGain, uTint: fx.tint,
       uGlowFloor: fx.glowFloor, uBg: fx.bg, uFloorAlbedo: fx.floorAlbedo, uFloorEnv: fx.floorEnv,
     });
     this.rtBack = null;
@@ -308,6 +333,7 @@ export class JellyView {
   }
 
   setLightDir(d) {
+    this.lightDir.copy(d).normalize();
     this.frontMat.uniforms.uLightDir.value.copy(d);
     this.causticMat.uniforms.uLightDir.value.copy(d);
     this.maskMat.uniforms.uLightDir.value.copy(d);
@@ -589,16 +615,76 @@ export class JellyView {
     r.setClearColor(prevClear, prevAlpha);
   }
 
-  renderFloorFx() {
+  // The key light's view of the jelly, framed to fit the pieces.
+  _fitLightView(sb) {
+    let x0 = Infinity, y0 = Infinity, z0 = Infinity, x1 = -Infinity, y1 = -Infinity, z1 = -Infinity;
+    for (const pc of sb.pieces) {
+      const b = pc.bbox;
+      if (!b) continue;
+      x0 = Math.min(x0, b[0]); y0 = Math.min(y0, b[1]); z0 = Math.min(z0, b[2]);
+      x1 = Math.max(x1, b[3]); y1 = Math.max(y1, b[4]); z1 = Math.max(z1, b[5]);
+    }
+    if (!(x1 > x0)) return false;
+    const cam = this.lightCam, L = this.lightDir, c = this.lightOrigin.set((x0 + x1) / 2, (y0 + y1) / 2, (z0 + z1) / 2);
+    cam.position.copy(c).addScaledVector(L, 12);
+    cam.up.set(0, Math.abs(L.y) > 0.98 ? 0 : 1, Math.abs(L.y) > 0.98 ? 1 : 0);
+    cam.lookAt(c);
+    cam.updateMatrixWorld();
+    let u0 = Infinity, v0 = Infinity, w0 = Infinity, u1 = -Infinity, v1 = -Infinity, w1 = -Infinity;
+    const p = this._corner;
+    for (let k = 0; k < 8; k++) {
+      p.set(k & 1 ? x1 : x0, k & 2 ? y1 : y0, k & 4 ? z1 : z0).applyMatrix4(cam.matrixWorldInverse);
+      u0 = Math.min(u0, p.x); u1 = Math.max(u1, p.x);
+      v0 = Math.min(v0, p.y); v1 = Math.max(v1, p.y);
+      w0 = Math.min(w0, p.z); w1 = Math.max(w1, p.z);
+    }
+    const m = 0.03;
+    cam.left = u0 - m; cam.right = u1 + m; cam.bottom = v0 - m; cam.top = v1 + m;
+    cam.near = Math.max(0.01, -w1 - 0.5); cam.far = -w0 + 0.5;
+    cam.updateProjectionMatrix();
+    this.causticMat.uniforms.uLightInvVP.value.multiplyMatrices(cam.projectionMatrix, cam.matrixWorldInverse).invert();
+    this.causticMat.uniforms.uOrigin.value.copy(c);
+    // the caustics' texture: the pieces' footprint and their straight
+    // shadow, squared up (where light bent through them can land) - ~3 mm a
+    // texel for one cube, so a cell of focused light still covers a texel
+    let fx0 = x0, fz0 = z0, fx1 = x1, fz1 = z1;
+    const kx = -L.x / L.y, kz = -L.z / L.y;
+    for (const yy of [y0, y1]) {
+      fx0 = Math.min(fx0, x0 + kx * yy, x1 + kx * yy); fx1 = Math.max(fx1, x0 + kx * yy, x1 + kx * yy);
+      fz0 = Math.min(fz0, z0 + kz * yy, z1 + kz * yy); fz1 = Math.max(fz1, z0 + kz * yy, z1 + kz * yy);
+    }
+    const size = Math.min(6.4, Math.max(1, fx1 - fx0, fz1 - fz0) + 0.4);
+    const cx = (fx0 + fx1) / 2, cz = (fz0 + fz1) / 2;
+    const CR = this.fxUniforms.causRect.value;
+    CR.set(cx - size / 2, cz - size / 2, 1 / size, 1 / size);
+    this.causticMat.uniforms.uCausRect.value.copy(CR);
+    // (the floor's soft taps stay ~2 cm in the world, the key light's penumbra)
+    const k = 0.022 / 3.2 / size;
+    this.fxUniforms.ctexel.value.set(k, k);
+    return true;
+  }
+
+  renderFloorFx(sb) {
     const r = this.renderer;
     const prevClear = r.getClearColor(new THREE.Color());
     const prevAlpha = r.getClearAlpha();
     for (const m of this.meshes) m.visible = true;
     r.setClearColor(0x000000, 0);
+    // caustics: the light's view of the jelly, then its grid of rays
+    const lit = sb && this.meshes.length && this._fitLightView(sb);
+    if (lit) {
+      for (const { rt, mat } of this.lightView) {
+        mat.uniforms.uOrigin.value.copy(this.lightOrigin);
+        r.setRenderTarget(rt);
+        r.clear(true, true, false);
+        this.scene.overrideMaterial = mat;
+        r.render(this.scene, this.lightCam);
+      }
+      this.scene.overrideMaterial = null;
+    }
     r.setRenderTarget(this.rtCaustic);
     r.clear(true, false, false);
-    this.scene.overrideMaterial = this.causticMat;
-    r.render(this.scene, this.fxCam);
+    if (lit) r.render(this.gridScene, this.fxCam);
     r.setRenderTarget(this.rtFloorFx);
     r.clear(true, false, false);
     const auto = r.autoClear;

@@ -19,6 +19,8 @@ export function createFloor(env, fx) {
     shader.uniforms.uTexel = fx.texel;
     shader.uniforms.uTint = fx.tint;
     shader.uniforms.uCTexel = fx.ctexel;
+    shader.uniforms.uCausRect = fx.causRect;
+    shader.uniforms.uCausGain = fx.causGain;
     shader.uniforms.tRefl = fx.refl;
     shader.uniforms.uRes = fx.res;
     shader.uniforms.uReflAmount = fx.reflAmount;
@@ -45,6 +47,8 @@ export function createFloor(env, fx) {
         uniform vec2 uTexel;
         uniform vec3 uTint;
         uniform vec2 uCTexel;
+        uniform vec4 uCausRect;
+        uniform float uCausGain;
         uniform sampler2D tRefl;
         uniform vec2 uRes;
         uniform float uReflAmount;
@@ -70,11 +74,14 @@ export function createFloor(env, fx) {
           // soft taps (the key light is an area light: its caustics have a
           // penumbra, and the mesh's facets shouldn't show as lines)
           vec2 o = uCTexel * 3.2, od = uCTexel * 3.6;
-          caus = textureLod(tCaustic, fuv, 0.0).rgb * 0.2
-            + (textureLod(tCaustic, fuv + vec2(o.x, 0.0), 0.0).rgb + textureLod(tCaustic, fuv - vec2(o.x, 0.0), 0.0).rgb
-            + textureLod(tCaustic, fuv + vec2(0.0, o.y), 0.0).rgb + textureLod(tCaustic, fuv - vec2(0.0, o.y), 0.0).rgb) * 0.12
-            + (textureLod(tCaustic, fuv + od, 0.0).rgb + textureLod(tCaustic, fuv - od, 0.0).rgb
-            + textureLod(tCaustic, fuv + vec2(od.x, -od.y), 0.0).rgb + textureLod(tCaustic, fuv + vec2(-od.x, od.y), 0.0).rgb) * 0.08;
+          // (the caustics have their own texture, fitted round the jelly)
+          vec2 cuv = (vFloorPos.xz - uCausRect.xy) * uCausRect.zw;
+          if (all(greaterThan(cuv, vec2(0.0))) && all(lessThan(cuv, vec2(1.0))))
+            caus = textureLod(tCaustic, cuv, 0.0).rgb * 0.2
+              + (textureLod(tCaustic, cuv + vec2(o.x, 0.0), 0.0).rgb + textureLod(tCaustic, cuv - vec2(o.x, 0.0), 0.0).rgb
+              + textureLod(tCaustic, cuv + vec2(0.0, o.y), 0.0).rgb + textureLod(tCaustic, cuv - vec2(0.0, o.y), 0.0).rgb) * 0.12
+              + (textureLod(tCaustic, cuv + od, 0.0).rgb + textureLod(tCaustic, cuv - od, 0.0).rgb
+              + textureLod(tCaustic, cuv + vec2(od.x, -od.y), 0.0).rgb + textureLod(tCaustic, cuv + vec2(-od.x, od.y), 0.0).rgb) * 0.08;
           vec2 o2 = uTexel * 3.0;
           vec4 fx0 = textureLod(tFloorFx, fuv, 0.0);
           vec4 fx1 = textureLod(tFloorFx, fuv + vec2(o2.x, o2.y), 0.0);
@@ -109,14 +116,15 @@ export function createFloor(env, fx) {
         // in bands), at the strength of the overall tint
         vec3 tint = uTint;
         if (uTintLocal > 0.0 && mask > 0.0) {
-          vec3 cb = textureLod(tCaustic, fuv, 3.0).rgb + textureLod(tCaustic, fuv, 4.5).rgb * 0.5;
+          vec2 cuv = (vFloorPos.xz - uCausRect.xy) * uCausRect.zw;
+          vec3 cb = textureLod(tCaustic, cuv, 3.5).rgb + textureLod(tCaustic, cuv, 5.0).rgb * 0.5;
           float cm = max(cb.r, max(cb.g, cb.b));
           vec3 hue = mix(cb / max(cm, 1e-4), vec3(1.0), 0.3) * max(uTint.r, max(uTint.g, uTint.b));
           tint = mix(uTint, hue, smoothstep(0.0005, 0.012, cm));
         }
         // in the jelly's shadow: the light that came through it (coloured,
         // focused), and a little of its colour from light scattered inside
-        vec3 jellyTransfer = vec3(1.0 - mask) + caus * 2.7 + tint * mask * 0.22;
+        vec3 jellyTransfer = vec3(1.0 - mask) + caus * uCausGain + tint * mask * 0.22;
         ${THREE.ShaderChunk.lights_fragment_begin.replace(
           'getDirectionalLightInfo( directionalLight, directLight );',
           'getDirectionalLightInfo( directionalLight, directLight );\n\t\tdirectLight.color *= jellyTransfer;',
