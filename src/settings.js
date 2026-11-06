@@ -49,6 +49,11 @@ export const SETTINGS = [
     id: 'impacts', group: 'Sound', label: 'Impacts', key: 'impacts', def: 0.55, ...linMap(0, 1),
     word: (v) => (v < 0.02 ? 'Off' : v < 0.3 ? 'Subtle' : v < 0.65 ? 'Soft' : v < 0.85 ? 'Lively' : 'Loud'),
   },
+  {
+    // the jelly's own voice: a hum at its wobble, as loud as it jiggles
+    id: 'wobble', group: 'Sound', label: 'Wobble', key: 'wobble', def: 0.5, ...linMap(0, 1),
+    word: (v) => (v < 0.02 ? 'Off' : v < 0.3 ? 'Faint' : v < 0.65 ? 'Soft' : v < 0.85 ? 'Lively' : 'Loud'),
+  },
 ];
 
 export function settingWord(s, value) {

@@ -48,7 +48,7 @@ function asFloat(o, keys) {
   }
   return o;
 }
-const PIECE_FLOATS = ['sleepT', 'rebT', 'impY', 'rebR', 'impR', 'impUx', 'impUz', 'impT', 'impDv', 'foldUntil', 'buzzT', 'buzzA', 'buzzB', 'untangle', 'touchT'];
+const PIECE_FLOATS = ['sleepT', 'rebT', 'impY', 'rebR', 'impR', 'impUx', 'impUz', 'impT', 'impDv', 'foldUntil', 'buzzT', 'buzzA', 'buzzB', 'untangle', 'touchT', 'vib'];
 // (piece state a rebuild carries over to an untouched piece: see _buildPieces)
 const CARRY = ['sleepT', 'asleep', 'rebT', 'impY', 'boosted', 'rebR', 'impR', 'impUx', 'impUz', 'boostedR', 'impPend', 'impT', 'impDv', 'sleepLogMu', 'foldUntil', 'foldAsk', 'buzzT', 'buzzA', 'buzzB', 'tangleN', 'untangle', 'touchT', 'hinge'];
 
@@ -735,6 +735,7 @@ export class SoftBody {
         buzzB: 0,
         tangleN: 0, // looks in a row that found it passed through itself (see _tangleCheck)
         touchT: -1e9, // (sim time) last held or blasted - what tangles a piece
+        vib: 0, // (m/s) how fast it jiggles: its vertices' rms speed apart from moving as a whole (the jelly's voice follows it)
         untangle: 0, // (s) left of springing back out of that
         fitQ: new Float64Array([0, 0, 0, 1]), // its last fitted rotation (rest -> now)
       }, PIECE_FLOATS);
@@ -1608,7 +1609,10 @@ export class SoftBody {
       pc.omega[0] = wx;
       pc.omega[1] = wy;
       pc.omega[2] = wz;
-      if (pc.asleep) continue;
+      if (pc.asleep) {
+        pc.vib = 0;
+        continue;
+      }
       let vmax2 = 0, e2 = 0;
       for (let k = 0; k < vs.length; k++) {
         const o = vs[k] * 3;
@@ -1637,6 +1641,7 @@ export class SoftBody {
         pc.sleepT += buzzing ? 1 : dt;
         if (pc.sleepT > 0.6) {
           pc.asleep = true;
+          pc.vib = 0;
           pc.foldAsk = true; // (not to be left asleep folded into itself)
           for (let k = 0; k < vs.length; k++) {
             const o = vs[k] * 3;
@@ -1645,14 +1650,18 @@ export class SoftBody {
           continue;
         }
       } else pc.sleepT = 0;
+      let dev2 = 0;
       for (let k = 0; k < vs.length; k++) {
         const i = vs[k], o = i * 3;
         const rx = x[o] - cx, ry = x[o + 1] - cy, rz = x[o + 2] - cz;
         const rvx = vx + wy * rz - wz * ry, rvy = vy + wz * rx - wx * rz, rvz = vz + wx * ry - wy * rx;
+        const ux = v[o] - rvx, uy = v[o + 1] - rvy, uz = v[o + 2] - rvz;
+        dev2 += m[i] * (ux * ux + uy * uy + uz * uz);
         v[o] = (rvx + (v[o] - rvx) * (1 - kd)) * air;
         v[o + 1] = (rvy + (v[o + 1] - rvy) * (1 - kd)) * air;
         v[o + 2] = (rvz + (v[o + 2] - rvz) * (1 - kd)) * air;
       }
+      pc.vib = Math.sqrt(dev2 / M);
     }
   }
 

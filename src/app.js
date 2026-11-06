@@ -356,7 +356,7 @@ export class App {
     sb.p.gravity = -st.gravity;
     sb.setDensity(st.weight);
     sb.wakeAll();
-    this.audio.setLevels(st.volume, st.impacts);
+    this.audio.setLevels(st.volume, st.impacts, st.wobble);
     this.bubbles?.configure(st.bubbles, st.bubbleSize);
     this.glitter?.configure({ mode: this.style.glitter, count: st.glitterAmount, size: st.glitterSize, sparkle: st.glitterSparkle });
     this.flavor = f;
@@ -460,10 +460,11 @@ export class App {
   resetSettings() {
     const oldSize = this.sb.p.size;
     // (the jelly resets; your sound levels stay)
-    const { volume, impacts } = this.tune;
+    const { volume, impacts, wobble } = this.tune;
     this.tune = {};
     if (volume !== undefined) this.tune.volume = volume;
     if (impacts !== undefined) this.tune.impacts = impacts;
+    if (wobble !== undefined) this.tune.wobble = wobble;
     this.applyStyle();
     if (Math.abs(this.settings.size - oldSize) > 1e-6) this.setCubeSize(this.settings.size);
   }
@@ -936,6 +937,7 @@ export class App {
       for (const k in this.tools) if (this.tools[k] !== this.tool && this.tools[k].background) this.tools[k].update(sdt, dt);
       this.particles.update(sdt);
       this._impactSounds();
+      this._wobbleSounds();
       this._impactGlow();
     }
     this._themeTick(dt);
@@ -1163,6 +1165,33 @@ export class App {
       this.audio.impact(e.dv, size, this._impactMaterial(pc), this._pan(e.x, e.y, e.z));
       played++;
     }
+  }
+
+  // The jelly's own voice: the three pieces jiggling most (by how fast,
+  // and how big they are) each get a voice, pitched at the piece's own
+  // wobble - its natural frequency, set by its size and firmness, times 20
+  // to bring 3-30 Hz into hearing - and as loud as it jiggles this frame, so
+  // it swells with a smack and dies away as the piece settles. Frozen: silent.
+  _wobbleSounds() {
+    const a = this.audio;
+    if (!a.ctx) return;
+    const sb = this.sb, st = this.settings;
+    const list = [];
+    if (!this.healer.active && a.wobbleLevel > 0.01) {
+      for (const pc of sb.pieces) if (!pc.asleep && pc.vib > 0.015) list.push(pc);
+      list.sort((p, q) => q.vib * Math.cbrt(q.volume) - p.vib * Math.cbrt(p.volume));
+    }
+    const out = [];
+    for (const pc of list.slice(0, 3)) {
+      const mat = this._impactMaterial(pc);
+      if (mat.ice) continue;
+      const L = Math.cbrt(Math.max(pc.volume, 1e-5));
+      const fn = (6.7 * Math.sqrt(st.mu / 170 / sb.p.density)) / L;
+      // (a poke jiggles it at ~0.07 m/s, a smack at ~0.3)
+      const amp = 0.25 * Math.min(1, (pc.vib - 0.015) / 0.25) ** 1.1 * Math.min(1.4, 0.5 + L);
+      out.push({ id: pc.id, f: Math.min(900, Math.max(55, fn * 20)), amp, firm: mat.firm, wet: mat.wet, pan: this._pan(pc.com[0], pc.com[1], pc.com[2]) });
+    }
+    a.wobble(out);
   }
 
   // What a piece sounds like: firm/wet from the feel settings, creamy and
