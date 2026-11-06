@@ -48,9 +48,9 @@ function asFloat(o, keys) {
   }
   return o;
 }
-const PIECE_FLOATS = ['sleepT', 'rebT', 'impY', 'rebR', 'impR', 'impUx', 'impUz', 'impT', 'impDv', 'foldUntil', 'buzzT', 'buzzA', 'buzzB'];
+const PIECE_FLOATS = ['sleepT', 'rebT', 'impY', 'rebR', 'impR', 'impUx', 'impUz', 'impT', 'impDv', 'foldUntil', 'buzzT', 'buzzA', 'buzzB', 'untangle', 'touchT'];
 // (piece state a rebuild carries over to an untouched piece: see _buildPieces)
-const CARRY = ['sleepT', 'asleep', 'rebT', 'impY', 'boosted', 'rebR', 'impR', 'impUx', 'impUz', 'boostedR', 'impPend', 'impT', 'impDv', 'sleepLogMu', 'foldUntil', 'foldAsk', 'buzzT', 'buzzA', 'buzzB'];
+const CARRY = ['sleepT', 'asleep', 'rebT', 'impY', 'boosted', 'rebR', 'impR', 'impUx', 'impUz', 'boostedR', 'impPend', 'impT', 'impDv', 'sleepLogMu', 'foldUntil', 'foldAsk', 'buzzT', 'buzzA', 'buzzB', 'tangleN', 'untangle', 'touchT'];
 
 export class SoftBody {
   constructor(opts = {}) {
@@ -100,6 +100,11 @@ export class SoftBody {
     this._gap = 0;
     this._fSelf = false;
     this.topoStale = false; // a light rebuild done, the full one still owed (see rebuildLight)
+    this._tgVersion = -1; // (surface edges for _tangleCount, per topology)
+    this._tgEdges = null;
+    this._tgBox = null;
+    this._tgStamp = null;
+    this._tgSt = 0;
     this._pass = 0;
     this._fStamp = 0;
     this._nHTets = 0;
@@ -157,6 +162,8 @@ export class SoftBody {
     this._svList = null;
     this._hoodStamp = 0;
     this._foldClock = 0; // (s) since the last look for folds
+    this._tangleClock = 0; // (s) since the last look for surfaces passed through themselves
+    this._tangleNext = 0; // (the next piece to look at)
     this._foldNext = 0; // (the next piece to look at)
     this._foldUntil = null; // per vertex: sim time till which it is held as folded in
     this._foldLook = null;
@@ -197,7 +204,7 @@ export class SoftBody {
     this._ti4 = new Int32Array(4);
     this._tb4 = new Float64Array(4);
     this._fq = asFloat({ ok: false, dist: 0, prev: 0, nx: 0, ny: 0, nz: 0, on: false, crossS: Infinity }, ['dist', 'prev', 'nx', 'ny', 'nz']);
-    asFloat(this, ['time', 'gravityScale', 'rebuildMs', 'dampBoost', '_heatResidual', '_hashAge', '_grabPress', '_gap', '_foldClock']);
+    asFloat(this, ['time', 'gravityScale', 'rebuildMs', 'dampBoost', '_heatResidual', '_hashAge', '_grabPress', '_gap', '_foldClock', '_tangleClock']);
   }
 
   // ---------------------------------------------------------------- storage
@@ -718,6 +725,10 @@ export class SoftBody {
         buzzT: 0, // (s) still, but buzzing, for this long (see _dampPieces)
         buzzA: 0, // (its buzz over the first and the second half of that)
         buzzB: 0,
+        tangleN: 0, // looks in a row that found it passed through itself (see _tangleCheck)
+        touchT: -1e9, // (sim time) last held or blasted - what tangles a piece
+        untangle: 0, // (s) left of springing back out of that
+        fitQ: new Float64Array([0, 0, 0, 1]), // its last fitted rotation (rest -> now)
       }, PIECE_FLOATS);
     });
     // A piece the change didn't touch - the very same vertices as one piece
@@ -739,7 +750,7 @@ export class SoftBody {
       for (let k = 1; k < vs.length && same; k++) same = vs[k] < oldNV && oldVP[vs[k]] === op;
       if (!same) continue;
       for (const f of CARRY) pc[f] = o[f];
-      pc.com.set(o.com); pc.vel.set(o.vel); pc.bbox.set(o.bbox); pc.omega.set(o.omega); pc.impPrev.set(o.impPrev);
+      pc.com.set(o.com); pc.vel.set(o.vel); pc.bbox.set(o.bbox); pc.omega.set(o.omega); pc.impPrev.set(o.impPrev); pc.fitQ.set(o.fitQ);
       kept[op] = 1;
       carried[pc.id] = 1;
       if (pc.asleep) anyAsleep = true;
@@ -1034,7 +1045,10 @@ export class SoftBody {
     this._impPartner.fill(-1, 0, NP0);
     this._updateMaterial(dt);
     this._foldCheck(dt);
-    if (this.grab) this.wake(this.grab.piece);
+    if (this.grab) {
+      this.wake(this.grab.piece);
+      if (this.pieces[this.grab.piece]) this.pieces[this.grab.piece].touchT = this.time;
+    }
     if (this.attract || this.gravityScale !== 1 || this.embeds.length) this.wakeAll();
     const NP = this.pieces.length;
     const aw = this._awake && this._awake.length >= NP ? this._awake : (this._awake = new Uint8Array(Math.max(NP, 64)));
@@ -1080,6 +1094,8 @@ export class SoftBody {
       this._updateVelocities(h);
     }
     this._dampPieces(dt);
+    this._tangleCheck(dt);
+    this._untangle(dt);
     this._emitImpacts(dt, h);
   }
 
@@ -1792,7 +1808,7 @@ export class SoftBody {
       // (or anything with a fold in it to pop out - all its tets, as the
       // fold can reach past the layer at the surface)
       const folded = P[a].foldUntil > this.time;
-      const can = this.p.selfCollide && !quiet && !P[a].asleep && (P[a].hinge || soft || folded), ac = act[a];
+      const can = this.p.selfCollide && !quiet && !P[a].asleep && !(P[a].untangle > 0) && (P[a].hinge || soft || folded), ac = act[a];
       selfOK[a] = can ? (ac || folded ? 1 : 2) : 0;
       anySelf = anySelf || selfOK[a] > 0;
     }
@@ -1941,6 +1957,217 @@ export class SoftBody {
       }
     }
     this._hoodStamp = hs;
+  }
+
+  // Every 0.25 s, a look at awake pieces held or blasted in the last 4 s but
+  // not held now (round-robin, a budget of tets a look) for surfaces passed
+  // through themselves; found
+  // twice in a row - not just a moment of a fold coming undone - the piece
+  // springs back out of it (see _untangle).
+  _tangleCheck(dt) {
+    const P = this.pieces, NP = P.length;
+    if (!this.p.selfCollide || !NP) return;
+    this._tangleClock += dt;
+    if (this._tangleClock < 0.25) return;
+    this._tangleClock = 0;
+    const look = this._tgLook && this._tgLook.length >= NP ? this._tgLook : (this._tgLook = new Uint8Array(Math.max(NP, 64)));
+    const out = this._tgOut && this._tgOut.length >= NP ? this._tgOut : (this._tgOut = new Int32Array(Math.max(NP, 64)));
+    look.fill(0, 0, NP);
+    out.fill(0, 0, NP);
+    const gp = this.grab ? this.grab.piece : -1;
+    let budget = 9000, any = false;
+    for (let n = 0; n < NP && budget > 0; n++) {
+      const k = (this._tangleNext + n) % NP, pc = P[k];
+      if (pc.asleep || k === gp || pc.untangle > 0 || pc.verts.length < 30 || this.time - pc.touchT > 4) continue;
+      look[k] = 1;
+      any = true;
+      budget -= pc.tets.length;
+      this._tangleNext = k + 1;
+    }
+    if (!any) return;
+    this._tangleCount(look, out);
+    for (let k = 0; k < NP; k++) {
+      if (!look[k]) continue;
+      const pc = P[k];
+      if (!out[k]) pc.tangleN = 0;
+      else if (++pc.tangleN >= 2) {
+        pc.tangleN = 0;
+        pc.untangle = 0.7;
+      }
+    }
+  }
+
+  // A piece passed through itself springs back to its rest shape - turned
+  // and sized to fit how it lies now, on the floor - a share each frame for
+  // 0.7 s, its self-contact off meanwhile so the surfaces can slip back
+  // through each other. (Its rest shape has nothing passed through; self-
+  // contact would only hold the tangle in place, and pulling it apart from
+  // the inside made it worse.)
+  _untangle(dt) {
+    const P = this.pieces, x = this.x, X = this.X, v = this.v, m = this.m;
+    for (let k = 0; k < P.length; k++) {
+      const pc = P[k];
+      if (!(pc.untangle > 0)) continue;
+      if (this.grab && this.grab.piece === k) {
+        pc.untangle = 0;
+        continue;
+      }
+      pc.untangle -= dt;
+      if (pc.asleep) this.wake(k);
+      const vs = pc.verts;
+      let M = 0, Cx = 0, Cy = 0, Cz = 0, cx = 0, cy = 0, cz = 0, ux = 0, uy = 0, uz = 0;
+      for (let n = 0; n < vs.length; n++) {
+        const i = vs[n], o = i * 3, w = m[i];
+        M += w;
+        Cx += X[o] * w; Cy += X[o + 1] * w; Cz += X[o + 2] * w;
+        cx += x[o] * w; cy += x[o + 1] * w; cz += x[o + 2] * w;
+        ux += v[o] * w; uy += v[o + 1] * w; uz += v[o + 2] * w;
+      }
+      if (M <= 0) continue;
+      Cx /= M; Cy /= M; Cz /= M; cx /= M; cy /= M; cz /= M; ux /= M; uy /= M; uz /= M;
+      // A = sum m (x - c)(X - C)^T, columns a0 a1 a2
+      let a00 = 0, a01 = 0, a02 = 0, a10 = 0, a11 = 0, a12 = 0, a20 = 0, a21 = 0, a22 = 0, den = 0;
+      for (let n = 0; n < vs.length; n++) {
+        const i = vs[n], o = i * 3, w = m[i];
+        const dx = (x[o] - cx) * w, dy = (x[o + 1] - cy) * w, dz = (x[o + 2] - cz) * w;
+        const rx = X[o] - Cx, ry = X[o + 1] - Cy, rz = X[o + 2] - Cz;
+        a00 += dx * rx; a10 += dy * rx; a20 += dz * rx;
+        a01 += dx * ry; a11 += dy * ry; a21 += dz * ry;
+        a02 += dx * rz; a12 += dy * rz; a22 += dz * rz;
+        den += w * (rx * rx + ry * ry + rz * rz);
+      }
+      if (den <= 0) continue;
+      // its rotation (Muller et al. 2016: iterate q toward the polar part of A)
+      const q = pc.fitQ;
+      let r00 = 1, r01 = 0, r02 = 0, r10 = 0, r11 = 1, r12 = 0, r20 = 0, r21 = 0, r22 = 1;
+      for (let it = 0; it < 20; it++) {
+        const qx = q[0], qy = q[1], qz = q[2], qw = q[3];
+        r00 = 1 - 2 * (qy * qy + qz * qz); r01 = 2 * (qx * qy - qz * qw); r02 = 2 * (qx * qz + qy * qw);
+        r10 = 2 * (qx * qy + qz * qw); r11 = 1 - 2 * (qx * qx + qz * qz); r12 = 2 * (qy * qz - qx * qw);
+        r20 = 2 * (qx * qz - qy * qw); r21 = 2 * (qy * qz + qx * qw); r22 = 1 - 2 * (qx * qx + qy * qy);
+        // omega = sum_j col_j(R) x col_j(A) / |sum_j col_j(R) . col_j(A)|
+        let ox = (r10 * a20 - r20 * a10) + (r11 * a21 - r21 * a11) + (r12 * a22 - r22 * a12);
+        let oy = (r20 * a00 - r00 * a20) + (r21 * a01 - r01 * a21) + (r22 * a02 - r02 * a22);
+        let oz = (r00 * a10 - r10 * a00) + (r01 * a11 - r11 * a01) + (r02 * a12 - r12 * a02);
+        const dd = Math.abs(r00 * a00 + r10 * a10 + r20 * a20 + r01 * a01 + r11 * a11 + r21 * a21 + r02 * a02 + r12 * a12 + r22 * a22) + 1e-12;
+        ox /= dd; oy /= dd; oz /= dd;
+        const wl = Math.hypot(ox, oy, oz);
+        if (wl < 1e-9) break;
+        const sh = Math.sin(wl / 2) / wl, ch = Math.cos(wl / 2);
+        const px = ox * sh, py = oy * sh, pz = oz * sh, pw = ch;
+        // q = dq * q
+        const nx = pw * qx + px * qw + py * qz - pz * qy, ny = pw * qy - px * qz + py * qw + pz * qx;
+        const nz = pw * qz + px * qy - py * qx + pz * qw, nw = pw * qw - px * qx - py * qy - pz * qz;
+        const ql = Math.hypot(nx, ny, nz, nw) || 1;
+        q[0] = nx / ql; q[1] = ny / ql; q[2] = nz / ql; q[3] = nw / ql;
+      }
+      const sc = (r00 * a00 + r10 * a10 + r20 * a20 + r01 * a01 + r11 * a11 + r21 * a21 + r02 * a02 + r12 * a12 + r22 * a22) / den;
+      // the share this frame (most of the way back in 0.2 s), on the floor
+      const amt = 1 - Math.exp(-dt * 15);
+      let low = Infinity;
+      for (let n = 0; n < vs.length; n++) {
+        const o = vs[n] * 3, rx = X[o] - Cx, ry = X[o + 1] - Cy, rz = X[o + 2] - Cz;
+        const ty = cy + sc * (r10 * rx + r11 * ry + r12 * rz);
+        if (ty < low) low = ty;
+      }
+      const lift = Math.max(0, -low);
+      for (let n = 0; n < vs.length; n++) {
+        const o = vs[n] * 3, rx = X[o] - Cx, ry = X[o + 1] - Cy, rz = X[o + 2] - Cz;
+        x[o] += amt * (cx + sc * (r00 * rx + r01 * ry + r02 * rz) - x[o]);
+        x[o + 1] += amt * (cy + lift + sc * (r10 * rx + r11 * ry + r12 * rz) - x[o + 1]);
+        x[o + 2] += amt * (cz + sc * (r20 * rx + r21 * ry + r22 * rz) - x[o + 2]);
+        v[o] = ux + (1 - amt) * (v[o] - ux);
+        v[o + 1] = uy + (1 - amt) * (v[o + 1] - uy);
+        v[o + 2] = uz + (1 - amt) * (v[o + 2] - uz);
+      }
+      this._hashDirty = true;
+    }
+  }
+
+  // Surfaces passed through themselves - what a corner dragged right through
+  // the body leaves, and the fold check (buried vertices) can't see once it
+  // is through: surface edges of a piece piercing a surface triangle of the
+  // same piece they don't touch. Counts per piece into out (for the pieces
+  // with look[k]), through a grid of the triangles.
+  _tangleCount(look, out) {
+    const x = this.x, F = this.sTri, nF = this.nF, tp = this.tPiece, sTet = this.sTet;
+    if (this._tgVersion !== this.topoVersion) {
+      // the surface edges, each once: the surface is closed and turned one
+      // way, so every edge runs a->b in one of its triangles and b->a in
+      // the other - keep the a < b one
+      const E = new Int32Array(nF * 3);
+      let n = 0;
+      for (let f = 0; f < nF; f++)
+        for (let e = 0; e < 3; e++) {
+          const a = F[f * 3 + e], b = F[f * 3 + ((e + 1) % 3)];
+          if (a < b) {
+            E[n++] = a;
+            E[n++] = b;
+          }
+        }
+      this._tgEdges = E.subarray(0, n);
+      this._tgBox = new Float32Array(nF * 6);
+      this._tgVersion = this.topoVersion;
+    }
+    const E = this._tgEdges, box = this._tgBox;
+    const C = 0.7 * this.hCell, iC = 1 / C;
+    const cells = new Map();
+    for (let f = 0; f < nF; f++) {
+      const k = tp[sTet[f]];
+      if (!look[k]) continue;
+      const a = F[f * 3] * 3, b = F[f * 3 + 1] * 3, c = F[f * 3 + 2] * 3, r = f * 6;
+      for (let d = 0; d < 3; d++) {
+        box[r + d] = Math.min(x[a + d], x[b + d], x[c + d]);
+        box[r + 3 + d] = Math.max(x[a + d], x[b + d], x[c + d]);
+      }
+      for (let ix = Math.floor(box[r] * iC); ix <= Math.floor(box[r + 3] * iC); ix++)
+        for (let iy = Math.floor(box[r + 1] * iC); iy <= Math.floor(box[r + 4] * iC); iy++)
+          for (let iz = Math.floor(box[r + 2] * iC); iz <= Math.floor(box[r + 5] * iC); iz++) {
+            const key = (ix + 512) * 1048576 + (iy + 512) * 1024 + (iz + 512), l = cells.get(key);
+            if (l) l.push(f);
+            else cells.set(key, [f]);
+          }
+    }
+    const stamp = this._tgStamp && this._tgStamp.length >= nF ? this._tgStamp : (this._tgStamp = new Int32Array(Math.max(nF, 1024)));
+    let st = this._tgSt || 0;
+    for (let e = 0; e < E.length; e += 2) {
+      const a = E[e], b = E[e + 1], k = this.vPiece[a];
+      if (k < 0 || !look[k]) continue;
+      const ax = x[a * 3], ay = x[a * 3 + 1], az = x[a * 3 + 2];
+      const dx = x[b * 3] - ax, dy = x[b * 3 + 1] - ay, dz = x[b * 3 + 2] - az;
+      const x0 = Math.min(ax, ax + dx), x1 = Math.max(ax, ax + dx), y0 = Math.min(ay, ay + dy), y1 = Math.max(ay, ay + dy), z0 = Math.min(az, az + dz), z1 = Math.max(az, az + dz);
+      st++;
+      for (let ix = Math.floor(x0 * iC); ix <= Math.floor(x1 * iC); ix++)
+        for (let iy = Math.floor(y0 * iC); iy <= Math.floor(y1 * iC); iy++)
+          for (let iz = Math.floor(z0 * iC); iz <= Math.floor(z1 * iC); iz++) {
+            const l = cells.get((ix + 512) * 1048576 + (iy + 512) * 1024 + (iz + 512));
+            if (!l) continue;
+            for (const f of l) {
+              if (stamp[f] === st) continue;
+              stamp[f] = st;
+              const i0 = F[f * 3], i1 = F[f * 3 + 1], i2 = F[f * 3 + 2];
+              if (i0 === a || i1 === a || i2 === a || i0 === b || i1 === b || i2 === b || tp[sTet[f]] !== k) continue;
+              const r = f * 6;
+              if (x1 < box[r] || x0 > box[r + 3] || y1 < box[r + 1] || y0 > box[r + 4] || z1 < box[r + 2] || z0 > box[r + 5]) continue;
+              // Moller-Trumbore, segment a->b against the triangle
+              const p0 = i0 * 3, p1 = i1 * 3, p2 = i2 * 3;
+              const e1x = x[p1] - x[p0], e1y = x[p1 + 1] - x[p0 + 1], e1z = x[p1 + 2] - x[p0 + 2];
+              const e2x = x[p2] - x[p0], e2y = x[p2 + 1] - x[p0 + 1], e2z = x[p2 + 2] - x[p0 + 2];
+              const qx = dy * e2z - dz * e2y, qy = dz * e2x - dx * e2z, qz = dx * e2y - dy * e2x, det = e1x * qx + e1y * qy + e1z * qz;
+              if (Math.abs(det) < 1e-12) continue;
+              const inv = 1 / det, tx = ax - x[p0], ty = ay - x[p0 + 1], tz = az - x[p0 + 2];
+              const u = (tx * qx + ty * qy + tz * qz) * inv;
+              if (u < 0 || u > 1) continue;
+              const rx = ty * e1z - tz * e1y, ry = tz * e1x - tx * e1z, rz = tx * e1y - ty * e1x;
+              const v = (dx * rx + dy * ry + dz * rz) * inv;
+              if (v < 0 || u + v > 1) continue;
+              const t = (e2x * rx + e2y * ry + e2z * rz) * inv;
+              if (t < 0 || t > 1) continue;
+              out[k]++;
+            }
+          }
+    }
+    this._tgSt = st;
   }
 
   // Of the pieces that may meet themselves, the surface vertices with some
@@ -2915,6 +3142,7 @@ export class SoftBody {
       v[o] += ux; v[o + 1] += uy; v[o + 2] += uz;
       if (dv) { dv[o] = ux; dv[o + 1] = uy; dv[o + 2] = uz; }
       if (this.pieces[this.vPiece[i]].asleep) this.wake(this.vPiece[i]);
+      this.pieces[this.vPiece[i]].touchT = this.time;
     }
     if (!dv) return;
     for (const pc of this.pieces) {
