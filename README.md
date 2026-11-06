@@ -2,7 +2,8 @@
 
 A hyper-real, physically simulated jelly cube that runs in the browser.
 
-**Play:** https://nickcason.github.io/cube-simulator/
+**Play:** https://nickcason.github.io/cube-simulator/ — it installs as an app (Add to Home
+Screen on iPhone, Install on Android and desktop Chrome/Edge) and then plays offline.
 
 Grab it, throw it, poke it — then go to work on it:
 
@@ -35,8 +36,12 @@ the table.
   little cross-section to pick its colour), starting from Rainbow, Sunset, Ocean, Neon,
   Candy or Duo, with a **Blend** slider from crisp seams to a smooth gradient. The layers
   show on every cut face.
-- **Texture** — Jello (clear, wobbly), Gummy (cloudy, chewy, firmer), Sour (sugar-crystal
-  coating), Crystal (glass-clear), Creamy (milky panna-cotta).
+- **Material** — how it looks *and* how it behaves: Jello (clear, wobbly), Gummy (cloudy,
+  chewy, firmer), Sour (sugar-crystal coating), Crystal (glass-clear), Creamy (milky
+  panna-cotta), Slime (glowing, gooey, sticky), Water balloon (crystal-clear, heavy, all
+  jiggle), Syrup (deep, slow, sticky), Mochi (soft, doughy, satin), Marshmallow (pale,
+  powdery, light, squashes like foam), Rubber (dense, firm, bounces like a super ball)
+  and Glass (clear, rigid, heavy, slippery).
 - **Edges** — Sharp, Soft, Round or Pillow; the cube re-forms with the new rounding.
 - **Glitter** — Off, Silver, Gold, Holo (rainbow, shifts with angle) or Rose flakes
   suspended in the jelly; they turn with every wobble, so it twinkles as it moves.
@@ -53,7 +58,8 @@ means (Wobbly, Syrupy, Moon, Super ball…):
 | Glitter | Amount (sprinkle → galaxy), Size (dust → sequins), Sparkle |
 | World | Gravity (Moon → Jupiter), Cube size |
 
-Picking a texture resets the material sliders to that texture; **Reset** puts everything back.
+Picking a material resets the material sliders (Feel and Look) to that material; **Reset**
+puts everything back.
 
 Choices are remembered. You can also link straight to a combo, e.g.
 `?flavor=rainbow&texture=gummy&edges=pillow`, or to your own layers (top → bottom):

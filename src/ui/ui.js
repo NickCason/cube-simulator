@@ -1,4 +1,4 @@
-import { FLAVORS, TEXTURES, EDGES, GLITTERS, LAYER_PRESETS, MIN_LAYERS, MAX_LAYERS, flavorSwatchCSS } from '../styles.js';
+import { FLAVORS, TEXTURES, EDGES, GLITTERS, LAYER_PRESETS, MIN_LAYERS, MAX_LAYERS, flavorSwatchCSS, flavorMainHex, materialSwatchCSS } from '../styles.js';
 import { SETTINGS, settingWord } from '../settings.js';
 
 const svg = (inner) =>
@@ -57,13 +57,24 @@ export class UI {
     this.app = app;
     this.root = root;
     this.root.innerHTML = `
-      <header class="title"><span class="dot"></span><span class="name">Cube Simulator</span></header>
+      <header class="brand" aria-label="Cube Simulator">
+        <svg class="mark" viewBox="4 3 56 58" aria-hidden="true">
+          <path class="ft" d="M32 6 56 18 32 30 8 18Z" />
+          <path class="fl" d="M8 18 32 30V58L8 46Z" />
+          <path class="fr" d="M56 18 32 30V58L56 46Z" />
+          <path class="gl" d="M16.5 17.6 32 9.8l11.6 5.8" />
+        </svg>
+        <svg class="word" viewBox="0 0 146 60" aria-hidden="true">
+          <use href="#bl-c" /><use href="#bl-u" /><use href="#bl-b" /><use href="#bl-e" />
+          <text x="0" y="58" textLength="146" lengthAdjust="spacing">SIMULATOR</text>
+        </svg>
+      </header>
       <div class="hint" aria-live="polite"></div>
       <nav class="dock" role="toolbar" aria-label="Tools">
         <div class="tools"></div>
         <div class="sep"></div>
         <div class="colors">
-          <button class="swatch-btn" aria-label="Jelly style" title="Flavor, texture & edges"><span class="swatch"></span></button>
+          <button class="swatch-btn" aria-label="Jelly style" title="Flavor, material & edges"><span class="swatch"></span></button>
 
         </div>
         <button class="tune-btn" aria-label="Settings" title="Settings">${ICONS.tune}</button>
@@ -83,7 +94,7 @@ export class UI {
           <div class="presets"></div>
           <label class="row blend"><span class="name">Blend</span><input type="range" min="0" max="1" step="0.01" aria-label="Blend between layers"><span class="word"></span></label>
         </div>
-        <div class="sec"><span class="lbl">Texture</span><div class="seg tex"></div></div>
+        <div class="sec"><span class="lbl">Material</span><div class="mats" role="group" aria-label="Material"></div></div>
         <div class="sec"><span class="lbl">Glitter</span><div class="seg glit"></div></div>
         <div class="sec"><span class="lbl">Edges</span><div class="seg edges"></div></div>
       </div>
@@ -97,7 +108,6 @@ export class UI {
     this.muteEl = root.querySelector('.mute');
     this.swatchBtn = root.querySelector('.swatch-btn');
     this.paletteEl = root.querySelector('.style-panel');
-    this.dot = root.querySelector('.title .dot');
     this.buttons = {};
     for (const d of TOOL_DEFS) {
       const b = document.createElement('button');
@@ -167,17 +177,18 @@ export class UI {
     custom.innerHTML = '<input type="color" value="#d4102a" aria-label="Custom colour">';
     custom.querySelector('input').addEventListener('input', (e) => app.setFlavor(e.target.value));
     chips.appendChild(custom);
-    const texSeg = this.paletteEl.querySelector('.seg.tex');
+    this.matsEl = this.paletteEl.querySelector('.mats');
     for (const [id, t] of Object.entries(TEXTURES)) {
       const b = document.createElement('button');
-      b.className = 'opt';
+      b.className = 'mat';
       b.dataset.tex = id;
-      b.textContent = t.name;
+      b.innerHTML = `<i class="msw"></i><span>${t.label || t.name}</span>`;
+      b.setAttribute('aria-label', t.name);
       b.addEventListener('click', () => {
         app.audio.ui();
         app.setTexture(id);
       });
-      texSeg.appendChild(b);
+      this.matsEl.appendChild(b);
     }
     const glitSeg = this.paletteEl.querySelector('.seg.glit');
     for (const gl of GLITTERS) {
@@ -290,6 +301,9 @@ export class UI {
     this.closeTune();
     this.paletteEl.hidden = false;
     this.swatchBtn.classList.add('open');
+    // (the chosen material in view)
+    const a = this.matsEl.querySelector('.active');
+    if (a) this.matsEl.scrollLeft = a.offsetLeft - (this.matsEl.clientWidth - a.offsetWidth) / 2;
   }
 
   closeTune() {
@@ -375,16 +389,22 @@ export class UI {
 
   setStyle(style, flavor) {
     const css = flavorSwatchCSS(flavor);
-    this.root.style.setProperty('--jelly', flavor.layers ? flavor.layers[flavor.layers.length - 1] : flavor.hex);
+    // (on the page, for the logotype's cube too)
+    document.documentElement.style.setProperty('--jelly', flavor.layers ? flavor.layers[flavor.layers.length - 1] : flavor.hex);
     this.swatchBtn.querySelector('.swatch').style.background = css;
-    this.dot.style.background = css;
     const layerChip = this.paletteEl.querySelector('.chip.layered');
     if (layerChip) layerChip.style.setProperty('--c', flavorSwatchCSS({ layers: style.layers.colors, blur: style.layers.blur }));
     this.layersSec.hidden = !flavor.layers;
     if (flavor.layers) this.renderLayers(style.layers);
     for (const b of this.paletteEl.querySelectorAll('.chip[data-flavor]')) b.classList.toggle('active', b.dataset.flavor === style.flavor);
     this.paletteEl.querySelector('.chip.custom').classList.toggle('active', String(style.flavor).startsWith('#'));
-    for (const b of this.paletteEl.querySelectorAll('.opt[data-tex]')) b.classList.toggle('active', b.dataset.tex === style.texture);
+    // material tiles in this flavour (layered: its middle colour)
+    const hex = flavorMainHex(flavor);
+    if (hex !== this._matHex) {
+      this._matHex = hex;
+      for (const b of this.matsEl.children) b.firstChild.style.background = materialSwatchCSS(TEXTURES[b.dataset.tex], hex);
+    }
+    for (const b of this.matsEl.children) b.classList.toggle('active', b.dataset.tex === style.texture);
     for (const b of this.paletteEl.querySelectorAll('.opt[data-edges]')) b.classList.toggle('active', b.dataset.edges === style.edges);
     for (const b of this.paletteEl.querySelectorAll('.opt[data-glit]')) b.classList.toggle('active', b.dataset.glit === style.glitter);
   }

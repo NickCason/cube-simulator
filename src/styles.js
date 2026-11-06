@@ -27,15 +27,24 @@ export const LAYER_PRESETS = [
 export const MIN_LAYERS = 2;
 export const MAX_LAYERS = 10;
 
-// Texture presets. Look: depth (colour), opacity, glow (translucency),
+// Material presets. Look: depth (colour), opacity, glow (translucency),
 // rough, ior, sugar (crystal coating), milk (creamy body).
-// Feel: mu (firmness), damping (viscosity), weight (density), lambda (volume keeping).
+// Feel: mu (firmness), damping (viscosity), weight (density), lambda (volume
+// keeping), bounce, grip. (Stored as style.texture: the first five were the
+// original "textures", and saved styles and ?texture= links still name them.)
 export const TEXTURES = {
-  jello: { name: 'Jello', depth: 1.25, opacity: 0.25, glow: 0.5, rough: 0.035, ior: 1.36, sugar: 0, milk: 0, mu: 170, damping: 1.7, weight: 1, lambda: 24 },
-  gummy: { name: 'Gummy', depth: 1.5, opacity: 0.52, glow: 0.45, rough: 0.1, ior: 1.38, sugar: 0, milk: 0.12, mu: 430, damping: 3.4, weight: 1.15, lambda: 24 },
-  sour: { name: 'Sour', depth: 1.5, opacity: 0.5, glow: 0.45, rough: 0.1, ior: 1.38, sugar: 1, milk: 0.08, mu: 430, damping: 3.4, weight: 1.15, lambda: 24 },
-  crystal: { name: 'Crystal', depth: 0.42, opacity: 0.1, glow: 0.5, rough: 0.018, ior: 1.4, sugar: 0, milk: 0, mu: 140, damping: 1.2, weight: 0.95, lambda: 30 },
-  creamy: { name: 'Creamy', depth: 1.0, opacity: 0.82, glow: 0.62, rough: 0.05, ior: 1.36, sugar: 0, milk: 1, mu: 115, damping: 2.2, weight: 1, lambda: 24 },
+  jello: { name: 'Jello', depth: 1.25, opacity: 0.25, glow: 0.5, rough: 0.035, ior: 1.36, sugar: 0, milk: 0, mu: 170, damping: 1.7, weight: 1, lambda: 24, bounce: 0.55, grip: 0.85 },
+  gummy: { name: 'Gummy', depth: 1.5, opacity: 0.52, glow: 0.45, rough: 0.1, ior: 1.38, sugar: 0, milk: 0.12, mu: 430, damping: 3.4, weight: 1.15, lambda: 24, bounce: 0.55, grip: 0.85 },
+  sour: { name: 'Sour', depth: 1.5, opacity: 0.5, glow: 0.45, rough: 0.1, ior: 1.38, sugar: 1, milk: 0.08, mu: 430, damping: 3.4, weight: 1.15, lambda: 24, bounce: 0.55, grip: 0.85 },
+  crystal: { name: 'Crystal', depth: 0.42, opacity: 0.1, glow: 0.5, rough: 0.018, ior: 1.4, sugar: 0, milk: 0, mu: 140, damping: 1.2, weight: 0.95, lambda: 30, bounce: 0.55, grip: 0.85 },
+  creamy: { name: 'Creamy', depth: 1.0, opacity: 0.82, glow: 0.62, rough: 0.05, ior: 1.36, sugar: 0, milk: 1, mu: 115, damping: 2.2, weight: 1, lambda: 24, bounce: 0.55, grip: 0.85 },
+  slime: { name: 'Slime', depth: 0.8, opacity: 0.5, glow: 0.95, rough: 0.01, ior: 1.35, sugar: 0, milk: 0.2, mu: 52, damping: 5.5, weight: 1.05, lambda: 24, bounce: 0.08, grip: 1.4 },
+  water: { name: 'Water balloon', depth: 0.45, opacity: 0.04, glow: 0.55, rough: 0.014, ior: 1.333, sugar: 0, milk: 0, mu: 46, damping: 0.32, weight: 1.5, lambda: 40, bounce: 0.3, grip: 0.8 },
+  syrup: { name: 'Syrup', depth: 1.9, opacity: 0, glow: 0.72, rough: 0.013, ior: 1.49, sugar: 0, milk: 0, mu: 50, damping: 12, weight: 1.4, lambda: 30, bounce: 0.02, grip: 1.45 },
+  mochi: { name: 'Mochi', depth: 0.45, opacity: 0.86, glow: 0.62, rough: 0.3, ior: 1.32, sugar: 0, milk: 0.9, mu: 70, damping: 9, weight: 1.1, lambda: 18, bounce: 0.04, grip: 1.45 },
+  marshmallow: { name: 'Marshmallow', label: 'Marsh\u00admallow', depth: 0.22, opacity: 0.95, glow: 0.85, rough: 0.45, ior: 1.3, sugar: 0, milk: 1, mu: 80, damping: 7, weight: 0.35, lambda: 1.8, bounce: 0.25, grip: 1 },
+  rubber: { name: 'Rubber', depth: 1.25, opacity: 0.97, glow: 0.15, rough: 0.26, ior: 1.5, sugar: 0, milk: 0.4, mu: 900, damping: 1, weight: 1.2, lambda: 30, bounce: 0.9, grip: 1.3 },
+  glass: { name: 'Glass', depth: 0.14, opacity: 0, glow: 0.22, rough: 0.008, ior: 1.52, sugar: 0, milk: 0, mu: 1000, damping: 2.5, weight: 1.6, lambda: 40, bounce: 0.25, grip: 0.4 },
 };
 
 export const EDGES = {
@@ -106,4 +115,30 @@ export function nextLayerColor(hex) {
   [r, g, b] = h < 60 ? [c, x, 0] : h < 120 ? [x, c, 0] : h < 180 ? [0, c, x] : h < 240 ? [0, x, c] : h < 300 ? [x, 0, c] : [c, 0, x];
   const to = (u) => Math.round((u + m) * 255).toString(16).padStart(2, '0');
   return `#${to(r)}${to(g)}${to(b)}`;
+}
+
+// A material tile for the picker: the flavour colour as that material
+// looks - clear or solid, glossy or matte, glowing, milky, sugared.
+export function materialSwatchCSS(t, hex) {
+  const n = parseInt(hex.slice(1), 16);
+  const c = [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+  const mix = (a, b, k) => a.map((v, i) => Math.round(v + (b[i] - v) * k));
+  const rgb = (a, al = 1) => `rgba(${a[0]}, ${a[1]}, ${a[2]}, ${al})`;
+  const W = [255, 255, 255], K = [0, 0, 0];
+  const o = Math.min(1, t.opacity), clear = 1 - o;
+  const body = mix(c, W, 0.5 * t.milk);
+  const mid = mix(body, W, 0.42 * clear * Math.min(1, 1.2 / t.depth));
+  const edge = mix(body, K, 0.18 + 0.14 * Math.min(1.5, t.depth) * clear);
+  const s = Math.max(0, Math.min(1, 1 - t.rough / 0.45)); // gloss sharpness
+  const ha = 0.4 + 0.55 * s;
+  const layers = [];
+  if (t.sugar > 0) {
+    const a = 0.35 + 0.5 * Math.min(1, t.sugar);
+    layers.push(`radial-gradient(circle, rgba(255, 255, 255, ${a}) 0 0.6px, transparent 1.1px) 1px 2px / 9px 8px`);
+    layers.push(`radial-gradient(circle, rgba(255, 255, 255, ${a * 0.75}) 0 0.5px, transparent 1px) 5px 6px / 7px 9px`);
+  }
+  layers.push(`radial-gradient(ellipse 58% 34% at 36% 22%, rgba(255, 255, 255, ${ha}) 0%, rgba(255, 255, 255, ${ha * 0.85}) ${16 + 30 * (1 - s)}%, transparent ${30 + 42 * (1 - s)}%)`);
+  layers.push(`radial-gradient(ellipse 80% 55% at 50% 100%, ${rgb(mix(c, W, 0.35), 0.55 * t.glow * (1 - 0.5 * o))}, transparent 70%)`);
+  layers.push(`radial-gradient(circle at 50% 58%, ${rgb(mid)} 0%, ${rgb(body)} 55%, ${rgb(edge)} 100%)`);
+  return layers.join(', ');
 }

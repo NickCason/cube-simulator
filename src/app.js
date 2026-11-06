@@ -127,9 +127,11 @@ export class App {
     this._panV = new THREE.Vector3();
     this._hitStop = 0;
     this._resizePending = false;
+    this.splash = null; // the opening splash (see main.js, ui/splash.js)
+    this.splashHold = false; // keeps the cube up while the splash shows
     // the cube hangs a moment before it drops, while the physics code warms
     // up on a throwaway body (Safari runs cold code slowly at first)
-    this.intro = { job: physicsWarmJob(), t: 0, done: false };
+    this.intro = { job: physicsWarmJob(), t: 0, ready: false, done: false };
     this.paused = false;
     this.raycaster = new THREE.Raycaster();
     this._ndc = new THREE.Vector2();
@@ -485,7 +487,9 @@ export class App {
   _introStep(dt) {
     const I = this.intro;
     I.t += dt;
-    if (this._warmSlice(9) === 'ready' || I.t > 1.2) I.done = true;
+    if (this._warmSlice(9) === 'ready') I.ready = true;
+    // (behind the splash the job just carries on: the drop is its reveal)
+    if ((I.ready || I.t > 1.2) && !this.splashHold) I.done = true;
     if (I.done) this.introMs = I.t * 1000;
   }
 
@@ -605,6 +609,7 @@ export class App {
       this.audio.init();
       this.isTouch = e.pointerType === 'touch';
       this.intro.done = true; // a touch ends the intro hold right away
+      this.splash?.leave(true);
       el.setPointerCapture(e.pointerId);
       pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
       if (pointers.size === 2) {
@@ -733,8 +738,15 @@ export class App {
     this._updateCamera(dt);
     this.overlay.draw(dt);
     const r0 = performance.now();
-    this.render();
+    // (nothing to draw under the splash, past the first frames that build
+    // the GPU's state; its own animation gets the time)
+    const covered = this.splash?.active && !this.splash.leaving && this.stats.frames > 2;
+    if (!covered) this.render();
     this.stats.renderLast = performance.now() - r0;
+    if (this.splash?.active && this.stats.frames > 1) {
+      this.splash.go();
+      if (this.intro.ready || this.intro.t > 4) this.splash.ready();
+    }
     const cpu = performance.now() - t0;
     this.stats.frameMs = this.stats.frameMs * 0.9 + cpu * 0.1;
     this.stats.frames++;

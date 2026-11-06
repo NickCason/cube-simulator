@@ -1,5 +1,5 @@
-// Fine-tuning sliders. Material settings default to the current texture
-// preset (and reset when the texture changes); the rest are global.
+// Fine-tuning sliders. Material settings default to the current material
+// preset (and reset when the material changes); the rest are global.
 // Values are stored in physical units; sliders run 0..1 via to/from.
 
 const logMap = (a, b) => ({
@@ -16,8 +16,8 @@ export const SETTINGS = [
   { id: 'viscosity', group: 'Feel', label: 'Viscosity', key: 'damping', mat: true, ...logMap(0.3, 14), words: ['Watery', 'Jiggly', 'Smooth', 'Syrupy', 'Doughy'] },
   { id: 'density', group: 'Feel', label: 'Density', key: 'weight', mat: true, ...logMap(0.3, 4), words: ['Airy', 'Light', 'Normal', 'Heavy', 'Lead'] },
   { id: 'squash', group: 'Feel', label: 'Squash', key: 'lambda', mat: true, ...logMap(40, 1.6), words: ['Solid', 'Squishy', 'Spongy', 'Foam'] },
-  { id: 'bounce', group: 'Feel', label: 'Bounce', key: 'bounce', def: 0.55, ...linMap(0, 0.95), words: ['Splat', 'Thud', 'Jelly', 'Springy', 'Super ball'] },
-  { id: 'grip', group: 'Feel', label: 'Grip', key: 'grip', def: 0.85, ...linMap(0.02, 1.5), words: ['Ice', 'Slippery', 'Normal', 'Grippy', 'Sticky'] },
+  { id: 'bounce', group: 'Feel', label: 'Bounce', key: 'bounce', mat: true, def: 0.55, ...linMap(0, 0.95), words: ['Splat', 'Thud', 'Jelly', 'Springy', 'Super ball'] },
+  { id: 'grip', group: 'Feel', label: 'Grip', key: 'grip', mat: true, def: 0.85, ...linMap(0.02, 1.5), words: ['Ice', 'Slippery', 'Normal', 'Grippy', 'Sticky'] },
   { id: 'opacity', group: 'Look', label: 'Opacity', key: 'opacity', mat: true, ...linMap(0, 1), words: ['Clear', 'Hazy', 'Cloudy', 'Milky', 'Solid'] },
   { id: 'translucency', group: 'Look', label: 'Translucency', key: 'glow', mat: true, ...linMap(0, 1), words: ['Dull', 'Soft', 'Glowing', 'Radiant'] },
   { id: 'depth', group: 'Look', label: 'Colour depth', key: 'depth', mat: true, ...logMap(0.15, 4), words: ['Pale', 'Light', 'Rich', 'Deep', 'Inky'] },
@@ -57,12 +57,12 @@ export function settingWord(s, value) {
   return s.words[Math.min(s.words.length - 1, Math.floor(t * s.words.length))];
 }
 
-// Effective value of every setting: user overrides, else texture, else default.
+// Effective value of every setting: user overrides, else material, else default.
 export function resolveSettings(overrides, texture) {
   const out = {};
   for (const s of SETTINGS) {
     if (overrides[s.key] !== undefined) out[s.key] = overrides[s.key];
-    else out[s.key] = s.mat ? texture[s.key] : s.def;
+    else out[s.key] = s.mat && texture[s.key] !== undefined ? texture[s.key] : s.def;
   }
   return out;
 }

@@ -42,6 +42,7 @@ body {
 #ui {
   position: fixed;
   inset: 0;
+  z-index: 2;
   pointer-events: none;
 }
 
@@ -49,28 +50,92 @@ body {
   pointer-events: auto;
 }
 
-/* ---------------------------------------------------------------- title */
-.title {
-  position: fixed;
-  top: max(20px, env(safe-area-inset-top));
-  right: max(24px, env(safe-area-inset-right));
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  font-size: 15px;
-  font-weight: 600;
-  letter-spacing: 0.01em;
-  color: rgba(28, 28, 31, 0.86);
-  pointer-events: none !important;
+/* a home-screen app on iOS draws the status bar over the page: a light shade
+   behind it keeps its white text legible */
+@media (display-mode: standalone) {
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0 0 auto;
+    height: calc(env(safe-area-inset-top) * 1.6);
+    background: linear-gradient(rgba(20, 16, 14, 0.3), rgba(20, 16, 14, 0));
+    pointer-events: none;
+    z-index: 1;
+  }
 }
 
-.title .dot {
-  width: 10px;
-  height: 10px;
-  border-radius: 50%;
-  background: var(--jelly);
-  box-shadow: inset -1.5px -2px 3px rgba(0, 0, 0, 0.25), inset 1.5px 1.5px 2px rgba(255, 255, 255, 0.55), 0 1px 6px color-mix(in srgb, var(--jelly) 55%, transparent);
-  transition: background 0.3s;
+/* ---------------------------------------------------------------- logotype */
+.brand {
+  position: fixed;
+  top: max(16px, calc(env(safe-area-inset-top) + 8px));
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  height: 34px;
+  color: var(--ink);
+  pointer-events: none !important;
+  transition: opacity 0.3s ease;
+}
+
+.splashing .brand {
+  opacity: 0;
+}
+
+.brand svg {
+  display: block;
+  height: 100%;
+  width: auto;
+  overflow: visible;
+}
+
+.brand .mark {
+  height: 112%;
+  filter: drop-shadow(0 2px 5px color-mix(in srgb, var(--jelly) 38%, transparent));
+}
+
+.brand .mark path {
+  stroke-width: 2.4;
+  stroke-linejoin: round;
+  transition: fill 0.3s, stroke 0.3s;
+}
+
+.brand .mark .ft {
+  fill: #ec5363;
+  stroke: #ec5363;
+  fill: color-mix(in srgb, var(--jelly) 66%, #fff);
+  stroke: color-mix(in srgb, var(--jelly) 66%, #fff);
+}
+
+.brand .mark .fl {
+  fill: var(--jelly);
+  stroke: var(--jelly);
+}
+
+.brand .mark .fr {
+  fill: #9b0b1e;
+  stroke: #9b0b1e;
+  fill: color-mix(in srgb, var(--jelly) 72%, #000);
+  stroke: color-mix(in srgb, var(--jelly) 72%, #000);
+}
+
+.brand .mark .gl {
+  fill: none;
+  stroke: #fff;
+  stroke-opacity: 0.85;
+  stroke-width: 2.6;
+  stroke-linecap: round;
+}
+
+.brand .word use {
+  fill: currentColor;
+}
+
+.brand .word text {
+  font: 600 13.2px var(--font);
+  fill: currentColor;
+  opacity: 0.62;
 }
 
 /* ---------------------------------------------------------------- dock */
@@ -398,6 +463,67 @@ body {
   background: rgba(0, 0, 0, 0.05);
 }
 
+.palette .mats {
+  position: relative;
+  display: flex;
+  gap: 4px;
+  /* (fills the panel's width without widening it; scrolls sideways) */
+  width: 0;
+  min-width: 100%;
+  overflow-x: auto;
+  scrollbar-width: none;
+  overscroll-behavior-x: contain;
+  scroll-snap-type: x proximity;
+  -webkit-mask-image: linear-gradient(90deg, #000 calc(100% - 22px), transparent);
+  mask-image: linear-gradient(90deg, #000 calc(100% - 22px), transparent);
+}
+
+.palette .mats::-webkit-scrollbar {
+  display: none;
+}
+
+.palette .mat {
+  flex: 0 0 62px;
+  display: grid;
+  grid-template-rows: auto 1fr;
+  justify-items: center;
+  align-content: start;
+  gap: 5px;
+  padding: 6px 2px 6px;
+  border-radius: 12px;
+  font-size: 10.5px;
+  font-weight: 560;
+  line-height: 1.15;
+  text-align: center;
+  -webkit-hyphens: manual;
+  hyphens: manual;
+  color: rgba(28, 28, 31, 0.72);
+  scroll-snap-align: start;
+  transition: background 0.15s, color 0.15s;
+}
+
+.palette .mat .msw {
+  width: 38px;
+  height: 38px;
+  border-radius: 11px;
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.07), 0 2px 6px rgba(40, 20, 10, 0.18);
+  transition: transform 0.15s;
+}
+
+.palette .mat:hover {
+  background: rgba(255, 255, 255, 0.7);
+}
+
+.palette .mat:hover .msw {
+  transform: scale(1.06);
+}
+
+.palette .mat.active {
+  background: #fff;
+  color: var(--ink);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.12);
+}
+
 .palette .opt {
   flex: 1 1 auto;
   height: 30px;
@@ -693,6 +819,19 @@ body {
   transform: translate(-50%, 0);
 }
 
+/* (room for every material at once on a big screen) */
+@media (min-width: 721px) {
+  .palette .mats {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    width: auto;
+    min-width: 0;
+    overflow: visible;
+    -webkit-mask-image: none;
+    mask-image: none;
+  }
+}
+
 /* ---------------------------------------------------------------- small screens */
 @media (max-width: 720px) {
   .hint {
@@ -702,10 +841,9 @@ body {
     text-align: center;
     border-radius: 14px;
   }
-  .title {
-    font-size: 14px;
-    top: max(14px, env(safe-area-inset-top));
-    right: max(16px, env(safe-area-inset-right));
+  .brand {
+    height: 30px;
+    gap: 8px;
   }
   .dock {
     width: calc(100vw - 20px);
