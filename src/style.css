@@ -98,7 +98,8 @@ body {
   gap: 2px;
 }
 
-.dock button {
+.dock button,
+.palette button {
   touch-action: manipulation;
   appearance: none;
   border: 0;
@@ -260,7 +261,7 @@ body {
   background: rgba(0, 0, 0, 0.05);
 }
 
-.dock .palette .opt {
+.palette .opt {
   flex: 1 1 auto;
   height: 30px;
   padding: 0 10px;
@@ -276,23 +277,23 @@ body {
   transition: background 0.15s, color 0.15s;
 }
 
-.dock .palette .opt svg {
+.palette .opt svg {
   width: 15px;
   height: 15px;
 }
 
-.dock .palette .opt:hover {
+.palette .opt:hover {
   background: rgba(255, 255, 255, 0.7);
 }
 
-.dock .palette .opt.active {
+.palette .opt.active {
   background: #fff;
   color: var(--ink);
   box-shadow: 0 1px 4px rgba(0, 0, 0, 0.12);
 }
 
 .chip,
-.dock .chip {
+.palette .chip {
   width: 34px;
   height: 34px;
   border-radius: 50%;
@@ -310,12 +311,12 @@ body {
   outline-offset: 2px;
 }
 
-.dock .chip.layered {
+.palette .chip.layered {
   box-shadow: inset -3px -4px 7px rgba(0, 0, 0, 0.22), inset 2px 3px 4px rgba(255, 255, 255, 0.45), 0 2px 5px rgba(0, 0, 0, 0.18);
 }
 
 .chip.custom,
-.dock .chip.custom {
+.palette .chip.custom {
   position: relative;
   overflow: hidden;
   cursor: pointer;
@@ -329,6 +330,135 @@ body {
   height: 52px;
   opacity: 0;
   cursor: pointer;
+}
+
+.tune-btn {
+  width: 42px;
+  height: 42px;
+  border-radius: 13px;
+  display: grid;
+  place-items: center;
+}
+
+.tune-btn svg {
+  width: 21px;
+  height: 21px;
+}
+
+.tune-btn:hover,
+.tune-btn.open {
+  background: rgba(0, 0, 0, 0.055);
+}
+
+.tune.palette {
+  width: 330px;
+  padding: 6px 0 10px;
+  gap: 0;
+  left: auto;
+  right: max(20px, env(safe-area-inset-right));
+  transform: none;
+}
+
+.tune-scroll {
+  max-height: min(58vh, 520px);
+  overflow-y: auto;
+  padding: 6px 16px 4px;
+  display: grid;
+  gap: 2px;
+  overscroll-behavior: contain;
+}
+
+.tune .lbl {
+  margin-top: 10px;
+  margin-bottom: 2px;
+}
+
+.tune .row {
+  display: grid;
+  grid-template-columns: 92px 1fr 74px;
+  align-items: center;
+  gap: 10px;
+  height: 30px;
+  font-size: 13px;
+  font-weight: 520;
+  color: rgba(28, 28, 31, 0.86);
+  cursor: pointer;
+}
+
+.tune .word {
+  font-size: 12px;
+  font-weight: 500;
+  color: rgba(28, 28, 31, 0.55);
+  text-align: right;
+  white-space: nowrap;
+}
+
+.tune input[type='range'] {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 22px;
+  margin: 0;
+  background: transparent;
+  cursor: pointer;
+  --p: 50%;
+}
+
+.tune input[type='range']::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: 2px;
+  background: linear-gradient(90deg, var(--ink) var(--p), rgba(0, 0, 0, 0.13) var(--p));
+}
+
+.tune input[type='range']::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 17px;
+  height: 17px;
+  margin-top: -6.5px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3), 0 0 0 0.5px rgba(0, 0, 0, 0.12);
+}
+
+.tune input[type='range']::-moz-range-track {
+  height: 4px;
+  border-radius: 2px;
+  background: rgba(0, 0, 0, 0.13);
+}
+
+.tune input[type='range']::-moz-range-progress {
+  height: 4px;
+  border-radius: 2px;
+  background: var(--ink);
+}
+
+.tune input[type='range']::-moz-range-thumb {
+  width: 17px;
+  height: 17px;
+  border: 0;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3), 0 0 0 0.5px rgba(0, 0, 0, 0.12);
+}
+
+.tune-foot {
+  padding: 8px 16px 0;
+  border-top: 1px solid rgba(0, 0, 0, 0.06);
+  margin-top: 6px;
+}
+
+.tune .reset {
+  width: 100%;
+  height: 32px;
+  border-radius: 9px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: rgba(28, 28, 31, 0.75);
+  background: rgba(0, 0, 0, 0.05);
+}
+
+.tune .reset:hover {
+  background: rgba(0, 0, 0, 0.09);
 }
 
 .heal {
@@ -467,18 +597,38 @@ body {
     grid-template-columns: repeat(10, 1fr);
     gap: 5px;
   }
-  .dock .palette .chip {
+  .tune.palette {
+    width: calc(100vw - 24px);
+    padding: 4px 0 9px;
+    left: 50%;
+    right: auto;
+    transform: translateX(-50%);
+  }
+  .tune-scroll {
+    max-height: 46vh;
+    padding: 4px 12px 2px;
+  }
+  .tune .row {
+    grid-template-columns: 84px 1fr 66px;
+    gap: 8px;
+    height: 30px;
+    font-size: 12.5px;
+  }
+  .tune-btn {
+    width: 38px;
+  }
+  .palette .chip {
     width: 100%;
     height: auto;
     aspect-ratio: 1;
   }
-  .dock .palette .opt {
+  .palette .opt {
     height: 28px;
     padding: 0 4px;
     font-size: 11.5px;
     gap: 3px;
   }
-  .dock .palette .opt svg {
+  .palette .opt svg {
     width: 13px;
     height: 13px;
   }

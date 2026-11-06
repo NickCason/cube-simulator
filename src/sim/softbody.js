@@ -21,7 +21,7 @@ const DEFAULTS = {
   damping: 1.7, // decay rate of non-rigid velocity (1/s)
   airDrag: 0.05,
   friction: 0.85,
-  restitutionWall: 0.2,
+  bounce: -1, // rebound/impact speed ratio for floor & wall hits (-1 = natural)
   arenaRadius: 2.35,
   ceiling: 4.2,
   maxSpeed: 45,
@@ -125,6 +125,19 @@ export class SoftBody {
   }
 
   // Recompute everything derived from topology.
+  // Change material density live (re-lumps vertex masses).
+  setDensity(d) {
+    if (d === this.p.density) return;
+    this.p.density = d;
+    this._computeMass();
+    for (const pc of this.pieces) {
+      let m = 0;
+      for (const i of pc.verts) m += this.m[i];
+      pc.mass = m;
+    }
+    this.wakeAll();
+  }
+
   wakeAll() {
     for (const pc of this.pieces) {
       pc.sleepT = 0;
@@ -608,7 +621,12 @@ export class SoftBody {
         const g2x = k0x * b10 + k1x * b11 + k2x * b12, g2y = k0y * b10 + k1y * b11 + k2y * b12, g2z = k0z * b10 + k1z * b11 + k2z * b12;
         const g3x = k0x * b20 + k1x * b21 + k2x * b22, g3y = k0y * b20 + k1y * b21 + k2y * b22, g3z = k0z * b20 + k1z * b21 + k2z * b22;
         const g0x = -g1x - g2x - g3x, g0y = -g1y - g2y - g3y, g0z = -g1z - g2z - g3z;
-        const alpha = ih2 / (lam * V);
+        // compression barrier: below ~1/3 volume the tet resists ever harder
+        let alpha = ih2 / (lam * V);
+        if (J < 0.35) {
+          const q = Math.max(J / 0.35, 0.25);
+          alpha *= q * q;
+        }
         const den = w0 * (g0x * g0x + g0y * g0y + g0z * g0z) + w1 * (g1x * g1x + g1y * g1y + g1z * g1z) +
           w2 * (g2x * g2x + g2y * g2y + g2z * g2z) + w3 * (g3x * g3x + g3y * g3y + g3z * g3z) + alpha;
         if (den > 1e-12) {
@@ -706,6 +724,7 @@ export class SoftBody {
   _solveBounds(h, last) {
     const { x, px, w } = this;
     const mu = this.p.friction;
+
     const R = this.p.arenaRadius, R2 = R * R;
     const top = this.p.ceiling;
     const n = this.nV;
@@ -801,6 +820,59 @@ export class SoftBody {
       pc.com[0] = cx; pc.com[1] = cy; pc.com[2] = cz;
       pc.vel[0] = vx; pc.vel[1] = vy; pc.vel[2] = vz;
       pc.bbox[0] = x0; pc.bbox[1] = y0; pc.bbox[2] = z0; pc.bbox[3] = x1; pc.bbox[4] = y1; pc.bbox[5] = z1;
+      // Bounciness: remember the impact speed while a piece squashes against
+      // the floor/wall; for a short window after the squash, set its rebound
+      // to exactly e x the impact speed (0 = splat, 0.95 = super ball).
+      const e = this.p.bounce;
+      if (e >= 0 && !pc.asleep) {
+        if (y0 < 0.02 && vy < -1.2 && !pc.rebT) pc.impY = Math.min(pc.impY || 0, vy);
+        if (pc.impY && !pc.rebT && vy > -0.25) pc.rebT = 0.22;
+        if (pc.rebT) {
+          const want = -pc.impY * e;
+          const dv = want - vy;
+          if ((dv > 0 && !pc.boosted) || dv < 0) {
+            for (let k = 0; k < vs.length; k++) v[vs[k] * 3 + 1] += dv;
+            vy = want;
+            if (dv > 0) pc.boosted = true;
+          }
+          pc.rebT -= dt;
+          if (pc.rebT <= 0) {
+            pc.rebT = 0;
+            pc.impY = 0;
+            pc.boosted = false;
+          }
+        }
+        const rc = Math.hypot(cx, cz) || 1;
+        const ux = cx / rc, uz = cz / rc;
+        const rmax = Math.max(Math.hypot(x0, z0), Math.hypot(x1, z0), Math.hypot(x0, z1), Math.hypot(x1, z1));
+        const vr = vx * ux + vz * uz;
+        if (rmax > this.p.arenaRadius - 0.03 && vr > 1.2 && !pc.rebR) {
+          pc.impR = Math.max(pc.impR || 0, vr);
+          pc.impUx = ux;
+          pc.impUz = uz;
+        }
+        if (pc.impR && !pc.rebR && vr < 0.25) pc.rebR = 0.22;
+        if (pc.rebR) {
+          const want = -pc.impR * e;
+          const cur = vx * pc.impUx + vz * pc.impUz;
+          const dv = want - cur;
+          if ((dv < 0 && !pc.boostedR) || dv > 0) {
+            for (let k = 0; k < vs.length; k++) {
+              v[vs[k] * 3] += pc.impUx * dv;
+              v[vs[k] * 3 + 2] += pc.impUz * dv;
+            }
+            vx += pc.impUx * dv;
+            vz += pc.impUz * dv;
+            if (dv < 0) pc.boostedR = true;
+          }
+          pc.rebR -= dt;
+          if (pc.rebR <= 0) {
+            pc.rebR = 0;
+            pc.impR = 0;
+            pc.boostedR = false;
+          }
+        }
+      }
       // angular momentum and inertia
       let Lx = 0, Ly = 0, Lz = 0;
       let Ixx = 0, Iyy = 0, Izz = 0, Ixy = 0, Ixz = 0, Iyz = 0;

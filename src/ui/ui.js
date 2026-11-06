@@ -1,4 +1,5 @@
 import { FLAVORS, TEXTURES, EDGES, flavorSwatchCSS } from '../styles.js';
+import { SETTINGS, settingWord } from '../settings.js';
 
 const svg = (inner) =>
   `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${inner}</svg>`;
@@ -31,6 +32,7 @@ export const ICONS = {
   heal: svg(
     '<path d="M11 3.5 12.7 8l4.6 1.7-4.6 1.7L11 16l-1.7-4.6-4.6-1.7L9.3 8z"/><path d="m18.5 14.5.8 2.1 2.2.8-2.2.8-.8 2.3-.8-2.3-2.2-.8 2.2-.8z"/>',
   ),
+  tune: svg('<path d="M4 7h9"/><path d="M17 7h3"/><path d="M4 17h3"/><path d="M11 17h9"/><circle cx="15" cy="7" r="2"/><circle cx="9" cy="17" r="2"/>'),
   sound: svg('<path d="M11 5 6.5 8.5H3.5v7h3L11 19z"/><path d="M15.5 9a4.5 4.5 0 0 1 0 6"/><path d="M18.4 6.2a8.4 8.4 0 0 1 0 11.6"/>'),
   mute: svg('<path d="M11 5 6.5 8.5H3.5v7h3L11 19z"/><path d="m16 9.5 5 5"/><path d="m21 9.5-5 5"/>'),
 };
@@ -60,21 +62,27 @@ export class UI {
         <div class="sep"></div>
         <div class="colors">
           <button class="swatch-btn" aria-label="Jelly style" title="Flavor, texture & edges"><span class="swatch"></span></button>
-          <div class="palette" hidden>
-            <div class="sec"><span class="lbl">Flavor</span><div class="chips"></div></div>
-            <div class="sec"><span class="lbl">Texture</span><div class="seg tex"></div></div>
-            <div class="sec"><span class="lbl">Edges</span><div class="seg edges"></div></div>
-          </div>
+
         </div>
+        <button class="tune-btn" aria-label="Settings" title="Settings">${ICONS.tune}</button>
         <button class="heal" title="Heal (H)">${ICONS.heal}<span>Heal</span></button>
         <button class="mute" title="Sound (M)" aria-label="Toggle sound">${ICONS.sound}</button>
-      </nav>`;
+      </nav>
+      <div class="palette style-panel" hidden>
+        <div class="sec"><span class="lbl">Flavor</span><div class="chips"></div></div>
+        <div class="sec"><span class="lbl">Texture</span><div class="seg tex"></div></div>
+        <div class="sec"><span class="lbl">Edges</span><div class="seg edges"></div></div>
+      </div>
+      <div class="palette tune" hidden>
+        <div class="tune-scroll"></div>
+        <div class="tune-foot"><button class="reset"></button></div>
+      </div>`;
     this.toolsEl = root.querySelector('.tools');
     this.hintEl = root.querySelector('.hint');
     this.healEl = root.querySelector('.heal');
     this.muteEl = root.querySelector('.mute');
     this.swatchBtn = root.querySelector('.swatch-btn');
-    this.paletteEl = root.querySelector('.palette');
+    this.paletteEl = root.querySelector('.style-panel');
     this.dot = root.querySelector('.title .dot');
     this.buttons = {};
     for (const d of TOOL_DEFS) {
@@ -137,6 +145,52 @@ export class UI {
       edgeSeg.appendChild(b);
     }
 
+    // ---- settings panel
+    this.tuneBtn = root.querySelector('.tune-btn');
+    this.tuneEl = root.querySelector('.palette.tune');
+    this.rows = {};
+    const scroll = this.tuneEl.querySelector('.tune-scroll');
+    let group = null;
+    for (const st of SETTINGS) {
+      if (st.group !== group) {
+        group = st.group;
+        const h = document.createElement('div');
+        h.className = 'lbl';
+        h.textContent = group;
+        scroll.appendChild(h);
+      }
+      const row = document.createElement('label');
+      row.className = 'row';
+      row.innerHTML = `<span class="name">${st.label}</span><input type="range" min="0" max="1" step="${st.int ? 1 / 240 : 0.001}"><span class="word"></span>`;
+      const input = row.querySelector('input');
+      const word = row.querySelector('.word');
+      const valueOf = () => {
+        const v = st.to(+input.value);
+        return st.int ? Math.round(v) : v;
+      };
+      input.addEventListener('input', () => {
+        const v = valueOf();
+        word.textContent = settingWord(st, v);
+        input.style.setProperty('--p', `${input.value * 100}%`);
+        app.setSetting(st.key, v, !st.release);
+      });
+      if (st.release) input.addEventListener('change', () => app.setSetting(st.key, valueOf(), true));
+      scroll.appendChild(row);
+      this.rows[st.key] = { st, input, word };
+    }
+    this.tuneEl.querySelector('.reset').addEventListener('click', () => {
+      app.audio.ui();
+      app.resetSettings();
+    });
+    this.tuneBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      app.audio.init();
+      const open = this.tuneEl.hidden;
+      this.closePalette();
+      this.tuneEl.hidden = !open;
+      this.tuneBtn.classList.toggle('open', open);
+    });
+
     this.swatchBtn.addEventListener('click', (e) => {
       e.stopPropagation();
       app.audio.init();
@@ -144,7 +198,8 @@ export class UI {
       else this.closePalette();
     });
     document.addEventListener('pointerdown', (e) => {
-      if (!this.paletteEl.hidden && !this.paletteEl.contains(e.target) && e.target !== this.swatchBtn) this.closePalette();
+      if (!this.paletteEl.hidden && !this.paletteEl.contains(e.target) && !this.swatchBtn.contains(e.target)) this.closePalette();
+      if (!this.tuneEl.hidden && !this.tuneEl.contains(e.target) && !this.tuneBtn.contains(e.target)) this.closeTune();
     });
     this.healEl.addEventListener('click', () => {
       app.audio.init();
@@ -172,8 +227,36 @@ export class UI {
   }
 
   openPalette() {
+    this.closeTune();
     this.paletteEl.hidden = false;
     this.swatchBtn.classList.add('open');
+  }
+
+  closeTune() {
+    if (!this.tuneEl) return;
+    this.tuneEl.hidden = true;
+    this.tuneBtn.classList.remove('open');
+  }
+
+  // Fraction of the screen height covered by an open panel (bottom sheet on phones).
+  get panelCover() {
+    if (window.innerWidth > 720) return 0;
+    const el = !this.tuneEl.hidden ? this.tuneEl : !this.paletteEl.hidden ? this.paletteEl : null;
+    if (!el) return 0;
+    const r = el.getBoundingClientRect();
+    return Math.max(0, (window.innerHeight - r.top) / window.innerHeight);
+  }
+
+  setSettings(st, tex) {
+    for (const key in this.rows) {
+      const { st: def, input, word } = this.rows[key];
+      const v = st[key];
+      const t = Math.min(1, Math.max(0, def.from(v)));
+      if (document.activeElement !== input) input.value = t;
+      input.style.setProperty('--p', `${t * 100}%`);
+      word.textContent = settingWord(def, v);
+    }
+    this.tuneEl.querySelector('.reset').textContent = `Reset to ${tex.name}`;
   }
 
   closePalette() {

@@ -30,6 +30,18 @@ place and fuses it into a pristine cube.
   coating), Crystal (glass-clear), Creamy (milky panna-cotta).
 - **Edges** — Sharp, Soft, Round or Pillow; the cube re-forms with the new rounding.
 
+**Settings** (the sliders button) fine-tune everything live — each slider shows what it
+means (Wobbly, Syrupy, Moon, Super ball…):
+
+| Group | Settings |
+| --- | --- |
+| Feel | Firmness, Viscosity, Density (weight), Squash (volume keeping → foam), Bounce, Grip |
+| Look | Opacity, Translucency, Colour depth, Gloss, Refraction |
+| Bubbles | Count (0–240), Size |
+| World | Gravity (Moon → Jupiter), Cube size |
+
+Picking a texture resets the material sliders to that texture; **Reset** puts everything back.
+
 Choices are remembered. You can also link straight to a combo, e.g.
 `?flavor=rainbow&texture=gummy&edges=pillow`.
 

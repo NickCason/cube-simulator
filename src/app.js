@@ -16,10 +16,21 @@ import { makeMaterials } from './world/models.js';
 import { Droplets } from './world/droplets.js';
 import { Bubbles } from './world/bubbles.js';
 import { DEFAULT_STYLE, TEXTURES, EDGES, flavorById, flavorMainHex } from './styles.js';
+import { SETTINGS, resolveSettings } from './settings.js';
 
 const BG = new THREE.Color(0.86, 0.85, 0.83);
 
 export class App {
+  // Wobble frequency ~ sqrt(mu/rho)/size: above ~sqrt(850)/1 the solver goes
+  // unstable at low substep counts (and foamy material even sooner).
+  // A floor keeps it from flattening into nothing under its own weight.
+  static safeMu(mu, rho, size, lambdaRatio, gravity = 22) {
+    const foam = Math.min(1, lambdaRatio / 6);
+    const hi = 850 * rho * size * size * (0.35 + 0.65 * foam);
+    const lo = (0.45 * rho * Math.abs(gravity) * size) / (0.4 + 0.6 * foam);
+    return Math.max(Math.min(mu, hi), Math.min(lo, hi));
+  }
+
   constructor(canvas, opts = {}) {
     this.canvas = canvas;
     this.opts = opts;
@@ -79,7 +90,9 @@ export class App {
 
     this.post = new Post(renderer);
     this.style = this._loadStyle(opts);
-    this.sb = new SoftBody({ ...(opts.sim || {}), bevel: EDGES[this.style.edges].bevel });
+    this.tune = this._loadTune();
+    const t0 = resolveSettings(this.tune, TEXTURES[this.style.texture]);
+    this.sb = new SoftBody({ ...(opts.sim || {}), size: t0.size, bevel: EDGES[this.style.edges].bevel * t0.size });
     this.sb.loadCube(0, opts.dropHeight ?? 1.1, 0, 0.18);
 
     this.audio = new AudioEngine();
@@ -180,20 +193,42 @@ export class App {
     return st;
   }
 
+  _loadTune() {
+    try {
+      return JSON.parse(localStorage.getItem('cube-sim-tune') || '{}') || {};
+    } catch (e) {
+      return {};
+    }
+  }
+
+  // Resolved settings: user overrides on top of the texture preset.
+  get settings() {
+    return resolveSettings(this.tune, TEXTURES[this.style.texture]);
+  }
+
   applyStyle() {
     const f = flavorById(this.style.flavor);
     const tex = TEXTURES[this.style.texture];
-    this.jelly.setStyle(f, tex, this.sb.p.size);
-    this.sb.p.mu = tex.mu;
-    this.sb.p.damping = tex.damping;
-    this.sb.wakeAll();
-    this.bubbles?.setShare(tex.bubbles);
+    const st = this.settings;
+    this.jelly.setStyle(f, { ...tex, ...st }, this.sb.p.size);
+    const sb = this.sb;
+    sb.p.mu = App.safeMu(st.mu, st.weight, sb.p.size, st.lambda, st.gravity);
+    sb.p.damping = st.damping;
+    sb.p.lambdaRatio = st.lambda;
+    sb.p.bounce = st.bounce;
+    sb.p.friction = st.grip;
+    sb.p.gravity = -st.gravity;
+    sb.setDensity(st.weight);
+    sb.wakeAll();
+    this.bubbles?.configure(st.bubbles, st.bubbleSize);
     this.flavor = f;
     this.color = flavorMainHex(f);
     for (const fn of this.onColor || []) fn(this.color, f);
     this.ui?.setStyle(this.style, f);
+    this.ui?.setSettings?.(st, tex);
     try {
       localStorage.setItem('cube-sim-style', JSON.stringify(this.style));
+      localStorage.setItem('cube-sim-tune', JSON.stringify(this.tune));
     } catch (e) {
       /* private mode */
     }
@@ -211,14 +246,45 @@ export class App {
   setTexture(id) {
     if (!TEXTURES[id]) return;
     this.style.texture = id;
+    // material sliders follow the new texture preset
+    for (const s of SETTINGS) if (s.mat) delete this.tune[s.key];
     this.applyStyle();
     this.sb.impulse(0, 0.6, 0, 0, -1, 0, 3, 1.2);
+  }
+
+  // One fine-tuning slider changed (value in physical units).
+  setSetting(key, value, final = true) {
+    this.tune[key] = value;
+    if (key === 'size') {
+      if (final) this.setCubeSize(value);
+      return;
+    }
+    this.applyStyle();
+  }
+
+  resetSettings() {
+    const oldSize = this.sb.p.size;
+    this.tune = {};
+    this.applyStyle();
+    if (Math.abs(this.settings.size - oldSize) > 1e-6) this.setCubeSize(this.settings.size);
+  }
+
+  setCubeSize(size) {
+    const old = this.sb.p.size;
+    if (Math.abs(size - old) < 1e-6) return;
+    this.tune.size = size;
+    this.sb.p.size = size;
+    this.sb.p.bevel = EDGES[this.style.edges].bevel * size;
+    this.applyStyle();
+    // re-form the cube at the new size
+    this.healer.active = false;
+    this.heal({ scale: size / old });
   }
 
   setEdges(id) {
     if (!EDGES[id] || this.style.edges === id) return;
     this.style.edges = id;
-    this.sb.p.bevel = EDGES[id].bevel;
+    this.sb.p.bevel = EDGES[id].bevel * this.sb.p.size;
     this.applyStyle();
     // reform the cube with the new rounding
     this.healer.active = false;
@@ -264,10 +330,10 @@ export class App {
     this.ui?.setDamaged(false);
   }
 
-  heal() {
+  heal(opts) {
     if (this.healer.active) return;
     this.tool?.up?.();
-    this.healer.start();
+    this.healer.start(opts);
   }
 
   fireAt(p, level) {
@@ -289,10 +355,12 @@ export class App {
   _applyOrbit() {
     const o = this.orbit;
     const c = this.camera;
+    // pull back while a bottom sheet hides part of a small screen
+    const r = o.radius * (1 + (this._lift || 0) * 1.5);
     c.position.set(
-      o.target.x + o.radius * Math.cos(o.phi) * Math.sin(o.theta),
-      o.target.y + o.radius * Math.sin(o.phi),
-      o.target.z + o.radius * Math.cos(o.phi) * Math.cos(o.theta),
+      o.target.x + r * Math.cos(o.phi) * Math.sin(o.theta),
+      o.target.y + r * Math.sin(o.phi),
+      o.target.z + r * Math.cos(o.phi) * Math.cos(o.theta),
     );
     c.lookAt(o.target);
     if (this._shake > 1e-4) {
@@ -302,6 +370,15 @@ export class App {
   }
 
   _updateCamera(dt) {
+    // lift the scene above an open bottom sheet on small screens
+    const cover = this.ui ? this.ui.panelCover : 0;
+    const goal = cover > 0 ? Math.min(0.42, cover * 0.42) : 0;
+    this._lift = (this._lift || 0) + (goal - (this._lift || 0)) * (1 - Math.exp(-dt * 10));
+    const c = this.camera;
+    if (Math.abs(this._lift) > 1e-3) {
+      const W = this.size.w, H = this.size.h;
+      c.setViewOffset(W, H, 0, this._lift * H, W, H);
+    } else if (c.view && c.view.enabled) c.clearViewOffset();
     const o = this.orbit, g = this.orbitGoal;
     const k = 1 - Math.exp(-dt * 12);
     o.theta += (g.theta - o.theta) * k;

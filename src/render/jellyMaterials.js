@@ -144,6 +144,8 @@ export function createJellyMaterial(env, layerUniforms) {
       ...layerUniforms,
       uSugar: { value: 0 },
       uMilk: { value: 0 },
+      uGlow: { value: 0.5 },
+      uHazeMin: { value: 0 },
       tScene: { value: null },
       tBack: { value: null },
       envMap: { value: env.texture },
@@ -190,6 +192,8 @@ export function createJellyMaterial(env, layerUniforms) {
       uniform vec3 uPLColor;
       uniform float uSugar;
       uniform float uMilk;
+      uniform float uGlow;
+      uniform float uHazeMin;
       varying vec3 vWorldPos;
       varying vec3 vNormal;
       varying vec3 vViewPos;
@@ -289,7 +293,7 @@ export function createJellyMaterial(env, layerUniforms) {
         vec3 sigma = uLayers > 0 ? mix(layerSigma(vRest.y, vRest.y, uAbsorb), layerSigma(vRest.y, exitY, uAbsorb), 0.22) : uAbsorb;
         vec3 Tr = exp(-sigma * pathLen * (1.0 + melt * 0.35));
         float haze = 1.0 - exp(-(uScatter + uMilk * 7.0 + frost * 2.5) * pathLen);
-        haze = max(haze, uMilk * 0.72);
+        haze = max(haze, max(uMilk * 0.72, uHazeMin));
 
         vec3 L = normalize(uLightDir);
         float NdL = dot(N, L);
@@ -301,7 +305,9 @@ export function createJellyMaterial(env, layerUniforms) {
         baseSc = mix(baseSc, mix(baseSc, vec3(1.0), 0.45) * 1.05, uMilk);
         vec3 sc = mix(baseSc, vec3(0.92, 0.96, 1.0), frost * 0.85);
         // light that scattered inside the body (thin regions glow more brightly)
-        vec3 scatterLight = sc * (irr * 0.55 + uLightColor * (wrap * 0.22 + backlit * 0.5)) * (0.55 + 0.45 * exp(-pathLen * 1.5));
+        // translucency: how much light glows through (and how deep it reaches)
+        vec3 scatterLight = sc * (irr * 0.55 + uLightColor * (wrap * 0.22 + backlit * (0.25 + 0.5 * uGlow)))
+          * (0.2 + 1.6 * uGlow) * (0.55 + 0.45 * exp(-pathLen * mix(3.0, 0.45, uGlow)));
 
         vec3 body = trans * Tr * (1.0 - haze) + scatterLight * haze;
 

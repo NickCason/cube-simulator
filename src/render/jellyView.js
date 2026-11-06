@@ -52,9 +52,10 @@ export class JellyView {
     this.maskMat.uniforms.uLightDir.value.copy(d);
   }
 
-  // flavor: { hex } or { layers: [hex bottom..top] }; tex: texture preset
-  setStyle(flavor, tex, size = 1) {
-    const ref = 0.55 / tex.density;
+  // flavor: { hex } or { layers: [hex bottom..top] }
+  // m: resolved material {depth, opacity, glow, rough, ior, sugar, milk}
+  setStyle(flavor, m, size = 1) {
+    const ref = 0.55 / m.depth;
     const colors = (flavor.layers || [flavor.hex]).map((h) => new THREE.Color(h));
     const abs = colors.map((c) => absorptionFromColor(c, ref));
     const scs = colors.map((c) => {
@@ -72,23 +73,33 @@ export class JellyView {
       scs.forEach((c, k) => L.uLayerSc.value[k].set(c.r, c.g, c.b));
     } else L.uLayers.value = 0;
     const F = this.frontMat.uniforms;
+    const C = this.causticMat.uniforms;
     F.uAbsorb.value.copy(avgAbs);
-    this.causticMat.uniforms.uAbsorb.value.copy(avgAbs);
-    F.uScatterColor.value.copy(scs[0]);
-    if (flavor.layers) F.uScatterColor.value.copy(avgSc);
+    C.uAbsorb.value.copy(avgAbs);
+    F.uScatterColor.value.copy(flavor.layers ? avgSc : scs[0]);
+    // opacity -> cloudiness; near the top end even thin parts go solid
+    const o = Math.min(1, Math.max(0, m.opacity));
+    const scatter = 9 * o * o;
+    const hazeMin = 0.92 * Math.min(1, Math.max(0, (o - 0.45) / 0.55)) ** 2;
     // colour of light that has crossed ~0.35 units of jelly (tints the shadow)
     const tint = new THREE.Color(0, 0, 0);
     for (const a of abs) tint.r += Math.exp(-a.x * 0.35), tint.g += Math.exp(-a.y * 0.35), tint.b += Math.exp(-a.z * 0.35);
     tint.multiplyScalar(1 / abs.length);
-    if (tex.milk) tint.lerp(new THREE.Color(1, 1, 1), 0.35 * tex.milk).multiplyScalar(1 - 0.35 * tex.milk);
+    const cloud = Math.max(m.milk, hazeMin);
+    if (cloud) tint.lerp(new THREE.Color(1, 1, 1), 0.35 * cloud).multiplyScalar(1 - 0.35 * cloud);
     this.fxUniforms.tint.value.copy(tint);
     // healing light: a luminous, lighter version of the jelly colour
     F.uGlowColor.value.copy(avgSc).lerp(new THREE.Color(1, 1, 1), 0.55).multiplyScalar(0.9);
-    F.uScatter.value = tex.scatter + (flavor.layers ? 1.6 : 0);
-    this.causticMat.uniforms.uScatter.value = tex.scatter + tex.milk * 3;
-    F.uRoughness.value = tex.rough;
-    F.uSugar.value = tex.sugar;
-    F.uMilk.value = tex.milk;
+    F.uScatter.value = scatter + (flavor.layers ? 1.6 * (1 - o) : 0);
+    F.uHazeMin.value = hazeMin;
+    F.uGlow.value = m.glow;
+    C.uScatter.value = scatter + m.milk * 3;
+    F.uRoughness.value = m.rough;
+    F.uSugar.value = m.sugar;
+    F.uMilk.value = m.milk;
+    F.uIor.value = m.ior;
+    F.uDispersion.value = 0.018 * Math.max(0, m.ior - 1) / 0.36;
+    C.uIor.value = Math.max(1.0001, m.ior);
   }
 
   setSize(w, h) {

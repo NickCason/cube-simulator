@@ -15,7 +15,7 @@ export class Healer {
     this.t = 0;
   }
 
-  start() {
+  start(opts = {}) {
     if (this.active) return;
     const app = this.app;
     const sb = app.sb;
@@ -75,8 +75,9 @@ export class Healer {
     const tg = new Float64Array(n * 3);
     const c = Math.cos(this.yaw), s = Math.sin(this.yaw);
     const half = sb.p.size / 2;
+    const k = opts.scale || 1; // re-sizing: fly to a scaled cube
     for (let i = 0; i < n; i++) {
-      const X = sb.X[i * 3], Y = sb.X[i * 3 + 1], Z = sb.X[i * 3 + 2];
+      const X = sb.X[i * 3] * k, Y = sb.X[i * 3 + 1] * k, Z = sb.X[i * 3 + 2] * k;
       tg[i * 3] = cx + c * X + s * Z;
       tg[i * 3 + 1] = Y + half + this.lift;
       tg[i * 3 + 2] = cz - s * X + c * Z;

@@ -14,14 +14,15 @@ export const FLAVORS = [
   { id: 'rainbow', name: 'Rainbow', layers: ['#7b22d6', '#1572ff', '#2cc23a', '#ffc814', '#ff6a0d', '#e8102e'] },
 ];
 
-// density: colour depth; scatter: cloudiness; rough: surface gloss;
-// sugar: crystal coating; milk: creamy body; mu/damping: feel; bubbles: share shown
+// Texture presets. Look: depth (colour), opacity, glow (translucency),
+// rough, ior, sugar (crystal coating), milk (creamy body).
+// Feel: mu (firmness), damping (viscosity), weight (density), lambda (volume keeping).
 export const TEXTURES = {
-  jello: { name: 'Jello', density: 1.25, scatter: 0.55, rough: 0.035, sugar: 0, milk: 0, mu: 170, damping: 1.7, bubbles: 1 },
-  gummy: { name: 'Gummy', density: 1.5, scatter: 2.4, rough: 0.1, sugar: 0, milk: 0.12, mu: 430, damping: 3.4, bubbles: 0 },
-  sour: { name: 'Sour', density: 1.5, scatter: 2.2, rough: 0.1, sugar: 1, milk: 0.08, mu: 430, damping: 3.4, bubbles: 0 },
-  crystal: { name: 'Crystal', density: 0.42, scatter: 0.08, rough: 0.018, sugar: 0, milk: 0, mu: 140, damping: 1.2, bubbles: 1 },
-  creamy: { name: 'Creamy', density: 1.0, scatter: 6, rough: 0.05, sugar: 0, milk: 1, mu: 115, damping: 2.2, bubbles: 0 },
+  jello: { name: 'Jello', depth: 1.25, opacity: 0.25, glow: 0.5, rough: 0.035, ior: 1.36, sugar: 0, milk: 0, mu: 170, damping: 1.7, weight: 1, lambda: 24 },
+  gummy: { name: 'Gummy', depth: 1.5, opacity: 0.52, glow: 0.45, rough: 0.1, ior: 1.38, sugar: 0, milk: 0.12, mu: 430, damping: 3.4, weight: 1.15, lambda: 24 },
+  sour: { name: 'Sour', depth: 1.5, opacity: 0.5, glow: 0.45, rough: 0.1, ior: 1.38, sugar: 1, milk: 0.08, mu: 430, damping: 3.4, weight: 1.15, lambda: 24 },
+  crystal: { name: 'Crystal', depth: 0.42, opacity: 0.1, glow: 0.5, rough: 0.018, ior: 1.4, sugar: 0, milk: 0, mu: 140, damping: 1.2, weight: 0.95, lambda: 30 },
+  creamy: { name: 'Creamy', depth: 1.0, opacity: 0.82, glow: 0.62, rough: 0.05, ior: 1.36, sugar: 0, milk: 1, mu: 115, damping: 2.2, weight: 1, lambda: 24 },
 };
 
 export const EDGES = {
