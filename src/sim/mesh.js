@@ -3,32 +3,49 @@
 // alternating parity so neighbouring cells share face diagonals. Boundary
 // vertices are pushed onto a rounded box of radius `bevel`.
 
+// The cube's rounding: a grid point outside the core box (half-size
+// half - bevel) is pulled in along its offset from that box until its
+// largest coordinate offset is its distance - the corners and edges round
+// off to radius `bevel`. Written to out[o..o+2]. unbevelPoint undoes it
+// exactly (an edge style change morphs between roundings through it).
+export function bevelPoint(x, y, z, half, bevel, out, o = 0) {
+  const a = half - bevel;
+  if (bevel > 0) {
+    const qx = Math.max(-a, Math.min(a, x)), qy = Math.max(-a, Math.min(a, y)), qz = Math.max(-a, Math.min(a, z));
+    const dx = x - qx, dy = y - qy, dz = z - qz;
+    const m = Math.max(Math.abs(dx), Math.abs(dy), Math.abs(dz));
+    if (m > 1e-12) {
+      const s = m / Math.sqrt(dx * dx + dy * dy + dz * dz);
+      x = qx + dx * s; y = qy + dy * s; z = qz + dz * s;
+    }
+  }
+  out[o] = x; out[o + 1] = y; out[o + 2] = z;
+}
+export function unbevelPoint(x, y, z, half, bevel, out, o = 0) {
+  const a = half - bevel;
+  if (bevel > 0) {
+    const qx = Math.max(-a, Math.min(a, x)), qy = Math.max(-a, Math.min(a, y)), qz = Math.max(-a, Math.min(a, z));
+    const dx = x - qx, dy = y - qy, dz = z - qz;
+    const m = Math.max(Math.abs(dx), Math.abs(dy), Math.abs(dz));
+    if (m > 1e-12) {
+      const s = Math.sqrt(dx * dx + dy * dy + dz * dz) / m;
+      x = qx + dx * s; y = qy + dy * s; z = qz + dz * s;
+    }
+  }
+  out[o] = x; out[o + 1] = y; out[o + 2] = z;
+}
+
 export function buildCubeMesh(res = 12, size = 1, bevel = 0.09) {
   const n1 = res + 1;
   const h = size / res;
   const half = size / 2;
-  const a = half - bevel;
   const pos = new Float64Array(n1 * n1 * n1 * 3);
   const id = (i, j, k) => (i * n1 + j) * n1 + k;
 
   for (let i = 0; i < n1; i++) {
     for (let j = 0; j < n1; j++) {
       for (let k = 0; k < n1; k++) {
-        let x = -half + i * h, y = -half + j * h, z = -half + k * h;
-        if (bevel > 0) {
-          const qx = Math.max(-a, Math.min(a, x));
-          const qy = Math.max(-a, Math.min(a, y));
-          const qz = Math.max(-a, Math.min(a, z));
-          const dx = x - qx, dy = y - qy, dz = z - qz;
-          const m = Math.max(Math.abs(dx), Math.abs(dy), Math.abs(dz));
-          const len = Math.hypot(dx, dy, dz);
-          if (m > 1e-12) {
-            const s = m / len;
-            x = qx + dx * s; y = qy + dy * s; z = qz + dz * s;
-          }
-        }
-        const o = id(i, j, k) * 3;
-        pos[o] = x; pos[o + 1] = y; pos[o + 2] = z;
+        bevelPoint(-half + i * h, -half + j * h, -half + k * h, half, bevel, pos, id(i, j, k) * 3);
       }
     }
   }

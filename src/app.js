@@ -17,6 +17,7 @@ import { physicsWarmJob } from './sim/warm.js';
 import { Droplets } from './world/droplets.js';
 import { Bubbles } from './world/bubbles.js';
 import { Glitter, GLITTER_MODES } from './world/glitter.js';
+import { bevelPoint, unbevelPoint } from './sim/mesh.js';
 import { DEFAULT_STYLE, TEXTURES, EDGES, LAYER_PRESETS, MIN_LAYERS, MAX_LAYERS, MAX_REPEAT, biasExp, resolveFlavor, flavorMainHex, nextLayerColor } from './styles.js';
 import { SETTINGS, resolveSettings } from './settings.js';
 import { Tilt } from './tilt.js';
@@ -475,12 +476,56 @@ export class App {
 
   setEdges(id) {
     if (!EDGES[id] || this.style.edges === id) return;
+    const from = this._edgeMorph ? this._edgeMorph.cur : this.sb.p.bevel;
     this.style.edges = id;
     this.sb.p.bevel = EDGES[id].bevel * this.sb.p.size;
     this.applyStyle();
-    // reform the cube with the new rounding
-    this.healer.active = false;
-    this.heal();
+    // A whole cube changes shape: its rest shape eases from one rounding to
+    // the other and the jelly springs after it. A cut or battered one
+    // re-forms with the new rounding (the heal).
+    if (this.damaged || this.healer.active || this.sb.pieces.length !== 1 || !this.intro.done) {
+      this._edgeMorph = null;
+      this.healer.active = false;
+      this.heal();
+      return;
+    }
+    const sb = this.sb, n = sb.nV, half = sb.p.size / 2;
+    const M = this._edgeMorph;
+    // (the rest positions with no rounding at all, worked out once)
+    let G = M && M.topo === sb.topoVersion ? M.G : null;
+    if (!G) {
+      G = new Float64Array(n * 3);
+      for (let i = 0; i < n; i++) unbevelPoint(sb.X[i * 3], sb.X[i * 3 + 1], sb.X[i * 3 + 2], half, from, G, i * 3);
+    }
+    this._edgeMorph = { G, topo: sb.topoVersion, half, from, to: this.sb.p.bevel, cur: from, t: 0, dur: 0.6 };
+  }
+
+  _edgeMorphTick(dt) {
+    const M = this._edgeMorph;
+    if (!M) return;
+    const sb = this.sb, n = sb.nV;
+    // (cut or rebuilt meanwhile: the new rounding as it is, at once)
+    const broken = M.topo !== sb.topoVersion || M.G.length !== n * 3;
+    M.t += dt;
+    const k = broken ? 1 : Math.min(1, M.t / M.dur);
+    M.cur = M.from + (M.to - M.from) * k * k * (3 - 2 * k);
+    const X = sb.X, G = M.G;
+    if (broken) {
+      const g = new Float64Array(3);
+      for (let i = 0; i < n; i++) {
+        unbevelPoint(X[i * 3], X[i * 3 + 1], X[i * 3 + 2], M.half, M.from, g);
+        bevelPoint(g[0], g[1], g[2], M.half, M.to, X, i * 3);
+      }
+    } else for (let i = 0; i < n; i++) bevelPoint(G[i * 3], G[i * 3 + 1], G[i * 3 + 2], M.half, M.cur, X, i * 3);
+    sb._computeRest();
+    sb._computeMass();
+    sb.wakeAll();
+    if (k >= 1) {
+      sb._computeEscape();
+      sb._rg = null;
+      this.jelly.topoVersion = -1; // (the render surface's true-shape fit, for the new rounding)
+      this._edgeMorph = null;
+    }
   }
 
   // Jelly colour at a world point (layered flavours vary with rest height).
@@ -790,6 +835,7 @@ export class App {
       this.tool?.update?.(sdt, dt);
       this.healer.update(sdt);
       this.tilt.update(dt);
+      this._edgeMorphTick(dt);
       const nS = Math.max(4, Math.min(16, Math.round(this.substepRate * sdt)));
       this.sb.p.substeps = nS;
       const p0 = performance.now();
