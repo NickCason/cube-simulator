@@ -235,8 +235,10 @@ export class App {
     undo.push(() => this.scene.remove(bomb));
     for (const o of [this.nails.mesh, this.droplets.mesh]) {
       if (o.count !== 0) continue;
+      const vis = o.visible;
       o.count = 1;
-      undo.push(() => (o.count = 0));
+      o.visible = true;
+      undo.push(() => ((o.count = 0), (o.visible = vis)));
     }
     for (const L of [this.particles.add, this.particles.alpha]) {
       const g = L.points.geometry, { start, count } = g.drawRange;

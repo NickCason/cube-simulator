@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { mergeVertices } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 
 // Little blobs of jelly blasted out of the cube (explosions, over-inflation).
 // They fly ballistically, splat on the floor and wait for the heal, when they
@@ -7,18 +8,24 @@ export class Droplets {
   constructor(app) {
     this.app = app;
     this.max = 220;
-    const geo = new THREE.IcosahedronGeometry(1, 2);
+    // (a soft, slightly lumpy blob: fine enough that it doesn't show facets)
+    const geo = mergeVertices(new THREE.IcosahedronGeometry(1, 3));
     const pos = geo.attributes.position;
     for (let i = 0; i < pos.count; i++) {
       const x = pos.getX(i), y = pos.getY(i), z = pos.getZ(i);
-      const n = 1 + 0.18 * Math.sin(x * 5.1 + y * 3.3) * Math.cos(z * 4.7 - y * 2.1);
+      const n = 1 + 0.12 * Math.sin(x * 3.1 + y * 2.3) * Math.cos(z * 2.7 - y * 1.6);
       pos.setXYZ(i, x * n, y * n, z * n);
     }
     geo.computeVertexNormals();
+    // jelly, not plastic: see-through and refracting what's behind it (the
+    // colour tints the light coming through), glossy outside
     this.mat = new THREE.MeshPhysicalMaterial({
       color: 0xd4102a,
-      roughness: 0.08,
+      roughness: 0.06,
       metalness: 0,
+      transmission: 1,
+      ior: 1.36,
+      thickness: 0.05,
       clearcoat: 1,
       clearcoatRoughness: 0.04,
       envMap: app.env.texture,
@@ -31,11 +38,12 @@ export class Droplets {
     this.mat.onBeforeCompile = (sh) => {
       sh.fragmentShader = sh.fragmentShader.replace(
         '#include <emissivemap_fragment>',
-        '#include <emissivemap_fragment>\n#ifdef USE_COLOR\ntotalEmissiveRadiance *= vColor.rgb * 2.2;\n#endif',
+        '#include <emissivemap_fragment>\n#ifdef USE_COLOR\ntotalEmissiveRadiance *= vColor.rgb * 1.2;\n#endif',
       );
     };
     this.mesh = new THREE.InstancedMesh(geo, this.mat, this.max);
     this.mesh.count = 0;
+    this.mesh.visible = this.mesh.count > 0; // (see-through: three draws the scene behind it once more while it shows)
     this.mesh.frustumCulled = false;
     this.mesh.castShadow = false;
     this.mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
@@ -64,7 +72,7 @@ export class Droplets {
   spawn(p, v, r, hex) {
     if (this.items.length >= this.max) this.items.shift();
     // droplets are opaque; use a slightly deeper tone of the local jelly colour
-    const col = new THREE.Color(hex || this.app.flavorColorAt(p.x, p.y, p.z)).multiplyScalar(0.75);
+    const col = new THREE.Color(hex || this.app.flavorColorAt(p.x, p.y, p.z));
     const tex = this.app.style?.texture;
     if (tex === 'creamy') col.lerp(new THREE.Color(1, 1, 1), 0.35);
     this.items.push({
@@ -155,6 +163,7 @@ export class Droplets {
       this.mesh.setMatrixAt(c++, this._m);
     }
     this.mesh.count = c;
+    this.mesh.visible = this.mesh.count > 0; // (see-through: three draws the scene behind it once more while it shows)
     this.mesh.instanceMatrix.needsUpdate = true;
     if (this.mesh.instanceColor) this.mesh.instanceColor.needsUpdate = true;
   }
