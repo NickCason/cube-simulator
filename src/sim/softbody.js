@@ -57,6 +57,7 @@ export class SoftBody {
     this.nT = 0;
     this.vCap = 0;
     this.tCap = 0;
+    this.tKs = null; // per tet: stiffness scale, see _computeMass
     this._allocV(4096);
     this._allocT(16384);
     this.grab = null;
@@ -220,6 +221,7 @@ export class SoftBody {
     this.tPiece = growArr(this.tPiece, cap, Int32Array);
     this.tVS = growArr(this.tVS, cap, Float32Array);
     this.tMu = growArr(this.tMu, cap, Float32Array);
+    this.tKs = growArr(this.tKs, cap, Float32Array);
     this.tCap = cap;
   }
 
@@ -572,6 +574,31 @@ export class SoftBody {
         this.alive[i] = 0;
       }
     }
+    // How stiff each tet is for the corners it moves: V * sum(w_i |b_i|^2)
+    // (b_i = how its corner i moves F; per unit density). Cuts leave small
+    // tets on light corners up to 60x stiffer for their mass than any tet of
+    // the whole cube; a piece made of them never comes to rest - its two
+    // elastic terms overshoot each other every substep and it buzzes at
+    // metres a second, skating over the floor like a bristlebot. Those tets
+    // are softened to a set level (per unit cell size^-2): every tet of a
+    // whole sharp or soft-edged cube is below it, a round one's most
+    // squashed bevel tets touch it; frozen boosts scale on top as before.
+    const { B, tKs } = this;
+    for (let t = 0; t < this.nT; t++) {
+      if (vol0[t] <= 0) {
+        tKs[t] = 1;
+        continue;
+      }
+      const o = t * 9, q = t * 4;
+      const b1 = B[o] * B[o] + B[o + 1] * B[o + 1] + B[o + 2] * B[o + 2];
+      const b2 = B[o + 3] * B[o + 3] + B[o + 4] * B[o + 4] + B[o + 5] * B[o + 5];
+      const b3 = B[o + 6] * B[o + 6] + B[o + 7] * B[o + 7] + B[o + 8] * B[o + 8];
+      const s0 = B[o] + B[o + 3] + B[o + 6], s1 = B[o + 1] + B[o + 4] + B[o + 7], s2 = B[o + 2] + B[o + 5] + B[o + 8];
+      const k = vol0[t] * Math.cbrt(tVS[t]) * rho * (w[T[q]] * (s0 * s0 + s1 * s1 + s2 * s2) + w[T[q + 1]] * b1 + w[T[q + 2]] * b2 + w[T[q + 3]] * b3);
+      tKs[t] = k;
+    }
+    const kRef = 4.5 / (this.hCell * this.hCell);
+    for (let t = 0; t < this.nT; t++) if (vol0[t] > 0) tKs[t] = tKs[t] > kRef ? kRef / tKs[t] : 1;
   }
 
   _buildAdjacency() {
@@ -1067,7 +1094,7 @@ export class SoftBody {
   }
 
   _solveTets(h) {
-    const { T, B, vol0, x, w, tMu, tVS } = this;
+    const { T, B, vol0, x, w, tMu, tVS, tKs } = this;
     const mu0 = this.p.mu;
     const lam = mu0 * this.p.lambdaRatio;
     // frozen tets stiffen, but only up to what these substeps can hold
@@ -1095,8 +1122,9 @@ export class SoftBody {
       // frozen (stiffer) tets stiffen in volume too, keeping lambda/mu: a stiff
       // shear term against a soft volume term rings violently
       const boost = tMu[t] > 1 ? Math.min(tMu[t], boostHi) : tMu[t];
-      const mu = mu0 * boost;
-      const lamT = boost > 1 ? lam * boost : lam;
+      const ks = tKs[t];
+      const mu = mu0 * boost * ks;
+      const lamT = (boost > 1 ? lam * boost : lam) * ks;
 
       // ---- deviatoric: C = sqrt(tr(F^T F))
       let e1x = x[i1] - x[i0], e1y = x[i1 + 1] - x[i0 + 1], e1z = x[i1 + 2] - x[i0 + 2];
