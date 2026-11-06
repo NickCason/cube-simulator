@@ -477,8 +477,8 @@ export class App {
   // Intro: hold the cube up while the warm-up job runs a few ms per frame,
   // and let it drop once the job has warmed the falling and landing code and
   // the first runs of the cutting and contact code (or after 1.2 s, or at
-  // the first touch). The rest of the job finishes in the background, on
-  // quiet frames (see frame).
+  // the first touch). The rest of the job finishes in the background, a
+  // couple of ms a frame.
   _introStep(dt) {
     const I = this.intro;
     I.t += dt;
@@ -707,9 +707,8 @@ export class App {
       if (!this.intro.done) this._introStep(dt);
       else if (sdt > 0) this.sb.step(sdt);
       const pm = performance.now() - p0;
-      // the rest of the warm-up waits for quiet frames: its first runs of the
-      // contact code are slow, and shouldn't land on a busy frame
-      if (this.intro.done && this.intro.job && (!this.sb.anyAwake || pm < 2)) this._warmSlice(3);
+      // the rest of the warm-up: a small slice a frame
+      if (this.intro.done && this.intro.job) this._warmSlice(2);
       this.stats.physLast = pm;
       // adapt substep rate to the device (not to the intro's warm-up work)
       if (this.intro.done) this.stats.physMs = this.stats.physMs * 0.9 + pm * 0.1;

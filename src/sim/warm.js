@@ -36,48 +36,60 @@ export function* physicsWarmJob() {
   yield;
   yield* step(3, 2);
   // (enough for the drop: the intro can let go of the cube now; the rest
-  // carries on in the background)
+  // carries on in the background, a slice a frame, on a smaller body so
+  // each slice stays small)
   yield 'ready';
+  const sm = new SoftBody({ res: 4, bounce: 0.55 });
+  sm.loadCube(0.1, 0.3, 0, 0.3);
+  const stepS = function* (n, substeps = 4) {
+    sm.p.substeps = substeps;
+    for (let k = 0; k < n; k++) {
+      sm.step(1 / 60);
+      yield;
+    }
+  };
+  yield* stepS(10);
   // a mallet dent (ringing on, as on the beat)
-  sb.wakeAll();
-  sb.dampBoost = 0.6;
+  sm.wakeAll();
+  sm.dampBoost = 0.6;
   // (numbers with fractions, as the mallet's are: see asFloat in softbody.js)
-  const P = { c: [0.01, 1.02, 0.01], d: [0.1, -0.995, 0.01], r: 0.105, len: 0.34, s0: 0, s1: 0 };
-  sb.pushers.push(P);
+  const P = { c: [0.11, 0.52, 0.01], d: [0.1, -0.995, 0.01], r: 0.105, len: 0.34, s0: 0, s1: 0 };
+  sm.pushers.push(P);
   for (let k = 0; k < 4; k++) {
     P.s0 = P.s1;
     P.s1 = Math.min(0.15, P.s1 + 0.06);
-    yield* step(1, 2);
+    yield* stepS(1);
   }
-  sb.pushers.length = 0;
-  // a scooping cut: pieces collide and settle
-  cutBody(sb, sphereField(0.2, 0.7, 0.2, 0.3), { separate: 0.01 });
+  sm.pushers.length = 0;
+  // cuts: pieces collide, settle and fall asleep
+  cutBody(sm, planeField(1, 0, 0, 0.12), { separate: 0.01 });
   yield;
-  // the chunks settle and fall asleep
-  sb.dampBoost = 1;
-  yield* step(80, 2);
+  cutBody(sm, sphereField(0.3, 0.5, 0.2, 0.3), { separate: 0.01 });
+  yield;
+  sm.dampBoost = 1;
+  yield* stepS(90);
   // a scoop, and the rest split into slabs
-  removeTets(sb, (t, x, y) => y > 0.95 && x > 0.3);
+  removeTets(sm, (t, x, y) => y > 0.5 && x > 0.35);
   yield;
-  const slab = new Int32Array(sb.nT);
-  for (let t = 0; t < sb.nT; t++) slab[t] = Math.min(2, Math.max(0, Math.floor((sb.X[sb.T[t * 4] * 3 + 2] + 0.5) * 3)));
-  separateClusters(sb, slab);
-  removeSmallPieces(sb, 0.002);
+  const slab = new Int32Array(sm.nT);
+  for (let t = 0; t < sm.nT; t++) slab[t] = Math.min(2, Math.max(0, Math.floor((sm.X[sm.T[t * 4] * 3 + 2] + 0.5) * 3)));
+  separateClusters(sm, slab);
+  removeSmallPieces(sm, 0.002);
   yield;
-  yield* step(20, 2);
+  yield* stepS(30);
   // the heal: pulled together without collisions, then the weld field
-  const targets = new Float64Array(sb.vCap * 3);
-  for (let i = 0; i < sb.nV; i++) {
-    targets[i * 3] = sb.X[i * 3];
-    targets[i * 3 + 1] = sb.X[i * 3 + 1] + 0.62;
-    targets[i * 3 + 2] = sb.X[i * 3 + 2];
+  const targets = new Float64Array(sm.vCap * 3);
+  for (let i = 0; i < sm.nV; i++) {
+    targets[i * 3] = sm.X[i * 3];
+    targets[i * 3 + 1] = sm.X[i * 3 + 1] + 0.62;
+    targets[i * 3 + 2] = sm.X[i * 3 + 2];
   }
-  sb.attract = { targets, n: sb.nV, rate: 12 };
-  sb.collisionsEnabled = false;
-  sb.gravityScale = 0.3;
-  sb.dampBoost = 2;
-  yield* step(6, 2);
+  sm.attract = { targets, n: sm.nV, rate: 12 };
+  sm.collisionsEnabled = false;
+  sm.gravityScale = 0.3;
+  sm.dampBoost = 2;
+  yield* stepS(6);
   const weld = weldFieldJob([0, 0.2, 0, 0.3, 0.2, 0, 0, 0.2, 0.3, 0.45, -0.1, 0, 0.45, 0.2, 0, 0.45, -0.1, 0.3], 0.5, new Float64Array([0, 0.5, 0, 0.5, 0, 0.2, -0.5, 0.1, 0]));
   for (let r = weld.next(); !r.done; r = weld.next()) yield;
-  return sb;
+  return sm;
 }
