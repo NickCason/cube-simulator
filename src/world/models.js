@@ -158,6 +158,32 @@ export function makeSyringe(M) {
   return shadowed(g);
 }
 
+// Pneumatic nail gun, muzzle at origin pointing -Z (camera-space viewmodel).
+export function makeNailGun(M) {
+  const g = new THREE.Group();
+  const yellow = new THREE.MeshStandardMaterial({ color: 0xf2b211, roughness: 0.38, metalness: 0.05, envMap: M.steel.envMap });
+  const body = new THREE.Mesh(new THREE.BoxGeometry(0.075, 0.1, 0.32), yellow);
+  body.position.set(0, 0.02, 0.17);
+  g.add(body);
+  const head = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.045, 0.1, 24), M.darkSteel);
+  head.rotation.x = Math.PI / 2;
+  head.position.set(0, 0.06, 0.05);
+  g.add(head);
+  const nose = new THREE.Mesh(new THREE.CylinderGeometry(0.014, 0.02, 0.09, 16), M.steel);
+  nose.rotation.x = Math.PI / 2;
+  nose.position.set(0, 0.0, -0.01);
+  g.add(nose);
+  const mag = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.05, 0.3), M.darkSteel);
+  mag.position.set(0, -0.045, 0.16);
+  mag.rotation.x = -0.12;
+  g.add(mag);
+  const grip = new THREE.Mesh(new THREE.BoxGeometry(0.055, 0.17, 0.065), M.rubber);
+  grip.position.set(0, -0.06, 0.32);
+  grip.rotation.x = 0.35;
+  g.add(grip);
+  return shadowed(g);
+}
+
 // Horseshoe magnet: poles pointing -Y at origin.
 export function makeMagnet(M) {
   const g = new THREE.Group();

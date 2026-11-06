@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { cutBody, planeField } from '../sim/cutting.js';
+import { makeNailGun } from '../world/models.js';
 
 const _v = new THREE.Vector3();
 const _w = new THREE.Vector3();
@@ -152,6 +153,46 @@ export class NailGunTool {
     this.firing = false;
     this.cool = 0;
     this.ray = new THREE.Ray();
+    this.model = makeNailGun(app.M);
+    this.model.visible = false;
+    this.model.traverse((o) => (o.castShadow = false));
+    app.scene.add(this.model);
+    this.recoil = 0;
+    this.aim = new THREE.Vector3(0, 0.5, 0);
+  }
+
+  activate() {
+    this.model.visible = true;
+  }
+
+  deactivate() {
+    this.model.visible = false;
+    this.firing = false;
+  }
+
+  hover(e, ray) {
+    if (ray) this.ray.copy(ray);
+  }
+
+  // viewmodel: bottom-right of the screen, aimed at what's under the cursor
+  _placeModel(dt) {
+    const cam = this.app.camera;
+    const hit = this.app.pickJelly(this.ray);
+    const goal = hit ? new THREE.Vector3(...hit.point) : this.ray.origin.clone().addScaledVector(this.ray.direction, 4);
+    this.aim.lerp(goal, 1 - Math.exp(-dt * 18));
+    // anchor to a fixed spot on screen (bottom-right), whatever the aspect
+    const D = 1.75;
+    const ty = Math.tan((cam.fov * Math.PI) / 360);
+    const off = new THREE.Vector3(0.74 * ty * cam.aspect * D, -0.6 * ty * D, -D).applyQuaternion(cam.quaternion);
+    const pos = cam.position.clone().add(off);
+    this.model.position.copy(pos);
+    this.model.lookAt(this.aim);
+    this.model.rotateY(Math.PI);
+    this.recoil *= Math.exp(-dt * 14);
+    this.model.translateZ(this.recoil * 0.08);
+    this.model.rotateX(this.recoil * 0.25);
+    this.model.updateMatrixWorld();
+    return pos;
   }
 
   down(e, ray) {
@@ -170,7 +211,8 @@ export class NailGunTool {
     this.firing = false;
   }
 
-  update(dt) {
+  update(dt, rdt) {
+    this._placeModel(rdt || dt);
     if (!this.firing) return;
     this.cool -= dt;
     if (this.cool <= 0) this.fire();
@@ -181,10 +223,11 @@ export class NailGunTool {
     this.cool = 0.16;
     const cam = app.camera;
     // muzzle sits just off-screen bottom-right, aimed at what's under the cursor
-    const right = _v.set(1, 0, 0).applyQuaternion(cam.quaternion);
-    const up = _w.set(0, 1, 0).applyQuaternion(cam.quaternion);
-    const origin = cam.position.clone().addScaledVector(right, 1.7).addScaledVector(up, 0.25);
     const r = this.ray;
+    // muzzle of the viewmodel
+    const origin = this.model.localToWorld(new THREE.Vector3(0, 0, 0.06).multiplyScalar(-1));
+    this.recoil = 1;
+    this.app.particles.flash(origin, 0.05, [6, 5, 4]);
     const hit = app.pickJelly(r);
     let target;
     if (hit) target = new THREE.Vector3(...hit.point);
@@ -197,7 +240,6 @@ export class NailGunTool {
     dir.x += (Math.random() - 0.5) * 0.006;
     dir.y += (Math.random() - 0.5) * 0.006;
     dir.normalize();
-    origin.addScaledVector(dir, 0.6);
     app.nails.fire(origin, dir);
     app.audio?.nailgun();
     app.shake(0.004);
