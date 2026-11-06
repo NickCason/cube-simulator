@@ -840,6 +840,7 @@ export class App {
   }
 
   frame(dt) {
+    if (this.lost || this.renderer.getContext().isContextLost()) return; // (the GPU context is gone: see main.js)
     const t0 = performance.now();
     if (this._resizePending) {
       this._resizePending = false;

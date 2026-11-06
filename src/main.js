@@ -44,6 +44,18 @@ function boot() {
   }
   if (params.has('dbg')) app.jelly.frontMat.uniforms.uDebug.value = +params.get('dbg');
   window.__app = app;
+  // A GPU context the browser takes back (iOS does, for a tab left in the
+  // background) can't be pieced together again here: stop drawing, and start
+  // afresh once it's back or the page is looked at again (the style and the
+  // settings are remembered).
+  const restart = () => location.reload();
+  canvas.addEventListener('webglcontextlost', (e) => {
+    e.preventDefault();
+    app.lost = true;
+    if (document.visibilityState === 'visible') setTimeout(restart, 1500);
+    else document.addEventListener('visibilitychange', () => document.visibilityState === 'visible' && setTimeout(restart, 300));
+  });
+  canvas.addEventListener('webglcontextrestored', restart);
   app.splash = new Splash(app);
   if (params.has('stats')) import('./ui/stats.js').then((m) => m.attachStats(app));
   app.start();
