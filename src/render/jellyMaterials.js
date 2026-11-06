@@ -112,6 +112,17 @@ function emptyFloatTexture() {
   return t;
 }
 
+// NaN-proofing for the shaders that write buffers others sample (mipmapped,
+// some of them: one NaN texel spreads into a black block): normalize that
+// leaves a zero vector zero, and a scrub that replaces non-finite values.
+const SAFE_GLSL = /* glsl */ `
+  vec3 safeNormalize(vec3 v) { return v * inversesqrt(max(dot(v, v), 1e-24)); }
+  vec4 finite4(vec4 c) {
+    bvec4 bad = equal(floatBitsToUint(c) & uvec4(0x7f800000u), uvec4(0x7f800000u));
+    return any(bad) ? vec4(0.0) : c;
+  }
+`;
+
 export function createLayerUniforms() {
   return {
     uLayers: { value: 0 },
@@ -139,7 +150,8 @@ const VERT = /* glsl */ `
     vWeld = aWeld;
     vec4 wp = modelMatrix * vec4(position, 1.0);
     vWorldPos = wp.xyz;
-    vNormal = normalize(mat3(modelMatrix) * normal);
+    vNormal = mat3(modelMatrix) * normal;
+    vNormal *= inversesqrt(max(dot(vNormal, vNormal), 1e-24));
     vec4 mv = viewMatrix * wp;
     vViewPos = mv.xyz;
     vRest = aRest;
@@ -160,9 +172,10 @@ export function createBackMaterial() {
       varying vec3 vRest;
       varying vec4 vData;
       ${OCT}
+      ${SAFE_GLSL}
       void main() {
-        vec3 vn = normalize((viewMatrix * vec4(normalize(vNormal), 0.0)).xyz);
-        gl_FragColor = vec4(-vViewPos.z, octEncode(vn), vRest.y);
+        vec3 vn = safeNormalize((viewMatrix * vec4(safeNormalize(vNormal), 0.0)).xyz);
+        gl_FragColor = finite4(vec4(-vViewPos.z, octEncode(vn), vRest.y));
       }`,
   });
 }
@@ -691,8 +704,9 @@ export function createLightViewMaterial(kind) {
       varying vec3 vN;
       varying float vRestY;
       varying float vTemp;
+      ${SAFE_GLSL}
       void main() {
-        ${kind === 1 ? 'gl_FragColor = vec4(normalize(vN), vTemp);' : 'gl_FragColor = vec4(vW - uOrigin, vRestY + 10.0);'}
+        ${kind === 1 ? 'gl_FragColor = finite4(vec4(safeNormalize(vN), vTemp));' : 'gl_FragColor = finite4(vec4(vW - uOrigin, vRestY + 10.0));'}
       }`,
   });
 }
@@ -785,7 +799,9 @@ export function createCausticMaterial(layerUniforms) {
               ivec2 q = clamp(ij + ivec2(dx, dy) * stp, ivec2(0), sz - 1);
               if (texelFetch(tEntry, q, 0).w > 0.5) Ns += texelFetch(tNormal, q, 0).xyz * (3.0 - 0.5 * float(abs(dx) + abs(dy)));
             }
-          vec3 N = normalize(Ns);
+          // (no usable normal: as if the ray missed)
+          float nl = dot(Ns, Ns);
+          vec3 N = nl > 1e-12 ? Ns * inversesqrt(nl) : vec3(0.0, 1.0, 0.0);
           vec4 X = texelFetch(tExit, ij, 0);
           vec3 r = refract(Ld, N, 1.0 / uIor);
           if (dot(r, r) < 1e-6) r = Ld;
@@ -799,7 +815,7 @@ export function createCausticMaterial(layerUniforms) {
           vPath = t;
           // (light that only grazes the jelly's foot lands right where it
           // went in - in the contact shadow - not as a white spark)
-          vValid = smoothstep(0.0, 0.05, P.y);
+          vValid = nl > 1e-12 ? smoothstep(0.0, 0.05, P.y) : 0.0;
           vOld = P + Ld * (-P.y / Ld.y);
           vNew = F;
           vRestA = E.w - 10.0;
@@ -825,7 +841,7 @@ export function createCausticMaterial(layerUniforms) {
       varying float vTemp;
       void main() {
         // (only cells whose rays all went through the jelly)
-        if (vValid < 0.01 || vNdL <= 0.0) discard;
+        if (!(vValid >= 0.01) || !(vNdL > 0.0)) discard; // (NaN-safe)
         float oldA = length(dFdx(vOld)) * length(dFdy(vOld));
         float newA = length(dFdx(vNew)) * length(dFdy(vNew));
         // focusing (capped: a cell squeezed to nothing would be a spike)
@@ -836,7 +852,9 @@ export function createCausticMaterial(layerUniforms) {
         vec3 T = exp(-sig * vPath) * exp(-uScatter * vPath * 0.7);
         // frosted jelly scatters light: no sharp caustics
         T *= 1.0 - 0.9 * smoothstep(0.05, 0.6, -vTemp);
-        gl_FragColor = vec4(T * ratio * Ft * vValid, 1.0);
+        vec3 c = T * ratio * Ft * vValid;
+        bvec3 bad = equal(floatBitsToUint(c) & uvec3(0x7f800000u), uvec3(0x7f800000u));
+        gl_FragColor = vec4(any(bad) ? vec3(0.0) : min(c, vec3(8.0)), 1.0);
       }`,
   });
 }
@@ -865,7 +883,7 @@ export function createReflectMaterial(layerUniforms) {
       void main() {
         vec4 wp = modelMatrix * vec4(position, 1.0);
         vW = wp.xyz;
-        vN = normalize(mat3(modelMatrix) * normal);
+        vN = mat3(modelMatrix) * normal;
         vRest = aRest;
         vGlow = aData.y;
         gl_Position = projectionMatrix * viewMatrix * wp;
@@ -880,16 +898,17 @@ export function createReflectMaterial(layerUniforms) {
       varying vec3 vW;
       varying float vGlow;
       ${LAYER_GLSL}
+      ${SAFE_GLSL}
       void main() {
         // (mirrored: -y is how high the real point is above the floor)
         float h = max(-vW.y, 0.0);
         float fade = exp(-h * uFade);
         vec3 sc = layerScatter(vRest.y, uScatterColor);
         sc = mix(sc, mix(sc, vec3(1.0), 0.45), uMilk);
-        vec3 V = normalize(cameraPosition - vW);
-        float rim = pow(1.0 - abs(dot(normalize(vN), V)), 2.0);
+        vec3 V = safeNormalize(cameraPosition - vW);
+        float rim = pow(clamp(1.0 - abs(dot(safeNormalize(vN), V)), 0.0, 1.0), 2.0);
         vec3 c = sc * mix(0.42 + 0.3 * rim, 0.85 + 0.5 * rim, uEmit) + vec3(1.0, 0.9, 0.75) * vGlow * 0.6;
-        gl_FragColor = vec4(c * fade, fade);
+        gl_FragColor = finite4(vec4(c * fade, fade));
       }`,
   });
 }
@@ -931,11 +950,12 @@ export function createGlowMaterial(layerUniforms, scatterColor, milk) {
       varying float vH;
       varying vec3 vRest;
       ${LAYER_GLSL}
+      ${SAFE_GLSL}
       void main() {
         float w = exp(-max(vH, 0.0) * 5.0);
         vec3 sc = layerScatter(vRest.y, uScatterColor);
         sc = mix(sc, mix(sc, vec3(1.0), 0.45), uMilk);
-        gl_FragColor = vec4(sc * w, w);
+        gl_FragColor = finite4(vec4(sc * w, w));
       }`,
   });
 }

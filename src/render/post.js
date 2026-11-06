@@ -161,7 +161,10 @@ export function makeCopyMaterial() {
     fragmentShader: /* glsl */ `
       uniform sampler2D tDiffuse;
       varying vec2 vUv;
-      void main() { gl_FragColor = texture2D(tDiffuse, vUv); }`,
+      ${FINITE_GLSL}
+      // (what the jelly refracts, blurred through mip levels: a non-finite
+      // texel would turn a whole block of it black)
+      void main() { gl_FragColor = vec4(finite(texture2D(tDiffuse, vUv).rgb), 1.0); }`,
   });
 }
 

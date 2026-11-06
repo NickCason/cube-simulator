@@ -154,8 +154,19 @@ function tessellate(pos, nrm, data, mids, first, disp) {
       qz -= 0.5 * (da * naz + db * nbz) * PHONG;
     }
     let nx = nax + nbx, ny = nay + nby, nz = naz + nbz;
-    const l2 = nx * nx + ny * ny + nz * nz;
-    const il = l2 > 1e-24 ? 1 / Math.sqrt(l2) : 0; // (Math.hypot is slow in a loop this hot)
+    let l2 = nx * nx + ny * ny + nz * nz;
+    // (ends facing opposite ways - an edge across a thin sliver - sum to
+    // nothing: a zero normal turns every shader's normalize() into NaN, and
+    // the mipmapped buffers spread that into black blocks. Take an end's.)
+    if (!(l2 > 1e-12)) {
+      nx = nax; ny = nay; nz = naz;
+      l2 = nx * nx + ny * ny + nz * nz;
+      if (!(l2 > 1e-12)) {
+        nx = 0; ny = 1; nz = 0;
+        l2 = 1;
+      }
+    }
+    const il = 1 / Math.sqrt(l2); // (Math.hypot is slow in a loop this hot)
     nx *= il; ny *= il; nz *= il;
     const d = disp[j];
     const o = k * 3;
