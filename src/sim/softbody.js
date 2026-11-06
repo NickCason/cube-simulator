@@ -26,6 +26,7 @@ const DEFAULTS = {
   ceiling: 4.2,
   maxSpeed: 45,
   collide: true,
+  selfCollide: true, // a piece's surface against the rest of its own body (folds, hinged flaps)
 };
 
 function growArr(a, n, C) {
@@ -64,6 +65,7 @@ export class SoftBody {
     this.attract = null;
     this.gravityScale = 1;
     this.collisionsEnabled = true;
+    this.selfQuietUntil = 0; // (sim time) no self-contact before this: see radialImpulse
     this.topoVersion = 0;
     this.pieces = [];
     this.time = 0;
@@ -86,6 +88,7 @@ export class SoftBody {
     this._hashAge = 0;
     this._hashTopo = -1;
     this._hashDirty = true;
+    this._hMask = 0;
     this._grabPress = 0;
     this._anyContact = false;
     this._gap = 0;
@@ -135,6 +138,16 @@ export class SoftBody {
     this._tStat = null;
     this._sfKey = null;
     this._sfVal = null;
+    this._selfOK = null;
+    this._hood = null;
+    this._tSurf = null;
+    this._surfV = null;
+    this._nSurfV = 0;
+    this._selfFlag = null;
+    this._svStart = null;
+    this._svFill = null;
+    this._svList = null;
+    this._hoodStamp = 0;
     this._pieceActive = null;
     this._ptS = null;
     this._hCount = null;
@@ -283,10 +296,56 @@ export class SoftBody {
     this._extractSurface();
     this._computeEscape();
     this._buildRenderClusters();
+    this._findHinges();
     this._sizeContactScratch();
     this.topoVersion++;
     this.rebuildMs += performance.now() - t0; // (read and cleared by ?stats)
     this.rebuilds++;
+  }
+
+  // A piece still joined to itself across a cut - a flap on a hinge - has
+  // the two sides of that cut facing each other, a blade's width apart: it
+  // needs self-contact, or the flap drops straight through the rest.
+  _findHinges() {
+    const { sTri, sTag, sTet, X, tPiece, sRestN } = this;
+    for (const pc of this.pieces) pc.hinge = false;
+    const C = 0.02 * this.p.size, iC = 1 / C, near2 = (0.6 * C) ** 2;
+    const cells = new Map();
+    const cen = new Float64Array(this.nF * 3);
+    const key = (i, j, k) => (i + 512) * 1048576 + (j + 512) * 1024 + (k + 512);
+    for (let f = 0; f < this.nF; f++) {
+      if (sTag[f] === TAG_EXTERIOR) continue;
+      const a = sTri[f * 3] * 3, b = sTri[f * 3 + 1] * 3, c = sTri[f * 3 + 2] * 3;
+      for (let e = 0; e < 3; e++) cen[f * 3 + e] = (X[a + e] + X[b + e] + X[c + e]) / 3;
+      const k = key(Math.floor(cen[f * 3] * iC), Math.floor(cen[f * 3 + 1] * iC), Math.floor(cen[f * 3 + 2] * iC));
+      const l = cells.get(k);
+      if (l) l.push(f);
+      else cells.set(k, [f]);
+    }
+    for (const [k, list] of cells) {
+      const ci = Math.floor(k / 1048576) - 512, cj = (Math.floor(k / 1024) % 1024) - 512, ck = (k % 1024) - 512;
+      for (const f of list) {
+        const pf = tPiece[sTet[f]];
+        if (this.pieces[pf].hinge) continue;
+        for (let di = -1; di <= 1 && !this.pieces[pf].hinge; di++)
+          for (let dj = -1; dj <= 1 && !this.pieces[pf].hinge; dj++)
+            for (let dk = -1; dk <= 1; dk++) {
+              const other = cells.get(key(ci + di, cj + dj, ck + dk));
+              if (!other) continue;
+              for (const g of other) {
+                if (g === f || tPiece[sTet[g]] !== pf) continue;
+                const dn = sRestN[f * 3] * sRestN[g * 3] + sRestN[f * 3 + 1] * sRestN[g * 3 + 1] + sRestN[f * 3 + 2] * sRestN[g * 3 + 2];
+                if (dn > -0.8) continue;
+                const dx = cen[f * 3] - cen[g * 3], dy = cen[f * 3 + 1] - cen[g * 3 + 1], dz = cen[f * 3 + 2] - cen[g * 3 + 2];
+                if (dx * dx + dy * dy + dz * dz < near2) {
+                  this.pieces[pf].hinge = true;
+                  break;
+                }
+              }
+              if (this.pieces[pf].hinge) break;
+            }
+      }
+    }
   }
 
   // The contact pass's scratch arrays, sized for the new topology here
@@ -331,6 +390,28 @@ export class SoftBody {
     this._skip = f32(this._skip, Pr);
     this._tBoxNow = f32(this._tBoxNow, Tc * 6);
     this._tBoxStamp = i32(this._tBoxStamp, Tc);
+    this._selfOK = u8(this._selfOK, NP);
+    this._hood = i32(this._hood, V);
+    // tets touching the surface (a piece against itself only meets those:
+    // whatever folds into it comes in through them - the ones right on a
+    // cut can be slivers, so the whole layer)
+    const ts = (this._tSurf = u8(this._tSurf, Tc));
+    const onS = new Uint8Array(this.nV);
+    for (let k = 0; k < this.nF * 3; k++) onS[this.sTri[k]] = 1;
+    for (let t = 0; t < this.nT; t++) {
+      const o = t * 4;
+      ts[t] = onS[this.T[o]] | onS[this.T[o + 1]] | onS[this.T[o + 2]] | onS[this.T[o + 3]];
+    }
+    // the surface vertices, and scratch for finding the ones near another
+    // part of their own body (see _buildCollisionHash)
+    const sv = (this._surfV = i32(this._surfV, V));
+    let n = 0;
+    for (let i = 0; i < this.nV; i++) if (onS[i]) sv[n++] = i;
+    this._nSurfV = n;
+    this._selfFlag = u8(this._selfFlag, V);
+    this._svStart = i32(this._svStart, 4097);
+    this._svFill = i32(this._svFill, 4096);
+    this._svList = i32(this._svList, V);
   }
 
   // For every vertex: rest-space vector to the nearest boundary vertex of its
@@ -567,6 +648,7 @@ export class SoftBody {
         impT: -1,
         impDv: 0,
         sleepLogMu: undefined,
+        hinge: false, // still joined to itself across a cut (see _findHinges)
       }, PIECE_FLOATS);
     });
     // keep largest piece first for stable "main piece" semantics
@@ -834,7 +916,7 @@ export class SoftBody {
       this._dampPieces(dt);
       return;
     }
-    const multi = this.pieces.length > 1 && P.collide && this.collisionsEnabled;
+    const multi = (this.pieces.length > 1 || P.selfCollide) && P.collide && this.collisionsEnabled;
     this._grabPress = 0;
     if (multi) {
       // A frame's worth (or more) of motion: short frames (slow motion)
@@ -1539,8 +1621,22 @@ export class SoftBody {
         act[a] = act[b] = 1;
         pairs.push(a, b);
       }
-    this._anyContact = pairs.length > 0;
-    if (!pairs.length) return;
+    // and each awake piece against itself (see gather): 2 = only that, so
+    // only the tets touching its surface need hashing (see _sizeContactScratch)
+    const selfOK = this._selfOK && this._selfOK.length >= NP ? this._selfOK : (this._selfOK = new Uint8Array(NP64));
+    let anySelf = false;
+    // (where it can fold onto itself: a flap on a hinge, or soft jelly -
+    // firmer jelly doesn't fold far enough, even dragged by a corner)
+    const soft = this.p.mu < 110, quiet = this.time < this.selfQuietUntil;
+    for (let a = 0; a < NP; a++) {
+      const can = this.p.selfCollide && !quiet && !P[a].asleep && (P[a].hinge || soft), ac = act[a];
+      selfOK[a] = can ? (ac ? 1 : 2) : 0;
+      anySelf = anySelf || selfOK[a] > 0;
+    }
+    // (only the surface vertices near another part of their own body - see _selfCheck)
+    if (anySelf) anySelf = this._selfCheck(NP);
+    this._anyContact = pairs.length > 0 || anySelf;
+    if (!this._anyContact) return;
     ptS.fill(0, 0, NP + 1);
     for (let k = 0; k < pairs.length; k++) ptS[pairs[k] + 1]++;
     for (let k = 0; k < NP; k++) ptS[k + 1] += ptS[k];
@@ -1558,10 +1654,114 @@ export class SoftBody {
       this._wfF = new Int32Array(Math.max(this.nF, 1)).fill(-1);
       this._warmVersion = this.topoVersion;
     }
-    // hash the swept boxes of the active pieces' tets, keyed by cell + piece
-    const size = 1 << 15, mask = size - 1;
-    const counts = this._hCount && this._hCount.length === size + 1 ? this._hCount : (this._hCount = new Int32Array(size + 1));
-    counts.fill(0);
+    this._hashTets();
+    this._gatherProbes(ptL);
+  }
+
+  // Of the pieces that may meet themselves, the surface vertices with some
+  // other part of their own body close by - not within 2 steps of them in
+  // the mesh - are flagged for probing against it; a calm body has none and
+  // skips the pass. Returns whether any piece still needs it.
+  _selfCheck(NP) {
+    const x = this.x, D = this._disp, act = this._pieceActive, selfOK = this._selfOK, selfFlag = this._selfFlag;
+    const sv = this._surfV, nSV = this._nSurfV, vp = this.vPiece, hoodA = this._hood;
+    const nbS0 = this.nbStart, nbL0 = this.nbList;
+    // "Close": near enough to reach the middle of the other part's nearest
+    // surface triangle this frame - r0 plus how far the two move apart or
+    // together (at most twice the most any of them moves within its piece);
+    // cells one such reach across, so only the 27 round a vertex need looking at
+    const pV = this._pVel, fdt = this._hashSpan;
+    let mr2 = 0;
+    for (let q = 0; q < nSV; q++) {
+      const i = sv[q], k = vp[i];
+      selfFlag[i] = 0;
+      if (!selfOK[k]) continue;
+      const ux = D[i * 3] - pV[k * 3] * fdt, uy = D[i * 3 + 1] - pV[k * 3 + 1] * fdt, uz = D[i * 3 + 2] - pV[k * 3 + 2] * fdt;
+      const u2 = ux * ux + uy * uy + uz * uz;
+      if (u2 > mr2) mr2 = u2;
+    }
+    const r0 = 0.72 * this.hCell + 0.01, rc = Math.min(1.3 * this.hCell, r0 + 2 * Math.sqrt(mr2)), irc = 1 / rc;
+    const HM = 4095, hSt = this._svStart, hLi = this._svList;
+    const key = (ix, iy, iz, k) => (Math.imul(ix, 92837111) ^ Math.imul(iy, 689287499) ^ Math.imul(iz, 283923481) ^ Math.imul(k, 1640531513)) & HM;
+    hSt.fill(0);
+    for (let q = 0; q < nSV; q++) {
+      const i = sv[q];
+      if (!selfOK[vp[i]]) continue;
+      hSt[key(Math.floor(x[i * 3] * irc), Math.floor(x[i * 3 + 1] * irc), Math.floor(x[i * 3 + 2] * irc), vp[i]) + 1]++;
+    }
+    for (let k = 0; k < 4096; k++) hSt[k + 1] += hSt[k];
+    const hF = this._svFill;
+    hF.set(hSt.subarray(0, 4096));
+    for (let q = 0; q < nSV; q++) {
+      const i = sv[q];
+      if (selfOK[vp[i]]) hLi[hF[key(Math.floor(x[i * 3] * irc), Math.floor(x[i * 3 + 1] * irc), Math.floor(x[i * 3 + 2] * irc), vp[i])]++] = i;
+    }
+    let hs2 = this._hoodStamp;
+    for (let q = 0; q < nSV; q++) {
+      const i = sv[q], k = vp[i];
+      if (!selfOK[k]) continue;
+      // its immediate neighbours first; the wider neighbourhood (2 steps
+      // out) only if something else turns up close by
+      hs2++;
+      const h1 = hs2;
+      hoodA[i] = h1;
+      for (let e = nbS0[i]; e < nbS0[i + 1]; e++) hoodA[nbL0[e]] = h1;
+      let h2 = 0;
+      const ox = x[i * 3], oy = x[i * 3 + 1], oz = x[i * 3 + 2];
+      const cx = Math.floor(ox * irc), cy = Math.floor(oy * irc), cz = Math.floor(oz * irc);
+      for (let a1 = -1; a1 <= 1; a1++)
+        for (let b1 = -1; b1 <= 1; b1++)
+          for (let c1 = -1; c1 <= 1; c1++) {
+            const h = key(cx + a1, cy + b1, cz + c1, k);
+            for (let e = hSt[h]; e < hSt[h + 1]; e++) {
+              const j = hLi[e];
+              if (j <= i || vp[j] !== k) continue; // (each pair once: both get flagged)
+              const dx = x[j * 3] - ox, dy = x[j * 3 + 1] - oy, dz = x[j * 3 + 2] - oz;
+              const d2 = dx * dx + dy * dy + dz * dz;
+              if (d2 > rc * rc) continue;
+              const hj = hoodA[j];
+              if (hj === h1 || (h2 && hj === h2)) continue;
+              const r = Math.min(rc, r0 + Math.hypot(D[j * 3] - D[i * 3], D[j * 3 + 1] - D[i * 3 + 1], D[j * 3 + 2] - D[i * 3 + 2]));
+              if (d2 >= r * r) continue;
+              if (!h2) {
+                // (now the wider neighbourhood - its immediate ring keeps
+                // its stamp, so mark 2 steps out with a new one)
+                h2 = ++hs2;
+                for (let e1 = nbS0[i]; e1 < nbS0[i + 1]; e1++) {
+                  const u = nbL0[e1];
+                  for (let e2 = nbS0[u]; e2 < nbS0[u + 1]; e2++) if (hoodA[nbL0[e2]] !== h1) hoodA[nbL0[e2]] = h2;
+                }
+                if (hoodA[j] === h2) continue;
+              }
+              selfFlag[i] = 1;
+              selfFlag[j] = 1;
+            }
+          }
+    }
+    this._hoodStamp = hs2;
+    // pieces with nobody near themselves after all: no self pass
+    for (let a = 0; a < NP; a++) if (selfOK[a]) selfOK[a] = 3; // (3 = none found yet)
+    for (let q = 0; q < nSV; q++) {
+      const i = sv[q], k = vp[i];
+      if (selfOK[k] === 3 && selfFlag[i]) selfOK[k] = act[k] ? 1 : 2;
+    }
+    let anySelf = false;
+    for (let a = 0; a < NP; a++) {
+      if (selfOK[a] === 3) selfOK[a] = 0;
+      if (selfOK[a]) {
+        act[a] = 1;
+        anySelf = true;
+      }
+    }
+    return anySelf;
+  }
+
+  // Hash the swept boxes of the active pieces' tets, keyed by cell + piece
+  // (a table sized to the entries: clearing and summing a big one costs).
+  _hashTets() {
+    const { x, T } = this;
+    const nT = this.nT, D = this._disp, sw = this._sweep, pcs = this._pcs, act = this._pieceActive, selfOK = this._selfOK;
+    const counts = this._hCount && this._hCount.length === (1 << 15) + 1 ? this._hCount : (this._hCount = new Int32Array((1 << 15) + 1));
     const tbox = this._tBox0 && this._tBox0.length >= nT * 6 ? this._tBox0 : (this._tBox0 = new Float32Array(this.tCap * 6));
     const ranges = this._hRanges && this._hRanges.length >= nT * 6 ? this._hRanges : (this._hRanges = new Int32Array(this.tCap * 6));
     const list = this._hTets && this._hTets.length >= nT ? this._hTets : (this._hTets = new Int32Array(this.tCap));
@@ -1570,8 +1770,10 @@ export class SoftBody {
     const tS = this._tStat && this._tStat.length >= nT * 8 ? this._tStat : (this._tStat = new Float32Array(this.tCap * 8));
     let nList = 0, total = 0;
     const tp = this.tPiece;
+    const tSurf = this._tSurf;
     for (let t = 0; t < nT; t++) {
       if (!act[tp[t]] || this.vol0[t] <= 0) continue;
+      if (selfOK[tp[t]] === 2 && !tSurf[t]) continue;
       const o = t * 4, r = t * 6;
       const a = T[o] * 6, b = T[o + 1] * 6, c = T[o + 2] * 6, d = T[o + 3] * 6;
       {
@@ -1602,18 +1804,23 @@ export class SoftBody {
       const rr = nList * 6;
       ranges[rr] = ix0; ranges[rr + 1] = ix1; ranges[rr + 2] = iy0; ranges[rr + 3] = iy1; ranges[rr + 4] = iz0; ranges[rr + 5] = iz1;
       list[nList++] = t;
-      const pk = Math.imul(tp[t], 1640531513);
-      for (let ix = ix0; ix <= ix1; ix++)
-        for (let iy = iy0; iy <= iy1; iy++)
-          for (let iz = iz0; iz <= iz1; iz++) {
-            counts[((Math.imul(ix, 92837111) ^ Math.imul(iy, 689287499) ^ Math.imul(iz, 283923481) ^ pk) & mask) + 1]++;
-            total++;
-          }
+      total += (ix1 - ix0 + 1) * (iy1 - iy0 + 1) * (iz1 - iz0 + 1);
     }
     this._nHTets = nList;
+    let size = 1024;
+    while (size < total * 2 && size < 1 << 15) size <<= 1;
+    const mask = size - 1;
+    counts.fill(0, 0, size + 1);
+    for (let n = 0; n < nList; n++) {
+      const r = n * 6, pk = Math.imul(tp[list[n]], 1640531513);
+      for (let ix = ranges[r]; ix <= ranges[r + 1]; ix++)
+        for (let iy = ranges[r + 2]; iy <= ranges[r + 3]; iy++)
+          for (let iz = ranges[r + 4]; iz <= ranges[r + 5]; iz++)
+            counts[((Math.imul(ix, 92837111) ^ Math.imul(iy, 689287499) ^ Math.imul(iz, 283923481) ^ pk) & mask) + 1]++;
+    }
     for (let k = 0; k < size; k++) counts[k + 1] += counts[k];
     const entries = this._hEntries && this._hEntries.length >= total ? this._hEntries : (this._hEntries = new Int32Array(Math.max(total, 1024) * 2));
-    const fill = this._hFill && this._hFill.length === size ? this._hFill : (this._hFill = new Int32Array(size));
+    const fill = this._hFill && this._hFill.length === 1 << 15 ? this._hFill : (this._hFill = new Int32Array(1 << 15));
     fill.set(counts.subarray(0, size));
     for (let n = 0; n < nList; n++) {
       const r = n * 6, t = list[n], pk = Math.imul(tp[t], 1640531513);
@@ -1622,6 +1829,18 @@ export class SoftBody {
           for (let iz = ranges[r + 4]; iz <= ranges[r + 5]; iz++)
             entries[fill[(Math.imul(ix, 92837111) ^ Math.imul(iy, 689287499) ^ Math.imul(iz, 283923481) ^ pk) & mask]++] = t;
     }
+    this._hMask = mask;
+  }
+
+  // Probes (surface vertices, face centres) and their candidate tets for
+  // this frame's contact passes.
+  _gatherProbes(ptL) {
+    const { x, T } = this;
+    const nT = this.nT, nV = this.nV, NP = this.pieces.length, tp = this.tPiece;
+    const fdt = this._hashSpan, gp = this.grab ? this.grab.piece : -1;
+    const D = this._disp, pV = this._pVel, sw = this._sweep, bb = this._pbb, pcs = this._pcs;
+    const act = this._pieceActive, ptS = this._ptS, selfOK = this._selfOK, selfFlag = this._selfFlag;
+    const counts = this._hCount, entries = this._hEntries, tbox = this._tBox0, tS = this._tStat, mask = this._hMask;
     // probes and their candidate tets
     const sTri = this.sTri, nF = this.nF;
     const pvv = this._probeV && this._probeV.length >= nV ? this._probeV : (this._probeV = new Int32Array(Math.max(this.vCap, 1024)));
@@ -1643,13 +1862,44 @@ export class SoftBody {
     // as fast as the tet's corners move toward p relative to it (+ 12% and
     // 3 mm for changes of course). gRel = the fastest any kept tet's corner
     // moves relative to p (a closing speed bound, per frame).
-    const gather = (qx0, qy0, qz0, qx1, qy1, qz1, own, px, py, pz, dpx, dpy, dpz) => {
+    // A probe flagged by _selfCheck (vertex vi >= 0, face -2 - vi) also
+    // meets its own piece's tets - all but those touching it (a face: its
+    // corners) or their neighbours: reaching any of those means the body has
+    // folded onto itself (or a part hanging by a hinge has swung into the
+    // rest; across a cut the neighbours are only those on its side).
+    const nbS = this.nbStart, nbL = this.nbList, hood = this._hood;
+    if (this._hoodStamp > 2e9) {
+      hood.fill(0);
+      this._hoodStamp = 0;
+    }
+    let hs = this._hoodStamp;
+    // (face centres too only for watery jelly, whose folds slide edge over
+    // face; a firm piece on a hinge is held well enough by its vertices)
+    const selfFaces = this.p.mu < 110;
+    const gather = (qx0, qy0, qz0, qx1, qy1, qz1, own, px, py, pz, dpx, dpy, dpz, vi) => {
       const st = ++stamp;
       const c0 = nc;
       gRel = 0;
       gGrab = own === gp;
-      for (let e = ptS[own]; e < ptS[own + 1]; e++) {
-        const pb = ptL[e], B = pb * 6;
+      const self = selfOK[own] > 0 && (vi >= 0 ? selfFlag[vi] === 1 : selfFaces && vi < -1 && (selfFlag[sTri[(-2 - vi) * 3]] | selfFlag[sTri[(-2 - vi) * 3 + 1]] | selfFlag[sTri[(-2 - vi) * 3 + 2]]) === 1);
+      if (self) {
+        hs++;
+        if (vi >= 0) {
+          hood[vi] = hs;
+          for (let k = nbS[vi]; k < nbS[vi + 1]; k++) hood[nbL[k]] = hs;
+        } else {
+          const ff = -2 - vi;
+          for (let c = 0; c < 3; c++) {
+            const u = sTri[ff * 3 + c];
+            hood[u] = hs;
+            for (let k = nbS[u]; k < nbS[u + 1]; k++) hood[nbL[k]] = hs;
+          }
+        }
+      }
+      const e0 = ptS[own], e1 = ptS[own + 1] + (self ? 1 : 0);
+      for (let e = e0; e < e1; e++) {
+        const mine = e === ptS[own + 1];
+        const pb = mine ? own : ptL[e], B = pb * 6;
         // the probe's box, swept by how its piece moves relative to pb
         const rx = (pV[own * 3] - pV[pb * 3]) * fdt, ry = (pV[own * 3 + 1] - pV[pb * 3 + 1]) * fdt, rz = (pV[own * 3 + 2] - pV[pb * 3 + 2]) * fdt;
         const rm = 0.12 * (Math.abs(rx) + Math.abs(ry) + Math.abs(rz));
@@ -1669,6 +1919,7 @@ export class SoftBody {
                 const t = entries[q];
                 if (tStamp[t] === st || tp[t] !== pb) continue;
                 tStamp[t] = st;
+                if (mine && (hood[T[t * 4]] === hs || hood[T[t * 4 + 1]] === hs || hood[T[t * 4 + 2]] === hs || hood[T[t * 4 + 3]] === hs)) continue;
                 const r = t * 6;
                 if (x1 < tbox[r] || x0 > tbox[r + 3] || y1 < tbox[r + 1] || y0 > tbox[r + 4] || z1 < tbox[r + 2] || z0 > tbox[r + 5]) continue;
                 const s8 = t * 8;
@@ -1731,7 +1982,7 @@ export class SoftBody {
         seen[i] = 1;
         const r = i * 6, o = i * 3;
         const c0 = nc;
-        if (gather(sw[r], sw[r + 1], sw[r + 2], sw[r + 3], sw[r + 4], sw[r + 5], own, x[o], x[o + 1], x[o + 2], D[o], D[o + 1], D[o + 2])) {
+        if (gather(sw[r], sw[r + 1], sw[r + 2], sw[r + 3], sw[r + 4], sw[r + 5], own, x[o], x[o + 1], x[o + 2], D[o], D[o + 1], D[o + 2], i)) {
           vStart[nv] = c0;
           vEnd[nv] = nc;
           vRel[nv] = closing();
@@ -1746,7 +1997,7 @@ export class SoftBody {
       if (gather((sw[a] + sw[b] + sw[c]) / 3, (sw[a + 1] + sw[b + 1] + sw[c + 1]) / 3, (sw[a + 2] + sw[b + 2] + sw[c + 2]) / 3,
         (sw[a + 3] + sw[b + 3] + sw[c + 3]) / 3, (sw[a + 4] + sw[b + 4] + sw[c + 4]) / 3, (sw[a + 5] + sw[b + 5] + sw[c + 5]) / 3, own,
         (x[a3] + x[b3] + x[c3]) / 3, (x[a3 + 1] + x[b3 + 1] + x[c3 + 1]) / 3, (x[a3 + 2] + x[b3 + 2] + x[c3 + 2]) / 3,
-        (D[a3] + D[b3] + D[c3]) / 3, (D[a3 + 1] + D[b3 + 1] + D[c3 + 1]) / 3, (D[a3 + 2] + D[b3 + 2] + D[c3 + 2]) / 3)) {
+        (D[a3] + D[b3] + D[c3]) / 3, (D[a3 + 1] + D[b3 + 1] + D[c3 + 1]) / 3, (D[a3 + 2] + D[b3 + 2] + D[c3 + 2]) / 3, -2 - f)) {
         fS[nf] = c0;
         fE[nf] = nc;
         fR[nf] = closing();
@@ -1766,6 +2017,7 @@ export class SoftBody {
     }
     this._nProbeV = nv;
     this._nProbeF = nf;
+    this._hoodStamp = hs;
     // clearance left per probe: a probe that missed by a margin skips the
     // following substeps until the pieces could have closed that gap
     const nPr = nv + nf;
@@ -1776,6 +2028,7 @@ export class SoftBody {
       this._tBoxStamp = new Int32Array(this.tCap);
     }
   }
+
 
   // Is p inside tet t? Returns -1 if so (barycentric coordinates into
   // this._ct), else a lower bound on its distance to the tet: how far it is
@@ -1888,7 +2141,9 @@ export class SoftBody {
     const { T, tPiece } = this;
     const ct = this._ct, fq = this._fq;
     let t = -1;
-    const gw = wt >= 0 && wt < this.nT && tPiece[wt] !== own && this.vol0[wt] > 0 ? this._tetGap(wt, px, py, pz) : Infinity;
+    // (a warm tet of its own piece is fine: it came from a self-contact
+    // candidate list, which leaves out the probe's own neighbourhood)
+    const gw = wt >= 0 && wt < this.nT && this.vol0[wt] > 0 ? this._tetGap(wt, px, py, pz) : Infinity;
     if (gw < 0) t = wt;
     else {
       // scan the candidates; on a miss, remember how far the nearest was
@@ -2344,6 +2599,10 @@ export class SoftBody {
   radialImpulse(px, py, pz, radius, strength, up = 0, rigid = 0) {
     const { x, v, w } = this;
     this._hashDirty = true;
+    // the chunks of a blast skip self-contact while they fly: tumbling and
+    // torn about, every self probe would sweep through a lot of its own body
+    // (the heaviest moments get heavier still), for nothing anyone could see
+    this.selfQuietUntil = Math.max(this.selfQuietUntil, this.time + 0.5);
     const dv = rigid > 0 ? new Float64Array(this.nV * 3) : null;
     for (let i = 0; i < this.nV; i++) {
       if (w[i] === 0) continue;

@@ -344,6 +344,8 @@ export class MalletTool {
     if (!pc) return;
     this.res = null;
     if (!app.healer.active) sb.dampBoost = 1;
+    // (no self-contact while it tears, nor while the chunks fly: see radialImpulse)
+    sb.selfQuietUntil = sb.time + 0.5;
     // the dent's spring goes into the burst: the jelly pops most of the way
     // back into shape as it tears (left squashed, the chunks would start out
     // inside each other and spend their first moments shoving apart)

@@ -126,6 +126,7 @@ export class App {
     this.isTouch = false;
     this._panV = new THREE.Vector3();
     this._hitStop = 0;
+    this._resizePending = false;
     // the cube hangs a moment before it drops, while the physics code warms
     // up on a throwaway body (Safari runs cold code slowly at first)
     this.intro = { job: physicsWarmJob(), t: 0, done: false };
@@ -156,7 +157,9 @@ export class App {
     this.applyStyle();
 
     this.resize();
-    window.addEventListener('resize', () => this.resize());
+    // (applied at the start of the next frame: resizing the canvas clears
+    // it, and a cleared canvas shown for a frame is a black flash)
+    window.addEventListener('resize', () => (this._resizePending = true));
     this._bindInput();
     this._loop = this._loop.bind(this);
   }
@@ -689,6 +692,10 @@ export class App {
 
   frame(dt) {
     const t0 = performance.now();
+    if (this._resizePending) {
+      this._resizePending = false;
+      this.resize();
+    }
     // slow frames slow the simulation instead of piling on substeps
     if (this.slowGoal !== undefined) this.timeScale += (this.slowGoal - this.timeScale) * (1 - Math.exp(-dt * 10));
     let sdt = Math.min(dt, 1 / 45) * this.timeScale;
@@ -754,12 +761,12 @@ export class App {
       this.pixelRatio = Math.max(0.75, this.pixelRatio - 0.25);
       a.slow = 0;
       a.fast = 0;
-      this.resize();
+      this._resizePending = true;
     } else if (a.fast > 5 && this.pixelRatio + 0.25 <= Math.min(this.maxPixelRatio, a.ceiling) + 1e-6) {
       this.pixelRatio = this.pixelRatio + 0.25;
       a.fast = 0;
       a.upAt = a.t;
-      this.resize();
+      this._resizePending = true;
     }
   }
 

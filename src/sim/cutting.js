@@ -356,6 +356,35 @@ export function cutBody(sb, field, opts = {}) {
     }
   }
 
+  // --- a partial cut leaves the piece joined to itself across a slit: give
+  // the slit a blade's width - in the rest shape too - so its two sides
+  // don't sit pressed together (in contact) for ever. (Snapping keeps the
+  // nearest vertices ~0.3 cell from the cut, so this can't turn a tet over.)
+  if (remap.size) {
+    const kh = (opts.kerf ?? 0.035 * hEdge) / 2;
+    for (let g = 0; g < glue.length; g += 5) {
+      const plus = glue[g], minus = glue[g + 1];
+      if (remap.has(minus)) continue;
+      field.normal(glue[g + 2], glue[g + 3], glue[g + 4], nrm);
+      for (let e = 0; e < 2; e++) {
+        const id = e ? minus : plus, d = e ? -kh : kh;
+        if (id < nV0) {
+          const o = id * 3;
+          for (let c = 0; c < 3; c++) {
+            x[o + c] += nrm[c] * d;
+            X[o + c] += nrm[c] * d;
+          }
+        } else {
+          const o = (id - nV0) * 10;
+          for (let c = 0; c < 3; c++) {
+            newVerts[o + c] += nrm[c] * d;
+            newVerts[o + 3 + c] += nrm[c] * d;
+          }
+        }
+      }
+    }
+  }
+
   // --- commit
   const oldPiece = sb.vPiece.slice(0, nV0);
   const nNew = newVerts.length / 10;

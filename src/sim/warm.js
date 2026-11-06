@@ -77,6 +77,29 @@ export function* physicsWarmJob() {
   removeSmallPieces(sm, 0.002);
   yield;
   yield* stepS(30);
+  // a flap still hinged to the body, resting on it (self-contact: alone,
+  // then next to a piece cut off its far side)
+  const sh = new SoftBody({ res: 4, bounce: 0.55 });
+  sh.loadCube(0, 0, 0, 0);
+  sh.p.substeps = 4;
+  for (let k = 0; k < 6; k++) {
+    sh.step(1 / 60);
+    yield;
+  }
+  cutBody(sh, planeField(0, 1, 0, 0.55, (x) => x < 0.25), { separate: 0 });
+  yield;
+  for (let k = 0; k < 12; k++) {
+    sh.wakeAll();
+    sh.step(1 / 60);
+    yield;
+  }
+  cutBody(sh, planeField(1, 0, 0, 0.3), { separate: 0.01 });
+  yield;
+  for (let k = 0; k < 12; k++) {
+    sh.wakeAll();
+    sh.step(1 / 60);
+    yield;
+  }
   // the heal: pulled together without collisions, then the weld field
   const targets = new Float64Array(sm.vCap * 3);
   for (let i = 0; i < sm.nV; i++) {

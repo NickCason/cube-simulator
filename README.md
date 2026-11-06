@@ -69,8 +69,10 @@ Keys: `1`–`0` tools, `H` heal, `M` sound, hold `Space` for slow motion. Drag e
 
 - **Physics:** XPBD soft body on a tetrahedral mesh (~6.6k tets) with the stable
   Neo-Hookean constraints of Macklin & Müller (2021), rigid-motion-preserving
-  damping, friction, inter-piece contact and sleeping. Temperature softens or
-  stiffens the material per tet.
+  damping, friction, inter-piece contact and sleeping. Self-contact keeps a
+  watery cube from folding into itself and a flap still hinged on by a partial
+  cut from dropping through its own body. Temperature softens or stiffens the
+  material per tet.
 - **Cutting:** conforming tet splitting along implicit surfaces (planes, spheres)
   with vertex snapping for flat, clean cut faces; partial cuts are re-glued
   outside the knife stroke; frozen fracture splits along element boundaries.

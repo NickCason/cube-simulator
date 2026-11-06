@@ -238,6 +238,12 @@ export function createJellyMaterial(env, layerUniforms) {
       ${LAYER_GLSL}
 
       float sq(float x) { return x * x; }
+      // A NaN or infinity here would be smeared over the whole screen by the
+      // bloom (a white or black flash): replace it, and keep within range.
+      vec3 finite(vec3 c) {
+        bvec3 bad = equal(floatBitsToUint(c) & uvec3(0x7f800000u), uvec3(0x7f800000u));
+        return any(bad) ? vec3(0.0) : clamp(c, 0.0, 64.0);
+      }
       // The healed seams: exact distance from p to the seam segments listed
       // for its cell (1e3 if none come near).
       float weldSeg(vec3 p, float s) {
@@ -376,15 +382,16 @@ export function createJellyMaterial(env, layerUniforms) {
         vec3 body = trans * Tr * (1.0 - haze) + scatterLight * haze;
 
         float F0 = pow((uIor - 1.0) / (uIor + 1.0), 2.0);
-        float F = F0 + (1.0 - F0) * pow(1.0 - NdV, 5.0);
+        float F = F0 + (1.0 - F0) * pow(clamp(1.0 - NdV, 0.0, 1.0), 5.0);
         vec3 refl = envLookup(reflect(-V, N), rough);
 
         vec3 H = normalize(L + V);
         float NdH = max(dot(N, H), 0.0);
         float a = max(rough * rough, 0.0012);
         float nl = max(NdL, 0.0);
-        float Fh = F0 + (1.0 - F0) * pow(1.0 - max(dot(H, V), 0.0), 5.0);
-        vec3 spec = uLightColor * D_GGX(NdH, a) * V_Smith(nl, NdV, a) * nl * Fh;
+        float Fh = F0 + (1.0 - F0) * pow(clamp(1.0 - dot(H, V), 0.0, 1.0), 5.0);
+        // (capped: a glassy highlight seen dead on can top half-float range)
+        vec3 spec = min(uLightColor * D_GGX(NdH, a) * V_Smith(nl, NdV, a) * nl * Fh, vec3(48.0));
 
         vec3 col = body * (1.0 - F) + refl * F + spec;
 
@@ -482,7 +489,7 @@ export function createJellyMaterial(env, layerUniforms) {
         else if (uDebug == 5) col = refl;
         else if (uDebug == 6) col = N * 0.5 + 0.5;
 
-        gl_FragColor = vec4(col, 1.0);
+        gl_FragColor = vec4(finite(col), 1.0);
       }
     `,
   });
@@ -555,7 +562,7 @@ export function createCausticMaterial(layerUniforms) {
         // focusing, capped so sliver faces can't streak
         float ratio = clamp(oldA / max(newA, 1e-9), 0.0, 3.2);
         float F0 = pow((uIor - 1.0) / (uIor + 1.0), 2.0);
-        float Ft = 1.0 - (F0 + (1.0 - F0) * pow(1.0 - vNdL, 5.0));
+        float Ft = 1.0 - (F0 + (1.0 - F0) * pow(clamp(1.0 - vNdL, 0.0, 1.0), 5.0));
         vec3 sig = layerSigma(vRestY, uLayerY0, uAbsorb);
         vec3 T = exp(-sig * vPath) * exp(-uScatter * vPath * 0.7);
         // frosted jelly scatters light: no sharp caustics

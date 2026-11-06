@@ -180,6 +180,7 @@ export class Glitter {
         void main() {
           vec2 q = abs(vUv);
           if (max(q.x * 0.8660254 + q.y * 0.5, q.y) > 1.0) discard; // hexagonal flake
+          if (dot(vN, vN) < 1e-20) discard; // (a flattened flake has no normal)
           vec3 n = normalize(vN);
           vec3 V = normalize(vV);
           float ndv = dot(n, V);
@@ -194,7 +195,7 @@ export class Glitter {
           else if (uMode == 3) col = vec3(1.0, 0.6, 0.56);
           else col = vec3(0.92, 0.95, 1.0);
           vec3 c = col * (env + uLightColor * glint * 14.0) * uSparkle + col * 0.03;
-          gl_FragColor = vec4(c * vTint * vBoost, 1.0);
+          gl_FragColor = vec4(min(c * vTint * vBoost, vec3(64.0)), 1.0);
         }`,
     });
     this.mesh = new THREE.Mesh(g, mat);

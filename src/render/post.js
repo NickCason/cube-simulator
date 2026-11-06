@@ -56,7 +56,14 @@ export class Post {
         uniform float uThreshold;
         uniform float uKnee;
         varying vec2 vUv;
+        // (a NaN or infinity anywhere in the picture would otherwise spread
+        // through every bloom level: a white or black flash)
+        vec3 finite(vec3 c) {
+          bvec3 bad = equal(floatBitsToUint(c) & uvec3(0x7f800000u), uvec3(0x7f800000u));
+          return any(bad) ? vec3(0.0) : clamp(c, 0.0, 64.0);
+        }
         vec3 pre(vec3 c) {
+          c = finite(c);
           float br = max(c.r, max(c.g, c.b));
           float rq = clamp(br - uThreshold + uKnee, 0.0, 2.0 * uKnee);
           rq = rq * rq / (4.0 * uKnee + 1e-4);
@@ -133,9 +140,13 @@ export class Post {
         uniform float uFlash;
         varying vec2 vUv;
         float h12(vec2 p) { vec3 p3 = fract(vec3(p.xyx) * 0.1031); p3 += dot(p3, p3.yzx + 33.33); return fract((p3.x + p3.y) * p3.z); }
+        vec3 finite(vec3 c) {
+          bvec3 bad = equal(floatBitsToUint(c) & uvec3(0x7f800000u), uvec3(0x7f800000u));
+          return any(bad) ? vec3(0.0) : clamp(c, 0.0, 64.0);
+        }
         void main() {
-          vec3 c = texture2D(tDiffuse, vUv).rgb;
-          c += texture2D(tBloom, vUv).rgb * uBloom;
+          vec3 c = finite(texture2D(tDiffuse, vUv).rgb);
+          c += finite(texture2D(tBloom, vUv).rgb) * uBloom;
           c += vec3(1.0, 0.85, 0.6) * uFlash;
           vec2 d = (vUv - 0.5) * vec2(uRes.x / uRes.y, 1.0);
           c *= 1.0 - uVignette * smoothstep(0.35, 1.25, length(d));
