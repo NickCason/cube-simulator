@@ -189,6 +189,24 @@ export class Healer {
     this.app = app;
     this.active = false;
     this.t = 0;
+    // (every field up front: a stable object shape keeps Safari's JIT happy)
+    this.settling = false;
+    this.settleT = 0;
+    this.fused = false;
+    this.gathered = false;
+    this.ejected = 0;
+    this.scaleK = 1;
+    this.cx = 0;
+    this.cz = 0;
+    this.yaw = 0;
+    this.qF = new THREE.Quaternion();
+    this.cW = new THREE.Vector3();
+    this.plan = [];
+    this.planTopo = -1;
+    this.targets = null;
+    this.weldJob = null;
+    this.weldField = null;
+    this.weldT = undefined;
   }
 
   start(opts = {}) {

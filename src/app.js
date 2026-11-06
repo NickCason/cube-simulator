@@ -120,8 +120,11 @@ export class App {
 
     this.clock = { last: performance.now(), t: 0 };
     this.timeScale = 1;
-    this.stats = { physMs: 0, frameMs: 0, frames: 0 };
+    this.stats = { physMs: 0, frameMs: 0, frames: 0, physLast: 0, renderLast: 0 };
     this.substepRate = 720; // physics substeps per second
+    this.isTouch = false;
+    this._panV = new THREE.Vector3();
+    this._hitStop = 0;
     this.paused = false;
     this.raycaster = new THREE.Raycaster();
     this._ndc = new THREE.Vector2();
@@ -689,6 +692,7 @@ export class App {
       const p0 = performance.now();
       if (sdt > 0) this.sb.step(sdt);
       const pm = performance.now() - p0;
+      this.stats.physLast = pm;
       this.stats.physMs = this.stats.physMs * 0.9 + pm * 0.1;
       // adapt substep rate to the device
       if (this.sb.anyAwake) {
@@ -704,36 +708,37 @@ export class App {
     }
     this._updateCamera(dt);
     this.overlay.draw(dt);
+    const r0 = performance.now();
     this.render();
-    this.stats.frameMs = this.stats.frameMs * 0.9 + (performance.now() - t0) * 0.1;
+    this.stats.renderLast = performance.now() - r0;
+    const cpu = performance.now() - t0;
+    this.stats.frameMs = this.stats.frameMs * 0.9 + cpu * 0.1;
     this.stats.frames++;
-    this._adaptResolution(dt);
+    this._adaptResolution(dt, cpu);
   }
 
-  // Drop the render resolution if the device can't keep up (and recover).
-  // Drop the render resolution when the device can't keep up, and only
-  // try a sharper one again after a good while of smooth frames *while
-  // something is going on* (idle frames are cheap and prove nothing). If a
-  // step up has to be undone soon after, that level is off the table.
-  _adaptResolution(dt) {
+  // Render resolution follows the GPU: drop it while frames are slow *and*
+  // the slowness isn't our own CPU work (busy physics makes frames slow too,
+  // and a blurrier picture wouldn't help that); step it back up after a few
+  // seconds of smooth frames. A step up that soon has to be undone puts that
+  // level off the table.
+  _adaptResolution(dt, cpuMs = 0) {
     if (this.opts.preserve) return;
     const a = (this._adapt ||= { t: 0, slow: 0, fast: 0, ceiling: this.maxPixelRatio, upAt: -1e9 });
     a.t += dt;
     if (a.t < 2.5) return;
-    const busy = this.sb.anyAwake || this.healer.active;
-    if (dt > 1 / 42) a.slow += dt;
+    const gpuSlow = dt > 1 / 42 && cpuMs < dt * 1000 * 0.6;
+    if (gpuSlow) a.slow += dt;
     else a.slow = Math.max(0, a.slow - dt * 0.5);
-    if (busy) {
-      if (dt < 1 / 57) a.fast += dt;
-      else a.fast = 0;
-    }
+    if (dt < 1 / 57) a.fast += dt;
+    else if (gpuSlow) a.fast = 0;
     if (a.slow > 1.2 && this.pixelRatio > 0.75) {
       if (a.t - a.upAt < 12) a.ceiling = this.pixelRatio - 0.25; // that step up was too much
       this.pixelRatio = Math.max(0.75, this.pixelRatio - 0.25);
       a.slow = 0;
       a.fast = 0;
       this.resize();
-    } else if (a.fast > 6 && this.pixelRatio + 0.25 <= Math.min(this.maxPixelRatio, a.ceiling) + 1e-6) {
+    } else if (a.fast > 5 && this.pixelRatio + 0.25 <= Math.min(this.maxPixelRatio, a.ceiling) + 1e-6) {
       this.pixelRatio = this.pixelRatio + 0.25;
       a.fast = 0;
       a.upAt = a.t;
@@ -786,7 +791,7 @@ export class App {
 
   // stereo position of a world point (-1 left .. 1 right, kept gentle)
   _pan(x, y, z) {
-    const v = (this._panV ||= new THREE.Vector3()).set(x, y, z).project(this.camera);
+    const v = this._panV.set(x, y, z).project(this.camera);
     return Math.max(-1, Math.min(1, v.x)) * 0.6;
   }
 

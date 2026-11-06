@@ -386,6 +386,7 @@ export class MalletTool {
 // ------------------------------------------------------------------ torch & cryo
 class NozzleTool {
   constructor(app, id, model) {
+    this.tg = null;
     this.app = app;
     this.id = id;
     this.cursor = 'none';
@@ -903,6 +904,7 @@ export class SyringeTool {
 // ------------------------------------------------------------------ magnet
 export class MagnetTool {
   constructor(app) {
+    this.squeal = false;
     this.app = app;
     this.id = 'magnet';
     this.cursor = 'none';

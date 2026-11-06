@@ -8,6 +8,7 @@ const _w = new THREE.Vector3();
 // ------------------------------------------------------------------ hand
 export class HandTool {
   constructor(app) {
+    this._ht = 0;
     this.app = app;
     this.id = 'hand';
     this.cursor = 'grab';

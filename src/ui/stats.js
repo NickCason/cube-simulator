@@ -28,41 +28,21 @@ export function attachStats(app) {
   const slow = []; // { at, gap, cpu, phys, rend, rebuild, shaders, res, tool, pieces }
   const all = []; // every interval this session, for percentiles (capped)
 
-  let wrappedSb = null;
-  const wrapSb = () => {
-    const sb = app.sb;
-    if (sb === wrappedSb) return;
-    wrappedSb = sb;
-    const step = sb.step.bind(sb);
-    sb.step = (dt) => {
-      const a = performance.now();
-      step(dt);
-      phys += performance.now() - a;
-    };
-    const rebuild = sb.rebuild.bind(sb);
-    sb.rebuild = () => {
-      const a = performance.now();
-      rebuild();
-      rebuildMs += performance.now() - a;
-      rebuilds++;
-    };
-  };
-  wrapSb();
-  const render = app.render.bind(app);
-  app.render = () => {
-    const a = performance.now();
-    render();
-    rend += performance.now() - a;
-  };
+  // (the app records physics/render time and the body its rebuilds, so
+  // nothing in the hot simulation code needs wrapping - wrapping methods
+  // changes the objects' shape, which costs Safari seconds of slow code)
   const frame = app.frame.bind(app);
   app.frame = (dt) => {
-    wrapSb();
     const start = performance.now();
     const gap = lastStart ? start - lastStart : 16.7;
     lastStart = start;
-    phys = 0;
-    rend = 0;
     frame(dt);
+    phys = app.stats.physLast;
+    rend = app.stats.renderLast;
+    rebuildMs = app.sb.rebuildMs;
+    rebuilds = app.sb.rebuilds;
+    app.sb.rebuildMs = 0;
+    app.sb.rebuilds = 0;
     const cpu = performance.now() - start;
     const p = programs();
     const newProgs = p - progs;
@@ -90,8 +70,6 @@ export function attachStats(app) {
       });
       if (slow.length > 40) slow.shift();
     }
-    rebuildMs = 0;
-    rebuilds = 0;
     last = { cpu, phys, rend };
   };
   let last = { cpu: 0, phys: 0, rend: 0 };

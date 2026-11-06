@@ -55,6 +55,95 @@ export class SoftBody {
     this.hCell = this.p.size / this.p.res;
     this.impacts = []; // impacts this frame, one per piece: {x, y, z, dv, piece, kind, mass, partner} (for audio)
     this._ct = { t: -1, f: -1, b0: 0, b1: 0, b2: 0, b3: 0, nx: 0, ny: 0, nz: 0, depth: 0 };
+    // Every field this object will ever carry is created here, so its shape
+    // never changes later: Safari's JIT throws its optimised code away (and
+    // takes seconds to rebuild it) whenever a hot object gains a property.
+    this.rebuildMs = 0;
+    this.rebuilds = 0;
+    this.dampBoost = 1;
+    this.heatActive = false;
+    this._heatResidual = 0;
+    this.weld = null; // set by the heal: distances to the healed seams
+    this.anyAwake = true;
+    this._frameDt = 1 / 60;
+    this._grabPress = 0;
+    this._anyContact = false;
+    this._gap = 0;
+    this._pass = 0;
+    this._fStamp = 0;
+    this._nHTets = 0;
+    this._nProbeV = 0;
+    this._nProbeF = 0;
+    this._warmVersion = -1;
+    // derived from the topology (see rebuild)
+    this.nF = 0;
+    this.esc = null;
+    this.vtStart = null;
+    this.vtList = null;
+    this.nbStart = null;
+    this.nbList = null;
+    this.sTri = null;
+    this.sTet = null;
+    this.sTag = null;
+    this.sRestN = null;
+    this.tetBoundary = null;
+    this.nextBoundary = null;
+    this.vfStart = null;
+    this.vfList = null;
+    this._fSeen = null;
+    this._fGeo = null;
+    this._fGeoStamp = null;
+    this.rCount = 0;
+    this.rSim = null;
+    this.rTag = null;
+    this.rIndex = null;
+    this.rFaceOrder = null;
+    this.pieceRanges = null;
+    this._rg = null;
+    // solver scratch (allocated on first use)
+    this._awake = null;
+    this._imp = null;
+    this._impPartner = null;
+    this._pmu = null;
+    this._tmpTemp = null;
+    this._pbb = null;
+    this._pdev = null;
+    this._pcs = null;
+    this._sweep = null;
+    this._pieceActive = null;
+    this._ptS = null;
+    this._hCount = null;
+    this._hEntries = null;
+    this._hFill = null;
+    this._hRanges = null;
+    this._hTets = null;
+    this._tBox0 = null;
+    this._tBoxNow = null;
+    this._tBoxStamp = null;
+    this._tStamp = null;
+    this._cList = null;
+    this._skip = null;
+    this._probeV = null;
+    this._probeF = null;
+    this._probeSeen = null;
+    this._pcStart = null;
+    this._pcEnd = null;
+    this._pRel = null;
+    this._vcS = null;
+    this._vcE = null;
+    this._vcR = null;
+    this._fcS = null;
+    this._fcE = null;
+    this._fcR = null;
+    this._wtV = null;
+    this._wfV = null;
+    this._wtF = null;
+    this._wfF = null;
+    this._pi3 = null;
+    this._pw3 = null;
+    this._ti4 = null;
+    this._tb4 = null;
+    this._fq = { ok: false, dist: 0, prev: 0, nx: 0, ny: 0, nz: 0, on: false, crossS: Infinity };
   }
 
   // ---------------------------------------------------------------- storage
@@ -158,6 +247,7 @@ export class SoftBody {
   }
 
   rebuild() {
+    const t0 = performance.now();
     this._computeRest();
     this._computeMass();
     this._buildAdjacency();
@@ -166,6 +256,8 @@ export class SoftBody {
     this._computeEscape();
     this._buildRenderClusters();
     this.topoVersion++;
+    this.rebuildMs += performance.now() - t0; // (read and cleared by ?stats)
+    this.rebuilds++;
   }
 
   // For every vertex: rest-space vector to the nearest boundary vertex of its
@@ -385,8 +477,23 @@ export class SoftBody {
         com: [0, 0, 0],
         vel: [0, 0, 0],
         bbox: [0, 0, 0, 0, 0, 0],
+        omega: [0, 0, 0],
         sleepT: 0,
         asleep: false,
+        // (all fields up front - see the constructor)
+        rebT: 0,
+        impY: 0,
+        boosted: false,
+        rebR: 0,
+        impR: 0,
+        impUx: 0,
+        impUz: 0,
+        boostedR: false,
+        impPrev: [0, 0, 0],
+        impPend: null,
+        impT: -1,
+        impDv: 0,
+        sleepLogMu: undefined,
       };
     });
     // keep largest piece first for stable "main piece" semantics
@@ -659,7 +766,7 @@ export class SoftBody {
       const pc = this.pieces[k];
       if (!(pc.mass > 0)) continue;
       const o = k * 12;
-      const prev = pc.impPrev || (pc.impPrev = [0, 0, 0]);
+      const prev = pc.impPrev;
       let best = 0, kind = -1;
       for (let c = 0; c < 3; c++) {
         let dv = I[o + c * 4] / h / pc.mass;
@@ -1129,7 +1236,9 @@ export class SoftBody {
         wy = i01 * Lx + i11 * Ly + i12 * Lz;
         wz = i02 * Lx + i12 * Ly + i22 * Lz;
       }
-      pc.omega = [wx, wy, wz];
+      pc.omega[0] = wx;
+      pc.omega[1] = wy;
+      pc.omega[2] = wz;
       if (pc.asleep) continue;
       let vmax2 = 0, e2 = 0;
       for (let k = 0; k < vs.length; k++) {
