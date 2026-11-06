@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { cutBody, planeField, sphereField } from '../sim/cutting.js';
+import { cutBody, planeField } from '../sim/cutting.js';
 import { maxStretch } from '../sim/strain.js';
 import { makeNailGun } from '../world/models.js';
 
@@ -11,9 +11,9 @@ const _w = new THREE.Vector3();
 const TEAR = { jello: 1.75, gummy: 1.9, sour: 1.8, crystal: 1.6, creamy: 2.0, slime: 3.4, water: 2.4, syrup: 3.8, mochi: 3.2, marshmallow: 2.6, rubber: 2.8, glass: 1.3 };
 
 // Grab and drag; a quick tap pokes. Each finger holds on by itself - two on
-// the jelly squish it between them or pull it apart - and pulled too far it
-// tears where it's stretched most: a slit opens across the stretch and runs
-// on while the pull keeps it stretched (let go and the rip stays as it is).
+// the jelly squish it between them or pull it apart - and pulled too far
+// apart it tears between them (unless tearing's off: Settings). One hand
+// never tears it: dragged however fast, the whole piece comes along.
 export class HandTool {
   constructor(app) {
     this._ht = 0;
@@ -104,18 +104,17 @@ export class HandTool {
     }
   }
 
-  // Each frame (every other): is anything held stretched past tearing?
-  // Two hands on one piece pulling it apart: the stretch between them - past
-  // its limit twice running, it splits there, across the line between the
-  // hands, a half in each. One hand: the stretch round what it holds - it
-  // pulls off the chunk under the finger. (Torn wherever the stretch peaked,
-  // a fingertip's shallow hold peeled thin flaps and shredded them; and a
-  // rip that ran on in steps cut one plane over and over - each cut splits
-  // every tet on its plane anew: millions.) Bits under 5% of a cube don't
-  // tear again.
+  // Each frame (every other): two hands on one piece pulling it apart -
+  // stretched between them past its limit twice running, it splits there,
+  // across the line between the hands, a half in each. (Torn wherever the
+  // stretch peaked, a fingertip's shallow hold peeled thin flaps and
+  // shredded them; and a rip that ran on in steps cut one plane over and
+  // over - each cut splits every tet on its plane anew: millions. One hand
+  // tore a ball out of anything dragged fast.) Bits under 5% of a cube
+  // don't tear again.
   update(sdt, dt = 1 / 60) {
     const app = this.app, sb = app.sb;
-    if (!this.drags.size || app.healer.active) {
+    if (this.drags.size < 2 || app.healer.active || !app.tearing) {
       this._over = 0;
       return;
     }
@@ -137,55 +136,37 @@ export class HandTool {
     }
     let best = null;
     for (const [k, hands] of on) {
+      if (hands.length < 2) continue;
       const mask = new Uint8Array(sb.pieces.length);
       mask[k] = 1;
-      if (hands.length >= 2) {
-        const [A, B] = hands, ax = B.c[0] - A.c[0], ay = B.c[1] - A.c[1], az = B.c[2] - A.c[2];
-        const L2 = ax * ax + ay * ay + az * az;
-        if (L2 < 1e-6) continue;
-        const L = Math.sqrt(L2);
-        // pulled apart - further than when they took hold - not squeezed
-        // (squeezed, it bulges: stretched across the squeeze, which mustn't tear it)
-        const P = B.d;
-        if (P.pairWith !== A.d.grab) {
-          P.pairWith = A.d.grab;
-          P.d0 = L; // (how far apart they took hold)
-        }
-        if (L < P.d0 * 1.12) continue;
-        // (the middle of the way between them, stretched along it)
-        const m = maxStretch(sb, mask, (x, y, z) => {
-          const u = ((x - A.c[0]) * ax + (y - A.c[1]) * ay + (z - A.c[2]) * az) / L2;
-          return u > 0.2 && u < 0.8;
-        });
-        if (!m || Math.abs(m.dir[0] * ax + m.dir[1] * ay + m.dir[2] * az) / L < 0.7) continue;
-        if (!best || m.s / this._limit(m) > best.over) best = { over: m.s / this._limit(m), m, k, n: [ax / L, ay / L, az / L], plane: true };
-      } else {
-        const A = hands[0], r0 = 0.2 * size, r1 = 0.45 * size;
-        // (only yanked: the hand well ahead of what it holds)
-        const g = A.d.grab, lead = Math.hypot(g.tx - A.c[0], g.ty - A.c[1], g.tz - A.c[2]);
-        if (lead < 0.06 * size) continue;
-        const m = maxStretch(sb, mask, (x, y, z) => {
-          const r2 = (x - A.c[0]) ** 2 + (y - A.c[1]) ** 2 + (z - A.c[2]) ** 2;
-          return r2 > r0 * r0 && r2 < r1 * r1;
-        });
-        // (a single hand has to pull harder: it's yanking the whole piece)
-        if (m && (!best || m.s / (1.35 * this._limit(m)) > best.over)) best = { over: m.s / (1.35 * this._limit(m)), m, k, c: A.c, plane: false };
+      const [A, B] = hands, ax = B.c[0] - A.c[0], ay = B.c[1] - A.c[1], az = B.c[2] - A.c[2];
+      const L2 = ax * ax + ay * ay + az * az;
+      if (L2 < 1e-6) continue;
+      const L = Math.sqrt(L2);
+      // pulled apart - further than when they took hold - not squeezed
+      // (squeezed, it bulges: stretched across the squeeze, which mustn't tear it)
+      const P = B.d;
+      if (P.pairWith !== A.d.grab) {
+        P.pairWith = A.d.grab;
+        P.d0 = L; // (how far apart they took hold)
       }
+      if (L < P.d0 * 1.12) continue;
+      // (the middle of the way between them, stretched along it)
+      const m = maxStretch(sb, mask, (x, y, z) => {
+        const u = ((x - A.c[0]) * ax + (y - A.c[1]) * ay + (z - A.c[2]) * az) / L2;
+        return u > 0.2 && u < 0.8;
+      });
+      if (!m || Math.abs(m.dir[0] * ax + m.dir[1] * ay + m.dir[2] * az) / L < 0.7) continue;
+      if (!best || m.s / this._limit(m) > best.over) best = { over: m.s / this._limit(m), m, k, n: [ax / L, ay / L, az / L] };
     }
     if (best && best.over > 1) this._over++;
     else this._over = 0;
     if (this._over < 2) return;
     this._over = 0;
     const { m, k } = best;
-    let field, o;
-    if (best.plane) {
-      o = tetCentre(sb, m.t);
-      const [nx, ny, nz] = best.n;
-      field = ragged(planeField(nx, ny, nz, nx * o[0] + ny * o[1] + nz * o[2]), 0.035 * size);
-    } else {
-      o = best.c;
-      field = ragged(sphereField(o[0], o[1], o[2], 0.27 * size), 0.04 * size);
-    }
+    const o = tetCentre(sb, m.t);
+    const [nx, ny, nz] = best.n;
+    const field = ragged(planeField(nx, ny, nz, nx * o[0] + ny * o[1] + nz * o[2]), 0.035 * size);
     const res = cutBody(sb, field, { separate: 0.3, anchors: app.allAnchors(), pieces: [k] });
     if (!res.changed) return;
     app.onTopologyChanged();

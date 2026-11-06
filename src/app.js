@@ -449,6 +449,20 @@ export class App {
     this.sb.impulse(0, 0.6, 0, 0, -1, 0, 3, 1.2);
   }
 
+  // Two hands pulling the jelly apart tear it (Settings > Feel > Tearing).
+  get tearing() {
+    return this.tune.tear !== false;
+  }
+
+  setTearing(on) {
+    this.tune.tear = !!on;
+    try {
+      localStorage.setItem('cube-sim-tune', JSON.stringify(this.tune));
+    } catch (e) {
+      /* private mode */
+    }
+  }
+
   // One fine-tuning slider changed (value in physical units).
   setSetting(key, value, final = true) {
     this.tune[key] = value;
@@ -461,12 +475,13 @@ export class App {
 
   resetSettings() {
     const oldSize = this.sb.p.size;
-    // (the jelly resets; your sound levels stay)
-    const { volume, impacts, wobble } = this.tune;
+    // (the jelly resets; your sound levels and the tearing switch stay)
+    const { volume, impacts, wobble, tear } = this.tune;
     this.tune = {};
     if (volume !== undefined) this.tune.volume = volume;
     if (impacts !== undefined) this.tune.impacts = impacts;
     if (wobble !== undefined) this.tune.wobble = wobble;
+    if (tear !== undefined) this.tune.tear = tear;
     this.applyStyle();
     if (Math.abs(this.settings.size - oldSize) > 1e-6) this.setCubeSize(this.settings.size);
   }

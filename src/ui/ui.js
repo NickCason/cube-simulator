@@ -265,6 +265,26 @@ export class UI {
       scroll.appendChild(row);
       this.rows[st.key] = { st, input, word };
     }
+    // tearing (two hands pulling it apart): a switch under Feel
+    {
+      const row = document.createElement('div');
+      row.className = 'row toggle';
+      row.innerHTML = '<span class="name">Tearing</span><button class="switch" role="switch" aria-checked="false" aria-label="Tearing"><i></i></button><span class="word">Off</span>';
+      const sw = row.querySelector('.switch'), word = row.querySelector('.word');
+      const show = (on) => {
+        sw.setAttribute('aria-checked', String(on));
+        sw.classList.toggle('on', on);
+        word.textContent = on ? 'On' : 'Off';
+      };
+      show(app.tearing);
+      sw.addEventListener('click', () => {
+        app.audio.ui();
+        app.setTearing(!app.tearing);
+        show(app.tearing);
+        this.hint(app.tearing ? 'Pull it apart with two fingers and it tears' : 'Two fingers squish and stretch it · it won\'t tear', 2600);
+      });
+      this.rows.grip.input.closest('.row').after(row);
+    }
     // tilt & shake (phones with motion sensors): a switch under World
     if (app.tilt.supported) {
       const row = document.createElement('div');
@@ -406,7 +426,10 @@ export class UI {
     for (const k in this.buttons) this.buttons[k].classList.toggle('active', k === id);
     const d = TOOL_DEFS.find((t) => t.id === id);
     const touch = this.app.isTouch || window.matchMedia?.('(pointer: coarse)').matches;
-    if (d) this.hint(touch ? d.hint.replace(/\bClick\b/g, 'Tap').replace(/\bclick\b/g, 'tap') : d.hint);
+    if (!d) return;
+    // (tearing off: two fingers only squish and stretch)
+    const h = id === 'hand' && !this.app.tearing ? d.hint.replace('squish or pull it apart', 'squish or stretch it') : d.hint;
+    this.hint(touch ? h.replace(/\bClick\b/g, 'Tap').replace(/\bclick\b/g, 'tap') : h);
   }
 
   // Layer editor: bands top -> bottom; the stack background shows the
