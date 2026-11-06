@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { cutBody, sphereField, separateClusters, removeTets, removeSmallPieces } from '../sim/cutting.js';
+import { cutBody, sphereField, planeField, separateClusters, removeTets, removeSmallPieces } from '../sim/cutting.js';
 import { makeMallet, makeTorch, makeSpray, makeBaller, makeBomb, makeSyringe, makeMagnet, orient } from '../world/models.js';
 
 const V = (a) => new THREE.Vector3(a[0], a[1], a[2]);
@@ -55,6 +55,15 @@ function anchorOk(sb, a) {
 }
 
 // ------------------------------------------------------------------ mallet
+// Click to smack. Unfrozen jelly takes a big wet blow and rings. Hit it
+// again on its beat - a whole number of its own wobble periods later, so a
+// hand can keep up (~0.35-0.75 s) - and the resonance builds: each hit
+// lands harder, the jelly rings longer, glows when the next beat is due and
+// sings a rising note. Keep the beat for six hits and it bursts. Frozen
+// jelly shatters instead.
+const RES_HITS = 6;
+const RES_NOTES = [392.0, 440.0, 523.25, 587.33, 659.25, 783.99];
+
 export class MalletTool {
   constructor(app) {
     this.app = app;
@@ -65,6 +74,19 @@ export class MalletTool {
     this.model.visible = false;
     app.scene.add(this.model);
     this.anim = null;
+    this.res = null; // resonance streak: { piece, topo, hits, last, T }
+  }
+
+  // The jelly's beat (s): its natural wobble period - stiffer, lighter or
+  // smaller jelly rings faster - times a whole number.
+  beat() {
+    const p = this.app.sb.p;
+    const fn = (6.7 * Math.sqrt(p.mu / 170 / p.density)) / p.size;
+    const Tn = 1 / fn;
+    let T = Tn * Math.max(1, Math.round(0.5 / Tn));
+    while (T < 0.34) T += Tn;
+    while (T > 0.78 && T - Tn >= 0.34) T -= Tn;
+    return T;
   }
 
   down(e, ray) {
@@ -101,8 +123,13 @@ export class MalletTool {
   }
 
   update(dt) {
+    this._resonance();
     const a = this.anim;
     if (!a) return;
+    if (a.press) {
+      this._press(a, dt);
+      return;
+    }
     a.t += dt;
     const T1 = 0.1, T2 = 0.5;
     let ang;
@@ -134,15 +161,37 @@ export class MalletTool {
         this.shatter(a);
         return;
       }
-      sb.impulse(p.x, p.y, p.z, d.x, d.y, d.z, 0.48, 7.5, a.tg.hit.piece);
-      app.audio.thud(1);
-      // a few wet flecks fly off
-      const n = a.tg.normal;
-      for (let k = 0; k < 5; k++) {
-        const v = n.clone().multiplyScalar(1.5 + Math.random() * 2).add(new THREE.Vector3((Math.random() - 0.5) * 2.5, 1.5 + Math.random() * 2, (Math.random() - 0.5) * 2.5));
-        app.droplets.spawn(p.clone().addScaledVector(n, 0.03), v, 0.008 + Math.random() * 0.012);
+      const piece = a.tg.hit.piece;
+      // on the beat? (the swing is in real time, like the hand that clicks)
+      const now = app.clock.t, T = this.beat();
+      const r = this.res;
+      const live = r && r.piece === piece && r.topo === sb.topoVersion && now - r.last < 2.6 * T;
+      let onBeat = false;
+      if (live) {
+        const gap = now - r.last;
+        onBeat = Math.abs(gap - T) < 0.2 * T || Math.abs(gap - 2 * T) < 0.24 * T;
       }
+      const hits = onBeat ? r.hits + 1 : 1;
+      this.res = { piece, topo: sb.topoVersion, hits, last: now, T };
+      const lv = (hits - 1) / (RES_HITS - 1); // 0 .. 1
+      const size = sb.p.size;
+      // where the surface is now (it may have wobbled since the click)
+      const back = 0.4 * size;
+      const rh = sb.raycast(p.x - d.x * back, p.y - d.y * back, p.z - d.z * back, d.x, d.y, d.z, back * 2);
+      if (rh && rh.piece === piece) p.set(rh.point[0], rh.point[1], rh.point[2]);
+      // the blow: the head drives a dent into the jelly, the deeper and
+      // faster the more of the beat it has caught (see _press)
+      sb.wake(piece);
+      const pusher = { c: [p.x, p.y, p.z], d: [d.x, d.y, d.z], r: 0.105, len: 0.34, s0: 0, s1: 0 };
+      sb.pushers.push(pusher);
+      a.press = { pusher, piece, s: 0, D: (0.13 + 0.13 * lv) * size, V: 4.5 + 1.8 * lv, phase: 'in', hold: 0, lv, p: p.clone(), n: a.tg.normal.clone() };
+      // resonance: it rings longer the more of the beat it has caught
+      if (!app.healer.active) sb.dampBoost = hits > 1 ? Math.max(0.3, 1 - 0.7 * lv) : 1;
+      app.shake(0.012 + 0.025 * lv);
+      app.audio.thud(0.8 + 0.2 * lv);
+      if (hits > 1) app.audio.ring(RES_NOTES[Math.min(hits, RES_NOTES.length) - 1], lv);
       app.markDamaged();
+      if (hits === 3) app.ui?.hint('Resonance building - keep the beat', 1400);
     } else {
       // whack the table: everything nearby hops
       const x = sb.x, v = sb.v;
@@ -154,6 +203,118 @@ export class MalletTool {
       app.audio.thud(0.7);
       app.particles.smoke(p, 3, 0.4, 0.75, 0.1, 0.2);
     }
+  }
+
+  // The head sinks into the jelly to the blow's depth, holds for a moment
+  // (the world all but freezes), then lets go and the jelly springs back.
+  _press(a, dt) {
+    const pr = a.press, app = this.app, sb = app.sb;
+    const P = pr.pusher;
+    P.s0 = pr.s;
+    if (pr.phase === 'in') {
+      pr.s = Math.min(pr.D, pr.s + pr.V * dt);
+      if (pr.s >= pr.D) {
+        pr.phase = 'hold';
+        pr.hold = 0.018;
+        app.hitStop(0.05 + 0.05 * pr.lv);
+        // the splash comes out from round the dent
+        const flecks = 7 + Math.round(12 * pr.lv);
+        for (let k = 0; k < flecks; k++) {
+          const v = pr.n.clone().multiplyScalar(1.6 + Math.random() * (2 + 2.5 * pr.lv)).add(new THREE.Vector3((Math.random() - 0.5) * 3.2, 1.5 + Math.random() * (2 + 2.5 * pr.lv), (Math.random() - 0.5) * 3.2));
+          app.droplets.spawn(pr.p.clone().addScaledVector(pr.n, 0.03), v, 0.008 + Math.random() * 0.014);
+        }
+      }
+    } else if ((pr.hold -= dt) <= 0) {
+      const i = sb.pushers.indexOf(P);
+      if (i >= 0) sb.pushers.splice(i, 1);
+      a.press = null;
+      if (this.res && this.res.hits >= RES_HITS && this.res.piece === pr.piece) this.burst(pr.piece, pr.p);
+      return;
+    }
+    P.s1 = pr.s;
+    this._pose(0);
+    this.model.position.addScaledVector(a.d, pr.s);
+  }
+
+  // While a streak is alive the jelly glows as its next beat comes due
+  // (brighter the further along it is); the streak and the extra ringing
+  // fade once the beat is lost.
+  _resonance() {
+    const r = this.res;
+    if (!r) return;
+    const app = this.app, sb = app.sb;
+    const now = app.clock.t;
+    if (r.topo !== sb.topoVersion || now - r.last > 2.6 * r.T || !sb.pieces[r.piece]) {
+      this.res = null;
+      if (!app.healer.active) sb.dampBoost = 1;
+      return;
+    }
+    const lv = (r.hits - 1) / (RES_HITS - 1);
+    const u = (now - r.last) / r.T;
+    // a soft swell peaking on the beat (and on the one after)
+    const w = 0.13;
+    const g = Math.max(Math.exp(-((u - 1) * (u - 1)) / (2 * w * w)), 0.6 * Math.exp(-((u - 2) * (u - 2)) / (2 * w * w)));
+    const level = g * (0.1 + 0.32 * lv);
+    if (level < 0.01) return;
+    const vs = sb.pieces[r.piece].verts, G = sb.glow;
+    for (let k = 0; k < vs.length; k++) if (G[vs[k]] < level) G[vs[k]] = level;
+  }
+
+  // Six on the beat: the jelly shakes itself apart into wet chunks - torn
+  // along a few curved and flat seams through it, then flung outwards.
+  burst(piece, p) {
+    const app = this.app;
+    const sb = app.sb;
+    const pc = sb.pieces[piece];
+    if (!pc) return;
+    this.res = null;
+    if (!app.healer.active) sb.dampBoost = 1;
+    const [cx, cy, cz] = pc.com;
+    const bb = pc.bbox.slice();
+    const half = 0.5 * Math.max(bb[3] - bb[0], bb[4] - bb[1], bb[5] - bb[2]);
+    const inBox = (x, y, z) => x > bb[0] - 0.03 && x < bb[3] + 0.03 && y > bb[1] - 0.03 && y < bb[4] + 0.03 && z > bb[2] - 0.03 && z < bb[5] + 0.03;
+    const anchors = app.allAnchors();
+    const rndDir = () => {
+      const u = Math.random() * 2 - 1, th = Math.random() * Math.PI * 2, r = Math.sqrt(1 - u * u);
+      return new THREE.Vector3(r * Math.cos(th), u, r * Math.sin(th));
+    };
+    // a couple of curved seams (big spheres whose rims run through it)...
+    for (let k = 0; k < 2; k++) {
+      const dir = rndDir(), R = half * (1.1 + Math.random() * 0.5);
+      const c = new THREE.Vector3(cx, cy, cz).addScaledVector(dir, R + half * (Math.random() - 0.5) * 0.5);
+      const f = sphereField(c.x, c.y, c.z, R);
+      f.inRegion = inBox;
+      cutBody(sb, f, { separate: 0.015, anchors });
+    }
+    // ...and two or three flat ones near the middle
+    const K = 2 + (Math.random() < 0.5 ? 1 : 0);
+    for (let k = 0; k < K; k++) {
+      const n = rndDir();
+      const q = new THREE.Vector3(cx, cy, cz).addScaledVector(rndDir(), half * 0.25 * Math.random());
+      cutBody(sb, planeField(n.x, n.y, n.z, n.dot(q), inBox), { separate: 0.015, anchors });
+    }
+    const crumbs = removeSmallPieces(sb, 0.004 * sb.p.size ** 3, anchors);
+    const c = new THREE.Vector3(cx, cy, cz);
+    for (let k = 0; k < crumbs.length; k += 4) {
+      const q = new THREE.Vector3(crumbs[k], crumbs[k + 1], crumbs[k + 2]);
+      const v = q.clone().sub(c).normalize().multiplyScalar(2.5 + Math.random() * 2.5);
+      v.y += 2.5;
+      app.droplets.spawn(q, v, 0.014 + Math.cbrt(crumbs[k + 3]) * 0.3);
+    }
+    for (let k = 0; k < 36; k++) {
+      const dir = new THREE.Vector3(Math.random() - 0.5, Math.random() * 0.9 + 0.1, Math.random() - 0.5).normalize();
+      const v = dir.clone().multiplyScalar(3 + Math.random() * 4);
+      v.y += 1.5;
+      app.droplets.spawn(c.clone().addScaledVector(dir, half * 0.9), v, 0.01 + Math.random() * 0.02);
+    }
+    app.onTopologyChanged();
+    sb.radialImpulse(cx, cy, cz, 2.2 * half + 0.4, 5.5, 2.2);
+    app.shake(0.05);
+    app.hitStop(0.12);
+    app.audio.splat(1);
+    app.audio.resonate();
+    app.ui?.hint('Resonance!', 1600);
+    app.markDamaged();
   }
 
   shatter(a) {
@@ -782,6 +943,8 @@ export class MagnetTool {
     if (!this.on) return;
     this.on = false;
     this.app.audio.loop('magnet', false);
+    if (this.squeal) this.app.audio.loop('extract', false);
+    this.squeal = false;
     for (const n of this.stuck) {
       if (n.state === 'stuck') this.app.nails._toFree(n, new THREE.Vector3(0, -0.5, 0), 1);
     }
@@ -811,6 +974,7 @@ export class MagnetTool {
     if (!this.on) return;
     const poles = this.pos.clone().addScaledVector(fwd, 0.02);
     const sb = app.sb;
+    let sliding = 0;
     for (const n of app.nails.nails) {
       if (n.state === 'stuck') {
         n.tip.copy(poles).add(n.stuckOff);
@@ -826,11 +990,27 @@ export class MagnetTool {
       if (n.state === 'embedded') {
         sb.pushAnchor(n.aTip, d.x * f, d.y * f, d.z * f, dt * 0.05);
         sb.pushAnchor(n.aBack, d.x * f, d.y * f, d.z * f, dt * 0.05);
+        // the pull along the shaft (head first) works the nail loose; the
+        // jelly round it gets tugged out with it until it lets go
+        const fa = f * Math.max(0, d.dot(n.axis)) - 3;
+        if (fa > 0) {
+          sliding = Math.max(sliding, Math.min(1, fa / 20));
+          sb.pushAnchor(n.aBack, n.axis.x * fa, n.axis.y * fa, n.axis.z * fa, dt * 0.06);
+          const out = d.clone().multiplyScalar(3 + Math.min(4, f * 0.08)).addScaledVector(n.axis, 1.2);
+          // once it's out it flies to the magnet
+          if (app.nails.slideOut(n, fa * 0.03 * dt, out)) n.homing = 0.8;
+        }
       } else if (n.state === 'free') {
         n.rest = 0;
+        // just pulled out: straight to the magnet; lying about: a weaker tug
+        let acc = f * 0.6;
+        if (n.homing > 0) {
+          n.homing -= dt;
+          acc = Math.max(acc, 95);
+        }
         for (const [pp, qq] of [[n.p0, n.q0], [n.p1, n.q1]]) {
-          pp.addScaledVector(d, f * dt * dt * 0.6);
-          void qq;
+          pp.addScaledVector(d, acc * dt * dt);
+          if (n.homing > 0) qq.lerp(pp, 0.08); // a little drag so it doesn't orbit
         }
         if (dist < 0.1) {
           n.state = 'stuck';
@@ -841,5 +1021,10 @@ export class MagnetTool {
         }
       }
     }
+    // a gritty squeal while a nail is being drawn out
+    if (sliding > 0 && !this.squeal) app.audio.loop('extract', true, { type: 'bandpass', freq: 1300, q: 4, gain: 0.07, lfo: 31, flicker: 0.7 });
+    if (sliding <= 0 && this.squeal) app.audio.loop('extract', false);
+    this.squeal = sliding > 0;
+    if (this.squeal) app.audio.loopLevel('extract', 0.4 + 0.6 * sliding);
   }
 }

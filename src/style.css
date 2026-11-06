@@ -695,6 +695,13 @@ body {
 
 /* ---------------------------------------------------------------- small screens */
 @media (max-width: 720px) {
+  .hint {
+    white-space: normal;
+    width: max-content;
+    max-width: calc(100vw - 36px);
+    text-align: center;
+    border-radius: 14px;
+  }
   .title {
     font-size: 14px;
     top: max(14px, env(safe-area-inset-top));

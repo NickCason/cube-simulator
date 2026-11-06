@@ -421,6 +421,12 @@ export class App {
     this._shake = Math.min(0.05, this._shake + a);
   }
 
+  // a heavy blow: the world all but freezes for a moment
+  hitStop(sec) {
+    if (this.reducedMotion) return;
+    this._hitStop = Math.max(this._hitStop || 0, sec);
+  }
+
   // ------------------------------------------------------------ camera
   _applyOrbit() {
     const o = this.orbit;
@@ -604,7 +610,11 @@ export class App {
     const t0 = performance.now();
     // slow frames slow the simulation instead of piling on substeps
     if (this.slowGoal !== undefined) this.timeScale += (this.slowGoal - this.timeScale) * (1 - Math.exp(-dt * 10));
-    const sdt = Math.min(dt, 1 / 45) * this.timeScale;
+    let sdt = Math.min(dt, 1 / 45) * this.timeScale;
+    if (this._hitStop > 0) {
+      this._hitStop -= dt;
+      sdt *= 0.1;
+    }
     this.clock.t += dt;
     if (!this.paused) {
       for (const f of this.onFrame) f(sdt, dt);

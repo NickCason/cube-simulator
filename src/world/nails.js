@@ -90,6 +90,7 @@ export class NailSystem {
   _toFree(n, vel, spin = 0) {
     const L = NAIL_LEN;
     n.state = 'free';
+    n.pull = 0;
     n.p0 = n.tip.clone();
     n.p1 = n.tip.clone().addScaledVector(n.axis, L);
     const vt = vel.clone();
@@ -119,7 +120,7 @@ export class NailSystem {
         this.removeEmbedConstraint(n);
         n.state = 'ejecting';
         n.ej = -0.06 * k++; // stagger
-        n.ejDepth = n.depth;
+        n.ejDepth = n.depth - (n.pull || 0);
       } else if (n.state === 'free' || n.state === 'flying' || n.state === 'stuck') {
         if (n.state === 'stuck') this._toFree(n, new THREE.Vector3(0, -0.5, 0), 1);
         n.fadeOut = 2.5 + Math.random();
@@ -218,12 +219,41 @@ export class NailSystem {
       this._toFree(n, new THREE.Vector3(0, 1, 0), 2);
       return;
     }
+    this._place(n);
+  }
+
+  // Put an embedded nail where its anchors say, slid out by n.pull.
+  _place(n) {
+    const sb = this.app.sb;
     const a = sb.embedPoint(n.aTip.tet, n.aTip.b, this._p);
     const b = sb.embedPoint(n.aBack.tet, n.aBack.b, this._p2);
     const ax = b[0] - a[0], ay = b[1] - a[1], az = b[2] - a[2];
     const l = Math.hypot(ax, ay, az) || 1;
     n.axis.set(ax / l, ay / l, az / l);
-    n.tip.set(a[0], a[1], a[2]).addScaledVector(n.axis, -n.tipOffset);
+    n.tip.set(a[0], a[1], a[2]).addScaledVector(n.axis, (n.pull || 0) - n.tipOffset);
+  }
+
+  // Work an embedded nail out along its shaft by `dist`; once all of it is
+  // out it pops free with velocity `vel` (the jelly snaps back). Returns
+  // true when it popped.
+  slideOut(n, dist, vel) {
+    if (n.state !== 'embedded') return false;
+    n.pull = Math.min(n.depth, (n.pull || 0) + dist);
+    this._place(n);
+    if (n.pull < n.depth - 0.012) return false;
+    const sb = this.app.sb;
+    this.removeEmbedConstraint(n);
+    const exit = n.tip.clone().addScaledVector(n.axis, 0.012);
+    sb.impulse(exit.x, exit.y, exit.z, -n.axis.x, -n.axis.y, -n.axis.z, 0.22, 1.4);
+    this._toFree(n, vel, 2 + Math.random() * 3);
+    n.pull = 0;
+    // a couple of wet flecks follow it out
+    for (let k = 0; k < 3; k++) {
+      const v = n.axis.clone().multiplyScalar(1.2 + Math.random() * 1.5).add(new THREE.Vector3((Math.random() - 0.5) * 1.2, Math.random() * 1.2, (Math.random() - 0.5) * 1.2));
+      this.app.droplets?.spawn(exit, v, 0.006 + Math.random() * 0.008);
+    }
+    this.app.audio?.unplug?.(1, exit);
+    return true;
   }
 
   _updateEjecting(n, dt) {
@@ -234,14 +264,7 @@ export class NailSystem {
       return;
     }
     // follow the jelly while sliding out along the axis
-    if (n.aTip.tet >= 0 && n.aTip.tet < sb.nT && n.aBack.tet >= 0 && n.aBack.tet < sb.nT) {
-      const a = sb.embedPoint(n.aTip.tet, n.aTip.b, this._p);
-      const b = sb.embedPoint(n.aBack.tet, n.aBack.b, this._p2);
-      const ax = b[0] - a[0], ay = b[1] - a[1], az = b[2] - a[2];
-      const l = Math.hypot(ax, ay, az) || 1;
-      n.axis.set(ax / l, ay / l, az / l);
-      n.tip.set(a[0], a[1], a[2]).addScaledVector(n.axis, -n.tipOffset);
-    }
+    if (n.aTip.tet >= 0 && n.aTip.tet < sb.nT && n.aBack.tet >= 0 && n.aBack.tet < sb.nT) this._place(n);
     const T = 0.32;
     const u = Math.min(n.ej / T, 1);
     const ease = u * u * (3 - 2 * u);

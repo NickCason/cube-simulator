@@ -45,6 +45,7 @@ export class SoftBody {
     this._allocT(16384);
     this.grab = null;
     this.embeds = [];
+    this.pushers = []; // moving flat faces pressing into the jelly (mallet head)
     this.attract = null;
     this.gravityScale = 1;
     this.collisionsEnabled = true;
@@ -636,6 +637,7 @@ export class SoftBody {
       if (this.embeds.length) this._solveEmbeds(h);
       if (this.grab) this._solveGrab(h);
       if (this.attract) this._solveAttract(h);
+      if (this.pushers.length) this._solvePushers((s + 1) / nS);
       if (multi && this._anyContact) this._solvePieceCollisions(h);
       this._solveBounds(h);
       this._updateVelocities(h);
@@ -842,6 +844,38 @@ export class SoftBody {
         x[o] = px[o] + dx * s;
         x[o + 1] = px[o + 1] + dy * s;
         x[o + 2] = px[o + 2] + dz * s;
+      }
+    }
+  }
+
+  // A round flat face (the mallet head) travelling along d from s0 to s1
+  // over this frame: jelly it passes is carried along on the face, a softer
+  // rim around it drags the surface down into a bowl. Pusher:
+  // { c: [x,y,z] contact point, d: unit direction, r, len, s0, s1 }
+  _solvePushers(frac) {
+    const { x, w } = this;
+    const aw = this._awake, vp = this.vPiece;
+    for (const P of this.pushers) {
+      const s = P.s0 + (P.s1 - P.s0) * frac;
+      if (s <= 0) continue;
+      const cx = P.c[0], cy = P.c[1], cz = P.c[2], dx = P.d[0], dy = P.d[1], dz = P.d[2];
+      const r = P.r, R = r * 1.9, R2 = R * R, back = s - P.len;
+      for (let i = 0; i < this.nV; i++) {
+        if (w[i] === 0 || !aw[vp[i]]) continue;
+        const o = i * 3;
+        const ex = x[o] - cx, ey = x[o + 1] - cy, ez = x[o + 2] - cz;
+        const al = ex * dx + ey * dy + ez * dz;
+        if (al >= s || al < back) continue;
+        const qx = ex - al * dx, qy = ey - al * dy, qz = ez - al * dz;
+        const q2 = qx * qx + qy * qy + qz * qz;
+        if (q2 > R2) continue;
+        let k = s - al;
+        if (q2 > r * r) {
+          // rim: pressed in less the further out
+          const u = 1 - (Math.sqrt(q2) - r) / (R - r);
+          k *= u * u * 0.6;
+        }
+        x[o] += dx * k; x[o + 1] += dy * k; x[o + 2] += dz * k;
       }
     }
   }

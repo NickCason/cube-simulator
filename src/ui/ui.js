@@ -41,13 +41,13 @@ export const TOOL_DEFS = [
   { id: 'hand', label: 'Hand', hint: 'Drag to grab & throw · tap to poke', key: '1' },
   { id: 'knife', label: 'Knife', hint: 'Swipe across the jelly to slice it', key: '2' },
   { id: 'nailgun', label: 'Nail gun', hint: 'Click to fire · hold for auto', key: '3' },
-  { id: 'mallet', label: 'Mallet', hint: 'Click to smack · frozen jelly shatters', key: '4' },
+  { id: 'mallet', label: 'Mallet', hint: 'Click to smack · hit on its beat to build resonance · frozen jelly shatters', key: '4' },
   { id: 'torch', label: 'Torch', hint: 'Hold over the jelly to melt it', key: '5' },
   { id: 'freeze', label: 'Cryo spray', hint: 'Hold to freeze it solid', key: '6' },
   { id: 'baller', label: 'Melon baller', hint: 'Click to scoop out a ball', key: '7' },
   { id: 'bomb', label: 'Cherry bomb', hint: 'Click to plant · stand back', key: '8' },
   { id: 'syringe', label: 'Syringe', hint: 'Hold to pump it up', key: '9' },
-  { id: 'magnet', label: 'Magnet', hint: 'Hold to pull nails (and whatever they are stuck in)', key: '0' },
+  { id: 'magnet', label: 'Magnet', hint: 'Hold near nails to pull them out (and drag the jelly with them)', key: '0' },
 ];
 
 const blendWord = (b) => (b < 0.12 ? 'Crisp' : b < 0.38 ? 'Soft' : b < 0.7 ? 'Blended' : 'Gradient');
@@ -333,7 +333,8 @@ export class UI {
   setTool(id) {
     for (const k in this.buttons) this.buttons[k].classList.toggle('active', k === id);
     const d = TOOL_DEFS.find((t) => t.id === id);
-    if (d) this.hint(d.hint);
+    const touch = this.app.isTouch || window.matchMedia?.('(pointer: coarse)').matches;
+    if (d) this.hint(touch ? d.hint.replace(/\bClick\b/g, 'Tap').replace(/\bclick\b/g, 'tap') : d.hint);
   }
 
   // Layer editor: bands top -> bottom; the stack background shows the

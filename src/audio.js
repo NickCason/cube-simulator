@@ -292,6 +292,42 @@ export class AudioEngine {
     this._noise(t, 0.015, 'highpass', 5000, 5000, 0.7, 0.12 * amount, 0.0005, out);
   }
 
+  // resonance: the jelly sings a note, warmer and longer as it builds
+  ring(freq, level = 0) {
+    if (!this.ctx || this.muted) return;
+    const t = this.ctx.currentTime + 0.01;
+    const dur = 0.5 + 0.6 * level, g = 0.05 + 0.07 * level;
+    this._tone(t, 'sine', freq, freq * 1.004, dur, g, 0.006);
+    this._tone(t, 'sine', freq * 2, freq * 2.01, dur * 0.5, g * 0.35, 0.004);
+    this._tone(t, 'triangle', freq * 0.5, freq * 0.5, dur * 0.7, g * 0.3, 0.01);
+    // a little wobble in the note: the jelly's own vibrato
+    this._tone(t + 0.02, 'sine', freq * 1.012, freq * 0.996, dur * 0.8, g * 0.25, 0.03);
+  }
+
+  // the resonance bursts: a bright rising chord over the splash
+  resonate() {
+    if (!this.ctx || this.muted) return;
+    const t = this.ctx.currentTime;
+    [392.0, 493.88, 587.33, 783.99, 987.77, 1174.66].forEach((f, i) => {
+      this._tone(t + i * 0.035, 'sine', f, f * 1.002, 1.4, 0.06, 0.004);
+      this._tone(t + i * 0.035, 'triangle', f * 2, f * 2, 0.5, 0.012, 0.004);
+    });
+    this._noise(t, 0.9, 'bandpass', 600, 4200, 1.1, 0.08, 0.05);
+  }
+
+  // a nail sucked out of the jelly: wet suction pop, rising
+  unplug(amount = 1, at = null) {
+    if (!this._ok('unplug', 0.05)) return;
+    const t = this.ctx.currentTime;
+    const out = this._panned(this._panOf(at));
+    this._tone(t, 'sine', 240, 820, 0.07, 0.22 * amount, 0.002, out);
+    this._noise(t, 0.05, 'bandpass', 900, 2600, 3, 0.22 * amount, 0.001, out);
+    for (let i = 0; i < 3; i++) {
+      const f = rnd(1200, 2600);
+      this._noise(t + rnd(0.02, 0.09), rnd(0.01, 0.025), 'bandpass', f, f * 0.7, 9, 0.12 * amount, 0.001, out);
+    }
+  }
+
   pop(amount = 0.6) {
     if (!this._ok('pop', 0.04)) return;
     const t = this.ctx.currentTime;
