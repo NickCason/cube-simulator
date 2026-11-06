@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { buildCubeMesh } from './sim/mesh.js';
+import { TAG_EXTERIOR } from './sim/softbody.js';
 
 const clamp01 = (x) => Math.min(1, Math.max(0, x));
 const smooth = (a, b, x) => {
@@ -49,42 +50,31 @@ export function fitRotation(a0, a1, a2, q) {
   return q;
 }
 
-// Distance (rest space) to the nearest healed seam - the cut faces the body
-// was put back together along, inside it as well as on its skin - so the
-// weld's light can travel out from them through the material and show where
-// it crosses each face. Seams come as triangles (9 floats each); they are
-// sampled densely so a seam line stays a clean line, with a coarse copy for
-// points further away.
-export function* weldFieldJob(tris, half = 0.5, template = null) {
-  // one grid over the body (5 cm cells): the seam samples in each cell (for
-  // exact distances close in), and each cell's nearest sample (for further)
-  const G = 0.05, lo = -half - 0.1, N = Math.ceil((2 * half + 0.2) / G) + 1, NN = N * N, N3 = NN * N;
+// Distance (rest space) to the healed seams - the lines where the cut faces
+// the body was put back together along meet its outside - for the weld's
+// light and scorch. Two parts:
+// - far: per vertex (and `at` for any point), from samples every few mm
+//   along the seams, a 5 cm grid of them and each cell's nearest sample;
+// - near: for the shader, exact per pixel within reach of a seam - the space
+//   round the cube cut into small cells, each listing the (up to) 8 seam
+//   segments nearest to it, packed into float textures (see jellyView).
+// segs: 6 floats per segment.
+export function* weldFieldJob(segs, size = 1, template = null) {
+  const half = (size / 2) * 1.1;
+  const G = 0.05 * size, lo = -half - 0.1 * size, N = Math.ceil((2 * half + 0.2 * size) / G) + 1, NN = N * N, N3 = NN * N;
   const cell = (v) => Math.min(N - 1, Math.max(0, Math.floor((v - lo) / G)));
-  // samples: densely (1.2 cm) on seam triangles near the skin, where seam
-  // lines show; just the corners for ones deep inside
+  const nS = segs.length / 6;
   const px = [], py = [], pz = [];
-  const fine = new Set();
-  const FINE = 0.012, skin = 0.07;
-  const add = (x, y, z) => {
-    const kf = ((Math.floor(x / FINE) + 512) * 1024 + (Math.floor(y / FINE) + 512)) * 1024 + (Math.floor(z / FINE) + 512);
-    if (fine.has(kf)) return;
-    fine.add(kf);
-    px.push(x); py.push(y); pz.push(z);
-  };
-  const depth = (x, y, z) => half - Math.max(Math.abs(x), Math.abs(y), Math.abs(z));
-  for (let t = 0; t < tris.length; t += 9) {
-    if (t && t % 900 === 0) yield;
-    const ax = tris[t], ay = tris[t + 1], az = tris[t + 2];
-    const bx = tris[t + 3], by = tris[t + 4], bz = tris[t + 5];
-    const cx = tris[t + 6], cy = tris[t + 7], cz = tris[t + 8];
-    const deep = Math.min(depth(ax, ay, az), depth(bx, by, bz), depth(cx, cy, cz)) > skin;
-    const L = Math.max(Math.hypot(bx - ax, by - ay, bz - az), Math.hypot(cx - bx, cy - by, cz - bz), Math.hypot(ax - cx, ay - cy, az - cz));
-    const n = deep ? Math.min(3, Math.max(1, Math.ceil(L / 0.04))) : Math.min(24, Math.max(1, Math.ceil(L / FINE)));
-    for (let i = 0; i <= n; i++)
-      for (let j = 0; j <= n - i; j++) {
-        const u = i / n, v = j / n, w = 1 - u - v;
-        add(ax * w + bx * u + cx * v, ay * w + by * u + cy * v, az * w + bz * u + cz * v);
-      }
+  const STEP = 0.006 * size;
+  for (let s = 0; s < nS; s++) {
+    const o = s * 6;
+    const ax = segs[o], ay = segs[o + 1], az = segs[o + 2], bx = segs[o + 3], by = segs[o + 4], bz = segs[o + 5];
+    const n = Math.max(1, Math.ceil(Math.hypot(bx - ax, by - ay, bz - az) / STEP));
+    for (let q = 0; q < n; q++) {
+      const u = q / n;
+      px.push(ax + (bx - ax) * u); py.push(ay + (by - ay) * u); pz.push(az + (bz - az) * u);
+    }
+    px.push(bx); py.push(by); pz.push(bz);
   }
   const M = px.length;
   // bucket the samples by cell (CSR)
@@ -170,7 +160,61 @@ export function* weldFieldJob(tris, half = 0.5, template = null) {
       dist[i] = at(template[i * 3], template[i * 3 + 1], template[i * 3 + 2]);
     }
   }
-  return { at, dist };
+  // near field: cells of C reaching R past the cube; a segment is listed in
+  // a cell if it passes within R of somewhere in it
+  const R = 0.065 * size, C = 0.0275 * size, ext = size / 2 + R + C;
+  const NC = Math.ceil((2 * ext) / C), NC3 = NC * NC * NC;
+  const reach = R + C * 0.87, SL = 8;
+  // (the lists go straight into the texture's data: 2 texels a cell, 1024
+  // texels a row; -1 = no segment)
+  const W = 1024;
+  const cellH = Math.ceil((NC3 * 2) / W);
+  yield;
+  const slotS = new Float32Array(cellH * W * 4).fill(-1);
+  yield;
+  const slotD = new Float32Array(NC3 * SL).fill(Infinity);
+  yield;
+  for (let s = 0; s < nS; s++) {
+    if (s % 24 === 23) yield;
+    const o = s * 6;
+    const ax = segs[o], ay = segs[o + 1], az = segs[o + 2];
+    const ux = segs[o + 3] - ax, uy = segs[o + 4] - ay, uz = segs[o + 5] - az;
+    const uu = Math.max(ux * ux + uy * uy + uz * uz, 1e-12);
+    const r0 = (v) => Math.max(0, Math.floor((v - reach + ext) / C)), r1 = (v) => Math.min(NC - 1, Math.floor((v + reach + ext) / C));
+    const i0 = r0(Math.min(ax, ax + ux)), i1 = r1(Math.max(ax, ax + ux));
+    const j0 = r0(Math.min(ay, ay + uy)), j1 = r1(Math.max(ay, ay + uy));
+    const k0 = r0(Math.min(az, az + uz)), k1 = r1(Math.max(az, az + uz));
+    for (let i = i0; i <= i1; i++)
+      for (let j = j0; j <= j1; j++)
+        for (let k = k0; k <= k1; k++) {
+          const cx = -ext + (i + 0.5) * C - ax, cy = -ext + (j + 0.5) * C - ay, cz = -ext + (k + 0.5) * C - az;
+          const h = Math.min(1, Math.max(0, (cx * ux + cy * uy + cz * uz) / uu));
+          const d = Math.hypot(cx - ux * h, cy - uy * h, cz - uz * h);
+          if (d > reach) continue;
+          // into the cell's list, nearest first
+          const b = ((i * NC + j) * NC + k) * SL;
+          if (d >= slotD[b + SL - 1]) continue;
+          let q = SL - 1;
+          while (q > 0 && slotD[b + q - 1] > d) {
+            slotD[b + q] = slotD[b + q - 1];
+            slotS[b + q] = slotS[b + q - 1];
+            q--;
+          }
+          slotD[b + q] = d;
+          slotS[b + q] = s;
+        }
+  }
+  // the segments' ends, 2 texels each
+  yield;
+  const segH = Math.max(1, Math.ceil((nS * 2) / W));
+  const segTex = new Float32Array(segH * W * 4);
+  for (let s = 0; s < nS; s++) {
+    for (let e = 0; e < 2; e++) {
+      const o = (s * 2 + e) * 4;
+      segTex[o] = segs[s * 6 + e * 3]; segTex[o + 1] = segs[s * 6 + e * 3 + 1]; segTex[o + 2] = segs[s * 6 + e * 3 + 2];
+    }
+  }
+  return { at, dist, near: { cells: slotS, cellH, segs: segTex, segH, origin: -ext, invC: 1 / C, n: NC, unit: size } };
 }
 
 // Run a job to the end (now).
@@ -442,24 +486,39 @@ export class Healer {
     if ((t > end && this._maxError() < 0.025) || t > end + 0.45) this._fuse();
   }
 
-  // The cut faces (rest space, triangles) the pieces will be welded along,
-  // and a job building the distance field the weld's light travels by.
+  // The seams the pieces will be welded along - where a cut face meets the
+  // outside: edges shared by a cut face and an outer one (rest space, as the
+  // new cube will have them) - and a job building the weld's distance field.
   _startWeld() {
     const sb = this.app.sb;
-    const seams = [];
-    const k = this.scaleK, rI = sb.rIndex, rS = sb.rSim, X = sb.X;
-    for (let t = 0; t < rI.length; t += 3) {
-      const a = rI[t], b = rI[t + 1], c = rI[t + 2];
-      if (sb.rTag[a] !== 0 || sb.rTag[b] !== 0 || sb.rTag[c] !== 0) continue;
-      for (const r of [a, b, c]) {
-        const i = rS[r] * 3;
-        seams.push(X[i] * k, X[i + 1] * k, X[i + 2] * k);
+    const k = this.scaleK, X = sb.X, sTri = sb.sTri, sTag = sb.sTag, nF = sb.nF, K = sb.nV + 1;
+    const outer = new Set();
+    for (let f = 0; f < nF; f++) {
+      if (sTag[f] !== TAG_EXTERIOR) continue;
+      for (let e = 0; e < 3; e++) {
+        const a = sTri[f * 3 + e], b = sTri[f * 3 + ((e + 1) % 3)];
+        outer.add(a < b ? a * K + b : b * K + a);
+      }
+    }
+    // (each seam runs along both of the pieces it parted: keep one copy)
+    const segs = [], seen = new Set();
+    const key = (i) => `${Math.round(X[i * 3] * 1e4)},${Math.round(X[i * 3 + 1] * 1e4)},${Math.round(X[i * 3 + 2] * 1e4)}`;
+    for (let f = 0; f < nF; f++) {
+      if (sTag[f] === TAG_EXTERIOR) continue;
+      for (let e = 0; e < 3; e++) {
+        const a = sTri[f * 3 + e], b = sTri[f * 3 + ((e + 1) % 3)];
+        if (!outer.has(a < b ? a * K + b : b * K + a)) continue;
+        const ka = key(a), kb = key(b), kk = ka < kb ? ka + '|' + kb : kb + '|' + ka;
+        if (seen.has(kk)) continue;
+        seen.add(kk);
+        segs.push(X[a * 3] * k, X[a * 3 + 1] * k, X[a * 3 + 2] * k, X[b * 3] * k, X[b * 3 + 1] * k, X[b * 3 + 2] * k);
       }
     }
     this.weldField = null;
     const p = sb.p;
-    this.weldJob = seams.length ? weldFieldJob(seams, (p.size / 2) * 1.1, buildCubeMesh(p.res, p.size, p.bevel).pos) : null;
+    this.weldJob = segs.length ? weldFieldJob(segs, p.size, buildCubeMesh(p.res, p.size, p.bevel).pos) : null;
   }
+
 
   _maxError() {
     const sb = this.app.sb;
@@ -495,7 +554,7 @@ export class Healer {
         dist = new Float32Array(sb.nV);
         for (let i = 0; i < sb.nV; i++) dist[i] = field.at(sb.X[i * 3], sb.X[i * 3 + 1], sb.X[i * 3 + 2]);
       }
-      sb.weld = { dist, at: field.at, topo: sb.topoVersion };
+      sb.weld = { dist, at: field.at, near: field.near, topo: sb.topoVersion };
       sb.glow.fill(0.1, 0, sb.nV);
     } else {
       sb.weld = null;

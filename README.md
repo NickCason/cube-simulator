@@ -22,7 +22,9 @@ Grab it, throw it, poke it — then go to work on it:
 **Heal** is a little choreography: nails slide out and clatter away, the
 pieces lift and drift apart into an exploded view while each turns into its
 final orientation, hover for a beat, then glide back together with glowing
-seams, fuse, and settle gently onto the table.
+seams and fuse — the seams flare white-hot and scorch the jelly round them
+until a wave of light runs out and heals it clean — and settle gently onto
+the table.
 
 ![Heal animation](docs/heal.gif)
 

@@ -45,6 +45,9 @@ export class JellyView {
     };
     this.rtBack = null;
     this._v = new THREE.Vector3();
+    // the weld's seam textures (and the placeholders they replace)
+    this._weldTex = null;
+    this._weldEmpty = [this.frontMat.uniforms.uWeldSegs.value, this.frontMat.uniforms.uWeldCells.value];
   }
 
   setLightDir(d) {
@@ -102,6 +105,29 @@ export class JellyView {
     F.uIor.value = m.ior;
     F.uDispersion.value = 0.018 * Math.max(0, m.ior - 1) / 0.36;
     C.uIor.value = Math.max(1.0001, m.ior);
+  }
+
+  _setWeldSeams(near) {
+    const U = this.frontMat.uniforms;
+    if (this._weldTex) for (const t of this._weldTex) t.dispose();
+    this._weldTex = null;
+    if (!near) {
+      [U.uWeldSegs.value, U.uWeldCells.value] = this._weldEmpty;
+      U.uWeldGridN.value = 0;
+      return;
+    }
+    const tex = (data, h) => {
+      const t = new THREE.DataTexture(data, 1024, h, THREE.RGBAFormat, THREE.FloatType);
+      t.minFilter = t.magFilter = THREE.NearestFilter;
+      t.generateMipmaps = false;
+      t.needsUpdate = true;
+      return t;
+    };
+    this._weldTex = [tex(near.segs, near.segH), tex(near.cells, near.cellH)];
+    [U.uWeldSegs.value, U.uWeldCells.value] = this._weldTex;
+    U.uWeldGrid.value.set(near.origin, near.origin, near.origin, near.invC);
+    U.uWeldGridN.value = near.n;
+    U.uWeldUnit.value = near.unit;
   }
 
   setSize(w, h) {
@@ -186,7 +212,7 @@ export class JellyView {
     this.aNrm = new THREE.BufferAttribute(this.nrm, 3).setUsage(THREE.DynamicDrawUsage);
     this.aData = new THREE.BufferAttribute(this.data, 4).setUsage(THREE.DynamicDrawUsage);
     this.aRest = new THREE.BufferAttribute(rest, 3);
-    // distance along the surface from a just-healed seam (see Healer._fuse)
+    // distance from the just-healed seams (see Healer._fuse, weldFieldJob)
     const weld = new Float32Array(n).fill(99);
     if (sb.weld && sb.weld.topo === sb.topoVersion) {
       const d = sb.weld.dist;
@@ -199,6 +225,8 @@ export class JellyView {
       }
     }
     this.aWeld = new THREE.BufferAttribute(weld, 1);
+    // and the seams themselves, for exact distances close to them per pixel
+    this._setWeldSeams(sb.weld && sb.weld.topo === sb.topoVersion ? sb.weld.near : null);
     sb.pieceRanges.forEach((rg, k) => {
       const g = new THREE.BufferGeometry();
       g.setAttribute('position', this.aPos);

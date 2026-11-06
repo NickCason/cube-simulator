@@ -94,6 +94,15 @@ export const LAYER_GLSL = /* glsl */ `
   }
 `;
 
+// 1x1 float texture for samplers with nothing to show yet
+function emptyFloatTexture() {
+  const t = new THREE.DataTexture(new Float32Array(4), 1, 1, THREE.RGBAFormat, THREE.FloatType);
+  t.minFilter = t.magFilter = THREE.NearestFilter;
+  t.generateMipmaps = false;
+  t.needsUpdate = true;
+  return t;
+}
+
 export function createLayerUniforms() {
   return {
     uLayers: { value: 0 },
@@ -177,6 +186,13 @@ export function createJellyMaterial(env, layerUniforms) {
       uPLPos: { value: new THREE.Vector3(0, 2, 0) },
       uPLColor: { value: new THREE.Color(0, 0, 0) },
       uWeldT: { value: 99 },
+      // the healed seams near by, for exact distances per pixel (see
+      // weldFieldJob; set by JellyView): segment ends, per-cell segment lists
+      uWeldSegs: { value: emptyFloatTexture() },
+      uWeldCells: { value: emptyFloatTexture() },
+      uWeldGrid: { value: new THREE.Vector4(0, 0, 0, 1) },
+      uWeldGridN: { value: 0 },
+      uWeldUnit: { value: 1 },
     },
     vertexShader: VERT,
     fragmentShader: /* glsl */ `
@@ -206,6 +222,11 @@ export function createJellyMaterial(env, layerUniforms) {
       uniform float uGlow;
       uniform float uHazeMin;
       uniform float uWeldT;
+      uniform highp sampler2D uWeldSegs;
+      uniform highp sampler2D uWeldCells;
+      uniform vec4 uWeldGrid;
+      uniform float uWeldGridN;
+      uniform float uWeldUnit;
       varying vec3 vWorldPos;
       varying vec3 vNormal;
       varying vec3 vViewPos;
@@ -215,6 +236,36 @@ export function createJellyMaterial(env, layerUniforms) {
       ${NOISE}
       ${OCT}
       ${LAYER_GLSL}
+
+      float sq(float x) { return x * x; }
+      // The healed seams: exact distance from p to the seam segments listed
+      // for its cell (1e3 if none come near).
+      float weldSeg(vec3 p, float s) {
+        int j = int(s) * 2;
+        vec3 a = texelFetch(uWeldSegs, ivec2(j % 1024, j / 1024), 0).xyz;
+        vec3 b = texelFetch(uWeldSegs, ivec2((j + 1) % 1024, (j + 1) / 1024), 0).xyz;
+        vec3 ab = b - a, ap = p - a;
+        float h = clamp(dot(ap, ab) / max(dot(ab, ab), 1e-12), 0.0, 1.0);
+        return length(ap - ab * h);
+      }
+      float weldNear(vec3 p) {
+        int n = int(uWeldGridN);
+        ivec3 c = ivec3(floor((p - uWeldGrid.xyz) * uWeldGrid.w));
+        if (n < 1 || any(lessThan(c, ivec3(0))) || any(greaterThanEqual(c, ivec3(n)))) return 1e3;
+        int id = ((c.x * n + c.y) * n + c.z) * 2;
+        vec4 s0 = texelFetch(uWeldCells, ivec2(id % 1024, id / 1024), 0);
+        vec4 s1 = texelFetch(uWeldCells, ivec2((id + 1) % 1024, (id + 1) / 1024), 0);
+        float d = 1e3;
+        if (s0.x >= 0.0) d = weldSeg(p, s0.x);
+        if (s0.y >= 0.0) d = min(d, weldSeg(p, s0.y));
+        if (s0.z >= 0.0) d = min(d, weldSeg(p, s0.z));
+        if (s0.w >= 0.0) d = min(d, weldSeg(p, s0.w));
+        if (s1.x >= 0.0) d = min(d, weldSeg(p, s1.x));
+        if (s1.y >= 0.0) d = min(d, weldSeg(p, s1.y));
+        if (s1.z >= 0.0) d = min(d, weldSeg(p, s1.z));
+        if (s1.w >= 0.0) d = min(d, weldSeg(p, s1.w));
+        return d;
+      }
 
       vec3 envLookup(vec3 dir, float rough) {
         float lod = envMaxLod * rough * (2.0 - rough);
@@ -373,24 +424,56 @@ export function createJellyMaterial(env, layerUniforms) {
         // healing glow
         col += uGlowColor * glow * (0.25 + fresh * 0.75);
 
-        // the weld's aftermath: the healed seams stay white-hot for a moment,
-        // their light spreading out across each face as a widening, dimming
-        // band (vWeld = distance along the surface from the old seam) and
-        // through the body, cooling from white to the jelly's warm glow
+        // The weld (uWeldT s after the pieces fuse): the seam lines flare
+        // white-hot and the jelly round them scorches, a ragged ember edge
+        // creeping outward; then a wave of healing light runs out from the
+        // seams and wipes the scorch away, and the lines cool to nothing.
+        // Seam distance: exact per pixel near a seam, per vertex further out.
         if (uWeldT < 5.0) {
-          float t = uWeldT;
-          vec3 hot = mix(vec3(1.0, 0.98, 0.94), uGlowColor * vec3(1.15, 1.0, 0.85), smoothstep(0.05, 1.1, t));
-          // the crack line itself carries straight on from the pieces' glow;
-          // a band of light spills off it and travels out, an inner glow swells
-          float front = 0.02 + 0.9 * t * (1.0 - 0.25 * t);
-          float width = 0.025 + 0.09 * t;
-          float band = exp(-pow((vWeld - front) / width, 2.0)) * exp(-1.8 * t) * smoothstep(0.0, 0.14, t);
-          // (the seam lingers as a faint scar for a few seconds)
-          float seam = exp(-pow(vWeld / (0.022 + 0.03 * min(t, 1.2)), 2.0)) * (exp(-1.4 * t) + 0.09 * exp(-0.5 * t));
-          // a soft shimmer riding on the spreading band
-          float grain = 0.82 + 0.36 * vnoise(vRest * 18.0 + vec3(0.0, t * 2.0, 0.0));
-          float inner = (1.0 - exp(-pathLen * 1.2)) * exp(-2.4 * t) * smoothstep(0.0, 0.22, t);
-          col += hot * (seam * 1.35 + band * 0.9 * grain + inner * 0.28);
+          float t = uWeldT, U = uWeldUnit;
+          vec3 pr = vRest / U;
+          float d = min(weldNear(vRest), vWeld) / U;
+          float px = clamp(fwidth(d), 2e-4, 0.02);
+          // the healing front sets out from the seams at 0.8 s
+          float th = max(t - 0.8, 0.0);
+          float rh = th * (0.11 + 0.55 * th);
+          float healed = th > 0.0 ? 1.0 - smoothstep(rh - 0.02, rh, d) : 0.0;
+          if (d < 0.075 && healed < 1.0) {
+            // the scorch creeps out 3-5 cm, ragged, darkest at the seam
+            float ragged = fbm3(pr * 9.0);
+            float fine = vnoise(pr * 70.0);
+            float rb = (0.008 + 0.032 * smoothstep(0.0, 0.8, t)) * (0.72 + 0.56 * ragged) + 0.006 * (vnoise(pr * 32.0) - 0.5) + 0.003 * (fine - 0.5);
+            float burnt = (1.0 - smoothstep(rb - px, rb + px, d)) * smoothstep(0.0, 0.25, t) * (1.0 - healed);
+            float charA = burnt * (0.78 + 0.22 * (1.0 - d / max(rb, 1e-3))) * (0.88 + 0.22 * fine);
+            vec3 charCol = vec3(0.042, 0.017, 0.011) * (irr * 0.6 + uLightColor * nl * 0.45) + spec * 0.5;
+            col = mix(col, charCol, clamp(charA, 0.0, 0.97));
+            // embers: a glowing rim on the creeping edge, sparks in the char
+            float flick = 0.62 + 0.38 * vnoise(pr * 26.0 + vec3(0.0, t * 5.0, t * 3.0));
+            float rim = exp(-sq((d - rb) / max(0.003, 1.5 * px))) * (1.0 - healed) * smoothstep(0.03, 0.2, t);
+            float spark = smoothstep(0.8, 0.93, vnoise(pr * 115.0 + vec3(t * 0.7))) * burnt;
+            col += vec3(1.0, 0.32, 0.05) * flick * (rim * 2.3 + spark * 1.8);
+          }
+          // the seam line: crisp and white-hot, cooling through yellow and
+          // orange to a faint scar; its heat bleeds out a little way
+          float T = exp(-0.85 * t) * (1.0 - 0.6 * smoothstep(0.8, 1.6, t));
+          vec3 hotC = mix(vec3(0.7, 0.07, 0.01), vec3(1.0, 0.42, 0.07), smoothstep(0.0, 0.3, T));
+          hotC = mix(hotC, vec3(1.0, 0.82, 0.45), smoothstep(0.3, 0.65, T));
+          hotC = mix(hotC, vec3(1.0, 0.98, 0.94), smoothstep(0.65, 1.0, T));
+          float w = 0.0025 + 0.0015 * smoothstep(0.0, 0.6, t);
+          float line = 1.0 - smoothstep(w - px, w + px, d);
+          float halo = exp(-d / (0.0035 + 0.003 * t));
+          col += hotC * (1.0 - smoothstep(3.2, 5.0, t)) * (line * (0.35 + 3.2 * T) + halo * (0.1 + 1.4 * T));
+          // the healing light riding the front: narrow and bright at first,
+          // widening and dimming as it runs out over the faces
+          float wb = 0.005 + 0.038 * th;
+          float xb = (d - rh) / wb;
+          if (th > 0.0 && abs(xb) < 3.0) {
+            float band = exp(-xb * xb) * smoothstep(0.0, 0.05, th) * exp(-1.5 * th) * 0.85;
+            vec3 healC = mix(vec3(1.0, 0.94, 0.82), uGlowColor * vec3(1.15, 1.0, 0.85), smoothstep(0.0, 0.9, th));
+            col += healC * band * (1.0 + 0.3 * vnoise(pr * 22.0 + vec3(0.0, th * 2.0, 0.0)));
+          }
+          // (and warmth through the body while the seams are hot)
+          col += hotC * (1.0 - exp(-pathLen * 1.2)) * exp(-1.6 * t) * smoothstep(0.0, 0.2, t) * 0.2;
         }
         if (uDebug == 1) col = refl * F + spec;
         else if (uDebug == 2) col = trans * Tr;
