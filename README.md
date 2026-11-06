@@ -63,7 +63,8 @@ means (Wobbly, Syrupy, Moon, Super ball…):
 | World | Gravity (Moon → Jupiter), Cube size |
 
 Picking a material resets the material sliders (Feel and Look) to that material; **Reset**
-puts everything back.
+puts everything back. Changing the edges of a whole cube morphs it into the new rounding (a
+cut-up one re-forms with it).
 
 Choices are remembered. You can also link straight to a combo, e.g.
 `?flavor=rainbow&texture=gummy&edges=pillow`, or to your own layers (top → bottom):
@@ -101,9 +102,14 @@ ring of light racing through it and out across the floor. Link to it with `?them
 - **Rendering:** three.js with a custom multi-pass jelly shader — per-pixel
   thickness from back-face depth, two-interface refraction with dispersion and
   total internal reflection, Beer–Lambert absorption, scattering, studio
-  reflections — plus area-ratio caustics and a tinted shadow on the floor, the
-  jelly mirrored in the floor (drawn upside down into a blurred half-size
-  target), bloom and tone mapping. Glow mode recaptures the studio's lighting
+  reflections (below the horizon, the real floor where the reflected ray lands)
+  — drawn on the simulated surface subdivided twice where it curves (Phong
+  tessellation, snapped at rest to the exact rounded-box shape). Caustics come
+  from a grid of light rays bent through the jelly as the key light sees it
+  (caustics mapping), coloured by the layers each ray crosses; the jelly is
+  mirrored in the floor (drawn upside down into a blurred half-size target);
+  then bloom, tone mapping, specular anti-aliasing, FXAA, and on phones a
+  contrast-adaptive sharpen (FSR's EASU upscale is behind `?upscale`). Glow mode recaptures the studio's lighting
   as a dark room with neon strips and adds the jelly's own light: brighter
   through more of it, drifting slowly, pooling on the floor.
 - **Sound:** every sound is synthesized with WebAudio.
