@@ -94,6 +94,7 @@ export class SoftBody {
     this._grabPress = 0;
     this._anyContact = false;
     this._gap = 0;
+    this._fSelf = false;
     this._pass = 0;
     this._fStamp = 0;
     this._nHTets = 0;
@@ -2283,10 +2284,17 @@ export class SoftBody {
     const dist = -((px - ax) * nx + (py - ay) * ny + (pz - az) * nz);
     if (dist <= 0) return; // in front of it: not a way out
     // pushing out this way would land under the floor / in the arena wall:
-    // useless (it just gets pushed back in), so don't
+    // useless (it just gets pushed back in), so don't. (Against another piece
+    // a face only tilted a little down is fine: the floor lifts the last
+    // millimetres. Ruling those out left a piece lying on the floor that had
+    // sunk into another one only the far faces, up through its top: it was
+    // hauled up and dropped back every substep - two pieces kicking each
+    // other for good. A fold of its own body is the other way round: out
+    // through its underside is how a fold gets pushed through itself.)
     const ex = px + nx * dist, ey = py + ny * dist, ez = pz + nz * dist;
     const R = this.p.arenaRadius;
-    if ((ny < 0 && ey < 0.002) || ex * ex + ez * ez > R * R) return;
+    if (ex * ex + ez * ez > R * R) return;
+    if (this._fSelf ? ny < 0 && ey < 0.002 : (ny < -0.5 && ey < 0.002) || ey < -0.015) return;
     const prev = -((qx - ax) * nx + (qy - ay) * ny + (qz - az) * nz);
     fq.ok = true;
     fq.dist = dist; fq.prev = prev; fq.nx = nx; fq.ny = ny; fq.nz = nz;
@@ -2356,6 +2364,7 @@ export class SoftBody {
     }
     ct.t = t;
     const pt = tPiece[t];
+    this._fSelf = pt === own;
     // still behind last substep's face?
     if (wf >= 0 && wf < this.nF && tPiece[this.sTet[wf]] === pt) {
       this._faceProbe(wf, px, py, pz, qx, qy, qz);
