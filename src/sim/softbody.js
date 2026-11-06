@@ -50,7 +50,7 @@ function asFloat(o, keys) {
 }
 const PIECE_FLOATS = ['sleepT', 'rebT', 'impY', 'rebR', 'impR', 'impUx', 'impUz', 'impT', 'impDv', 'foldUntil', 'buzzT', 'buzzA', 'buzzB', 'untangle', 'touchT'];
 // (piece state a rebuild carries over to an untouched piece: see _buildPieces)
-const CARRY = ['sleepT', 'asleep', 'rebT', 'impY', 'boosted', 'rebR', 'impR', 'impUx', 'impUz', 'boostedR', 'impPend', 'impT', 'impDv', 'sleepLogMu', 'foldUntil', 'foldAsk', 'buzzT', 'buzzA', 'buzzB', 'tangleN', 'untangle', 'touchT'];
+const CARRY = ['sleepT', 'asleep', 'rebT', 'impY', 'boosted', 'rebR', 'impR', 'impUx', 'impUz', 'boostedR', 'impPend', 'impT', 'impDv', 'sleepLogMu', 'foldUntil', 'foldAsk', 'buzzT', 'buzzA', 'buzzB', 'tangleN', 'untangle', 'touchT', 'hinge'];
 
 export class SoftBody {
   constructor(opts = {}) {
@@ -61,6 +61,7 @@ export class SoftBody {
     this.tCap = 0;
     this.tKs = null; // per tet: stiffness scale, see _computeMass
     this._bpNV = 0; // vertex count at the last _buildPieces (0: nothing carries over)
+    this._carried = null; // per piece: carried over unchanged by the last rebuild (see _buildPieces)
     this._allocV(4096);
     this._allocT(16384);
     this.grab = null;
@@ -344,13 +345,15 @@ export class SoftBody {
   // needs self-contact, or the flap drops straight through the rest.
   _findHinges() {
     const { sTri, sTag, sTet, X, tPiece, sRestN } = this;
-    for (const pc of this.pieces) pc.hinge = false;
+    // (a piece the change didn't touch keeps what it had: see _buildPieces)
+    const carried = this._carried && this._carried.length === this.pieces.length ? this._carried : null;
+    for (const pc of this.pieces) if (!carried || !carried[pc.id]) pc.hinge = false;
     const C = 0.02 * this.p.size, iC = 1 / C, near2 = (0.6 * C) ** 2;
     const cells = new Map();
     const cen = new Float64Array(this.nF * 3);
     const key = (i, j, k) => (i + 512) * 1048576 + (j + 512) * 1024 + (k + 512);
     for (let f = 0; f < this.nF; f++) {
-      if (sTag[f] === TAG_EXTERIOR) continue;
+      if (sTag[f] === TAG_EXTERIOR || (carried && carried[tPiece[sTet[f]]])) continue;
       const a = sTri[f * 3] * 3, b = sTri[f * 3 + 1] * 3, c = sTri[f * 3 + 2] * 3;
       for (let e = 0; e < 3; e++) cen[f * 3 + e] = (X[a + e] + X[b + e] + X[c + e]) / 3;
       const k = key(Math.floor(cen[f * 3] * iC), Math.floor(cen[f * 3 + 1] * iC), Math.floor(cen[f * 3 + 2] * iC));
@@ -464,6 +467,10 @@ export class SoftBody {
   // push a deeply-penetrated point out the right way.
   _computeEscape() {
     const nV = this.nV, X = this.X;
+    // (pieces the change didn't touch keep theirs - their vertices, rest
+    // shape and skin are as they were: see _buildPieces)
+    const keep = this.esc && this.esc.length >= nV * 3 && this._carried && this._carried.length === this.pieces.length;
+    const carried = keep ? this._carried : null, vp = this.vPiece;
     const near = new Int32Array(nV).fill(-1);
     const dist = new Float64Array(nV).fill(Infinity);
     let cap = Math.max(1024, nV * 6);
@@ -498,7 +505,7 @@ export class SoftBody {
     };
     for (let k = 0; k < this.nF * 3; k++) {
       const i = this.sTri[k];
-      if (dist[i] !== 0) {
+      if (dist[i] !== 0 && !(carried && carried[vp[i]])) {
         dist[i] = 0;
         near[i] = i;
         push(i, 0);
@@ -522,6 +529,7 @@ export class SoftBody {
     }
     const esc = this.esc && this.esc.length >= nV * 3 ? this.esc : (this.esc = new Float32Array(this.vCap * 3));
     for (let i = 0; i < nV; i++) {
+      if (carried && vp[i] >= 0 && carried[vp[i]]) continue;
       const c = near[i];
       if (c < 0) {
         esc[i * 3] = esc[i * 3 + 1] = esc[i * 3 + 2] = 0;
@@ -739,7 +747,7 @@ export class SoftBody {
     // But a sleeper touching anything that did change wakes (what it rested
     // on may have been cut away or removed): any of its vertices within 2 cm
     // of a vertex of a changed piece, as it was or as it is now.
-    const kept = new Uint8Array(old.length), carried = new Uint8Array(this.pieces.length);
+    const kept = new Uint8Array(old.length), carried = (this._carried = new Uint8Array(this.pieces.length));
     let anyAsleep = false;
     for (const pc of this.pieces) {
       const vs = pc.verts, i0 = vs[0];
@@ -919,7 +927,7 @@ export class SoftBody {
     const cornerR = new Int32Array(nF * 3);
     const rSim = [];
     const rTag = [];
-    const par = new Int32Array(64);
+    const par = new Int32Array(64), rid = new Int32Array(64);
     const find = (a) => {
       while (par[a] !== a) {
         par[a] = par[par[a]];
@@ -956,7 +964,7 @@ export class SoftBody {
           if (ra !== rb) par[rb] = ra;
         }
       }
-      const rid = new Int32Array(n).fill(-1);
+      rid.fill(-1, 0, n);
       for (let a = 0; a < n; a++) {
         const r = find(a);
         if (rid[r] < 0) {
@@ -967,10 +975,13 @@ export class SoftBody {
         cornerR[inc[s + a]] = rid[r];
       }
     }
-    // index buffer sorted by piece
-    const order = Array.from({ length: nF }, (_, f) => f);
-    const tp = this.tPiece, sTet = this.sTet;
-    order.sort((a, b) => tp[sTet[a]] - tp[sTet[b]]);
+    // index buffer sorted by piece (counting sort; in face order within one)
+    const tp = this.tPiece, sTet = this.sTet, NPc = this.pieces.length;
+    const pStart = new Int32Array(NPc + 1);
+    for (let f = 0; f < nF; f++) pStart[tp[sTet[f]] + 1]++;
+    for (let k = 0; k < NPc; k++) pStart[k + 1] += pStart[k];
+    const order = new Int32Array(nF);
+    for (let f = 0; f < nF; f++) order[pStart[tp[sTet[f]]]++] = f;
     const rIndex = new Uint32Array(nF * 3);
     const ranges = this.pieces.map(() => ({ start: 0, count: 0 }));
     for (let k = 0; k < nF; k++) {
