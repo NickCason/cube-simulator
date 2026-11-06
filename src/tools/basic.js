@@ -104,6 +104,10 @@ export class KnifeTool {
   // Cut with the plane through the eye and the screen-space stroke.
   cut(ax, ay, bx, by) {
     const app = this.app;
+    if (app.sb.nT > 30000) {
+      app.ui?.hint('That is a lot of jelly bits — hit Heal first');
+      return false;
+    }
     const cam = app.camera;
     const ra = app.rayFromClient(ax, ay).direction.clone();
     const rb = app.rayFromClient(bx, by).direction.clone();

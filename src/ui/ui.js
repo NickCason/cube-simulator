@@ -132,8 +132,16 @@ export class UI {
       app.audio.init();
       this.setMuted(!app.audio.muted);
     });
+    window.addEventListener('keyup', (e) => {
+      if (e.code === 'Space') app.setSlowMo(false);
+    });
     window.addEventListener('keydown', (e) => {
       if (e.target instanceof HTMLInputElement) return;
+      if (e.code === 'Space') {
+        e.preventDefault();
+        if (!e.repeat) app.setSlowMo(true);
+        return;
+      }
       const d = TOOL_DEFS.find((t) => t.key === e.key);
       if (d) app.setTool(d.id);
       else if (e.key === 'h' || e.key === 'H') app.heal();

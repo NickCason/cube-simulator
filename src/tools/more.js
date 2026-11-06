@@ -427,6 +427,10 @@ export class BallerTool {
   scoop(a) {
     const app = this.app;
     const sb = app.sb;
+    if (sb.nT > 30000) {
+      app.ui?.hint('That is a lot of jelly bits — hit Heal first');
+      return;
+    }
     const res = cutBody(sb, sphereField(a.c.x, a.c.y, a.c.z, a.r), { separate: 0, snap: 0.38, anchors: app.allAnchors() });
     if (!res.changed) return;
     app.onTopologyChanged();

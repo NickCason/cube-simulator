@@ -64,6 +64,8 @@ export class JellyView {
     const mx = Math.max(sc.r, sc.g, sc.b, 1e-3);
     sc.multiplyScalar(1 / mx);
     this.frontMat.uniforms.uScatterColor.value.copy(sc);
+    // healing light: a luminous, lighter version of the jelly colour
+    this.frontMat.uniforms.uGlowColor.value.copy(sc).lerp(new THREE.Color(1, 1, 1), 0.55).multiplyScalar(0.9);
     const scatter = opts.scatter ?? (this.scatter ?? 0.55);
     this.frontMat.uniforms.uScatter.value = scatter;
     this.causticMat.uniforms.uScatter.value = scatter;
@@ -83,14 +85,69 @@ export class JellyView {
       m.geometry.dispose();
     }
     this.meshes = [];
-    const n = sb.rCount;
+    const nB = sb.rCount;
+    const rIndex = sb.rIndex, rSim = sb.rSim;
+    const nTri = rIndex.length / 3;
+    // --- one level of subdivision: a midpoint per edge. Smooth edges share
+    // a midpoint (Phong-tessellated); crease edges get one per side, placed
+    // on the straight edge so the surface stays watertight.
+    const K = sb.nV + 1;
+    const edgeMap = new Map();
+    const mids = []; // ra, rb, crease
+    const triMid = new Int32Array(nTri * 3);
+    for (let t = 0; t < nTri; t++) {
+      for (let e = 0; e < 3; e++) {
+        const ra = rIndex[t * 3 + e], rb = rIndex[t * 3 + ((e + 1) % 3)];
+        const sa = rSim[ra], sbv = rSim[rb];
+        const key = sa < sbv ? sa * K + sbv : sbv * K + sa;
+        let rec = edgeMap.get(key);
+        if (!rec) {
+          rec = [];
+          edgeMap.set(key, rec);
+        }
+        rec.push(t * 3 + e, ra, rb);
+      }
+    }
+    for (const rec of edgeMap.values()) {
+      const n = rec.length / 3;
+      let smooth = true;
+      if (n === 2) {
+        const a0 = rec[1], b0 = rec[2], a1 = rec[4], b1 = rec[5];
+        smooth = (a0 === a1 && b0 === b1) || (a0 === b1 && b0 === a1);
+      } else smooth = n === 1;
+      if (smooth) {
+        const id = nB + mids.length / 3;
+        mids.push(rec[1], rec[2], 0);
+        for (let k = 0; k < n; k++) triMid[rec[k * 3]] = id;
+      } else {
+        for (let k = 0; k < n; k++) {
+          const id = nB + mids.length / 3;
+          mids.push(rec[k * 3 + 1], rec[k * 3 + 2], 1);
+          triMid[rec[k * 3]] = id;
+        }
+      }
+    }
+    this.mids = Int32Array.from(mids);
+    this.nBase = nB;
+    const n = nB + mids.length / 3;
+    this.nRender = n;
     this.pos = new Float32Array(n * 3);
     this.nrm = new Float32Array(n * 3);
     this.data = new Float32Array(n * 4);
     const rest = new Float32Array(n * 3);
-    for (let r = 0; r < n; r++) {
-      const i = sb.rSim[r] * 3;
+    for (let r = 0; r < nB; r++) {
+      const i = rSim[r] * 3;
       rest[r * 3] = sb.X[i]; rest[r * 3 + 1] = sb.X[i + 1]; rest[r * 3 + 2] = sb.X[i + 2];
+    }
+    for (let m = 0, k = nB; m < this.mids.length; m += 3, k++) {
+      const a = this.mids[m], b = this.mids[m + 1];
+      for (let c = 0; c < 3; c++) rest[k * 3 + c] = (rest[a * 3 + c] + rest[b * 3 + c]) * 0.5;
+    }
+    const index = new Uint32Array(nTri * 12);
+    for (let t = 0; t < nTri; t++) {
+      const a = rIndex[t * 3], b = rIndex[t * 3 + 1], c = rIndex[t * 3 + 2];
+      const ab = triMid[t * 3], bc = triMid[t * 3 + 1], ca = triMid[t * 3 + 2];
+      index.set([a, ab, ca, ab, b, bc, ca, bc, c, ab, bc, ca], t * 12);
     }
     this.aPos = new THREE.BufferAttribute(this.pos, 3).setUsage(THREE.DynamicDrawUsage);
     this.aNrm = new THREE.BufferAttribute(this.nrm, 3).setUsage(THREE.DynamicDrawUsage);
@@ -102,7 +159,7 @@ export class JellyView {
       g.setAttribute('normal', this.aNrm);
       g.setAttribute('aData', this.aData);
       g.setAttribute('aRest', this.aRest);
-      g.setIndex(new THREE.BufferAttribute(sb.rIndex.slice(rg.start, rg.start + rg.count), 1));
+      g.setIndex(new THREE.BufferAttribute(index.slice(rg.start * 4, (rg.start + rg.count) * 4), 1));
       const mesh = new THREE.Mesh(g, this.frontMat);
       mesh.frustumCulled = false;
       mesh.userData.piece = k;
@@ -114,7 +171,37 @@ export class JellyView {
 
   update(sb) {
     this.syncTopology(sb);
-    sb.writeRender(this.pos, this.nrm, this.data);
+    const pos = this.pos, nrm = this.nrm, data = this.data;
+    sb.writeRender(pos, nrm, data);
+    // Phong tessellation of the edge midpoints
+    const mids = this.mids;
+    const alpha = 0.75;
+    for (let m = 0, k = this.nBase; m < mids.length; m += 3, k++) {
+      const a = mids[m] * 3, b = mids[m + 1] * 3;
+      const ax = pos[a], ay = pos[a + 1], az = pos[a + 2];
+      const bx = pos[b], by = pos[b + 1], bz = pos[b + 2];
+      let qx = (ax + bx) * 0.5, qy = (ay + by) * 0.5, qz = (az + bz) * 0.5;
+      const nax = nrm[a], nay = nrm[a + 1], naz = nrm[a + 2];
+      const nbx = nrm[b], nby = nrm[b + 1], nbz = nrm[b + 2];
+      if (!mids[m + 2]) {
+        const da = (qx - ax) * nax + (qy - ay) * nay + (qz - az) * naz;
+        const db = (qx - bx) * nbx + (qy - by) * nby + (qz - bz) * nbz;
+        const px = qx - 0.5 * (da * nax + db * nbx), py = qy - 0.5 * (da * nay + db * nby), pz = qz - 0.5 * (da * naz + db * nbz);
+        qx += (px - qx) * alpha;
+        qy += (py - qy) * alpha;
+        qz += (pz - qz) * alpha;
+      }
+      const o = k * 3;
+      pos[o] = qx; pos[o + 1] = qy; pos[o + 2] = qz;
+      let nx = nax + nbx, ny = nay + nby, nz = naz + nbz;
+      const l = Math.hypot(nx, ny, nz) || 1;
+      nrm[o] = nx / l; nrm[o + 1] = ny / l; nrm[o + 2] = nz / l;
+      const da4 = mids[m] * 4, db4 = mids[m + 1] * 4, o4 = k * 4;
+      data[o4] = (data[da4] + data[db4]) * 0.5;
+      data[o4 + 1] = (data[da4 + 1] + data[db4 + 1]) * 0.5;
+      data[o4 + 2] = Math.max(data[da4 + 2], data[db4 + 2]);
+      data[o4 + 3] = 0;
+    }
     this.aPos.needsUpdate = true;
     this.aNrm.needsUpdate = true;
     this.aData.needsUpdate = true;

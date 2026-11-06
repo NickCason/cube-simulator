@@ -22,7 +22,7 @@ Grab it, throw it, poke it — then go to work on it:
 **Heal** ejects every nail, thaws and cools it, pulls every fragment back into
 place and fuses it into a pristine cube.
 
-Keys: `1`–`0` tools, `H` heal, `M` sound. Drag empty space to orbit, scroll or pinch to zoom.
+Keys: `1`–`0` tools, `H` heal, `M` sound, hold `Space` for slow motion. Drag empty space to orbit, scroll or pinch to zoom.
 
 ## How it works
 

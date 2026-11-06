@@ -232,7 +232,7 @@ export function createJellyMaterial(env) {
         }
 
         // healing glow
-        col += uGlowColor * glow * (0.3 + fresh * 1.1);
+        col += uGlowColor * glow * (0.25 + fresh * 0.75);
         if (uDebug == 1) col = refl * F + spec;
         else if (uDebug == 2) col = trans * Tr;
         else if (uDebug == 3) col = vec3(thick * 0.5);

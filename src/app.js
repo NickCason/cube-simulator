@@ -192,6 +192,11 @@ export class App {
     this.healer.start();
   }
 
+  setSlowMo(on) {
+    this.slowGoal = on ? 0.2 : 1;
+    if (on) this.ui?.hint('Slow motion', 1200);
+  }
+
   shake(a) {
     this._shake = Math.min(0.05, this._shake + a);
   }
@@ -364,6 +369,7 @@ export class App {
   frame(dt) {
     const t0 = performance.now();
     // slow frames slow the simulation instead of piling on substeps
+    if (this.slowGoal !== undefined) this.timeScale += (this.slowGoal - this.timeScale) * (1 - Math.exp(-dt * 10));
     const sdt = Math.min(dt, 1 / 45) * this.timeScale;
     this.clock.t += dt;
     if (!this.paused) {
