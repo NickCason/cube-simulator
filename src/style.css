@@ -251,8 +251,9 @@ body {
 }
 
 .palette .seg {
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: 1fr;
   gap: 4px;
   padding: 3px;
   border-radius: 11px;
@@ -456,6 +457,30 @@ body {
   .hint {
     bottom: calc(max(18px, calc(env(safe-area-inset-bottom) + 8px)) + 60px);
     font-size: 12px;
+  }
+  .palette {
+    gap: 9px;
+    padding: 11px 11px 10px;
+    bottom: calc(max(18px, calc(env(safe-area-inset-bottom) + 8px)) + 60px);
+  }
+  .palette .chips {
+    grid-template-columns: repeat(10, 1fr);
+    gap: 5px;
+  }
+  .dock .palette .chip {
+    width: 100%;
+    height: auto;
+    aspect-ratio: 1;
+  }
+  .dock .palette .opt {
+    height: 28px;
+    padding: 0 4px;
+    font-size: 11.5px;
+    gap: 3px;
+  }
+  .dock .palette .opt svg {
+    width: 13px;
+    height: 13px;
   }
 }
 

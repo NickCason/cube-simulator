@@ -13,6 +13,22 @@ const NOISE = /* glsl */ `
     float n001 = hash13(i + vec3(0,0,1)), n101 = hash13(i + vec3(1,0,1)), n011 = hash13(i + vec3(0,1,1)), n111 = hash13(i + vec3(1,1,1));
     return mix(mix(mix(n000, n100, f.x), mix(n010, n110, f.x), f.y), mix(mix(n001, n101, f.x), mix(n011, n111, f.x), f.y), f.z);
   }
+  // cellular noise: (distance to nearest feature point, that cell's random id)
+  vec2 worley(vec3 p) {
+    vec3 i = floor(p), f = fract(p);
+    float d = 8.0, id = 0.0;
+    for (int x = -1; x <= 1; x++)
+      for (int y = -1; y <= 1; y++)
+        for (int z = -1; z <= 1; z++) {
+          vec3 g = vec3(float(x), float(y), float(z));
+          vec3 c = i + g;
+          vec3 o = vec3(hash13(c), hash13(c + 19.1), hash13(c + 47.7)) * 0.8 + 0.1;
+          vec3 r = g + o - f;
+          float dd = dot(r, r);
+          if (dd < d) { d = dd; id = hash13(c + 3.3); }
+        }
+    return vec2(sqrt(d), id);
+  }
   float fbm3(vec3 p) {
     float a = 0.5, s = 0.0;
     for (int i = 0; i < 4; i++) { s += a * vnoise(p); p = p * 2.03 + 17.1; a *= 0.5; }
@@ -241,14 +257,6 @@ export function createJellyMaterial(env, layerUniforms) {
         }
         // sugar coating (sour gummies): only on the moulded outside
         float coat = uSugar * (1.0 - fresh);
-        float grain = 0.0;
-        if (coat > 0.0) {
-          vec3 q = vRest * 140.0;
-          grain = vnoise(q) * 0.6 + vnoise(q * 2.3) * 0.4;
-          float e = 0.12;
-          vec3 g = vec3(vnoise(q + vec3(e, 0, 0)), vnoise(q + vec3(0, e, 0)), vnoise(q + vec3(0, 0, e))) - vnoise(q);
-          N = normalize(N + (g / e - N * dot(g / e, N)) * 0.05 * coat);
-        }
         // surface micro-structure: faint knife texture on cut faces, ice crystals when frozen
         if (fresh > 0.5 || frost > 0.01) {
           vec3 q = vRest * 38.0;
@@ -268,7 +276,7 @@ export function createJellyMaterial(env, layerUniforms) {
         vec3 Nb = back.r > 0.0 ? normalize((vec4(octDecode(back.gb), 0.0) * viewMatrix).xyz) : -N;
         float exitY = back.r > 0.0 ? back.a : vRest.y;
 
-        float rough = clamp(uRoughness + fresh * 0.02 + frost * 0.5 - melt * 0.02 + coat * 0.45, 0.015, 1.0);
+        float rough = clamp(uRoughness + fresh * 0.02 + frost * 0.5 - melt * 0.02 + coat * 0.18, 0.015, 1.0);
         float lod = clamp(rough * 9.0 + frost * 2.5 + thick * 1.6, 0.0, uSceneLodMax);
 
         vec3 trans;
@@ -322,11 +330,17 @@ export function createJellyMaterial(env, layerUniforms) {
           col += uPLColor * fall * (specP + sc * (max((dot(N, Lp) + 0.6) / 1.6, 0.0) * 0.5 + 0.35));
         }
 
-        // sugar crystals: frosty granular film with glints
+        // sugar crystals: discrete grains with their own facets and glints,
+        // the gummy colour showing between them
         if (coat > 0.0) {
-          float glint = pow(max(vnoise(vRest * 260.0), 0.0), 14.0) * 40.0 * nl;
-          vec3 sugarCol = mix(vec3(1.0), sc, 0.28) * (irr * 0.7 + uLightColor * (nl * 0.45 + 0.12)) * (0.72 + 0.5 * grain);
-          col = mix(col, sugarCol + glint, coat * (0.38 + 0.4 * grain));
+          vec2 w = worley(vRest * 56.0);
+          float grain = (1.0 - smoothstep(0.38, 0.5, w.x)) * step(0.12, w.y);
+          vec3 cn = normalize(N + (vec3(hash13(vec3(w.y * 91.0)), hash13(vec3(w.y * 37.0 + 5.0)), hash13(vec3(w.y * 13.0 + 9.0))) - 0.5) * 1.4);
+          float glint = pow(max(dot(reflect(-V, cn), L), 0.0), 70.0) * 22.0;
+          vec3 sugarCol = mix(vec3(1.0), sc, 0.18) * (irr * 0.62 + uLightColor * (max(dot(cn, L), 0.0) * 0.45 + 0.1)) * (0.8 + 0.3 * w.y);
+          col = mix(col, sugarCol + uLightColor * glint, grain * coat * 0.9);
+          // fine dusting between the grains
+          col = mix(col, mix(vec3(1.0), sc, 0.4) * (irr * 0.5 + uLightColor * nl * 0.3), coat * 0.14 * (1.0 - grain));
         }
 
         // frost layer: white crystalline film with sparkles

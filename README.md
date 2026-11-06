@@ -22,6 +22,19 @@ Grab it, throw it, poke it — then go to work on it:
 **Heal** ejects every nail, thaws and cools it, pulls every fragment back into
 place and fuses it into a pristine cube.
 
+**Make it yours** (the colour button in the dock):
+
+- **Flavor** — cherry, lime, blue raspberry, grape, orange, lemon, watermelon, cola,
+  **rainbow** (six layered slices — the layers show on every cut face) or any custom colour.
+- **Texture** — Jello (clear, wobbly), Gummy (cloudy, chewy, firmer), Sour (sugar-crystal
+  coating), Crystal (glass-clear), Creamy (milky panna-cotta).
+- **Edges** — Sharp, Soft, Round or Pillow; the cube re-forms with the new rounding.
+
+Choices are remembered. You can also link straight to a combo, e.g.
+`?flavor=rainbow&texture=gummy&edges=pillow`.
+
+![Rainbow jelly cube](docs/rainbow.jpg)
+
 Keys: `1`–`0` tools, `H` heal, `M` sound, hold `Space` for slow motion. Drag empty space to orbit, scroll or pinch to zoom.
 
 ## How it works

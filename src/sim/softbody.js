@@ -511,6 +511,7 @@ export class SoftBody {
       this._dampPieces(dt);
       return;
     }
+    this._frameDt = dt;
     const multi = this.pieces.length > 1 && P.collide && this.collisionsEnabled;
     if (multi) this._buildCollisionHash();
     for (let s = 0; s < nS; s++) {
@@ -519,7 +520,7 @@ export class SoftBody {
       if (this.embeds.length) this._solveEmbeds(h);
       if (this.grab) this._solveGrab(h);
       if (this.attract) this._solveAttract(h);
-      if (multi && this._anyContact && (s & 1 || s === nS - 1)) this._solvePieceCollisions();
+      if (multi && this._anyContact) this._solvePieceCollisions();
       this._solveBounds(h, s === nS - 1);
       this._updateVelocities(h);
     }
@@ -831,13 +832,15 @@ export class SoftBody {
       }
       pc.omega = [wx, wy, wz];
       if (pc.asleep) continue;
-      let vmax2 = 0;
+      let vmax2 = 0, e2 = 0;
       for (let k = 0; k < vs.length; k++) {
         const o = vs[k] * 3;
         const s2 = v[o] * v[o] + v[o + 1] * v[o + 1] + v[o + 2] * v[o + 2];
         if (s2 > vmax2) vmax2 = s2;
+        e2 += s2 * m[vs[k]];
       }
-      if (vmax2 < 0.07 * 0.07) {
+      const vrms2 = e2 / M;
+      if (vrms2 < 0.035 * 0.035 && vmax2 < 0.3 * 0.3) {
         pc.sleepT += dt;
         if (pc.sleepT > 0.6) {
           pc.asleep = true;
@@ -923,7 +926,15 @@ export class SoftBody {
     }
     const act = this._pieceActive && this._pieceActive.length >= P ? this._pieceActive : (this._pieceActive = new Uint8Array(Math.max(P, 64)));
     act.fill(0);
-    const m = 0.03;
+    // margin covers this frame's travel, so fast pieces start colliding before they overlap
+    let vmax2 = 0;
+    const v = this.v;
+    for (let i = 0; i < this.nV; i++) {
+      const o = i * 3;
+      const s2 = v[o] * v[o] + v[o + 1] * v[o + 1] + v[o + 2] * v[o + 2];
+      if (s2 > vmax2) vmax2 = s2;
+    }
+    const m = 0.03 + 2.2 * Math.sqrt(vmax2) * (this._frameDt || 1 / 60);
     let anyAct = false;
     for (let a = 0; a < P; a++)
       for (let b = a + 1; b < P; b++) {
@@ -1006,7 +1017,7 @@ export class SoftBody {
     const counts = this._hCount, entries = this._hEntries;
     const sv = this._surfVerts;
     const sTri = this.sTri;
-    const margin = 0.0015;
+    const margin = this.contactMargin ?? 0;
     const act = this._pieceActive;
     for (let q = 0; q < sv.length; q++) {
       const i = sv[q];
@@ -1035,8 +1046,11 @@ export class SoftBody {
         if (l2 < 0) continue;
         const l3 = (e1x * (e2y * rz - e2z * ry) - e2x * (e1y * rz - e1z * ry) + rx * (e1y * e2z - e1z * e2y)) * id;
         if (l3 < 0 || l1 + l2 + l3 > 1) continue;
-        // inside: push out through the closest boundary face of this tet
+        // inside: push out through the boundary face the vertex came in
+        // through this substep (falls back to the closest boundary face)
         let best = -1, bestD = Infinity, bnx = 0, bny = 0, bnz = 0;
+        let cross = -1, crossD = Infinity, cnx = 0, cny = 0, cnz = 0;
+        const qx = this.px[o], qy = this.px[o + 1], qz = this.px[o + 2];
         for (let f = this.tetBoundary[t]; f >= 0; f = this.nextBoundary[f]) {
           const fa = sTri[f * 3] * 3, fb = sTri[f * 3 + 1] * 3, fc = sTri[f * 3 + 2] * 3;
           const ux = x[fb] - x[fa], uy = x[fb + 1] - x[fa + 1], uz = x[fb + 2] - x[fa + 2];
@@ -1046,31 +1060,74 @@ export class SoftBody {
           if (l < 1e-14) continue;
           nx /= l; ny /= l; nz /= l;
           const dist = -((px - x[fa]) * nx + (py - x[fa + 1]) * ny + (pz - x[fa + 2]) * nz);
+          const prev = -((qx - x[fa]) * nx + (qy - x[fa + 1]) * ny + (qz - x[fa + 2]) * nz);
+          if (prev <= 1e-4 && dist < crossD) {
+            crossD = dist;
+            cross = f;
+            cnx = nx; cny = ny; cnz = nz;
+          }
           if (dist < bestD) {
             bestD = dist;
             best = f;
             bnx = nx; bny = ny; bnz = nz;
           }
         }
-        if (best < 0 || bestD < 0) continue;
-        const tpc = this.pieces[tPiece[t]];
-        if (tpc.asleep) {
-          tpc.asleep = false;
-          tpc.sleepT = 0;
-          this._awake[tPiece[t]] = 1;
+        if (cross >= 0) {
+          best = cross;
+          bestD = crossD;
+          bnx = cnx; bny = cny; bnz = cnz;
         }
-        const depth = bestD + margin;
+        if (best < 0 || bestD < 0) continue;
+        // a real impact wakes both sides; steady resting contact treats a
+        // sleeping piece as immovable (and leaves it asleep and undisturbed)
+        const tpc = this.pieces[tPiece[t]];
+        const ppc = this.pieces[pi];
+        if (bestD > 0.003) {
+          if (tpc.asleep) {
+            tpc.asleep = false;
+            tpc.sleepT = 0;
+            this._awake[tPiece[t]] = 1;
+          }
+          if (ppc.asleep) {
+            ppc.asleep = false;
+            ppc.sleepT = 0;
+            this._awake[pi] = 1;
+          }
+        }
+        const depth = (bestD + margin) * (this.contactRelax ?? 0.42);
         const f3 = best * 3;
         const ia = sTri[f3], ib = sTri[f3 + 1], ic = sTri[f3 + 2];
-        const wv = w[i], wf = (w[ia] + w[ib] + w[ic]) / 9;
+        const wv = ppc.asleep ? 0 : w[i];
+        const wfa = tpc.asleep ? 0 : w[ia], wfb = tpc.asleep ? 0 : w[ib], wfc = tpc.asleep ? 0 : w[ic];
+        const wf = (wfa + wfb + wfc) / 9;
         const den = wv + wf;
         if (den <= 0) continue;
         const sv1 = (depth * wv) / den;
-        const sf = (depth * (w[ia] / 3)) / den, sg = (depth * (w[ib] / 3)) / den, sh = (depth * (w[ic] / 3)) / den;
+        const sf = (depth * (wfa / 3)) / den, sg = (depth * (wfb / 3)) / den, sh = (depth * (wfc / 3)) / den;
         x[o] += bnx * sv1; x[o + 1] += bny * sv1; x[o + 2] += bnz * sv1;
         x[ia * 3] -= bnx * sf; x[ia * 3 + 1] -= bny * sf; x[ia * 3 + 2] -= bnz * sf;
         x[ib * 3] -= bnx * sg; x[ib * 3 + 1] -= bny * sg; x[ib * 3 + 2] -= bnz * sg;
         x[ic * 3] -= bnx * sh; x[ic * 3 + 1] -= bny * sh; x[ic * 3 + 2] -= bnz * sh;
+        // friction: gelatin on gelatin is grippy; cancel relative sliding
+        const q = this.px;
+        let sx = x[o] - q[o], sy = x[o + 1] - q[o + 1], sz = x[o + 2] - q[o + 2];
+        sx -= ((x[ia * 3] - q[ia * 3]) + (x[ib * 3] - q[ib * 3]) + (x[ic * 3] - q[ic * 3])) / 3;
+        sy -= ((x[ia * 3 + 1] - q[ia * 3 + 1]) + (x[ib * 3 + 1] - q[ib * 3 + 1]) + (x[ic * 3 + 1] - q[ic * 3 + 1])) / 3;
+        sz -= ((x[ia * 3 + 2] - q[ia * 3 + 2]) + (x[ib * 3 + 2] - q[ib * 3 + 2]) + (x[ic * 3 + 2] - q[ic * 3 + 2])) / 3;
+        const sn = sx * bnx + sy * bny + sz * bnz;
+        sx -= sn * bnx; sy -= sn * bny; sz -= sn * bnz;
+        const sl = Math.hypot(sx, sy, sz);
+        if (sl > 1e-9) {
+          const k = Math.min(1, (1.6 * depth) / sl) * 0.9;
+          const cv = (k * wv) / den;
+          if (ppc.asleep && tpc.asleep) continue;
+          x[o] -= sx * cv; x[o + 1] -= sy * cv; x[o + 2] -= sz * cv;
+          const fs = ((1 - wv / den) * k) / 3;
+          for (const fi of [ia, ib, ic]) {
+            if (w[fi] === 0 || tpc.asleep) continue;
+            x[fi * 3] += sx * fs; x[fi * 3 + 1] += sy * fs; x[fi * 3 + 2] += sz * fs;
+          }
+        }
         break;
       }
     }
