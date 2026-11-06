@@ -49,6 +49,8 @@ function asFloat(o, keys) {
   return o;
 }
 const PIECE_FLOATS = ['sleepT', 'rebT', 'impY', 'rebR', 'impR', 'impUx', 'impUz', 'impT', 'impDv', 'foldUntil', 'buzzT', 'buzzA', 'buzzB'];
+// (piece state a rebuild carries over to an untouched piece: see _buildPieces)
+const CARRY = ['sleepT', 'asleep', 'rebT', 'impY', 'boosted', 'rebR', 'impR', 'impUx', 'impUz', 'boostedR', 'impPend', 'impT', 'impDv', 'sleepLogMu', 'foldUntil', 'foldAsk', 'buzzT', 'buzzA', 'buzzB'];
 
 export class SoftBody {
   constructor(opts = {}) {
@@ -58,6 +60,7 @@ export class SoftBody {
     this.vCap = 0;
     this.tCap = 0;
     this.tKs = null; // per tet: stiffness scale, see _computeMass
+    this._bpNV = 0; // vertex count at the last _buildPieces (0: nothing carries over)
     this._allocV(4096);
     this._allocT(16384);
     this.grab = null;
@@ -266,6 +269,7 @@ export class SoftBody {
     this.tMu.fill(1, 0, this.nT);
     this.embeds.length = 0;
     this.grab = null;
+    this._bpNV = 0;
     this.rebuild();
   }
 
@@ -636,6 +640,8 @@ export class SoftBody {
 
   _buildPieces() {
     const nV = this.nV, nT = this.nT, T = this.T;
+    // (each vertex's piece before this rebuild: see the end)
+    const oldNV = Math.min(this._bpNV, nV), oldVP = this.vPiece.slice(0, oldNV);
     const parent = new Int32Array(nV);
     for (let i = 0; i < nV; i++) parent[i] = i;
     const find = (a) => {
@@ -714,8 +720,70 @@ export class SoftBody {
         buzzB: 0,
       }, PIECE_FLOATS);
     });
-    // keep largest piece first for stable "main piece" semantics
-    void old;
+    // A piece the change didn't touch - the very same vertices as one piece
+    // before it - carries on as it was: asleep if it was asleep. (Every
+    // piece used to come out of a rebuild awake: one knife swipe through a
+    // settled pile of a hundred pieces woke them all, to buzz and settle
+    // again at full cost for seconds.)
+    // But a sleeper touching anything that did change wakes (what it rested
+    // on may have been cut away or removed): any of its vertices within 2 cm
+    // of a vertex of a changed piece, as it was or as it is now.
+    const kept = new Uint8Array(old.length), carried = new Uint8Array(this.pieces.length);
+    let anyAsleep = false;
+    for (const pc of this.pieces) {
+      const vs = pc.verts, i0 = vs[0];
+      if (i0 >= oldNV) continue;
+      const op = oldVP[i0], o = old[op];
+      if (!o || o.verts.length !== vs.length) continue;
+      let same = true;
+      for (let k = 1; k < vs.length && same; k++) same = vs[k] < oldNV && oldVP[vs[k]] === op;
+      if (!same) continue;
+      for (const f of CARRY) pc[f] = o[f];
+      pc.com.set(o.com); pc.vel.set(o.vel); pc.bbox.set(o.bbox); pc.omega.set(o.omega); pc.impPrev.set(o.impPrev);
+      kept[op] = 1;
+      carried[pc.id] = 1;
+      if (pc.asleep) anyAsleep = true;
+    }
+    if (anyAsleep) {
+      const x = this.x, r = 0.02 * this.p.size, ir = 1 / r;
+      const cells = new Map();
+      const key = (i) => (Math.floor(x[i * 3] * ir) + 512) * 1048576 + (Math.floor(x[i * 3 + 1] * ir) + 512) * 1024 + (Math.floor(x[i * 3 + 2] * ir) + 512);
+      const add = (vs) => {
+        for (const i of vs) {
+          const k = key(i), l = cells.get(k);
+          if (l) l.push(i);
+          else cells.set(k, [i]);
+        }
+      };
+      for (let k = 0; k < old.length; k++) if (!kept[k]) add(old[k].verts);
+      for (const pc of this.pieces) if (!carried[pc.id]) add(pc.verts);
+      for (const pc of this.pieces) {
+        if (!carried[pc.id] || !pc.asleep) continue;
+        let near = false;
+        for (let n = 0; n < pc.verts.length && !near; n++) {
+          const i = pc.verts[n], ox = x[i * 3], oy = x[i * 3 + 1], oz = x[i * 3 + 2];
+          const cx = Math.floor(ox * ir), cy = Math.floor(oy * ir), cz = Math.floor(oz * ir);
+          for (let a = -1; a <= 1 && !near; a++)
+            for (let b = -1; b <= 1 && !near; b++)
+              for (let c = -1; c <= 1 && !near; c++) {
+                const l = cells.get((cx + a + 512) * 1048576 + (cy + b + 512) * 1024 + (cz + c + 512));
+                if (!l) continue;
+                for (const j of l) {
+                  const dx = x[j * 3] - ox, dy = x[j * 3 + 1] - oy, dz = x[j * 3 + 2] - oz;
+                  if (dx * dx + dy * dy + dz * dz < r * r) {
+                    near = true;
+                    break;
+                  }
+                }
+              }
+        }
+        if (near) {
+          pc.asleep = false;
+          pc.sleepT = 0;
+        }
+      }
+    }
+    this._bpNV = nV;
   }
 
   _extractSurface() {
