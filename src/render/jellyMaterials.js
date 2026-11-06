@@ -410,6 +410,13 @@ export function createJellyMaterial(env, layerUniforms) {
         float exitY = back.r > 0.0 ? back.a : vRest.y;
 
         float rough = clamp(uRoughness + fresh * 0.02 + frost * 0.5 - melt * 0.02 + coat * 0.18, 0.015, 1.0);
+        // (specular anti-aliasing: where the surface turns faster than a
+        // pixel can show - bevels and corners, on a small or low-resolution
+        // screen - its reflections blur as if it were rougher, instead of the
+        // studio's softboxes breaking up into stair-stepped, pointy shards)
+        vec3 dNx = dFdx(vNormal), dNy = dFdy(vNormal);
+        float a2 = rough * rough * rough * rough + min(0.5 * (dot(dNx, dNx) + dot(dNy, dNy)), 0.18);
+        rough = max(rough, sqrt(sqrt(min(a2, 1.0))));
         float lod = clamp(rough * 9.0 + frost * 2.5 + thick * 1.6, 0.0, uSceneLodMax);
 
         vec3 trans;
@@ -594,8 +601,13 @@ export function createJellyMaterial(env, layerUniforms) {
           col += hotC * (1.0 - exp(-pathLen * 1.2)) * exp(-1.6 * t) * smoothstep(0.0, 0.2, t) * 0.2;
         }
         // the outline, anti-aliased: the last pixel is part jelly, part
-        // whatever's behind (only where the jelly really is that thin)
+        // whatever's behind - where the jelly really is that thin, or at the
+        // outer edge (no jelly just past this pixel, out along the normal)
         float silh = 1.0 - smoothstep(0.0, 0.03, thick);
+        if (cover < 1.0) {
+          vec2 nS = (viewMatrix * vec4(normalize(vNormal), 0.0)).xy;
+          if (dot(nS, nS) > 1e-6 && textureLod(tBack, uv + normalize(nS) * 1.5 / resolution, 0.0).r <= 0.0) silh = 1.0;
+        }
         col = mix(textureLod(tScene, uv, 0.0).rgb, col, mix(1.0, cover, silh));
         if (uDebug == 1) col = refl * F + spec;
         else if (uDebug == 2) col = trans * Tr;

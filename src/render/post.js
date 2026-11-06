@@ -131,6 +131,9 @@ export class Post {
         // (switching looks: the room dims to black, or floods with light)
         uDim: { value: 1 },
         uWash: { value: 0 },
+        // edge smoothing (FXAA) where the scene has no multisampling (phones)
+        uFxaa: { value: 0 },
+        uPx: { value: new THREE.Vector2(1, 1) },
       },
       vertexShader: FS_VERT,
       fragmentShader: /* glsl */ `
@@ -143,14 +146,40 @@ export class Post {
         uniform float uFlash;
         uniform float uDim;
         uniform float uWash;
+        uniform float uFxaa;
+        uniform vec2 uPx;
         varying vec2 vUv;
         float h12(vec2 p) { vec3 p3 = fract(vec3(p.xyx) * 0.1031); p3 += dot(p3, p3.yzx + 33.33); return fract((p3.x + p3.y) * p3.z); }
         vec3 finite(vec3 c) {
           bvec3 bad = equal(floatBitsToUint(c) & uvec3(0x7f800000u), uvec3(0x7f800000u));
           return any(bad) ? vec3(0.0) : clamp(c, 0.0, 64.0);
         }
+        // FXAA (Lottes' compact form) on the HDR scene: colours compressed
+        // by their luma first, so a highlight can't swamp the average
+        float lw(vec3 c) { return dot(c, vec3(0.299, 0.587, 0.114)); }
+        vec3 squash(vec3 c) { return c / (1.0 + lw(c)); }
+        vec3 tap(vec2 uv) { return squash(finite(texture2D(tDiffuse, uv).rgb)); }
+        vec3 sceneAA(vec2 uv) {
+          vec3 cM = finite(texture2D(tDiffuse, uv).rgb);
+          if (uFxaa < 0.5) return cM;
+          vec3 sM = squash(cM);
+          float lNW = sqrt(lw(tap(uv + vec2(-1.0, -1.0) * uPx))), lNE = sqrt(lw(tap(uv + vec2(1.0, -1.0) * uPx)));
+          float lSW = sqrt(lw(tap(uv + vec2(-1.0, 1.0) * uPx))), lSE = sqrt(lw(tap(uv + vec2(1.0, 1.0) * uPx)));
+          float lM = sqrt(lw(sM));
+          float lMin = min(lM, min(min(lNW, lNE), min(lSW, lSE)));
+          float lMax = max(lM, max(max(lNW, lNE), max(lSW, lSE)));
+          if (lMax - lMin < max(0.0312, lMax * 0.125)) return cM; // (no edge here)
+          vec2 dir = vec2(-((lNW + lNE) - (lSW + lSE)), (lNW + lSW) - (lNE + lSE));
+          float reduce = max((lNW + lNE + lSW + lSE) * (0.25 / 8.0), 1.0 / 128.0);
+          dir = clamp(dir / (min(abs(dir.x), abs(dir.y)) + reduce), vec2(-8.0), vec2(8.0)) * uPx;
+          vec3 a = 0.5 * (tap(uv - dir / 6.0) + tap(uv + dir / 6.0));
+          vec3 b = a * 0.5 + 0.25 * (tap(uv - dir * 0.5) + tap(uv + dir * 0.5));
+          float lB = sqrt(lw(b));
+          vec3 r = (lB < lMin || lB > lMax) ? a : b;
+          return r / max(1.0 - lw(r), 1e-3);
+        }
         void main() {
-          vec3 c = finite(texture2D(tDiffuse, vUv).rgb);
+          vec3 c = sceneAA(vUv);
           c += finite(texture2D(tBloom, vUv).rgb) * uBloom;
           c += vec3(1.0, 0.85, 0.6) * uFlash;
           vec2 d = (vUv - 0.5) * vec2(uRes.x / uRes.y, 1.0);
@@ -175,6 +204,7 @@ export class Post {
       ch = Math.max(1, Math.floor(ch / 2));
     }
     this.compositeMat.uniforms.uRes.value.set(w, h);
+    this.compositeMat.uniforms.uPx.value.set(1 / w, 1 / h);
   }
 
   copy(src, dst) {

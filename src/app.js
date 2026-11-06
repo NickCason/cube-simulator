@@ -632,6 +632,8 @@ export class App {
     }
     const samples = this.opts.msaa ?? (this.coarse || this.pixelRatio > 1.6 ? 0 : 4);
     this.rtScene = new THREE.WebGLRenderTarget(pw, ph, { type: THREE.HalfFloatType, samples, depthBuffer: true });
+    // (no multisampling - phones, high-density screens: smooth edges in post)
+    this.post.compositeMat.uniforms.uFxaa.value = samples ? 0 : 1;
     this.rtTrans = new THREE.WebGLRenderTarget(pw, ph, {
       type: THREE.HalfFloatType,
       depthBuffer: false,
