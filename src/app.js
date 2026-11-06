@@ -17,8 +17,9 @@ import { physicsWarmJob } from './sim/warm.js';
 import { Droplets } from './world/droplets.js';
 import { Bubbles } from './world/bubbles.js';
 import { Glitter, GLITTER_MODES } from './world/glitter.js';
-import { DEFAULT_STYLE, TEXTURES, EDGES, LAYER_PRESETS, MIN_LAYERS, MAX_LAYERS, resolveFlavor, flavorMainHex, nextLayerColor } from './styles.js';
+import { DEFAULT_STYLE, TEXTURES, EDGES, LAYER_PRESETS, MIN_LAYERS, MAX_LAYERS, MAX_REPEAT, biasExp, resolveFlavor, flavorMainHex, nextLayerColor } from './styles.js';
 import { SETTINGS, resolveSettings } from './settings.js';
+import { Tilt } from './tilt.js';
 
 const BG = new THREE.Color(0.86, 0.85, 0.83);
 
@@ -140,6 +141,7 @@ export class App {
 
     const uiRoot = document.getElementById('ui');
     this.overlay = new Overlay(document.body);
+    this.tilt = new Tilt(this); // (before the UI: its switch lives in Settings)
     if (uiRoot) this.ui = new UI(this, uiRoot);
 
     this.tools = {
@@ -258,6 +260,9 @@ export class App {
     if (preset) {
       st.flavor = 'layers';
       st.layers.colors = [...preset.colors];
+      if (preset.blur !== undefined) st.layers.blur = preset.blur;
+      st.layers.repeat = preset.repeat || 1;
+      st.layers.bias = preset.bias || 0;
     }
     if (opts.layers) {
       const cols = opts.layers.split(',').map((c) => '#' + c.replace('#', '').trim()).filter((c) => /^#[0-9a-f]{6}$/i.test(c));
@@ -268,6 +273,10 @@ export class App {
       }
     }
     if (opts.blend !== undefined && Number.isFinite(opts.blend)) st.layers.blur = Math.min(1, Math.max(0, opts.blend));
+    if (opts.repeat !== undefined && Number.isFinite(opts.repeat)) st.layers.repeat = Math.min(MAX_REPEAT, Math.max(1, Math.round(opts.repeat)));
+    if (opts.bias !== undefined && Number.isFinite(opts.bias)) st.layers.bias = Math.min(1, Math.max(-1, opts.bias));
+    if (!(st.layers.repeat >= 1)) st.layers.repeat = 1;
+    if (!Number.isFinite(st.layers.bias)) st.layers.bias = 0;
     const L = st.layers;
     if (!Array.isArray(L.colors) || L.colors.length < MIN_LAYERS) L.colors = [...DEFAULT_STYLE.layers.colors];
     L.colors = L.colors.slice(0, MAX_LAYERS);
@@ -349,13 +358,31 @@ export class App {
   setLayerPreset(id) {
     const p = LAYER_PRESETS.find((q) => q.id === id);
     if (!p) return;
-    this.style.layers.colors = [...p.colors];
+    const L = this.style.layers;
+    L.colors = [...p.colors];
+    if (p.blur !== undefined) L.blur = p.blur;
+    L.repeat = p.repeat || 1;
+    L.bias = p.bias || 0;
     this.style.flavor = 'layers';
     this.applyStyle();
   }
 
   setLayerBlur(b) {
     this.style.layers.blur = Math.min(1, Math.max(0, b));
+    this.style.flavor = 'layers';
+    this.applyStyle();
+  }
+
+  // how many times the colours cycle up the cube
+  setLayerRepeat(n) {
+    this.style.layers.repeat = Math.min(MAX_REPEAT, Math.max(1, Math.round(n)));
+    this.style.flavor = 'layers';
+    this.applyStyle();
+  }
+
+  // -1..1: the bands crowd toward the bottom or the top
+  setLayerBias(b) {
+    this.style.layers.bias = Math.min(1, Math.max(-1, b));
     this.style.flavor = 'layers';
     this.applyStyle();
   }
@@ -427,9 +454,9 @@ export class App {
     if (!r) return this.color;
     let ry = 0;
     for (let k = 0; k < 4; k++) ry += this.sb.X[this.sb.T[r.tet * 4 + k] * 3 + 1] * r.bary[k];
-    const n = f.layers.length;
-    const i = Math.max(0, Math.min(n - 1, Math.floor((ry / this.sb.p.size + 0.5) * n)));
-    return f.layers[i];
+    const n = f.layers.length, m = n * (f.repeat || 1);
+    const h = Math.pow(Math.min(1, Math.max(0, ry / this.sb.p.size + 0.5)), biasExp(f.bias));
+    return f.layers[Math.min(m - 1, Math.floor(h * m)) % n];
   }
 
   setCursor(c) {
@@ -713,6 +740,7 @@ export class App {
       for (const f of this.onFrame) f(sdt, dt);
       this.tool?.update?.(sdt, dt);
       this.healer.update(sdt);
+      this.tilt.update(dt);
       const nS = Math.max(4, Math.min(16, Math.round(this.substepRate * sdt)));
       this.sb.p.substeps = nS;
       const p0 = performance.now();

@@ -58,21 +58,29 @@ const OCT = /* glsl */ `
 // (0) to a smooth gradient between layer centres (1). A ray crossing several
 // layers averages the profile over the heights it spans.
 export const MAX_LAYERS = 10;
+export const MAX_CAVITIES = 12;
 export const LAYER_GLSL = /* glsl */ `
   uniform int uLayers;
   uniform float uLayerY0;
-  uniform float uLayerH;
+  uniform float uLayerSpan;
+  uniform float uLayerRep;
+  uniform float uLayerExp;
   uniform float uLayerBlur;
   uniform vec3 uLayerAbs[10];
   uniform vec3 uLayerSc[10];
-  // neighbouring layers around height y and the blend between them
+  // neighbouring layers around height y and the blend between them: the
+  // height (0..1 up the cube) crowded by the bias, the colours cycling
+  // uLayerRep times over it
   void layerPair(float y, out int a, out int b, out float s) {
-    float f = (y - uLayerY0) / uLayerH - 0.5;
+    float n = float(uLayers), m = n * uLayerRep;
+    float h = pow(max(clamp((y - uLayerY0) / uLayerSpan, 0.0, 1.0), 1e-6), uLayerExp);
+    float f = h * m - 0.5;
     float i0 = floor(f);
     float w = max(uLayerBlur * 0.5, 0.012);
     s = smoothstep(0.5 - w, 0.5 + w, f - i0);
-    a = clamp(int(i0), 0, uLayers - 1);
-    b = clamp(int(i0) + 1, 0, uLayers - 1);
+    // (past the bottom and top bands: their own colour)
+    a = int(mod(clamp(i0, 0.0, m - 1.0), n));
+    b = int(mod(clamp(i0 + 1.0, 0.0, m - 1.0), n));
   }
   vec3 sigmaAt(float y) {
     int a, b; float s;
@@ -83,8 +91,8 @@ export const LAYER_GLSL = /* glsl */ `
     if (uLayers == 0) return uniformSigma;
     if (abs(yb - ya) < 1e-3) return sigmaAt(ya);
     vec3 acc = vec3(0.0);
-    for (int k = 0; k < 10; k++) acc += sigmaAt(mix(ya, yb, (float(k) + 0.5) / 10.0));
-    return acc * 0.1;
+    for (int k = 0; k < 16; k++) acc += sigmaAt(mix(ya, yb, (float(k) + 0.5) / 16.0));
+    return acc * 0.0625;
   }
   vec3 layerScatter(float y, vec3 uniformColor) {
     if (uLayers == 0) return uniformColor;
@@ -107,7 +115,9 @@ export function createLayerUniforms() {
   return {
     uLayers: { value: 0 },
     uLayerY0: { value: -0.5 },
-    uLayerH: { value: 1 / 6 },
+    uLayerSpan: { value: 1 },
+    uLayerRep: { value: 1 },
+    uLayerExp: { value: 1 },
     uLayerBlur: { value: 0 },
     uLayerAbs: { value: Array.from({ length: MAX_LAYERS }, () => new THREE.Vector3()) },
     uLayerSc: { value: Array.from({ length: MAX_LAYERS }, () => new THREE.Vector3()) },
@@ -193,6 +203,9 @@ export function createJellyMaterial(env, layerUniforms) {
       uWeldGrid: { value: new THREE.Vector4(0, 0, 0, 1) },
       uWeldGridN: { value: 0 },
       uWeldUnit: { value: 1 },
+      // bubbles a cut has opened: centre and radius (world), see Bubbles
+      uCav: { value: Array.from({ length: MAX_CAVITIES }, () => new THREE.Vector4()) },
+      uCavN: { value: 0 },
     },
     vertexShader: VERT,
     fragmentShader: /* glsl */ `
@@ -227,6 +240,8 @@ export function createJellyMaterial(env, layerUniforms) {
       uniform vec4 uWeldGrid;
       uniform float uWeldGridN;
       uniform float uWeldUnit;
+      uniform vec4 uCav[${MAX_CAVITIES}];
+      uniform int uCavN;
       varying vec3 vWorldPos;
       varying vec3 vNormal;
       varying vec3 vViewPos;
@@ -319,8 +334,32 @@ export function createJellyMaterial(env, layerUniforms) {
         vec3 N = normalize(vNormal);
         vec3 V = normalize(cameraPosition - vWorldPos);
 
+        // A bubble a cut has run through: here the surface is air, and what
+        // shows is the far wall of the hollow - the line of sight carried on
+        // to it (its rest position follows near enough unrotated).
+        vec3 Pw = vWorldPos, Rp = vRest;
+        float cavity = 0.0, cavDeep = 0.0;
+        for (int k = 0; k < ${MAX_CAVITIES}; k++) {
+          if (k >= uCavN) break;
+          vec3 d = Pw - uCav[k].xyz;
+          float r = uCav[k].w, dd = dot(d, d);
+          if (dd < r * r) {
+            float b = dot(-V, d);
+            float s = -b + sqrt(max(b * b - dd + r * r, 0.0));
+            vec3 Nf = N;
+            Pw += -V * s;
+            Rp += Pw - vWorldPos;
+            N = normalize(uCav[k].xyz - Pw);
+            V = normalize(cameraPosition - Pw);
+            cavity = 1.0;
+            cavDeep = clamp(dot(vWorldPos - Pw, Nf) / r, 0.0, 1.0);
+            fresh = 0.0; // (a bubble's wall is smooth)
+            break;
+          }
+        }
+
         // molded-surface irregularity (breaks perfect-glass reflections)
-        {
+        if (cavity < 0.5) {
           vec3 q = vRest * 5.0;
           float e = 0.05;
           float n0 = vnoise(q) + 0.5 * vnoise(q * 2.1 + 7.0);
@@ -330,7 +369,7 @@ export function createJellyMaterial(env, layerUniforms) {
           N = normalize(N + (g - N * dot(g, N)) * 0.018);
         }
         // sugar coating (sour gummies): only on the moulded outside
-        float coat = uSugar * (1.0 - fresh);
+        float coat = uSugar * (1.0 - fresh) * (1.0 - cavity);
         // surface micro-structure: faint knife texture on cut faces, ice crystals when frozen
         if (fresh > 0.5 || frost > 0.01) {
           vec3 q = vRest * 38.0;
@@ -345,7 +384,7 @@ export function createJellyMaterial(env, layerUniforms) {
 
         vec2 uv = gl_FragCoord.xy / resolution;
         vec4 back = texture(tBack, uv);
-        float frontDepth = -vViewPos.z;
+        float frontDepth = cavity > 0.5 ? -(viewMatrix * vec4(Pw, 1.0)).z : -vViewPos.z;
         float thick = back.r > 0.0 ? clamp(back.r - frontDepth, 0.0, 4.0) : 0.0;
         vec3 Nb = back.r > 0.0 ? normalize((vec4(octDecode(back.gb), 0.0) * viewMatrix).xyz) : -N;
         float exitY = back.r > 0.0 ? back.a : vRest.y;
@@ -354,13 +393,13 @@ export function createJellyMaterial(env, layerUniforms) {
         float lod = clamp(rough * 9.0 + frost * 2.5 + thick * 1.6, 0.0, uSceneLodMax);
 
         vec3 trans;
-        trans.r = sampleThrough(vWorldPos, V, N, Nb, thick, uIor - uDispersion, lod, rough, 0).r;
-        trans.g = sampleThrough(vWorldPos, V, N, Nb, thick, uIor, lod, rough, 1).g;
-        trans.b = sampleThrough(vWorldPos, V, N, Nb, thick, uIor + uDispersion, lod, rough, 2).b;
+        trans.r = sampleThrough(Pw, V, N, Nb, thick, uIor - uDispersion, lod, rough, 0).r;
+        trans.g = sampleThrough(Pw, V, N, Nb, thick, uIor, lod, rough, 1).g;
+        trans.b = sampleThrough(Pw, V, N, Nb, thick, uIor + uDispersion, lod, rough, 2).b;
 
         float pathLen = thick;
         // layered: lean toward the layer you look into, so bands stay crisp
-        vec3 sigma = uLayers > 0 ? mix(layerSigma(vRest.y, vRest.y, uAbsorb), layerSigma(vRest.y, exitY, uAbsorb), 0.22) : uAbsorb;
+        vec3 sigma = uLayers > 0 ? mix(layerSigma(Rp.y, Rp.y, uAbsorb), layerSigma(Rp.y, exitY, uAbsorb), 0.22) : uAbsorb;
         vec3 Tr = exp(-sigma * pathLen * (1.0 + melt * 0.35));
         float haze = 1.0 - exp(-(uScatter + uMilk * 7.0 + frost * 2.5) * pathLen);
         haze = max(haze, max(uMilk * 0.72, uHazeMin));
@@ -370,7 +409,7 @@ export function createJellyMaterial(env, layerUniforms) {
         float wrap = max((NdL + 0.7) / 1.7, 0.0);
         vec3 irr = envLookup(N, 1.0);
         float backlit = pow(clamp(dot(V, -L), 0.0, 1.0), 3.0);
-        vec3 baseSc = uLayers > 0 ? mix(layerScatter(vRest.y, uScatterColor), layerScatter(exitY, uScatterColor), 0.25) : uScatterColor;
+        vec3 baseSc = uLayers > 0 ? mix(layerScatter(Rp.y, uScatterColor), layerScatter(exitY, uScatterColor), 0.25) : uScatterColor;
         // creamy jelly: pastel, milky body colour
         baseSc = mix(baseSc, mix(baseSc, vec3(1.0), 0.45) * 1.05, uMilk);
         vec3 sc = mix(baseSc, vec3(0.92, 0.96, 1.0), frost * 0.85);
@@ -397,7 +436,7 @@ export function createJellyMaterial(env, layerUniforms) {
 
         // dynamic point light (torch flame, explosion flash)
         if (uPLColor.r + uPLColor.g + uPLColor.b > 0.001) {
-          vec3 Lp = uPLPos - vWorldPos;
+          vec3 Lp = uPLPos - Pw;
           float dp = length(Lp);
           Lp /= dp;
           float fall = 1.0 / (1.0 + dp * dp * 9.0);
@@ -427,6 +466,11 @@ export function createJellyMaterial(env, layerUniforms) {
           vec3 frostCol = vec3(0.86, 0.92, 1.0) * (irr * 0.75 + uLightColor * (nl * 0.5 + 0.15)) * (0.7 + 0.5 * crystal);
           col = mix(col, frostCol + sparkle, frost * (0.35 + 0.4 * crystal));
         }
+
+        // (deep in a hollow a little less of the room's light gets in; its
+        // rim, a crisp edge, catches it)
+        col *= 1.0 - 0.12 * cavity * cavDeep;
+        col += (irr * 0.35 + uLightColor * 0.12) * cavity * smoothstep(0.82, 1.0, 1.0 - cavDeep) * 0.6;
 
         // healing glow
         col += uGlowColor * glow * (0.25 + fresh * 0.75);

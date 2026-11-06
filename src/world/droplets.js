@@ -78,6 +78,14 @@ export class Droplets {
     }
   }
 
+  // New homes for the ones not yet on their way: home(out) writes one.
+  retarget(home) {
+    for (const d of this.items) {
+      if (!d.home || d.homeT >= 0) continue;
+      home(d.home);
+    }
+  }
+
   update(dt) {
     const g = this.app.sb.p.gravity;
     const R = this.app.sb.p.arenaRadius;

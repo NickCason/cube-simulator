@@ -1,4 +1,4 @@
-import { FLAVORS, TEXTURES, EDGES, GLITTERS, LAYER_PRESETS, MIN_LAYERS, MAX_LAYERS, flavorSwatchCSS, flavorMainHex, materialSwatchCSS } from '../styles.js';
+import { FLAVORS, TEXTURES, EDGES, GLITTERS, LAYER_PRESETS, MIN_LAYERS, MAX_LAYERS, MAX_REPEAT, flavorSwatchCSS, flavorMainHex, materialSwatchCSS } from '../styles.js';
 import { SETTINGS, settingWord } from '../settings.js';
 
 const svg = (inner) =>
@@ -93,6 +93,8 @@ export class UI {
           <div class="stack" role="group" aria-label="Layer colours, top to bottom"></div>
           <div class="presets"></div>
           <label class="row blend"><span class="name">Blend</span><input type="range" min="0" max="1" step="0.01" aria-label="Blend between layers"><span class="word"></span></label>
+          <label class="row repeat"><span class="name">Repeat</span><input type="range" min="1" max="${MAX_REPEAT}" step="1" aria-label="How many times the colours repeat up the cube"><span class="word"></span></label>
+          <label class="row bias"><span class="name">Bias</span><input type="range" min="-1" max="1" step="0.01" aria-label="Bands crowd toward the bottom or the top"><span class="word"></span></label>
         </div>
         <div class="sec"><span class="lbl">Material</span><div class="mats" role="group" aria-label="Material"></div></div>
         <div class="sec"><span class="lbl">Glitter</span><div class="seg glit"></div></div>
@@ -145,6 +147,10 @@ export class UI {
     this.plusEl = this.layersSec.querySelector('.plus');
     this.blendEl = this.layersSec.querySelector('.blend input');
     this.blendWord = this.layersSec.querySelector('.blend .word');
+    this.repeatEl = this.layersSec.querySelector('.repeat input');
+    this.repeatWord = this.layersSec.querySelector('.repeat .word');
+    this.biasEl = this.layersSec.querySelector('.bias input');
+    this.biasWord = this.layersSec.querySelector('.bias .word');
     this.minusEl.addEventListener('click', () => {
       app.audio.ui();
       app.setLayerCount(app.style.layers.colors.length - 1);
@@ -158,12 +164,14 @@ export class UI {
       this.blendEl.style.setProperty('--p', `${this.blendEl.value * 100}%`);
       app.setLayerBlur(+this.blendEl.value);
     });
+    this.repeatEl.addEventListener('input', () => app.setLayerRepeat(+this.repeatEl.value));
+    this.biasEl.addEventListener('input', () => app.setLayerBias(+this.biasEl.value));
     const presets = this.layersSec.querySelector('.presets');
     for (const p of LAYER_PRESETS) {
       const b = document.createElement('button');
       b.className = 'preset';
       b.dataset.preset = p.id;
-      b.innerHTML = `<i style="background:${flavorSwatchCSS({ layers: p.colors })}"></i>${p.name}`;
+      b.innerHTML = `<i style="background:${flavorSwatchCSS({ layers: p.colors, blur: p.blur, repeat: p.repeat, bias: p.bias })}"></i>${p.name}`;
       b.addEventListener('click', () => {
         app.audio.ui();
         app.setLayerPreset(p.id);
@@ -249,6 +257,30 @@ export class UI {
       scroll.appendChild(row);
       this.rows[st.key] = { st, input, word };
     }
+    // tilt & shake (phones with motion sensors): a switch under World
+    if (app.tilt.supported) {
+      const row = document.createElement('div');
+      row.className = 'row toggle';
+      row.innerHTML = '<span class="name">Tilt &amp; shake</span><button class="switch" role="switch" aria-checked="false" aria-label="Tilt and shake"><i></i></button><span class="word">Off</span>';
+      const sw = row.querySelector('.switch'), word = row.querySelector('.word');
+      const show = (on) => {
+        sw.setAttribute('aria-checked', String(on));
+        sw.classList.toggle('on', on);
+        word.textContent = on ? 'On' : 'Off';
+      };
+      sw.addEventListener('click', async () => {
+        app.audio.ui();
+        if (app.tilt.on) {
+          app.tilt.disable();
+          show(false);
+          return;
+        }
+        const ok = await app.tilt.enable();
+        show(ok);
+        this.hint(ok ? 'Tilt your phone to slide the jelly · shake it to jiggle' : 'Motion access is off for this page', 3200);
+      });
+      this.rows.size.input.closest('.row').after(row);
+    }
     this.tuneEl.querySelector('.reset').addEventListener('click', () => {
       app.audio.ui();
       app.resetSettings();
@@ -301,9 +333,11 @@ export class UI {
     this.closeTune();
     this.paletteEl.hidden = false;
     this.swatchBtn.classList.add('open');
-    // (the chosen material in view)
-    const a = this.matsEl.querySelector('.active');
-    if (a) this.matsEl.scrollLeft = a.offsetLeft - (this.matsEl.clientWidth - a.offsetWidth) / 2;
+    // (the chosen material and layer preset in view, where they scroll sideways)
+    for (const box of [this.matsEl, this.layersSec.querySelector('.presets')]) {
+      const a = box.querySelector('.active');
+      if (a && box.scrollWidth > box.clientWidth) box.scrollLeft += a.getBoundingClientRect().left - box.getBoundingClientRect().left - (box.clientWidth - a.offsetWidth) / 2;
+    }
   }
 
   closeTune() {
@@ -380,10 +414,17 @@ export class UI {
     if (document.activeElement !== this.blendEl) this.blendEl.value = L.blur;
     this.blendEl.style.setProperty('--p', `${L.blur * 100}%`);
     this.blendWord.textContent = blendWord(L.blur);
+    const rep = L.repeat || 1, bias = L.bias || 0;
+    if (document.activeElement !== this.repeatEl) this.repeatEl.value = rep;
+    this.repeatEl.style.setProperty('--p', `${((rep - 1) / (MAX_REPEAT - 1)) * 100}%`);
+    this.repeatWord.textContent = rep === 1 ? 'Once' : `${rep}×`;
+    if (document.activeElement !== this.biasEl) this.biasEl.value = bias;
+    this.biasEl.style.setProperty('--p', `${((bias + 1) / 2) * 100}%`);
+    this.biasWord.textContent = bias < -0.6 ? 'Bottom-heavy' : bias < -0.2 ? 'Low' : bias <= 0.2 ? 'Even' : bias <= 0.6 ? 'High' : 'Top-heavy';
     const key = cols.join(',').toLowerCase();
     for (const b of this.layersSec.querySelectorAll('.preset')) {
       const p = LAYER_PRESETS.find((q) => q.id === b.dataset.preset);
-      b.classList.toggle('active', p.colors.join(',').toLowerCase() === key);
+      b.classList.toggle('active', p.colors.join(',').toLowerCase() === key && (p.repeat || 1) === rep && Math.abs((p.bias || 0) - bias) < 0.02);
     }
   }
 
@@ -393,7 +434,7 @@ export class UI {
     document.documentElement.style.setProperty('--jelly', flavor.layers ? flavor.layers[flavor.layers.length - 1] : flavor.hex);
     this.swatchBtn.querySelector('.swatch').style.background = css;
     const layerChip = this.paletteEl.querySelector('.chip.layered');
-    if (layerChip) layerChip.style.setProperty('--c', flavorSwatchCSS({ layers: style.layers.colors, blur: style.layers.blur }));
+    if (layerChip) layerChip.style.setProperty('--c', flavorSwatchCSS({ layers: style.layers.colors, blur: style.layers.blur, repeat: style.layers.repeat, bias: style.layers.bias }));
     this.layersSec.hidden = !flavor.layers;
     if (flavor.layers) this.renderLayers(style.layers);
     for (const b of this.paletteEl.querySelectorAll('.chip[data-flavor]')) b.classList.toggle('active', b.dataset.flavor === style.flavor);

@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { biasExp } from '../styles.js';
 import {
   createBackMaterial,
   createJellyMaterial,
@@ -72,7 +73,9 @@ export class JellyView {
     if (flavor.layers) {
       L.uLayers.value = flavor.layers.length;
       L.uLayerY0.value = -size / 2;
-      L.uLayerH.value = size / flavor.layers.length;
+      L.uLayerSpan.value = size;
+      L.uLayerRep.value = Math.max(1, Math.round(flavor.repeat || 1));
+      L.uLayerExp.value = biasExp(flavor.bias);
       L.uLayerBlur.value = flavor.blur || 0;
       abs.forEach((a, k) => L.uLayerAbs.value[k].copy(a));
       scs.forEach((c, k) => L.uLayerSc.value[k].set(c.r, c.g, c.b));
@@ -248,6 +251,7 @@ export class JellyView {
     this.syncTopology(sb);
     const pos = this.pos, nrm = this.nrm, data = this.data;
     sb.writeRender(pos, nrm, data);
+    if (sb.fill && sb.fill.topo === sb.topoVersion) this._fill(sb, sb.fill);
     // Phong tessellation of the edge midpoints
     const mids = this.mids;
     const alpha = 0.75;
@@ -280,6 +284,41 @@ export class JellyView {
     this.aPos.needsUpdate = true;
     this.aNrm.needsUpdate = true;
     this.aData.needsUpdate = true;
+  }
+
+  // The heal's liquid fill: what was missing rises from its holes' walls
+  // to where it belongs, like a level rising at one speed everywhere (a
+  // part twice as far from the wall takes twice as long), easing in at the
+  // end. The surface's normals follow the moving shape.
+  _fill(sb, F) {
+    const pos = this.pos, nrm = this.nrm, rSim = sb.rSim, nB = this.nBase;
+    let moved = false;
+    for (let r = 0; r < nB; r++) {
+      const i = rSim[r], d = F.d[i];
+      if (d < 0) continue;
+      const u = Math.min(1, F.t / Math.max(1e-3, (F.dur * d) / F.dmax));
+      const g = 1 - (1 - u) * (1 - u);
+      if (g >= 1) continue;
+      const o = r * 3, k = (1 - g);
+      pos[o] += F.off[i * 3] * k; pos[o + 1] += F.off[i * 3 + 1] * k; pos[o + 2] += F.off[i * 3 + 2] * k;
+      moved = true;
+    }
+    if (!moved) return;
+    nrm.fill(0, 0, nB * 3);
+    const ix = sb.rIndex;
+    for (let t = 0; t < ix.length; t += 3) {
+      const a = ix[t] * 3, b = ix[t + 1] * 3, c = ix[t + 2] * 3;
+      const ux = pos[b] - pos[a], uy = pos[b + 1] - pos[a + 1], uz = pos[b + 2] - pos[a + 2];
+      const vx = pos[c] - pos[a], vy = pos[c + 1] - pos[a + 1], vz = pos[c + 2] - pos[a + 2];
+      const nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx;
+      for (const q of [a, b, c]) {
+        nrm[q] += nx; nrm[q + 1] += ny; nrm[q + 2] += nz;
+      }
+    }
+    for (let r = 0; r < nB; r++) {
+      const o = r * 3, l = Math.hypot(nrm[o], nrm[o + 1], nrm[o + 2]) || 1;
+      nrm[o] /= l; nrm[o + 1] /= l; nrm[o + 2] /= l;
+    }
   }
 
   renderFloorFx() {

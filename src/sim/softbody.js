@@ -48,7 +48,7 @@ function asFloat(o, keys) {
   }
   return o;
 }
-const PIECE_FLOATS = ['sleepT', 'rebT', 'impY', 'rebR', 'impR', 'impUx', 'impUz', 'impT', 'impDv'];
+const PIECE_FLOATS = ['sleepT', 'rebT', 'impY', 'rebR', 'impR', 'impUx', 'impUz', 'impT', 'impDv', 'foldUntil'];
 
 export class SoftBody {
   constructor(opts = {}) {
@@ -64,6 +64,7 @@ export class SoftBody {
     this.pushers = []; // moving flat faces pressing into the jelly (mallet head)
     this.attract = null;
     this.gravityScale = 1;
+    this.tilt = new Float64Array(2); // (m/s²) sideways pull along x, z: the table tipped (see Tilt)
     this.collisionsEnabled = true;
     this.selfQuietUntil = 0; // (sim time) no self-contact before this: see radialImpulse
     this.topoVersion = 0;
@@ -81,6 +82,7 @@ export class SoftBody {
     this.heatActive = false;
     this._heatResidual = 0;
     this.weld = null; // set by the heal: distances to the healed seams
+    this.fill = null; // set by the heal: what was missing, rising to fill its holes (see JellyView)
     this.anyAwake = true;
     // the piece-contact candidates cover _hashSpan seconds of motion from
     // when they were found (_hashAge ago); short frames reuse them
@@ -148,6 +150,13 @@ export class SoftBody {
     this._svFill = null;
     this._svList = null;
     this._hoodStamp = 0;
+    this._foldClock = 0; // (s) since the last look for folds
+    this._foldNext = 0; // (the next piece to look at)
+    this._foldUntil = null; // per vertex: sim time till which it is held as folded in
+    this._foldLook = null;
+    this._fgCount = null;
+    this._fgEnt = null;
+    this._fgBox = null;
     this._pieceActive = null;
     this._ptS = null;
     this._hCount = null;
@@ -182,7 +191,7 @@ export class SoftBody {
     this._ti4 = new Int32Array(4);
     this._tb4 = new Float64Array(4);
     this._fq = asFloat({ ok: false, dist: 0, prev: 0, nx: 0, ny: 0, nz: 0, on: false, crossS: Infinity }, ['dist', 'prev', 'nx', 'ny', 'nz']);
-    asFloat(this, ['time', 'gravityScale', 'rebuildMs', 'dampBoost', '_heatResidual', '_hashAge', '_grabPress', '_gap']);
+    asFloat(this, ['time', 'gravityScale', 'rebuildMs', 'dampBoost', '_heatResidual', '_hashAge', '_grabPress', '_gap', '_foldClock']);
   }
 
   // ---------------------------------------------------------------- storage
@@ -411,6 +420,14 @@ export class SoftBody {
     this._selfFlag = u8(this._selfFlag, V);
     this._svStart = i32(this._svStart, 4097);
     this._svFill = i32(this._svFill, 4096);
+    // the look for folds: per-vertex hold times (vertex numbers changed:
+    // start over), and its own grid of tets
+    this._foldUntil = f64(this._foldUntil, V);
+    this._foldUntil.fill(0);
+    this._foldLook = u8(this._foldLook, NP);
+    this._fgCount = this._fgCount || new Int32Array((1 << 14) + 1);
+    this._fgEnt = i32(this._fgEnt, Tc * 8);
+    this._fgBox = f32(this._fgBox, Tc * 6);
     this._svList = i32(this._svList, V);
   }
 
@@ -649,6 +666,8 @@ export class SoftBody {
         impDv: 0,
         sleepLogMu: undefined,
         hinge: false, // still joined to itself across a cut (see _findHinges)
+        foldUntil: 0, // (sim time) has vertices folded into itself till then (see _foldCheck)
+        foldAsk: false, // look for folds next frame (it has just fallen asleep)
       }, PIECE_FLOATS);
     });
     // keep largest piece first for stable "main piece" semantics
@@ -902,6 +921,7 @@ export class SoftBody {
     this._imp.fill(0, 0, NP0 * 12);
     this._impPartner.fill(-1, 0, NP0);
     this._updateMaterial(dt);
+    this._foldCheck(dt);
     if (this.grab) this.wake(this.grab.piece);
     if (this.attract || this.gravityScale !== 1 || this.embeds.length) this.wakeAll();
     const NP = this.pieces.length;
@@ -1010,12 +1030,15 @@ export class SoftBody {
   _integrate(h) {
     const { x, px, v, w } = this;
     const g = this.p.gravity * this.gravityScale * h;
+    const gx = this.tilt[0] * this.gravityScale * h, gz = this.tilt[1] * this.gravityScale * h;
     const n = this.nV;
     const aw = this._awake, vp = this.vPiece;
     for (let i = 0; i < n; i++) {
       if (w[i] === 0 || !aw[vp[i]]) continue;
       const o = i * 3;
+      v[o] += gx;
       v[o + 1] += g;
+      v[o + 2] += gz;
       px[o] = x[o]; px[o + 1] = x[o + 1]; px[o + 2] = x[o + 2];
       x[o] += v[o] * h; x[o + 1] += v[o + 1] * h; x[o + 2] += v[o + 2] * h;
     }
@@ -1445,6 +1468,7 @@ export class SoftBody {
         pc.sleepT += dt;
         if (pc.sleepT > 0.6) {
           pc.asleep = true;
+          pc.foldAsk = true; // (not to be left asleep folded into itself)
           for (let k = 0; k < vs.length; k++) {
             const o = vs[k] * 3;
             v[o] = v[o + 1] = v[o + 2] = 0;
@@ -1629,8 +1653,11 @@ export class SoftBody {
     // firmer jelly doesn't fold far enough, even dragged by a corner)
     const soft = this.p.mu < 110, quiet = this.time < this.selfQuietUntil;
     for (let a = 0; a < NP; a++) {
-      const can = this.p.selfCollide && !quiet && !P[a].asleep && (P[a].hinge || soft), ac = act[a];
-      selfOK[a] = can ? (ac ? 1 : 2) : 0;
+      // (or anything with a fold in it to pop out - all its tets, as the
+      // fold can reach past the layer at the surface)
+      const folded = P[a].foldUntil > this.time;
+      const can = this.p.selfCollide && !quiet && !P[a].asleep && (P[a].hinge || soft || folded), ac = act[a];
+      selfOK[a] = can ? (ac || folded ? 1 : 2) : 0;
       anySelf = anySelf || selfOK[a] > 0;
     }
     // (only the surface vertices near another part of their own body - see _selfCheck)
@@ -1658,6 +1685,128 @@ export class SoftBody {
     this._gatherProbes(ptL);
   }
 
+  // Folds: every so often (and when a piece falls asleep) look for surface
+  // vertices that have ended up inside their own body - in a tet more than
+  // 2 steps from them in the mesh, so not just pressed into a crease. A
+  // drag can push a fold through faster than contact holds it, and firm
+  // jelly isn't watched for self-contact at all; anything found is held as
+  // folded for a moment: its piece runs self-contact on all its tets, those
+  // vertices probe, and they pop back out (see _selfCheck, _contact).
+  _foldCheck(dt) {
+    const P = this.pieces, NP = P.length;
+    if (!this.p.selfCollide || !NP) return;
+    this._foldClock += dt;
+    let ask = false;
+    for (let k = 0; k < NP; k++) if (P[k].foldAsk) ask = true;
+    if (this._foldClock < 0.12 && !ask) return;
+    this._foldClock = 0;
+    // which pieces: any that just fell asleep, then awake ones in turn, up
+    // to a budget of tets a look (lots of pieces: a few per look)
+    const look = this._foldLook;
+    look.fill(0, 0, NP);
+    let nLook = 0, budget = 3500;
+    for (let k = 0; k < NP; k++) {
+      if (!P[k].foldAsk) continue;
+      P[k].foldAsk = false;
+      look[k] = 1;
+      nLook++;
+      budget -= P[k].tets.length;
+    }
+    for (let n = 0; n < NP && budget > 0; n++) {
+      const k = (this._foldNext + n) % NP;
+      if (look[k] || P[k].asleep || P[k].tets.length <= 8) continue;
+      look[k] = 1;
+      nLook++;
+      budget -= P[k].tets.length;
+      this._foldNext = k + 1;
+    }
+    if (!nLook) return;
+    const x = this.x, T = this.T, tp = this.tPiece, nT = this.nT;
+    // the looked-at pieces' tets in a grid about a tet across (box and cell
+    // range per tet)
+    const C = 0.9 * this.hCell, iC = 1 / C;
+    const box = this._fgBox, cnt = this._fgCount, rng = this._hRanges;
+    let total = 0;
+    for (let t = 0; t < nT; t++) {
+      const r = t * 6;
+      if (!look[tp[t]] || this.vol0[t] <= 0) {
+        rng[r] = 1; rng[r + 1] = 0; // (none)
+        continue;
+      }
+      const o = t * 4;
+      const a = T[o] * 3, b = T[o + 1] * 3, c = T[o + 2] * 3, d = T[o + 3] * 3;
+      let v0 = x[a], v1 = x[b], v2 = x[c], v3 = x[d];
+      box[r] = Math.min(v0, v1, v2, v3); box[r + 3] = Math.max(v0, v1, v2, v3);
+      v0 = x[a + 1]; v1 = x[b + 1]; v2 = x[c + 1]; v3 = x[d + 1];
+      box[r + 1] = Math.min(v0, v1, v2, v3); box[r + 4] = Math.max(v0, v1, v2, v3);
+      v0 = x[a + 2]; v1 = x[b + 2]; v2 = x[c + 2]; v3 = x[d + 2];
+      box[r + 2] = Math.min(v0, v1, v2, v3); box[r + 5] = Math.max(v0, v1, v2, v3);
+      rng[r] = Math.floor(box[r] * iC); rng[r + 1] = Math.floor(box[r + 3] * iC);
+      rng[r + 2] = Math.floor(box[r + 1] * iC); rng[r + 3] = Math.floor(box[r + 4] * iC);
+      rng[r + 4] = Math.floor(box[r + 2] * iC); rng[r + 5] = Math.floor(box[r + 5] * iC);
+      total += (rng[r + 1] - rng[r] + 1) * (rng[r + 3] - rng[r + 2] + 1) * (rng[r + 5] - rng[r + 4] + 1);
+    }
+    let size = 1024;
+    while (size < total * 2 && size < 1 << 14) size <<= 1;
+    const mask = size - 1;
+    cnt.fill(0, 0, size + 1);
+    for (let t = 0; t < nT; t++) {
+      const r = t * 6;
+      for (let ix = rng[r]; ix <= rng[r + 1]; ix++)
+        for (let iy = rng[r + 2]; iy <= rng[r + 3]; iy++)
+          for (let iz = rng[r + 4]; iz <= rng[r + 5]; iz++) cnt[((Math.imul(ix, 92837111) ^ Math.imul(iy, 689287499) ^ Math.imul(iz, 283923481)) & mask) + 1]++;
+    }
+    for (let k = 0; k < size; k++) cnt[k + 1] += cnt[k];
+    const ent = this._fgEnt.length >= total ? this._fgEnt : (this._fgEnt = new Int32Array(total * 2));
+    const fill = this._svFill.length >= size ? this._svFill : (this._svFill = new Int32Array(size));
+    fill.set(cnt.subarray(0, size));
+    for (let t = 0; t < nT; t++) {
+      const r = t * 6;
+      for (let ix = rng[r]; ix <= rng[r + 1]; ix++)
+        for (let iy = rng[r + 2]; iy <= rng[r + 3]; iy++)
+          for (let iz = rng[r + 4]; iz <= rng[r + 5]; iz++) ent[fill[(Math.imul(ix, 92837111) ^ Math.imul(iy, 689287499) ^ Math.imul(iz, 283923481)) & mask]++] = t;
+    }
+    // every surface vertex of those pieces against its own tets: well inside
+    // one (not on its skin) that isn't within 2 steps of it in the mesh
+    const sv = this._surfV, nSV = this._nSurfV, vp = this.vPiece, hood = this._hood;
+    const nbS = this.nbStart, nbL = this.nbList, foldU = this._foldUntil, ct = this._ct;
+    const hold = this.time + 0.6;
+    let hs = this._hoodStamp;
+    for (let q = 0; q < nSV; q++) {
+      const i = sv[q], k = vp[i];
+      if (k < 0 || !look[k]) continue;
+      const px = x[i * 3], py = x[i * 3 + 1], pz = x[i * 3 + 2];
+      const h = (Math.imul(Math.floor(px * iC), 92837111) ^ Math.imul(Math.floor(py * iC), 689287499) ^ Math.imul(Math.floor(pz * iC), 283923481)) & mask;
+      let stamped = false;
+      for (let e = cnt[h]; e < cnt[h + 1]; e++) {
+        const t = ent[e];
+        if (tp[t] !== k) continue;
+        const r = t * 6;
+        if (px < box[r] || px > box[r + 3] || py < box[r + 1] || py > box[r + 4] || pz < box[r + 2] || pz > box[r + 5]) continue;
+        const o = t * 4;
+        if (T[o] === i || T[o + 1] === i || T[o + 2] === i || T[o + 3] === i) continue;
+        if (!(this._tetGap(t, px, py, pz) < 0) || Math.min(ct.b0, ct.b1, ct.b2, ct.b3) <= 0.02) continue;
+        // (inside one: is it a neighbour's? its 2 steps, stamped the first time)
+        if (!stamped) {
+          stamped = true;
+          hs++;
+          hood[i] = hs;
+          for (let e1 = nbS[i]; e1 < nbS[i + 1]; e1++) {
+            const u = nbL[e1];
+            hood[u] = hs;
+            for (let e2 = nbS[u]; e2 < nbS[u + 1]; e2++) hood[nbL[e2]] = hs;
+          }
+        }
+        if (hood[T[o]] === hs || hood[T[o + 1]] === hs || hood[T[o + 2]] === hs || hood[T[o + 3]] === hs) continue;
+        foldU[i] = hold;
+        P[k].foldUntil = hold;
+        if (P[k].asleep) this.wake(k);
+        break;
+      }
+    }
+    this._hoodStamp = hs;
+  }
+
   // Of the pieces that may meet themselves, the surface vertices with some
   // other part of their own body close by - not within 2 steps of them in
   // the mesh - are flagged for probing against it; a calm body has none and
@@ -1670,11 +1819,12 @@ export class SoftBody {
     // surface triangle this frame - r0 plus how far the two move apart or
     // together (at most twice the most any of them moves within its piece);
     // cells one such reach across, so only the 27 round a vertex need looking at
-    const pV = this._pVel, fdt = this._hashSpan;
+    const pV = this._pVel, fdt = this._hashSpan, foldU = this._foldUntil, now = this.time;
     let mr2 = 0;
     for (let q = 0; q < nSV; q++) {
       const i = sv[q], k = vp[i];
-      selfFlag[i] = 0;
+      // (found folded in: probed till it has popped out, see _foldCheck)
+      selfFlag[i] = foldU[i] > now ? 1 : 0;
       if (!selfOK[k]) continue;
       const ux = D[i * 3] - pV[k * 3] * fdt, uy = D[i * 3 + 1] - pV[k * 3 + 1] * fdt, uz = D[i * 3 + 2] - pV[k * 3 + 2] * fdt;
       const u2 = ux * ux + uy * uy + uz * uz;
@@ -1743,7 +1893,7 @@ export class SoftBody {
     for (let a = 0; a < NP; a++) if (selfOK[a]) selfOK[a] = 3; // (3 = none found yet)
     for (let q = 0; q < nSV; q++) {
       const i = sv[q], k = vp[i];
-      if (selfOK[k] === 3 && selfFlag[i]) selfOK[k] = act[k] ? 1 : 2;
+      if (selfOK[k] === 3 && selfFlag[i]) selfOK[k] = act[k] || this.pieces[k].foldUntil > now ? 1 : 2;
     }
     let anySelf = false;
     for (let a = 0; a < NP; a++) {

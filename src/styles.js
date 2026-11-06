@@ -14,15 +14,36 @@ export const FLAVORS = [
   { id: 'layers', name: 'Layers', layered: true },
 ];
 
-// Starting palettes for layered jelly, listed bottom → top.
+// Starting palettes for layered jelly, listed bottom → top. Optional: blur
+// (blend between layers), repeat (the colours cycle this many times up the
+// cube) and bias (-1..1: bands crowd toward the bottom or the top).
 export const LAYER_PRESETS = [
   { id: 'rainbow', name: 'Rainbow', colors: ['#7b22d6', '#1572ff', '#2cc23a', '#ffc814', '#ff6a0d', '#e8102e'] },
+  { id: 'pastel', name: 'Pastel', colors: ['#b39ddb', '#90caf9', '#a5d6a7', '#fff59d', '#ffcc80', '#f48fb1'], blur: 0.45 },
+  { id: 'spectrum', name: 'Spectrum', colors: ['#ff1744', '#ff9100', '#ffea00', '#00e676', '#00e5ff', '#2979ff', '#651fff', '#d500f9'], blur: 1 },
+  { id: 'stripes', name: 'Stripes', colors: ['#7b22d6', '#1572ff', '#2cc23a', '#ffc814', '#ff6a0d', '#e8102e'], blur: 0, repeat: 3 },
   { id: 'sunset', name: 'Sunset', colors: ['#3a0ca3', '#7209b7', '#f72585', '#ff6d00', '#ffbe0b'] },
   { id: 'ocean', name: 'Ocean', colors: ['#03045e', '#0077b6', '#00b4d8', '#90e0ef'] },
+  { id: 'aurora', name: 'Aurora', colors: ['#0b1d51', '#0f5257', '#14a76c', '#9bf2a2', '#c77dff'], blur: 0.8, bias: -0.35 },
+  { id: 'fire', name: 'Fire', colors: ['#fff3b0', '#ffd23f', '#ff8c42', '#e63946', '#7a0b1c'], blur: 0.9, bias: 0.4 },
+  { id: 'berry', name: 'Berry', colors: ['#4a0e2b', '#9d174d', '#ec4899', '#f9a8d4'], blur: 0.35, repeat: 2 },
+  { id: 'tropic', name: 'Tropic', colors: ['#00b4d8', '#90e0ef', '#ffd166', '#ef476f'], blur: 0.6, repeat: 2, bias: -0.3 },
   { id: 'neon', name: 'Neon', colors: ['#ff00a8', '#00e5ff', '#76ff03', '#ffea00'] },
   { id: 'candy', name: 'Candy', colors: ['#e8102e', '#f4f4f4', '#e8102e', '#f4f4f4', '#e8102e', '#f4f4f4', '#e8102e'] },
   { id: 'duo', name: 'Duo', colors: ['#3a86ff', '#ff006e'] },
 ];
+
+export const MAX_REPEAT = 6;
+// height (0 bottom .. 1 top) -> position in the bands: bias crowds them
+export const biasExp = (bias) => Math.pow(2, -1.5 * (bias || 0));
+
+// The bands of a layered flavour, bottom → top: { color, h0, h1 } (heights 0..1).
+export function layerBands(colors, repeat = 1, bias = 0) {
+  const n = colors.length, m = n * Math.max(1, Math.round(repeat || 1)), e = biasExp(bias);
+  const out = [];
+  for (let k = 0; k < m; k++) out.push({ color: colors[k % n], h0: Math.pow(k / m, 1 / e), h1: Math.pow((k + 1) / m, 1 / e) });
+  return out;
+}
 
 export const MIN_LAYERS = 2;
 export const MAX_LAYERS = 10;
@@ -67,7 +88,7 @@ export const DEFAULT_STYLE = {
   texture: 'jello',
   edges: 'round',
   glitter: 'off',
-  layers: { colors: [...LAYER_PRESETS[0].colors], blur: 0 },
+  layers: { colors: [...LAYER_PRESETS[0].colors], blur: 0, repeat: 1, bias: 0 },
 };
 
 export function flavorById(id) {
@@ -79,20 +100,21 @@ export function flavorById(id) {
 export function resolveFlavor(style) {
   if (style.flavor === 'layers' || style.flavor === 'rainbow') {
     const L = style.layers || DEFAULT_STYLE.layers;
-    return { id: 'layers', name: 'Layers', layers: L.colors, blur: L.blur || 0 };
+    return { id: 'layers', name: 'Layers', layers: L.colors, blur: L.blur || 0, repeat: L.repeat || 1, bias: L.bias || 0 };
   }
   return flavorById(style.flavor);
 }
 
 export function flavorSwatchCSS(f) {
   if (f.layers) {
-    const n = f.layers.length;
-    const top = [...f.layers].reverse();
+    // top first (the gradient runs down)
+    const bands = layerBands(f.layers, f.repeat, f.bias).reverse();
+    const pct = (h) => `${((1 - h) * 100).toFixed(2)}%`;
     if ((f.blur || 0) > 0.05) {
-      // blended: colour stops at the layer centres
-      return `linear-gradient(180deg, ${top.map((c, i) => `${c} ${((i + 0.5) / n) * 100}%`).join(', ')})`;
+      // blended: colour stops at the band centres
+      return `linear-gradient(180deg, ${bands.map((b) => `${b.color} ${pct((b.h0 + b.h1) / 2)}`).join(', ')})`;
     }
-    return `linear-gradient(180deg, ${top.map((c, i) => `${c} ${(i / n) * 100}% ${((i + 1) / n) * 100}%`).join(', ')})`;
+    return `linear-gradient(180deg, ${bands.map((b) => `${b.color} ${pct(b.h1)} ${pct(b.h0)}`).join(', ')})`;
   }
   return f.hex;
 }

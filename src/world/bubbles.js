@@ -1,10 +1,10 @@
 import * as THREE from 'three';
+import { TAG_FRESH } from '../sim/softbody.js';
+import { MAX_CAVITIES } from '../render/jellyMaterials.js';
+import { closestOnTriangle } from '../sim/geom.js';
 
 const MAX = 240;
 
-// Tiny air bubbles trapped in the gelatin. Each is anchored barycentrically
-// in a tet, so it rides along with every wobble, slice and squash. Positions
-// are fixed per bubble (seeded) and scale with the cube size.
 export class Bubbles {
   constructor(app) {
     this.app = app;
@@ -69,6 +69,7 @@ export class Bubbles {
         u: [rnd() * 2 - 1, uy, rnd() * 2 - 1],
         r: 0.004 + Math.pow(rnd(), 3) * 0.013,
         a: { tet: -1, b: [0, 0, 0, 0] },
+        open: false, // cut open: a hollow in the surface, not a bubble
       });
     }
     this.count = 34;
@@ -76,6 +77,11 @@ export class Bubbles {
     this.reseed();
     app.anchorProviders.push(() => this.items.slice(0, this.count).map((b) => b.a));
     app.onHealEnd.push(() => this.reseed());
+    // bubbles cut open: per piece they show in, a tet near by and the
+    // bubble's centre in its (extended) barycentric frame, and the radius
+    this.cavities = [];
+    this._cavTopo = -1;
+    this._cavHead = null;
     this._m = new THREE.Matrix4();
     this._q = new THREE.Quaternion();
     this._s = new THREE.Vector3();
@@ -89,6 +95,76 @@ export class Bubbles {
     this.count = n;
     this.scale = scale;
     if (grew) this.reseed();
+    this._cavTopo = -1;
+  }
+
+  // Which bubbles the cuts have run through: within a radius of a cut face
+  // (rest space; nothing else exposes them - they sit clear of the moulded
+  // faces). A bubble split between two pieces opens in both.
+  findCavities() {
+    const sb = this.app.sb;
+    this._cavTopo = sb.topoVersion;
+    this.cavities.length = 0;
+    for (const b of this.items) b.open = false;
+    const X = sb.X, T = sb.T, B = sb.B, sTri = sb.sTri, sTag = sb.sTag, sTet = sb.sTet;
+    // the bubbles (rest centres) in a little grid; then each cut face once
+    // against the ones in reach of it
+    const rMax = 0.017 * this.scale * sb.p.size;
+    const G = Math.max(0.05 * sb.p.size, 2 * rMax), iG = 1 / G;
+    // (a dense grid over the cube's rest shape and a margin round it)
+    const lo = -sb.p.size * 0.5 - 2 * G, N = Math.ceil((sb.p.size + 4 * G) * iG) + 1;
+    const cell = (v) => Math.min(N - 1, Math.max(0, Math.floor((v - lo) * iG)));
+    const head = this._cavHead && this._cavHead.length >= N * N * N ? this._cavHead : (this._cavHead = new Int32Array(N * N * N));
+    head.fill(-1, 0, N * N * N);
+    const next = new Int32Array(this.count).fill(-1), ctr = new Float64Array(this.count * 3);
+    let any = false;
+    for (let n = 0; n < this.count; n++) {
+      const bub = this.items[n];
+      if (bub.a.tet < 0 || bub.a.tet >= sb.nT || bub.a.lost) continue;
+      let cx = 0, cy = 0, cz = 0;
+      for (let k = 0; k < 4; k++) {
+        const i = T[bub.a.tet * 4 + k] * 3, w = bub.a.b[k];
+        cx += X[i] * w; cy += X[i + 1] * w; cz += X[i + 2] * w;
+      }
+      ctr[n * 3] = cx; ctr[n * 3 + 1] = cy; ctr[n * 3 + 2] = cz;
+      const h = (cell(cx) * N + cell(cy)) * N + cell(cz);
+      next[n] = head[h];
+      head[h] = n;
+      any = true;
+    }
+    if (!any) return;
+    const q = [0, 0, 0], done = new Set();
+    for (let f = 0; f < sb.nF; f++) {
+      if (sTag[f] !== TAG_FRESH) continue;
+      const ia = sTri[f * 3] * 3, ib = sTri[f * 3 + 1] * 3, ic = sTri[f * 3 + 2] * 3;
+      const x0 = cell(Math.min(X[ia], X[ib], X[ic]) - rMax), x1 = cell(Math.max(X[ia], X[ib], X[ic]) + rMax);
+      const y0 = cell(Math.min(X[ia + 1], X[ib + 1], X[ic + 1]) - rMax), y1 = cell(Math.max(X[ia + 1], X[ib + 1], X[ic + 1]) + rMax);
+      const z0 = cell(Math.min(X[ia + 2], X[ib + 2], X[ic + 2]) - rMax), z1 = cell(Math.max(X[ia + 2], X[ib + 2], X[ic + 2]) + rMax);
+      for (let i = x0; i <= x1; i++)
+        for (let j = y0; j <= y1; j++)
+          for (let k = z0; k <= z1; k++) {
+            for (let n = head[(i * N + j) * N + k]; n >= 0; n = next[n]) {
+              const pc = sb.tPiece[sTet[f]];
+              // (one hollow per bubble per piece it opens into)
+              if (done.has(n * 4096 + pc)) continue;
+              const bub = this.items[n], r = bub.r * this.scale * sb.p.size;
+              const cx = ctr[n * 3], cy = ctr[n * 3 + 1], cz = ctr[n * 3 + 2];
+              if (closestOnTriangle(cx, cy, cz, X[ia], X[ia + 1], X[ia + 2], X[ib], X[ib + 1], X[ib + 2], X[ic], X[ic + 1], X[ic + 2], q) >= r * r) continue;
+              done.add(n * 4096 + pc);
+              bub.open = true;
+              // the centre in that piece: barycentric in the cut face's tet
+              // (past its sides is fine - the map is affine)
+              const t = sTet[f], o = t * 9, a = T[t * 4] * 3;
+              const rx = cx - X[a], ry = cy - X[a + 1], rz = cz - X[a + 2];
+              const l1 = B[o] * rx + B[o + 1] * ry + B[o + 2] * rz;
+              const l2 = B[o + 3] * rx + B[o + 4] * ry + B[o + 5] * rz;
+              const l3 = B[o + 6] * rx + B[o + 7] * ry + B[o + 8] * rz;
+              this.cavities.push({ tet: t, b: [1 - l1 - l2 - l3, l1, l2, l3], r });
+            }
+          }
+    }
+    // the biggest first, if there are more than the shader takes
+    this.cavities.sort((p, q) => q.r - p.r);
   }
 
   // (Re)anchor bubbles at their rest positions inside the current mesh.
@@ -113,6 +189,16 @@ export class Bubbles {
     const sb = app.sb;
     const cam = app.camera;
     const F = app.jelly.frontMat.uniforms;
+    // the cut-open ones are hollows in the jelly (its shader carves them)
+    if (this._cavTopo !== sb.topoVersion) this.findCavities();
+    let nc = 0;
+    for (const cv of this.cavities) {
+      if (nc >= MAX_CAVITIES) break;
+      if (cv.tet >= sb.nT) continue;
+      sb.embedPoint(cv.tet, cv.b, this._t);
+      F.uCav.value[nc++].set(this._t[0], this._t[1], this._t[2], cv.r);
+    }
+    F.uCavN.value = nc;
     const sig = F.uAbsorb.value;
     const sc = F.uScatterColor.value;
     const haze = F.uHazeMin.value, scatter = F.uScatter.value;
@@ -123,7 +209,7 @@ export class Bubbles {
     const vis = (1 - haze) * (1 - haze);
     for (let k = 0; k < this.count && vis > 0.01; k++) {
       const b = this.items[k];
-      if (b.a.tet < 0 || b.a.tet >= sb.nT || b.a.lost) continue;
+      if (b.a.tet < 0 || b.a.tet >= sb.nT || b.a.lost || b.open) continue;
       sb.embedPoint(b.a.tet, b.a.b, this._t);
       const px = this._t[0], py = this._t[1], pz = this._t[2];
       // where the line of sight enters this piece's bounding box

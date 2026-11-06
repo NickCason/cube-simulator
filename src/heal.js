@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { buildCubeMesh } from './sim/mesh.js';
 import { TAG_EXTERIOR } from './sim/softbody.js';
+import { closestOnTriangle } from './sim/geom.js';
 
 const clamp01 = (x) => Math.min(1, Math.max(0, x));
 const smooth = (a, b, x) => {
@@ -217,6 +218,81 @@ export function* weldFieldJob(segs, size = 1, template = null) {
   return { at, dist, near: { cells: slotS, cellH, segs: segTex, segH, origin: -ext, invC: 1 / C, n: NC, unit: size } };
 }
 
+// What's gone - scooped out, blasted off, burnt away: vertices of the cube
+// the heal will grow (rest space; the pieces' rest positions x k) that lie
+// in no piece left, each with the nearest point of what is left, the wall
+// of its hole, and how far that is. The heal fills the holes from their
+// walls like a liquid (see Healer._fuse, JellyView). d: -1 = not missing.
+export function* fillFieldJob(sb, template, k = 1) {
+  const n = template.length / 3;
+  const d = new Float32Array(n).fill(-1);
+  const wall = new Float32Array(n * 3);
+  const loc = { tet: -1, b0: 0, b1: 0, b2: 0, b3: 0 };
+  const gone = [];
+  for (let i = 0; i < n; i++) {
+    if (i % 300 === 299) yield;
+    if (!sb.locateRestFast(template[i * 3] / k, template[i * 3 + 1] / k, template[i * 3 + 2] / k, loc)) gone.push(i);
+  }
+  if (!gone.length) return { d, wall, n: 0 };
+  // what's left: its surface in a grid (cells about a template cell across)
+  const h = sb.p.size / sb.p.res, C = h, iC = 1 / C;
+  const X = sb.X, sTri = sb.sTri, nF = sb.nF;
+  const cells = new Map();
+  const key = (i, j, l) => (i + 512) * 1048576 + (j + 512) * 1024 + (l + 512);
+  for (let f = 0; f < nF; f++) {
+    if (f % 600 === 599) yield;
+    const a = sTri[f * 3] * 3, b = sTri[f * 3 + 1] * 3, c = sTri[f * 3 + 2] * 3;
+    const lo = [0, 1, 2].map((e) => Math.floor(Math.min(X[a + e], X[b + e], X[c + e]) * k * iC));
+    const hi = [0, 1, 2].map((e) => Math.floor(Math.max(X[a + e], X[b + e], X[c + e]) * k * iC));
+    for (let i = lo[0]; i <= hi[0]; i++)
+      for (let j = lo[1]; j <= hi[1]; j++)
+        for (let l = lo[2]; l <= hi[2]; l++) {
+          const kk = key(i, j, l), list = cells.get(kk);
+          if (list) list.push(f);
+          else cells.set(kk, [f]);
+        }
+  }
+  // the nearest point on it for each missing vertex: rings of cells out
+  // until nothing nearer can be further out
+  const q = [0, 0, 0], best = [0, 0, 0];
+  const tol = 0.2 * h, maxR = sb.p.res + 2;
+  let count = 0;
+  for (let g = 0; g < gone.length; g++) {
+    if (g % 40 === 39) yield;
+    const v = gone[g], px = template[v * 3], py = template[v * 3 + 1], pz = template[v * 3 + 2];
+    const ci = Math.floor(px * iC), cj = Math.floor(py * iC), cl = Math.floor(pz * iC);
+    let bd = Infinity;
+    const seen = new Set();
+    for (let r = 0; r <= maxR; r++) {
+      if (bd <= ((r - 1) * C) ** 2) break;
+      for (let i = ci - r; i <= ci + r; i++)
+        for (let j = cj - r; j <= cj + r; j++)
+          for (let l = cl - r; l <= cl + r; l++) {
+            if (Math.max(Math.abs(i - ci), Math.abs(j - cj), Math.abs(l - cl)) !== r) continue;
+            const list = cells.get(key(i, j, l));
+            if (!list) continue;
+            for (const f of list) {
+              if (seen.has(f)) continue;
+              seen.add(f);
+              const a = sTri[f * 3] * 3, b = sTri[f * 3 + 1] * 3, c = sTri[f * 3 + 2] * 3;
+              const dd = closestOnTriangle(px, py, pz, X[a] * k, X[a + 1] * k, X[a + 2] * k, X[b] * k, X[b + 1] * k, X[b + 2] * k, X[c] * k, X[c + 1] * k, X[c + 2] * k, q);
+              if (dd < bd) {
+                bd = dd;
+                best[0] = q[0]; best[1] = q[1]; best[2] = q[2];
+              }
+            }
+          }
+    }
+    const dist = Math.sqrt(bd);
+    // (a hair from what's left: it just snaps in)
+    if (!(dist > tol)) continue;
+    d[v] = dist;
+    wall[v * 3] = best[0]; wall[v * 3 + 1] = best[1]; wall[v * 3 + 2] = best[2];
+    count++;
+  }
+  return { d, wall, n: count };
+}
+
 // Run a job to the end (now).
 function finish(job) {
   let r;
@@ -251,6 +327,9 @@ export class Healer {
     this.weldJob = null;
     this.weldField = null;
     this.weldT = undefined;
+    this.fillJob = null; // what's gone, and where to fill it from (see fillFieldJob)
+    this.fillField = null;
+    this.fillTemplate = null;
   }
 
   start(opts = {}) {
@@ -418,6 +497,10 @@ export class Healer {
         U.uWeldT.value = 99;
       }
     }
+    if (sb.fill) {
+      sb.fill.t += dt;
+      if (sb.fill.t > sb.fill.dur || sb.fill.topo !== sb.topoVersion) sb.fill = null;
+    }
     if (this.settling) {
       // lower the reformed cube gently onto the table
       this.settleT += dt;
@@ -447,8 +530,19 @@ export class Healer {
       this._startWeld();
       sb.attract = { targets: this.targets, n: sb.nV, rate: sb.attract ? sb.attract.rate : 0 };
     }
-    // the weld's light field is built a little at a time while the pieces fly
-    if (this.weldJob) {
+    // what's missing is worked out first (the droplets need it before they
+    // set off), then the weld's light field, a little at a time
+    if (this.fillJob) {
+      const t0 = performance.now();
+      let r;
+      do r = this.fillJob.next();
+      while (!r.done && performance.now() - t0 < 3);
+      if (r.done) {
+        this.fillField = r.value;
+        this.fillJob = null;
+        this._sendDroplets();
+      }
+    } else if (this.weldJob) {
       const t0 = performance.now();
       let r;
       do r = this.weldJob.next();
@@ -516,7 +610,28 @@ export class Healer {
     }
     this.weldField = null;
     const p = sb.p;
-    this.weldJob = segs.length ? weldFieldJob(segs, p.size, buildCubeMesh(p.res, p.size, p.bevel).pos) : null;
+    const template = buildCubeMesh(p.res, p.size, p.bevel).pos;
+    this.fillTemplate = template;
+    this.weldJob = segs.length ? weldFieldJob(segs, p.size, template) : null;
+    // and what's missing, for the liquid fill (first: the droplets want it)
+    this.fillField = null;
+    this.fillJob = fillFieldJob(sb, template, k);
+  }
+
+  // Blasted-off drops head for the holes they came out of (where the cube
+  // will be: the template's missing vertices, placed as _fuse will).
+  _sendDroplets() {
+    const f = this.fillField;
+    if (!f || !f.n) return;
+    const pts = [];
+    for (let i = 0; i < f.d.length; i++) if (f.d[i] >= 0) pts.push(i);
+    const half = this.app.sb.p.size / 2, c = Math.cos(this.yaw), s = Math.sin(this.yaw);
+    const tpl = this.fillTemplate;
+    this.app.droplets.retarget((out) => {
+      const i = pts[Math.floor(Math.random() * pts.length)];
+      const X = tpl[i * 3], Y = tpl[i * 3 + 1], Z = tpl[i * 3 + 2];
+      out.set(this.cx + c * X + s * Z, LIFT_FUSE + Y + half, this.cz - s * X + c * Z);
+    });
   }
 
 
@@ -541,8 +656,26 @@ export class Healer {
     const field = this.weldField || (this.weldJob ? finish(this.weldJob) : null);
     this.weldJob = null;
     this.weldField = null;
+    const fill = this.fillField || (this.fillJob ? finish(this.fillJob) : null);
+    this.fillJob = null;
+    this.fillField = null;
     sb.attract = null;
     sb.loadCube(this.cx, LIFT_FUSE, this.cz, this.yaw);
+    // what was missing starts where its holes' walls were and rises to fill
+    // them, glowing, as the seams weld (JellyView moves it, from sb.fill)
+    sb.fill = null;
+    if (fill && fill.n && fill.d.length === sb.nV) {
+      const off = new Float32Array(sb.nV * 3), c = Math.cos(this.yaw), s = Math.sin(this.yaw);
+      let dmax = 0;
+      for (let i = 0; i < sb.nV; i++) {
+        if (fill.d[i] < 0) continue;
+        dmax = Math.max(dmax, fill.d[i]);
+        // (rest -> world: turned by the yaw, as loadCube places it)
+        const ox = fill.wall[i * 3] - sb.X[i * 3], oy = fill.wall[i * 3 + 1] - sb.X[i * 3 + 1], oz = fill.wall[i * 3 + 2] - sb.X[i * 3 + 2];
+        off[i * 3] = c * ox + s * oz; off[i * 3 + 1] = oy; off[i * 3 + 2] = -s * ox + c * oz;
+      }
+      sb.fill = { d: fill.d, off, dmax, t: 0, dur: Math.min(1.25, Math.max(0.7, 0.55 + dmax * 2.2)), topo: sb.topoVersion };
+    }
     sb.collisionsEnabled = true;
     sb.dampBoost = 1;
     sb.gravityScale = 0;
@@ -560,6 +693,8 @@ export class Healer {
       sb.weld = null;
       sb.glow.fill(0.25, 0, sb.nV);
     }
+    // (the new jelly comes in glowing like liquid light, the rest of the cube a little)
+    if (sb.fill) for (let i = 0; i < sb.nV; i++) if (sb.fill.d[i] >= 0) sb.glow[i] = 2.4;
     this.weldT = field ? 0 : undefined;
     app.jelly.frontMat.uniforms.uWeldT.value = field ? 0 : 99;
     this.fused = true;

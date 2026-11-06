@@ -25,7 +25,9 @@ pieces lift and drift apart into an exploded view while each turns into its
 final orientation, hover for a beat, then glide back together with glowing
 seams and fuse — the seams flare white-hot and scorch the jelly round them
 until a wave of light runs out and heals it clean — and settle gently onto
-the table.
+the table. Blasted-off drops fly back into the holes they came from, and
+whatever was scooped or blown away rises back like glowing liquid from the
+holes' walls as the seams weld.
 
 ![Heal animation](docs/heal.gif)
 
@@ -33,9 +35,11 @@ the table.
 
 - **Flavor** — cherry, lime, blue raspberry, grape, orange, lemon, watermelon, cola, any
   custom colour, or **Layers**: 2–10 stacked layers you colour yourself (tap a band in the
-  little cross-section to pick its colour), starting from Rainbow, Sunset, Ocean, Neon,
-  Candy or Duo, with a **Blend** slider from crisp seams to a smooth gradient. The layers
-  show on every cut face.
+  little cross-section to pick its colour), starting from Rainbow, Pastel, Spectrum,
+  Stripes, Sunset, Ocean, Aurora, Fire, Berry, Tropic, Neon, Candy or Duo. **Blend** runs
+  from crisp seams to a smooth gradient, **Repeat** cycles the colours up to 6 times up
+  the cube, and **Bias** crowds the bands toward the bottom or the top. The layers show on
+  every cut face.
 - **Material** — how it looks *and* how it behaves: Jello (clear, wobbly), Gummy (cloudy,
   chewy, firmer), Sour (sugar-crystal coating), Crystal (glass-clear), Creamy (milky
   panna-cotta), Slime (glowing, gooey, sticky), Water balloon (crystal-clear, heavy, all
@@ -69,7 +73,11 @@ Choices are remembered. You can also link straight to a combo, e.g.
 
 ![Rainbow jelly cube](docs/rainbow.jpg)
 
-Keys: `1`–`0` tools, `H` heal, `M` sound, hold `Space` for slow motion. Drag empty space to orbit, scroll or pinch to zoom.
+Keys: `1`–`0` tools, `H` heal, `M` sound, hold `Space` for slow motion, arrow keys tip the table, `S` shakes it. Drag empty space to orbit, scroll or pinch to zoom.
+
+**Tilt & shake** (phones, Settings → World): tip the phone and the table tips with it — the
+jelly leans, then slides once the pull beats its grip; shake the phone and the table jolts
+under it.
 
 ## How it works
 
@@ -77,8 +85,10 @@ Keys: `1`–`0` tools, `H` heal, `M` sound, hold `Space` for slow motion. Drag e
   Neo-Hookean constraints of Macklin & Müller (2021), rigid-motion-preserving
   damping, friction, inter-piece contact and sleeping. Self-contact keeps a
   watery cube from folding into itself and a flap still hinged on by a partial
-  cut from dropping through its own body. Temperature softens or stiffens the
-  material per tet.
+  cut from dropping through its own body, and a regular look for folds catches
+  anything that got pushed through anyway (in firm jelly too) and pops it back
+  out. Temperature softens or stiffens the material per tet. Air bubbles ride
+  along inside; one a cut runs through becomes a hollow in the cut face.
 - **Cutting:** conforming tet splitting along implicit surfaces (planes, spheres)
   with vertex snapping for flat, clean cut faces; partial cuts are re-glued
   outside the knife stroke; frozen fracture splits along element boundaries.
