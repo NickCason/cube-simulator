@@ -3,19 +3,29 @@ import { App } from './app.js';
 
 const params = new URLSearchParams(location.search);
 const canvas = document.getElementById('stage');
-const app = new App(canvas, {
-  preserve: params.has('shot'),
-  msaa: params.has('nomsaa') ? 0 : 4,
-  tm: params.get('tm') || undefined,
-  exposure: params.has('exp') ? +params.get('exp') : undefined,
-  color: params.get('color') ? '#' + params.get('color') : undefined,
-  nojelly: params.has('nojelly'),
-  light: params.get('light') || undefined,
-});
+let app;
+try {
+  app = new App(canvas, {
+    preserve: params.has('shot'),
+    msaa: params.has('nomsaa') ? 0 : params.has('msaa') ? 4 : undefined,
+    tm: params.get('tm') || undefined,
+    exposure: params.has('exp') ? +params.get('exp') : undefined,
+    color: params.get('color') ? '#' + params.get('color') : undefined,
+    nojelly: params.has('nojelly'),
+    light: params.get('light') || undefined,
+  });
+} catch (err) {
+  console.error(err);
+  document.body.insertAdjacentHTML(
+    'beforeend',
+    '<div class="nogl"><b>Cube Simulator</b><span>Your browser could not start WebGL 2, which this jelly needs. Try a recent Chrome, Edge, Firefox or Safari.</span></div>',
+  );
+  throw err;
+}
 if (params.has('density') || params.has('scatter')) {
-  app.jelly.density = +(params.get('density') || 1);
-  app.jelly.scatter = +(params.get('scatter') || 0.22);
-  app.jelly.setColor(params.get('color') ? '#' + params.get('color') : '#e0102a');
+  if (params.has('density')) app.jelly.density = +params.get('density');
+  if (params.has('scatter')) app.jelly.scatter = +params.get('scatter');
+  app.setColor(app.color);
 }
 if (params.has('dbg')) app.jelly.frontMat.uniforms.uDebug.value = +params.get('dbg');
 window.__app = app;

@@ -42,17 +42,19 @@ export class Overlay {
       const s = this.stroke;
       c.save();
       c.lineCap = 'round';
-      c.setLineDash([2, 7]);
-      c.strokeStyle = 'rgba(30,30,34,0.55)';
-      c.lineWidth = 1.5;
+      c.setLineDash([3, 7]);
+      c.shadowColor = 'rgba(0,0,0,0.45)';
+      c.shadowBlur = 4;
+      c.strokeStyle = 'rgba(255,255,255,0.95)';
+      c.lineWidth = 2;
       c.beginPath();
       c.moveTo(s.ax, s.ay);
       c.lineTo(s.bx, s.by);
       c.stroke();
       c.setLineDash([]);
-      c.fillStyle = 'rgba(30,30,34,0.7)';
+      c.fillStyle = 'rgba(255,255,255,0.95)';
       c.beginPath();
-      c.arc(s.ax, s.ay, 3, 0, Math.PI * 2);
+      c.arc(s.ax, s.ay, 3.5, 0, Math.PI * 2);
       c.fill();
       c.restore();
     }

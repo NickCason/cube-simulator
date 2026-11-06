@@ -136,6 +136,13 @@ export class MalletTool {
       }
       sb.impulse(p.x, p.y, p.z, d.x, d.y, d.z, 0.48, 7.5, a.tg.hit.piece);
       app.audio.thud(1);
+      // a few wet flecks fly off
+      const n = a.tg.normal;
+      for (let k = 0; k < 5; k++) {
+        const v = n.clone().multiplyScalar(1.5 + Math.random() * 2).add(new THREE.Vector3((Math.random() - 0.5) * 2.5, 1.5 + Math.random() * 2, (Math.random() - 0.5) * 2.5));
+        app.droplets.spawn(p.clone().addScaledVector(n, 0.03), v, 0.008 + Math.random() * 0.012);
+      }
+      app.markDamaged();
     } else {
       // whack the table: everything nearby hops
       const x = sb.x, v = sb.v;
@@ -299,6 +306,7 @@ export class TorchTool extends NozzleTool {
     const app = this.app;
     app.particles.flame(tip, dir, 1);
     app.particles.flame(tip, dir, 1);
+    app.fireAt(tip.clone().addScaledVector(dir, 0.12), 1.0);
     if (tg.jelly) {
       const sb = app.sb;
       sb.addHeat(tg.point.x, tg.point.y, tg.point.z, 0.3, 2.1 * dt, 1.6, -1.3);
@@ -552,6 +560,7 @@ export class BombTool {
     app.audio.boom(1);
     app.shake(0.05);
     app.flash = 0.6;
+    app.fireAt(p.clone().add(new THREE.Vector3(0, 0.15, 0)), 9);
     const anchors = app.allAnchors();
     // smooth spherical crater; the blasted-out jelly becomes flying blobs
     const R = 0.24;

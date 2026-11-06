@@ -84,6 +84,8 @@ export function createJellyMaterial(env) {
       uTime: { value: 0 },
       uSceneLodMax: { value: 6 },
       uDebug: { value: 0 },
+      uPLPos: { value: new THREE.Vector3(0, 2, 0) },
+      uPLColor: { value: new THREE.Color(0, 0, 0) },
     },
     vertexShader: VERT,
     fragmentShader: /* glsl */ `
@@ -106,6 +108,8 @@ export function createJellyMaterial(env) {
       uniform float uTime;
       uniform float uSceneLodMax;
       uniform int uDebug;
+      uniform vec3 uPLPos;
+      uniform vec3 uPLColor;
       varying vec3 vWorldPos;
       varying vec3 vNormal;
       varying vec3 vViewPos;
@@ -222,6 +226,18 @@ export function createJellyMaterial(env) {
         vec3 spec = uLightColor * D_GGX(NdH, a) * V_Smith(nl, NdV, a) * nl * Fh;
 
         vec3 col = body * (1.0 - F) + refl * F + spec;
+
+        // dynamic point light (torch flame, explosion flash)
+        if (uPLColor.r + uPLColor.g + uPLColor.b > 0.001) {
+          vec3 Lp = uPLPos - vWorldPos;
+          float dp = length(Lp);
+          Lp /= dp;
+          float fall = 1.0 / (1.0 + dp * dp * 9.0);
+          float nlp = max(dot(N, Lp), 0.0);
+          vec3 Hp = normalize(Lp + V);
+          float specP = D_GGX(max(dot(N, Hp), 0.0), max(a, 0.004)) * V_Smith(nlp, NdV, max(a, 0.004)) * nlp * 0.06;
+          col += uPLColor * fall * (specP + sc * (max((dot(N, Lp) + 0.6) / 1.6, 0.0) * 0.5 + 0.35));
+        }
 
         // frost layer: white crystalline film with sparkles
         if (frost > 0.0) {

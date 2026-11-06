@@ -180,16 +180,16 @@ export class Particles {
   }
 
   flame(p, dir, intensity = 1) {
-    for (let i = 0; i < 3; i++) {
+    for (let i = 0; i < 4; i++) {
       const s = rnd(1.6, 2.6);
       const jx = rnd(-0.25, 0.25), jy = rnd(-0.25, 0.25), jz = rnd(-0.25, 0.25);
       const core = Math.random() < 0.5;
       if (core) {
         this.add.spawn(p.x, p.y, p.z, (dir.x + jx * 0.4) * s, (dir.y + jy * 0.4) * s, (dir.z + jz * 0.4) * s,
-          rnd(0.06, 0.12), 0.02, 0.05, [0.35 * intensity, 0.55 * intensity, 3.2 * intensity, 1], [0.6, 0.5, 2.0, 0.4], 3.5, 0.5);
+          rnd(0.06, 0.12), 0.02, 0.05, [0.25 * intensity, 0.4 * intensity, 2.4 * intensity, 1], [0.4, 0.35, 1.4, 0.4], 3.5, 0.5);
       } else {
         this.add.spawn(p.x, p.y, p.z, (dir.x + jx) * s, (dir.y + jy) * s, (dir.z + jz) * s,
-          rnd(0.12, 0.28), 0.03, rnd(0.09, 0.15), [4.0 * intensity, 1.6 * intensity, 0.35 * intensity, 1], [1.6, 0.25, 0.04, 0.0], 4.0, 2.5);
+          rnd(0.14, 0.32), 0.035, rnd(0.11, 0.2), [2.2 * intensity, 0.75 * intensity, 0.12 * intensity, 0.85], [1.1, 0.16, 0.02, 0.0], 3.6, 2.5);
       }
     }
   }
@@ -205,9 +205,14 @@ export class Particles {
 
   mist(p, dir, n = 3) {
     for (let i = 0; i < n; i++) {
-      const s = rnd(1.2, 2.4);
-      this.alpha.spawn(p.x, p.y, p.z, (dir.x + rnd(-0.3, 0.3)) * s, (dir.y + rnd(-0.3, 0.3)) * s, (dir.z + rnd(-0.3, 0.3)) * s,
-        rnd(0.6, 1.3), 0.03, rnd(0.18, 0.32), [0.92, 0.96, 1.0, 0.45], [0.95, 0.97, 1.0, 0.0], 3.0, -0.35);
+      const s = rnd(1.4, 2.6);
+      this.alpha.spawn(p.x, p.y, p.z, (dir.x + rnd(-0.25, 0.25)) * s, (dir.y + rnd(-0.25, 0.25)) * s, (dir.z + rnd(-0.25, 0.25)) * s,
+        rnd(0.7, 1.5), 0.04, rnd(0.22, 0.4), [1.15, 1.2, 1.3, 0.7], [1.0, 1.02, 1.05, 0.0], 3.0, -0.3);
+    }
+    // icy glints in the jet
+    if (Math.random() < 0.6) {
+      this.add.spawn(p.x, p.y, p.z, dir.x * 2.2 + rnd(-0.4, 0.4), dir.y * 2.2 + rnd(-0.4, 0.4), dir.z * 2.2 + rnd(-0.4, 0.4),
+        rnd(0.2, 0.4), 0.012, 0.004, [2.5, 3.0, 3.5, 1], [1.0, 1.3, 1.6, 0], 2.0, -1.0);
     }
   }
 

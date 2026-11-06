@@ -66,6 +66,12 @@ export class App {
     this.scene.add(key.target);
 
     this.jelly = new JellyView(renderer, this.env, this.lightDir);
+    // warm dynamic light for flames and blasts (lights the floor and the jelly)
+    this.fireLight = new THREE.PointLight(0xff8a3c, 0, 3.5, 2);
+    this.fireLight.position.set(0, 1, 0);
+    this.scene.add(this.fireLight);
+    this.fireLevel = 0;
+    this.fireGoal = 0;
     this.floor = createFloor(this.env, this.jelly.fxUniforms);
     this.scene.add(this.floor);
 
@@ -192,6 +198,11 @@ export class App {
     this.healer.start();
   }
 
+  fireAt(p, level) {
+    this.fireLight.position.copy(p);
+    this.fireGoal = Math.max(this.fireGoal, level);
+  }
+
   setSlowMo(on) {
     this.slowGoal = on ? 0.2 : 1;
     if (on) this.ui?.hint('Slow motion', 1200);
@@ -239,6 +250,9 @@ export class App {
     const halfV = Math.tan((this.camera.fov * Math.PI) / 360) * this.orbitGoal.radius;
     const halfW = halfV * (w / h);
     this.sb.p.arenaRadius = Math.max(1.15, Math.min(2.3, halfW * 0.92 - 0.35));
+    // pixel budget: huge screens render at a lower ratio
+    const budget = Math.sqrt(3.6e6 / Math.max(1, w * h));
+    if (this.pixelRatio > budget) this.pixelRatio = Math.max(0.6, budget);
     this.renderer.setPixelRatio(this.pixelRatio);
     const pw = Math.floor(w * this.pixelRatio), ph = Math.floor(h * this.pixelRatio);
     this.size = { w, h, pw, ph };
@@ -436,6 +450,13 @@ export class App {
     const r = this.renderer;
     this.jelly.update(this.sb);
     this.jelly.frontMat.uniforms.uTime.value = this.clock.t;
+    // fire light: torch sets fireGoal each frame, bombs spike it
+    this.fireLevel += (this.fireGoal - this.fireLevel) * 0.35;
+    this.fireGoal *= 0.6;
+    const fl = this.fireLevel * (0.85 + Math.random() * 0.3);
+    this.fireLight.intensity = fl * 3.2;
+    this.jelly.frontMat.uniforms.uPLPos.value.copy(this.fireLight.position);
+    this.jelly.frontMat.uniforms.uPLColor.value.setRGB(1.0 * fl, 0.55 * fl, 0.2 * fl);
 
     this.jelly.renderFloorFx();
 

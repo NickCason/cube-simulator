@@ -99,6 +99,7 @@ body {
 }
 
 .dock button {
+  touch-action: manipulation;
   appearance: none;
   border: 0;
   background: transparent;
@@ -390,4 +391,20 @@ body {
     bottom: calc(max(18px, calc(env(safe-area-inset-bottom) + 8px)) + 60px);
     font-size: 12px;
   }
+}
+
+.nogl {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-content: center;
+  gap: 8px;
+  text-align: center;
+  padding: 24px;
+  font-size: 15px;
+  color: rgba(28, 28, 31, 0.8);
+}
+
+.nogl b {
+  font-size: 18px;
 }
