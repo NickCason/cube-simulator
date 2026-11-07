@@ -27,6 +27,7 @@ import { SETTINGS, resolveSettings } from './settings.js';
 
 const SETTING_BY_KEY = Object.fromEntries(SETTINGS.map((s) => [s.key, s]));
 import { Tilt } from './tilt.js';
+import { nameCube } from './namegen.js';
 
 // The two looks: the photo studio, and glow mode - lights out, the jelly
 // shining in the dark over a glossy black floor that mirrors it.
@@ -1210,7 +1211,12 @@ export class App {
     this._arena(this.cubes.length + 1);
     const [x, z, top] = this._clearSpot();
     const y = drop ? Math.max(this.swapper._dropHeight(size), top + 0.3) : top;
-    const cb = { slot, style, tune };
+    // (a plain one gets a name of its own, made out of what it is - and so
+    // does the one already here, if it hasn't one)
+    const taken = () => this.cubes.map((x) => x.name || '');
+    for (const x of this.cubes) if (!x.name) x.name = nameCube({ ...x.style, tune: x.tune }, { taken: taken() });
+    const named = c ? c.name || '' : nameCube({ ...style, tune }, { taken: taken() });
+    const cb = { slot, style, tune, name: named };
     sb.addCube(slot, x, y, z, (Math.random() - 0.5) * 0.8, this.bevelOf(cb));
     sb.p.bevel = sb.cBevel[slot];
     sb.rebuild();

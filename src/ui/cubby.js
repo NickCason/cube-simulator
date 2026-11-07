@@ -4,7 +4,7 @@
 // link, or pasted in (an installed iPhone app doesn't get links: Safari does).
 
 import { captureCube, encodeCube, decodeCube, cubeLink, cubeSummary, cleanName } from '../cubecode.js';
-import { cubeName } from '../puns.js';
+import { nameCube } from '../namegen.js';
 import { qrEncode, qrSVG } from './qr.js';
 import { FighterCard } from './fighter.js';
 import { resolveFlavor, layerBands, TEXTURES } from '../styles.js';
@@ -396,10 +396,11 @@ export class Cubby {
     return this.items.map((it) => decodeCube(it.code)?.name || '');
   }
 
+  // a name made out of what it is (and what it's been through)
   _suggest(not = '') {
     const c = captureCube(this.app);
     const taken = [...this.names, not];
-    return cubeName(c, taken);
+    return nameCube(c, { taken, rec: this.active ? this.active.rec : this.loose });
   }
 
   open() {
@@ -596,8 +597,6 @@ export class Cubby {
     if (!c) return;
     const slot = this.app.addCube(c);
     if (slot < 0) return;
-    const cb = this.app.cubes.find((x) => x.slot === slot);
-    if (cb) cb.name = c.name || '';
     this.app.ui.cubesChanged();
     if (window.innerWidth <= 720) this.close();
   }

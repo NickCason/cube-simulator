@@ -45,11 +45,17 @@ const ANY = [
   'Blockbuster', 'Square Dance', 'Cubed Awakening', 'Jiggle Physics', 'Wobble Wobble', 'New Kid on the Block',
 ];
 
-// A name for this cube that isn't on the shelf yet. (rnd: 0..1)
+// the puns for this cube: its flavour's, its material's and the all-rounders
+export function punsFor(c) {
+  const flavorKey = c.flavor && String(c.flavor).startsWith('#') ? 'custom' : c.flavor;
+  return [...(BY_FLAVOR[flavorKey] || []), ...(BY_MATERIAL[c.texture] || []), ...ANY];
+}
+
+// A pun name for this cube that isn't on the shelf yet. (rnd: 0..1; the
+// Cubby's names come from namegen.js now - the puns are one kind of name)
 export function cubeName(c, taken = [], rnd = Math.random) {
   const used = new Set(taken.map((n) => n.toLowerCase()));
-  const flavorKey = c.flavor && c.flavor.startsWith('#') ? 'custom' : c.flavor;
-  const pool = [...(BY_FLAVOR[flavorKey] || []), ...(BY_MATERIAL[c.texture] || []), ...ANY];
+  const pool = punsFor(c);
   const free = pool.filter((n) => !used.has(n.toLowerCase()));
   if (free.length) return free[Math.floor(rnd() * free.length)];
   // (every pun's on the shelf: a sequel)

@@ -2871,6 +2871,9 @@ html.dark .card-healed {
   font-size: 11px;
   font-style: normal;
   color: rgba(28, 28, 31, 0.5);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .palette .stack-row .out {

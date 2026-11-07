@@ -12,9 +12,13 @@ const svg = (inner) =>
 
 export const STACK_ICON = svg('<rect x="7" y="3.6" width="10" height="5.2" rx="1.4"/><rect x="4" y="9.4" width="16" height="5.2" rx="1.4"/><rect x="5.5" y="15.2" width="13" height="5.2" rx="1.4"/>');
 
-// "Cherry jello", "Sunset gummy", or its Cubby name
+// its name - or "Cherry jello", "Layered gummy"
 export function cubeLabel(cb) {
-  if (cb.name) return cb.name;
+  return cb.name || cubeKind(cb);
+}
+
+// what it is: "Cherry jello", "Layered gummy", "Custom chrome"
+export function cubeKind(cb) {
   const st = cb.style, mat = (TEXTURES[st.texture]?.name || st.texture).toLowerCase();
   if (st.flavor === 'layers') return `Layered ${mat}`;
   if (st.flavor.startsWith('#')) return `Custom ${mat}`;
@@ -111,7 +115,8 @@ export class StackPanel {
       row.innerHTML = `<span class="grip" aria-hidden="true">⋮⋮</span><span class="bar"></span><span class="lab"><b></b><i></i></span><button class="out" aria-label="Take it out">×</button>`;
       row.querySelector('.bar').style.background = flavorSwatchCSS(resolveFlavor(cb.style));
       row.querySelector('.lab b').textContent = cubeLabel(cb);
-      row.querySelector('.lab i').textContent = i === 0 ? 'bottom' : i === order.length - 1 ? 'top' : `level ${i + 1}`;
+      const lvl = i === 0 ? 'bottom' : i === order.length - 1 ? 'top' : `level ${i + 1}`;
+      row.querySelector('.lab i').textContent = cb.name ? `${lvl} · ${cubeKind(cb)}` : lvl;
       const out = row.querySelector('.out');
       out.hidden = app.cubes.length <= 1;
       out.addEventListener('click', (e) => {
