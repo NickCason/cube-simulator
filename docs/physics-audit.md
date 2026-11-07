@@ -145,6 +145,39 @@ strength, Poke.
   hinge still get pushed apart, adding strain.
 - The push ignores mass.
 
+## Dicer
+**Model.**
+- **Frame:** the tapped piece's frame is fitted from its rest shape (centre
+  of mass, Müller rotation, extent along its own axes).
+- **Pass 1:** a blade grid comes down along the axis nearest straight up.
+  The vertical cuts go in when it bottoms out: planes at thirds of the
+  extent, square to the jelly's own axes, held inside its box.
+- **Pass 2:** the grid comes across sideways; the horizontal cuts go in at
+  the end of the pass. The frame is re-fitted before each pass.
+- **Hold:** between the passes it holds what it's dicing still (velocities
+  damped each frame), because the tall columns would otherwise topple out
+  of the second pass's box.
+- **Pop:** a rigid radial impulse. Pieces too small to dice 3x3x3 get
+  2x2x2, or nothing.
+
+**Open.**
+- The blades don't touch the jelly; only the cuts do.
+- The hold is a velocity damp, not a constraint, so a column already
+  falling keeps a little of its fall.
+
+## Cube cuber
+**Model.**
+- **Box:** a box cut worked out in the jelly's rest shape, square to its
+  own faces, 2.5 cells of the mesh a side.
+- **Grid-aligned:** every face sits half way between two rows of
+  vertices. A face that landed on a row snapped those vertices onto the
+  cut, and the cube stayed welded in about one time in three.
+- **Fling:** up and to the side, with a random spin.
+
+**Open.**
+- Like the baller, it uses where the jelly was at the click.
+- The cube's size follows the mesh resolution, not a set size.
+
 ## Nail gun and nails
 
 **Model.**

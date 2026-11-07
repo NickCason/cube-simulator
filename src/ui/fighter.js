@@ -10,6 +10,7 @@ const RECORD = [
   ['picked', 'Picked'],
   ['cuts', 'Cuts'],
   ['tears', 'Tears'],
+  ['diced', 'Diced'],
   ['shots', 'Shots'],
   ['booms', 'Booms'],
 ];

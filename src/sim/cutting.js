@@ -457,6 +457,37 @@ export function sphereField(cx, cy, cz, r) {
 
 // Fracture along element boundaries: tets get labels; vertices shared by
 // tets with different labels are duplicated so the clusters separate.
+// A box centred at (cx, cy, cz), turned by the quaternion q = [x, y, z, w],
+// half-sizes hx, hy, hz, its edges rounded by r (signed distance).
+export function boxField(cx, cy, cz, q, hx, hy, hz, r = 0) {
+  const [x, y, z, w] = q;
+  // its axes in the world (the rotation's columns)
+  const ax = [1 - 2 * (y * y + z * z), 2 * (x * y + w * z), 2 * (x * z - w * y)];
+  const ay = [2 * (x * y - w * z), 1 - 2 * (x * x + z * z), 2 * (y * z + w * x)];
+  const az = [2 * (x * z + w * y), 2 * (y * z - w * x), 1 - 2 * (x * x + y * y)];
+  const ix = hx - r, iy = hy - r, iz = hz - r;
+  const value = (px, py, pz) => {
+    const dx = px - cx, dy = py - cy, dz = pz - cz;
+    const qx = Math.abs(dx * ax[0] + dy * ax[1] + dz * ax[2]) - ix;
+    const qy = Math.abs(dx * ay[0] + dy * ay[1] + dz * ay[2]) - iy;
+    const qz = Math.abs(dx * az[0] + dy * az[1] + dz * az[2]) - iz;
+    return Math.hypot(Math.max(qx, 0), Math.max(qy, 0), Math.max(qz, 0)) + Math.min(Math.max(qx, qy, qz), 0) - r;
+  };
+  return {
+    value,
+    normal: (px, py, pz, out) => {
+      const e = 1e-4;
+      const gx = value(px + e, py, pz) - value(px - e, py, pz);
+      const gy = value(px, py + e, pz) - value(px, py - e, pz);
+      const gz = value(px, py, pz + e) - value(px, py, pz - e);
+      const l = Math.hypot(gx, gy, gz) || 1;
+      out[0] = gx / l; out[1] = gy / l; out[2] = gz / l;
+      return out;
+    },
+    inRegion: null,
+  };
+}
+
 export function separateClusters(sb, labels, anchors = []) {
   captureAnchors(sb, anchors);
   const { T } = sb;

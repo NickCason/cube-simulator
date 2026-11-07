@@ -104,6 +104,66 @@ export function makeBaller(M) {
   return shadowed(g);
 }
 
+// Cube cuber: a melon baller with a square cup (open side down, its rim at
+// the origin) on a neck and handle along +Y.
+export function makeCuber(M) {
+  const g = new THREE.Group();
+  const steel = M.steel.clone();
+  steel.side = THREE.DoubleSide;
+  const s = 0.26, t = 0.007, h = 0.24;
+  for (const [w, d, x, z] of [[s, t, 0, s / 2 - t / 2], [s, t, 0, t / 2 - s / 2], [t, s, s / 2 - t / 2, 0], [t, s, t / 2 - s / 2, 0]]) {
+    const wall = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), steel);
+    wall.position.set(x, h / 2, z);
+    g.add(wall);
+  }
+  const top = new THREE.Mesh(new THREE.BoxGeometry(s, t, s), steel);
+  top.position.y = h - t / 2;
+  g.add(top);
+  const neck = new THREE.Mesh(new THREE.CylinderGeometry(0.012, 0.016, 0.2, 12), M.steel);
+  neck.position.y = h + 0.1;
+  g.add(neck);
+  const handle = new THREE.Mesh(new THREE.CylinderGeometry(0.028, 0.024, 0.4, 16), M.wood);
+  handle.position.y = h + 0.4;
+  g.add(handle);
+  return shadowed(g);
+}
+
+// Dicer: a 3x3 grid of blades, their edges at y = 0, spanning x, z in
+// -0.5..0.5 and y 0..1 (userData.blades, scaled to whatever it dices), under
+// a square frame with two grips (userData.frame, set on the blades' backs).
+export function makeDicer(M) {
+  const g = new THREE.Group();
+  const blades = new THREE.Group(), frame = new THREE.Group();
+  const steel = M.steel.clone();
+  steel.side = THREE.DoubleSide;
+  steel.roughness = 0.12;
+  const t = 0.006;
+  for (const o of [-1 / 6, 1 / 6]) {
+    const a = new THREE.Mesh(new THREE.BoxGeometry(1, 1, t), steel);
+    a.position.set(0, 0.5, o);
+    blades.add(a);
+    const b = new THREE.Mesh(new THREE.BoxGeometry(t, 1, 1), steel);
+    b.position.set(o, 0.5, 0);
+    blades.add(b);
+  }
+  const bar = 0.04;
+  for (const [w, d, x, z] of [[1 + bar, bar, 0, 0.5], [1 + bar, bar, 0, -0.5], [bar, 1 + bar, 0.5, 0], [bar, 1 + bar, -0.5, 0]]) {
+    const f = new THREE.Mesh(new THREE.BoxGeometry(w, bar, d), M.darkSteel);
+    f.position.set(x, bar / 2, z);
+    frame.add(f);
+  }
+  for (const x of [-0.6, 0.6]) {
+    const grip = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.03, 0.14, 12), M.wood);
+    grip.rotation.z = Math.PI / 2;
+    grip.position.set(x, bar / 2, 0);
+    frame.add(grip);
+  }
+  g.add(blades, frame);
+  g.userData.blades = blades;
+  g.userData.frame = frame;
+  return shadowed(g);
+}
+
 // Cherry bomb: sphere at origin with a fuse along +Y.
 export function makeBomb(M) {
   const g = new THREE.Group();

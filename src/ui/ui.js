@@ -23,6 +23,8 @@ export const ICONS = {
   freeze: svg(
     '<path d="M12 2.5v19"/><path d="m3.8 7.25 16.4 9.5"/><path d="m3.8 16.75 16.4-9.5"/><path d="m9.6 4.2 2.4 1.8 2.4-1.8"/><path d="m9.6 19.8 2.4-1.8 2.4 1.8"/><path d="m4.1 10.4 2.8-1.2-.4-3"/><path d="m19.9 13.6-2.8 1.2.4 3"/><path d="m4.1 13.6 2.8 1.2-.4 3"/><path d="m19.9 10.4-2.8-1.2.4-3"/>',
   ),
+  dicer: svg('<rect x="3.8" y="3.8" width="16.4" height="16.4" rx="3"/><path d="M9.3 3.8v16.4M14.7 3.8v16.4M3.8 9.3h16.4M3.8 14.7h16.4"/>'),
+  cuber: svg('<rect x="3.2" y="11.6" width="9" height="9" rx="2"/><path d="M5.6 15.6v-1.4h1.4"/><path d="m11.6 12.4 6.3-6.3a1.8 1.8 0 0 1 2.5 2.5l-6.3 6.3"/>'),
   baller: svg(
     '<circle cx="8" cy="16" r="4.8"/><path d="M5.6 15.2a2.6 2.6 0 0 1 2.9-1.9"/><path d="m11.5 12.5 6.4-6.4a1.8 1.8 0 0 1 2.5 2.5L14 15"/>',
   ),
@@ -48,12 +50,14 @@ export const ICONS = {
 export const TOOL_DEFS = [
   { id: 'hand', label: 'Hand', hint: 'Drag to grab & throw · tap to poke · two fingers: squish or pull it apart', key: '1' },
   { id: 'knife', label: 'Knife', hint: 'Swipe across the jelly to slice it', key: '2' },
+  { id: 'dicer', label: 'Dicer', hint: 'Tap the jelly to dice it into little cubes', key: 'd' },
   { id: 'nailgun', label: 'Nail gun', hint: 'Click to fire · hold for auto', key: '3' },
   { id: 'holegun', label: 'Hole gun', hint: 'Click to shoot a hole through it', key: 'g' },
   { id: 'mallet', label: 'Mallet', hint: 'Click to smack · hit on its beat to build resonance · frozen, sugar and ice cubes shatter', key: '4' },
   { id: 'torch', label: 'Torch', hint: 'Hold over the jelly to melt it · it runs off as liquid', key: '5' },
   { id: 'freeze', label: 'Cryo spray', hint: 'Hold to freeze it solid · spray a puddle to set it back into jelly', key: '6' },
   { id: 'baller', label: 'Melon baller', hint: 'Click to scoop out a ball', key: '7' },
+  { id: 'cuber', label: 'Cube cuber', hint: 'Click to scoop out a cube', key: 'c' },
   { id: 'bomb', label: 'Cherry bomb', hint: 'Click to plant · stand back', key: '8' },
   { id: 'syringe', label: 'Syringe', hint: 'Hold to pump it up', key: '9' },
   { id: 'magnet', label: 'Magnet', hint: 'Hold near nails to pull them out (and drag the jelly with them)', key: '0' },

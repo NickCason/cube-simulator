@@ -547,6 +547,69 @@ export class AudioEngine {
     this.squish(0.7, 0.85);
   }
 
+  // The dicer. A blade going through: a bright steel "shing" with a ring
+  // like a struck knife over a wet chop (k: the blades before it, each a
+  // semitone up, so a run of them climbs). at: when (audio clock).
+  diceShink(k = 0, at = 0) {
+    if (!this.ctx || this.muted) return;
+    const t = Math.max(this.ctx.currentTime, at), up = Math.pow(2, k / 12);
+    this._noise(t, 0.05, 'highpass', 6500, 9500, 0.7, 0.42, 0.0008);
+    this._noise(t, 0.2, 'bandpass', 2600 * up, 8200 * up, 5, 0.3, 0.004);
+    for (const [m, g, d] of [[1, 0.07, 0.55], [1.47, 0.048, 0.42], [2.09, 0.034, 0.32], [2.56, 0.026, 0.26]]) {
+      this._tone(t, 'sine', 1750 * up * m, 1750 * up * m * 0.996, d, g, 0.002);
+    }
+    this._tone(t + 0.008, 'sine', 170, 58, 0.12, 0.24, 0.002);
+    this._noise(t + 0.006, 0.07, 'bandpass', 900, 380, 1.5, 0.16, 0.002);
+  }
+
+  // the blade frame bottoming out: a deep thunk and a steel clank
+  diceSlam(at = 0) {
+    if (!this.ctx || this.muted) return;
+    const t = Math.max(this.ctx.currentTime, at);
+    this._tone(t, 'sine', 96, 36, 0.3, 0.55, 0.002);
+    this._noise(t, 0.12, 'lowpass', 1800, 180, 0.8, 0.45, 0.001);
+    for (const [f, g, d] of [[620, 0.055, 0.4], [933, 0.045, 0.32], [1414, 0.032, 0.26], [2290, 0.02, 0.2]]) this._tone(t, 'triangle', f, f * 0.99, d, g, 0.001);
+  }
+
+  // swung round for the second pass
+  diceWhoosh(at = 0) {
+    if (!this.ctx || this.muted) return;
+    const t = Math.max(this.ctx.currentTime, at);
+    this._noise(t, 0.26, 'bandpass', 450, 2600, 1.6, 0.2, 0.09);
+  }
+
+  // ...and it all falls apart into cubes: a distorted sub drop, a crunch,
+  // a sparkle running up, and a patter of wet little landings
+  diceDrop(at = 0) {
+    if (!this.ctx || this.muted) return;
+    const ctx = this.ctx, t = Math.max(ctx.currentTime, at);
+    if (!this._diceShaper || this._diceShaper.context !== ctx) {
+      const sh = ctx.createWaveShaper(), curve = new Float32Array(1024);
+      for (let i = 0; i < 1024; i++) curve[i] = Math.tanh(((i / 1023) * 2 - 1) * 3);
+      sh.curve = curve;
+      sh.connect(this.bus);
+      this._diceShaper = sh;
+    }
+    this._tone(t, 'sine', 150, 30, 0.8, 0.85, 0.003, this._diceShaper);
+    this._noise(t, 0.32, 'lowpass', 3200, 160, 0.7, 0.55, 0.001, this._diceShaper);
+    this._noise(t, 0.05, 'highpass', 4000, 6000, 0.7, 0.3, 0.0005);
+    [1568, 2093, 2637, 3136, 4186].forEach((f, i) => this._tone(t + 0.04 + i * 0.04, 'triangle', f, f, 0.42, 0.03, 0.003));
+    for (let i = 0; i < 9; i++) {
+      const f = rnd(500, 1500);
+      this._noise(t + 0.12 + rnd(0, 0.5), rnd(0.03, 0.07), 'bandpass', f, f * 0.55, 6, 0.12);
+      this._tone(t + 0.12 + rnd(0, 0.5), 'sine', rnd(240, 420), rnd(90, 140), 0.08, 0.06, 0.002);
+    }
+  }
+
+  // the cube cuber: a square scoop pops a cube out
+  cubePop(amount = 1) {
+    if (!this._ok('cubePop', 0.1)) return;
+    const t = this.ctx.currentTime;
+    this.schlorp(amount);
+    this._tone(t + 0.07, 'square', 520, 1040, 0.07, 0.035 * amount, 0.002);
+    this._tone(t + 0.07, 'sine', 380, 900, 0.09, 0.12 * amount, 0.002);
+  }
+
   // Character select: the cube on show slurped up and away...
   swapOut() {
     if (!this._ok('swapOut', 0.2)) return;

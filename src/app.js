@@ -13,6 +13,7 @@ import { Overlay } from './ui/overlay.js';
 import { UI } from './ui/ui.js';
 import { HandTool, KnifeTool, NailGunTool, HoleGunTool } from './tools/basic.js';
 import { MalletTool, TorchTool, FreezeTool, BallerTool, BombTool, SyringeTool, MagnetTool } from './tools/more.js';
+import { CuberTool, DicerTool } from './tools/cubey.js';
 import { makeMaterials, makeBomb } from './world/models.js';
 import { physicsWarmJob } from './sim/warm.js';
 import { Droplets } from './world/droplets.js';
@@ -188,12 +189,14 @@ export class App {
     this.tools = {
       hand: new HandTool(this),
       knife: new KnifeTool(this),
+      dicer: new DicerTool(this),
       nailgun: new NailGunTool(this),
       holegun: new HoleGunTool(this),
       mallet: new MalletTool(this),
       torch: new TorchTool(this),
       freeze: new FreezeTool(this),
       baller: new BallerTool(this),
+      cuber: new CuberTool(this),
       bomb: new BombTool(this),
       syringe: new SyringeTool(this),
       magnet: new MagnetTool(this),
