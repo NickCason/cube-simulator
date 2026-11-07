@@ -606,7 +606,7 @@ export class JellyView {
     vertexNormals(rIndex, rest, restN, nB);
     // (each cube its own rounding; each render vertex knows its cube - the
     // new points their edge's)
-    const shapes = Array.from(sb.cBevel, (b) => ({ a: sb.p.size / 2 - b, r: b }));
+    const shapes = Array.from(sb.cBevel, (b, k) => ({ a: sb.cSize[k] / 2 - b, r: b }));
     const cube = new Float32Array(maxN);
     for (let r = 0; r < nB; r++) cube[r] = sb.vCube[rSim[r]];
     for (let m = 0, k = nB; m < L1.mids.length; m += 3, k++) cube[k] = cube[L1.mids[m]];

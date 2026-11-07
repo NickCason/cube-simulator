@@ -469,13 +469,14 @@ export class Healer {
   // clear of the others where they are now (on the floor if there's room,
   // else on top of what's under it).
   _homeOne(slot) {
-    const app = this.app, sb = app.sb, size = sb.p.size, half = size / 2;
+    const app = this.app, sb = app.sb, cb = app.cubes.find((c) => c.slot === slot);
+    const size = cb ? app.sizeOf(cb) : sb.cSize[slot], half = size / 2;
     let main = null;
     for (const pc of sb.pieces) if (pc.cube === slot && (!main || pc.verts.length > main.verts.length)) main = pc;
     let cx = 0, cz = 0, n = 0;
     if (main) for (const i of main.verts) { cx += sb.x[i * 3]; cz += sb.x[i * 3 + 2]; n++; }
     if (n) { cx /= n; cz /= n; }
-    const [x, z, top] = app._clearSpot({ exclude: slot, near: [cx, cz], gap: 1.5 });
+    const [x, z, top] = app._clearSpot({ exclude: slot, near: [cx, cz], gap: 1.5, size });
     const h = { cx: x, cy: top, cz: z, yaw: main ? this._yawOf(main) : 0 };
     h.cW = new THREE.Vector3(h.cx, h.cy + half + LIFT_FUSE, h.cz);
     h.qF = new THREE.Quaternion().setFromAxisAngle(UP, h.yaw);
@@ -508,13 +509,19 @@ export class Healer {
 
   // slot -> { cx, cy (its bottom), cz, yaw, cW (centre, as it re-forms), qF }
   _homes(layout) {
-    const app = this.app, sb = app.sb, size = sb.p.size, half = size / 2;
+    const app = this.app, sb = app.sb, size = sb.p.size;
+    // (each cube its own size)
+    const sz = (slot) => {
+      const cb = app.cubes.find((c) => c.slot === slot);
+      return cb ? app.sizeOf(cb) : sb.cSize[slot];
+    };
     const homes = new Map();
     if (layout) {
       for (const L of layout) homes.set(L.slot, { cx: L.x, cy: L.y, cz: L.z, yaw: L.yaw || 0 });
     } else {
       for (const cb of app.cubes) {
         let M = 0, cx = 0, cz = 0, main = null;
+        const s = sz(cb.slot);
         for (const pc of sb.pieces) {
           if (pc.cube !== cb.slot) continue;
           M += pc.mass;
@@ -526,17 +533,17 @@ export class Healer {
           cx /= M;
           cz /= M;
         }
-        homes.set(cb.slot, { cx, cy: 0, cz, yaw: main ? this._yawOf(main) : 0 });
+        homes.set(cb.slot, { cx, cy: 0, cz, yaw: main ? this._yawOf(main) : 0, s });
       }
       // apart from each other, and inside the wall
-      const H = [...homes.values()], R = Math.max(0, sb.p.arenaRadius - size * 0.8), gap = size * 1.18;
+      const H = [...homes.values()], R = Math.max(0, sb.p.arenaRadius - size * 0.8);
       for (let it = 0; it < 60; it++) {
         let moved = false;
         for (let i = 0; i < H.length; i++) {
           for (let j = i + 1; j < H.length; j++) {
             const a = H[i], b = H[j];
             let dx = b.cx - a.cx, dz = b.cz - a.cz;
-            const d = Math.hypot(dx, dz);
+            const d = Math.hypot(dx, dz), gap = ((a.s + b.s) / 2) * 1.18;
             if (d >= gap) continue;
             if (d < 1e-4) {
               const an = Math.random() * Math.PI * 2;
@@ -564,10 +571,10 @@ export class Healer {
         if (!moved) break;
       }
       // (too crowded for the floor: they stack instead)
-      for (let i = 0; i < H.length; i++) for (let j = i + 1; j < H.length; j++) if (Math.hypot(H[i].cx - H[j].cx, H[i].cz - H[j].cz) < size * 1.02) return this._homes(app.stackLayout());
+      for (let i = 0; i < H.length; i++) for (let j = i + 1; j < H.length; j++) if (Math.hypot(H[i].cx - H[j].cx, H[i].cz - H[j].cz) < ((H[i].s + H[j].s) / 2) * 1.02) return this._homes(app.stackLayout());
     }
-    for (const h of homes.values()) {
-      h.cW = new THREE.Vector3(h.cx, h.cy + half + LIFT_FUSE, h.cz);
+    for (const [slot, h] of homes) {
+      h.cW = new THREE.Vector3(h.cx, h.cy + sz(slot) / 2 + LIFT_FUSE, h.cz);
       h.qF = new THREE.Quaternion().setFromAxisAngle(UP, h.yaw);
     }
     return homes;
@@ -840,9 +847,11 @@ export class Healer {
     sb.grabs.length = 0;
     for (const [slot, h] of this.homes) {
       const cb = app.cubes.find((c) => c.slot === slot);
-      sb.addCube(slot, h.cx, h.cy + LIFT_FUSE, h.cz, h.yaw, cb ? app.bevelOf(cb) : sb.cBevel[slot]);
+      if (cb) sb.addCube(slot, h.cx, h.cy + LIFT_FUSE, h.cz, h.yaw, app.bevelOf(cb), app.sizeOf(cb), app.resOf(cb));
+      else sb.addCube(slot, h.cx, h.cy + LIFT_FUSE, h.cz, h.yaw, sb.cBevel[slot], sb.cSize[slot], sb.cRes[slot]);
     }
     sb.rebuild();
+    app._syncSel();
     sb.fill = null;
     sb.weld = null;
     sb.collisionsEnabled = true;
@@ -860,6 +869,7 @@ export class Healer {
     this.settleT = 0;
     for (const f of app.onHealEnd) f();
     app.onTopologyChanged();
+    if (only >= 0) app.applyStyle(); // (its size may be new: its stiffness and look go with it)
     // (alone: still battered if another one is)
     if (only < 0 || app.cubes.every((cb) => cb.slot === only || app._whole(cb.slot))) app.markHealed();
     app.audio?.healFuse();

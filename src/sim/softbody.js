@@ -142,6 +142,11 @@ export class SoftBody {
     this.cAir = new Float64Array(MAX_CUBES);
     this.cBevel = new Float64Array(MAX_CUBES).fill(this.p.bevel); // (each its own edges)
     this.cN = new Int32Array(MAX_CUBES); // (each one's vertices, built whole)
+    // each cube its own size (and so its own mesh resolution: the cells are
+    // about the same size in every cube - see App._cells)
+    this.cSize = new Float64Array(MAX_CUBES).fill(this.p.size);
+    this.cRes = new Int32Array(MAX_CUBES).fill(this.p.res);
+    this.cH = new Float64Array(MAX_CUBES).fill(this.p.size / this.p.res);
     // one cube re-cubing on its own (see Healer.start's only): its gravity
     // and damping its own, and it passes through everything meanwhile
     this.cGrav = new Float64Array(MAX_CUBES).fill(1);
@@ -333,6 +338,9 @@ export class SoftBody {
     this.cBevel[0] = this.p.bevel;
     const mesh = buildCubeMesh(this.p.res, this.p.size, this.p.bevel);
     this.cN[0] = mesh.nV;
+    this.cSize[0] = this.p.size;
+    this.cRes[0] = this.p.res;
+    this.cH[0] = mesh.h;
     this.hCell = mesh.h;
     this.nV = 0;
     this.ensureV(mesh.nV);
@@ -355,13 +363,17 @@ export class SoftBody {
 
   // Another cube (k: its slot), its bottom at oy, turned by yaw: added to
   // what's there (rebuild() after). Its rest shape is offset k * REST_STEP.
-  addCube(k, ox = 0, oy = 0, oz = 0, yaw = 0, bevel = this.p.bevel) {
+  // (size, res: its own - see cSize)
+  addCube(k, ox = 0, oy = 0, oz = 0, yaw = 0, bevel = this.p.bevel, size = this.p.size, res = this.p.res) {
     this.cBevel[k] = bevel;
-    const mesh = buildCubeMesh(this.p.res, this.p.size, bevel);
+    const mesh = buildCubeMesh(res, size, bevel);
     this.cN[k] = mesh.nV;
+    this.cSize[k] = size;
+    this.cRes[k] = res;
+    this.cH[k] = mesh.h;
     this.hCell = mesh.h;
     const base = this.nV, tBase = this.nT;
-    const c = Math.cos(yaw), s = Math.sin(yaw), half = this.p.size / 2, R = k * REST_STEP;
+    const c = Math.cos(yaw), s = Math.sin(yaw), half = size / 2, R = k * REST_STEP;
     this.ensureV(base + mesh.nV);
     for (let i = 0; i < mesh.nV; i++) {
       const X = mesh.pos[i * 3], Y = mesh.pos[i * 3 + 1], Z = mesh.pos[i * 3 + 2];
@@ -428,7 +440,7 @@ export class SoftBody {
       this.vCube[i] = j;
       this.X[i * 3] += d;
     }
-    for (const a of [this.cMu, this.cLam, this.cDens, this.cDamp, this.cFric, this.cBounce, this.cRigid, this.cAir, this.cBevel, this.cN, this.cGrav, this.cBoost]) a[j] = a[k];
+    for (const a of [this.cMu, this.cLam, this.cDens, this.cDamp, this.cFric, this.cBounce, this.cRigid, this.cAir, this.cBevel, this.cN, this.cGrav, this.cBoost, this.cSize, this.cRes, this.cH]) a[j] = a[k];
     this.embeds.length = 0;
     this.grabs.length = 0;
     this._bpNV = 0;
@@ -1044,7 +1056,7 @@ export class SoftBody {
     const sTet = new Int32Array(nF);
     const sTag = new Uint8Array(nF);
     const sRestN = new Float32Array(nF * 3);
-    const half = this.p.size / 2, vCube = this.vCube, cBevel = this.cBevel;
+    const vCube = this.vCube, cBevel = this.cBevel, cSize = this.cSize;
     const nrm = [0, 0, 0];
     let f = 0;
     const tetBoundary = new Int32Array(nT).fill(-1); // first boundary face of tet (linked)
@@ -1066,11 +1078,11 @@ export class SoftBody {
       nx /= l; ny /= l; nz /= l;
       sRestN[f * 3] = nx; sRestN[f * 3 + 1] = ny; sRestN[f * 3 + 2] = nz;
       // (against its own cube's shape, where that sits in rest space)
-      const cb = vCube[a], bevel = cBevel[cb];
+      const cb = vCube[a], bevel = cBevel[cb], half = cSize[cb] / 2;
       const cx = (ax + X[b * 3] + X[c * 3]) / 3 - cb * REST_STEP, cy = (ay + X[b * 3 + 1] + X[c * 3 + 1]) / 3, cz = (az + X[b * 3 + 2] + X[c * 3 + 2]) / 3;
       const sd = roundBoxSDF(cx, cy, cz, half, bevel);
       let tag = TAG_FRESH;
-      if (Math.abs(sd) < 0.03 * this.p.size) {
+      if (Math.abs(sd) < 0.06 * half) {
         roundBoxNormal(cx, cy, cz, half, bevel, nrm);
         if (nx * nrm[0] + ny * nrm[1] + nz * nrm[2] > 0.55) tag = TAG_EXTERIOR;
       }
@@ -1407,7 +1419,7 @@ export class SoftBody {
       const m0 = this.cMu[k], foam = Math.min(1, this.cLam[k] / 6);
       KM[k] = m0;
       KL[k] = m0 * this.cLam[k];
-      KB[k] = Math.max(m0, 850 * this.cDens[k] * this.p.size * this.p.size * (0.35 + 0.65 * foam) * Math.min(1, sr * sr)) / m0;
+      KB[k] = Math.max(m0, 850 * this.cDens[k] * this.cSize[k] * this.cSize[k] * (0.35 + 0.65 * foam) * Math.min(1, sr * sr)) / m0;
     }
     const ih2 = 1 / (h * h);
     const nT = this.nT;

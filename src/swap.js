@@ -180,8 +180,9 @@ export class Swapper {
       sb.cBounce[this.slot] = Math.min(this.bounce, 0.42);
       const [x, z] = this.exitXZ || [0, 0];
       sb.removeCube(this.slot);
-      sb.addCube(this.slot, x, this._dropHeight(sb.p.size), z, (Math.random() - 0.5) * 0.7, app.bevelOf(app.cube));
-      sb.p.bevel = sb.cBevel[this.slot];
+      const size = app.sizeOf(app.cube);
+      sb.addCube(this.slot, x, this._dropHeight(size), z, (Math.random() - 0.5) * 0.7, app.bevelOf(app.cube), size, app.resOf(app.cube));
+      app._syncSel();
       sb.rebuild();
       for (let i = 0; i < sb.nV; i++) if (sb.vCube[i] === this.slot) sb.v[i * 3 + 1] = DROP_V;
       sb.weld = null;

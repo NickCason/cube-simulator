@@ -280,20 +280,21 @@ export class Glitter {
   }
 
   _key() {
-    return `${this.count}|${this.app.sb.p.size}|${this.groups.map((g) => g.slot + ':' + g.mode).join(',')}`;
+    const sb = this.app.sb;
+    return `${this.count}|${this.groups.map((g) => g.slot + ':' + g.mode + ':' + sb.cSize[g.slot].toFixed(4)).join(',')}`;
   }
 
   // (Re)anchor flakes at their rest positions in the current mesh.
   _anchor() {
     const sb = this.app.sb;
-    const half = sb.p.size / 2;
-    const m = Math.min(0.03, half * 0.06);
     const X = sb.X, T = sb.T;
     const out = { tet: -1, b0: 0, b1: 0, b2: 0, b3: 0 };
     const n = this.count, G = this.groups.length ? this.groups : [{ slot: 0, mode: 0 }];
     for (let k = 0; k < n; k++) {
       // (shared out among the glittery cubes, each in its own rest space)
       const grp = G[k % G.length];
+      // (each cube its own size)
+      const half = sb.cSize[grp.slot] / 2, m = Math.min(0.03, half * 0.06);
       const px = this.u[k * 3] * (half - m), py = this.u[k * 3 + 1] * (half - m), pz = this.u[k * 3 + 2] * (half - m);
       this.aMode.array[k] = grp.mode;
       let r = null;

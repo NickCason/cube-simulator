@@ -171,13 +171,13 @@ export class Bubbles {
   // (Re)anchor bubbles at their rest positions inside the current mesh.
   reseed() {
     const sb = this.app.sb;
-    const half = sb.p.size / 2;
-    const m = Math.min(0.07, half * 0.15);
-    // (several cubes: shared out among them - each sits in its own rest space)
+    // (several cubes: shared out among them - each sits in its own rest
+    // space, its own size)
     const slots = this.app.cubes ? this.app.cubes.map((c) => c.slot) : [0];
     for (let k = 0; k < this.count; k++) {
-      const b = this.items[k];
-      const X = b.u[0] * (half - m) + slots[k % slots.length] * REST_STEP, Y = b.u[1] * (half - m), Z = b.u[2] * (half - m);
+      const b = this.items[k], slot = slots[k % slots.length];
+      const half = sb.cSize[slot] / 2, m = Math.min(0.07, half * 0.15);
+      const X = b.u[0] * (half - m) + slot * REST_STEP, Y = b.u[1] * (half - m), Z = b.u[2] * (half - m);
       const r = sb.locateRest(X, Y, Z);
       if (r) {
         b.a.tet = r.tet;
@@ -247,7 +247,7 @@ export class Bubbles {
       );
       this.mesh.setColorAt(c, tint);
       this._p.set(px, py, pz);
-      this._s.setScalar(b.r * this.scale * sb.p.size);
+      this._s.setScalar(b.r * this.scale * (b.a.tet >= 0 && b.a.tet < sb.nT ? sb.cSize[sb.tCube[b.a.tet]] : sb.p.size));
       this._m.compose(this._p, this._q, this._s);
       this.mesh.setMatrixAt(c++, this._m);
     }

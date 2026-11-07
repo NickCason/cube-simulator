@@ -81,7 +81,7 @@ export class CuberTool {
     // two rows of the mesh's vertices - so the cut never runs along a row
     // (a face snapped onto one left the cube welded in). (Its cube's rows:
     // each cube's rest shape sits apart along x - see REST_STEP.)
-    const g = sb.hCell, half = sb.p.size / 2, R = (sb.pieces[hit.piece].cube || 0) * REST_STEP;
+    const cube = sb.pieces[hit.piece].cube || 0, g = sb.cH[cube], half = sb.cSize[cube] / 2, R = cube * REST_STEP;
     const mid = (v, o) => o - half + (Math.round((v - o + half) / g - 0.5) + 0.5) * g;
     const d = p.clone().sub(F.c);
     const X = [0, 1, 2].map((k) => F.C.getComponent(k) + d.dot(F.ax[k]));

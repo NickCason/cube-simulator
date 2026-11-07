@@ -28,6 +28,9 @@ import { DEFAULT_STYLE, TEXTURES, EDGES, LAYER_PRESETS, MIN_LAYERS, MAX_LAYERS, 
 import { SETTINGS, resolveSettings } from './settings.js';
 
 const SETTING_BY_KEY = Object.fromEntries(SETTINGS.map((s) => [s.key, s]));
+// each cube's own settings: its material's, and its size (the rest - gravity,
+// the sound, the tools - are the room's, the same in every cube)
+const PER_CUBE = (k) => !!SETTING_BY_KEY[k]?.mat || k === 'size';
 import { Tilt } from './tilt.js';
 import { nameCube } from './namegen.js';
 
@@ -146,6 +149,7 @@ export class App {
     this.st = null; // (resolved settings: see applyStyle)
     const t0 = resolveSettings(this.tune, TEXTURES[this.style.texture]);
     this.sb = new SoftBody({ ...(opts.sim || {}), size: t0.size, bevel: EDGES[this.style.edges].bevel * t0.size });
+    this.cell = this.sb.p.size / this.sb.p.res; // (the mesh's cells: see _resolution)
     this.sb.loadCube(0, opts.dropHeight ?? 1.1, 0, 0.18);
 
     this.audio = new AudioEngine();
@@ -382,11 +386,11 @@ export class App {
     for (const cb of this.cubes) {
       const ct = TEXTURES[cb.style.texture], cs = resolveSettings(cb.tune, ct);
       sb.setCube(cb.slot, {
-        mu: App.safeMu(cs.mu, cs.weight, sb.p.size, cs.lambda, cs.gravity),
+        mu: App.safeMu(cs.mu, cs.weight, sb.cSize[cb.slot], cs.lambda, cs.gravity),
         damping: cs.damping, lambdaRatio: cs.lambda, bounce: cs.bounce, friction: cs.grip,
         rigidity: cs.rigidity, density: cs.weight, airDrag: cs.airDrag,
       });
-      this.jelly.setCubeLook(cb.slot, resolveFlavor(cb.style), { ...ct, ...cs }, sb.p.size);
+      this.jelly.setCubeLook(cb.slot, resolveFlavor(cb.style), { ...ct, ...cs }, sb.cSize[cb.slot]);
     }
     this.jelly.multiCube = this.cubes.length > 1; // (their shadows on each other)
     // (any layered one: the floor takes its shadow's colour band by band)
@@ -515,7 +519,7 @@ export class App {
   // One fine-tuning slider changed (value in physical units).
   setSetting(key, value, final = true) {
     this.tune[key] = value;
-    if (!SETTING_BY_KEY[key]?.mat) for (const cb of this.cubes) cb.tune[key] = value; // (the same in every cube)
+    if (!PER_CUBE(key)) for (const cb of this.cubes) cb.tune[key] = value; // (the same in every cube)
     if (key === 'size') {
       if (final) this.setCubeSize(value);
       return;
@@ -529,22 +533,29 @@ export class App {
     // your sound levels and the tearing switch stay)
     const keep = new Set(['volume', 'impacts', 'wobble', 'tear']);
     for (const cb of this.cubes) {
-      for (const k of Object.keys(cb.tune)) if (!keep.has(k) && (cb === this.cube || !SETTING_BY_KEY[k]?.mat)) delete cb.tune[k];
+      for (const k of Object.keys(cb.tune)) if (!keep.has(k) && (cb === this.cube || !PER_CUBE(k))) delete cb.tune[k];
     }
     this.applyStyle();
     if (Math.abs(this.settings.size - oldSize) > 1e-6) this.setCubeSize(this.settings.size);
   }
 
+  // The selected cube's size (each its own): it re-forms at the new size -
+  // with others about, just it, and they stay as they are.
   setCubeSize(size) {
-    const old = this.sb.p.size;
-    if (Math.abs(size - old) < 1e-6) return;
+    const sb = this.sb, slot = this.cube.slot, old = sb.cSize[slot];
     this.tune.size = size;
+    if (Math.abs(size - old) < 1e-6) return;
     this._edgeMorphTick(0, true);
-    this.sb.p.size = size;
-    this.sb.p.bevel = EDGES[this.style.edges].bevel * size;
+    if (this.healer.active || this.healer.settling) this.healer.cancel();
+    this.swapper.stop?.();
+    if (this.cubes.length > 1) {
+      this.applyStyle();
+      this.heal({ only: slot, scale: size / old });
+      return;
+    }
+    sb.p.size = size;
+    sb.p.bevel = EDGES[this.style.edges].bevel * size;
     this.applyStyle();
-    // re-form the cube at the new size
-    this.healer.active = false;
     this.heal({ scale: size / old });
   }
 
@@ -568,7 +579,7 @@ export class App {
       this.heal();
       return;
     }
-    const half = sb.p.size / 2, R = slot * REST_STEP, M = this._edgeMorph;
+    const half = sb.cSize[slot] / 2, R = slot * REST_STEP, M = this._edgeMorph;
     // (the rest positions with no rounding at all, worked out once; its
     // rest shape sits R along x)
     let G = M && M.topo === sb.topoVersion ? M.G : null, idx = G ? M.idx : null;
@@ -629,29 +640,27 @@ export class App {
 
   // Jelly colour at a world point (layered flavours vary with rest height).
   flavorColorAt(x, y, z) {
-    const f = this.flavor;
-    if (!f || (!f.layers && f.id !== 'rubik')) return this.color;
-    const r = this.sb.locate(x, y, z);
+    const sb = this.sb, r = sb.locate(x, y, z);
     if (!r) return this.color;
-    // (Rubik: the sticker it came out of)
+    // (the cube that's there: its colour - where it came out of its layers,
+    // or out of which Rubik's sticker)
+    const k = sb.tCube[r.tet], cb = this.cubes.find((c) => c.slot === k) || this.cube;
+    const f = resolveFlavor(cb.style);
+    if (!f.layers && f.id !== 'rubik') return flavorMainHex(f);
+    const p = [0, 0, 0], T = sb.T;
+    for (let q = 0; q < 4; q++) for (let c = 0; c < 3; c++) p[c] += sb.X[T[r.tet * 4 + q] * 3 + c] * r.bary[q];
     if (f.id === 'rubik') {
-      const p = [0, 0, 0], sb = this.sb, T = sb.T;
-      for (let k = 0; k < 4; k++) for (let c = 0; c < 3; c++) p[c] += sb.X[T[r.tet * 4 + k] * 3 + c] * r.bary[k];
-      p[0] -= sb.vCube[T[r.tet * 4]] * REST_STEP;
-      const [face, cell] = rubikCellAt(p[0], p[1], p[2], sb.p.size);
+      const [face, cell] = rubikCellAt(p[0] - k * REST_STEP, p[1], p[2], sb.cSize[k]);
       return RUBIK_COLORS[rubikIndex(f.rubik, face, cell)];
     }
-    let ry = 0;
-    for (let k = 0; k < 4; k++) ry += this.sb.X[this.sb.T[r.tet * 4 + k] * 3 + 1] * r.bary[k];
-    return this.flavorColorAtRestY(ry);
+    return this.flavorColorAtRestY(p[1], f, sb.cSize[k]);
   }
 
   // the jelly's colour at a rest height (layered flavours: its band)
-  flavorColorAtRestY(ry) {
-    const f = this.flavor;
+  flavorColorAtRestY(ry, f = this.flavor, size = this.sb.cSize[this.cube?.slot ?? 0]) {
     if (!f || !f.layers) return this.color;
     const n = f.layers.length, m = n * (f.repeat || 1);
-    const h = Math.pow(Math.min(1, Math.max(0, ry / this.sb.p.size + 0.5)), biasExp(f.bias));
+    const h = Math.pow(Math.min(1, Math.max(0, ry / size + 0.5)), biasExp(f.bias));
     return f.layers[Math.min(m - 1, Math.floor(h * m)) % n];
   }
 
@@ -1152,7 +1161,37 @@ export class App {
 
   // a cube's rounding (each has its own edges), at the size they all are
   bevelOf(cb) {
-    return (EDGES[cb.style.edges] || EDGES[DEFAULT_STYLE.edges]).bevel * this.sb.p.size;
+    return (EDGES[cb.style.edges] || EDGES[DEFAULT_STYLE.edges]).bevel * this.sizeOf(cb);
+  }
+
+  // ---- sizes: each cube its own (the Size slider: the selected one's), and
+  // the mesh's cells about the same size in every cube - how big, from how
+  // much jelly there is: a budget of cells that grows slower than the count
+  // (eight at full resolution took the physics 120 ms a frame)
+  sizeOf(cb) {
+    return resolveSettings(cb.tune || {}, TEXTURES[cb.style.texture] || TEXTURES.jello).size;
+  }
+
+  static cellFor(sizes) {
+    const n = Math.max(1, sizes.length), V = sizes.reduce((a, s) => a + s * s * s, 0) || 1;
+    return Math.cbrt(V / (1331 * Math.pow(n, 0.35)));
+  }
+
+  // (cells a side for a cube this size)
+  static resAt(size, h) {
+    return Math.max(4, Math.min(12, Math.round(size / h)));
+  }
+
+  resOf(cb, h = this.cell) {
+    return App.resAt(this.sizeOf(cb), h);
+  }
+
+  // the selected cube's size, resolution and rounding, for what works with one
+  _syncSel() {
+    const sb = this.sb, k = this.cube?.slot ?? 0;
+    sb.p.size = sb.cSize[k];
+    sb.p.res = sb.cRes[k];
+    sb.p.bevel = sb.cBevel[k];
   }
 
   // The cube in slot k is the one the panels edit now.
@@ -1162,7 +1201,7 @@ export class App {
     this.sel = i;
     this.style = this.cubes[i].style;
     this.tune = this.cubes[i].tune;
-    this.sb.p.bevel = this.sb.cBevel[slot];
+    this._syncSel();
     this.applyStyle();
     // (a glimmer through it, and a ping round it on the floor, so you see which)
     const sb = this.sb;
@@ -1192,7 +1231,7 @@ export class App {
     }
     if (!(M > 0)) return;
     const S = fx.sel.value;
-    S.set(cx / M, cz / M, sb.p.size / 2, this.healer._yawOf(main));
+    S.set(cx / M, cz / M, sb.cSize[slot] / 2, this.healer._yawOf(main));
     if (this._selHex !== this.color) {
       this._selHex = this.color;
       const col = new THREE.Color(this.color);
@@ -1224,13 +1263,13 @@ export class App {
       : { flavor: flavors[Math.floor(Math.random() * flavors.length)], layers: { ...DEFAULT_STYLE.layers, colors: [...DEFAULT_STYLE.layers.colors] }, texture: 'jello', edges: DEFAULT_STYLE.edges, glitter: 'off' };
     // (its own material sliders; the world's as everyone's)
     const tune = {};
-    for (const k of Object.keys(this.tune)) if (!SETTING_BY_KEY[k]?.mat) tune[k] = this.tune[k];
-    if (c) for (const k of Object.keys(c.tune)) if (SETTING_BY_KEY[k]?.mat) tune[k] = c.tune[k];
-    const sb = this.sb, size = sb.p.size;
-    // (fewer cells a cube as they multiply; a bigger room)
-    this._resolution(this.cubes.length + 1);
+    for (const k of Object.keys(this.tune)) if (!PER_CUBE(k)) tune[k] = this.tune[k];
+    if (c) for (const k of Object.keys(c.tune)) if (PER_CUBE(k)) tune[k] = c.tune[k];
+    const sb = this.sb, size = this.sizeOf({ style, tune });
+    // (its own size; fewer cells a cube as they multiply; a bigger room)
+    this._resolution([size]);
     this._arena(this.cubes.length + 1);
-    const [x, z, top] = this._clearSpot();
+    const [x, z, top] = this._clearSpot({ size });
     const y = drop ? Math.max(this.swapper._dropHeight(size), top + 0.3) : top;
     // (a plain one gets a name of its own, made out of what it is - and so
     // does the one already here, if it hasn't one)
@@ -1238,8 +1277,7 @@ export class App {
     for (const x of this.cubes) if (!x.name) x.name = nameCube({ ...x.style, tune: x.tune }, { taken: taken() });
     const named = c ? c.name || '' : nameCube({ ...style, tune }, { taken: taken() });
     const cb = { slot, style, tune, name: named };
-    sb.addCube(slot, x, y, z, (Math.random() - 0.5) * 0.8, this.bevelOf(cb));
-    sb.p.bevel = sb.cBevel[slot];
+    sb.addCube(slot, x, y, z, (Math.random() - 0.5) * 0.8, this.bevelOf(cb), size, this.resOf(cb));
     sb.rebuild();
     if (drop) for (let v = 0; v < sb.nV; v++) if (sb.vCube[v] === slot) sb.v[v * 3 + 1] = -3;
     this.cubes.push(cb);
@@ -1248,6 +1286,7 @@ export class App {
     this.sel = this.cubes.length - 1;
     this.style = style;
     this.tune = tune;
+    this._syncSel();
     this.onTopologyChanged();
     this.applyStyle();
     if (drop) this.swapper.watchLanding(slot);
@@ -1278,14 +1317,14 @@ export class App {
     }
     this.sb.rebuild();
     if (last) this.stackOrder = [0];
-    this._resolution(this.cubes.length);
+    this._resolution();
     this._arena(this.cubes.length);
     this.stackOrder = this.stackOrder.filter((s) => s !== slot);
     if (this.sel >= this.cubes.length || i === this.sel) this.sel = Math.min(i, this.cubes.length - 1);
     else if (i < this.sel) this.sel--;
     this.style = this.cube.style;
     this.tune = this.cube.tune;
-    this.sb.p.bevel = this.sb.cBevel[this.cube.slot];
+    this._syncSel();
     this.onTopologyChanged();
     this.applyStyle();
     this.ui?.cubesChanged?.();
@@ -1295,14 +1334,25 @@ export class App {
   // Where each cube goes in a stack, in stackOrder from the bottom: a tower
   // of up to four, then a 2x2 base with the rest on top (eight: one big cube).
   stackLayout(order = this.stackOrder) {
-    const size = this.sb.p.size, g = 0.03, n = order.length, out = [];
-    order.forEach((slot, i) => {
-      if (n <= 4) out.push({ slot, x: 0, y: i * (size + g), z: 0, yaw: 0 });
-      else {
-        const lvl = Math.floor(i / 4), j = i % 4;
-        out.push({ slot, x: (j & 1 ? 0.5 : -0.5) * (size + g), y: lvl * (size + g), z: (j & 2 ? 0.5 : -0.5) * (size + g), yaw: 0 });
+    const g = 0.03, n = order.length, out = [];
+    // (each its own size: a level as tall as its biggest)
+    const sz = (slot) => {
+      const cb = this.cubes.find((c) => c.slot === slot);
+      return cb ? this.sizeOf(cb) : this.sb.p.size;
+    };
+    let y = 0;
+    if (n <= 4) {
+      for (const slot of order) {
+        out.push({ slot, x: 0, y, z: 0, yaw: 0 });
+        y += sz(slot) + g;
       }
-    });
+      return out;
+    }
+    for (let l = 0; l * 4 < n; l++) {
+      const lv = order.slice(l * 4, l * 4 + 4), big = Math.max(...lv.map(sz));
+      lv.forEach((slot, j) => out.push({ slot, x: (j & 1 ? 0.5 : -0.5) * (big + g), y, z: (j & 2 ? 0.5 : -0.5) * (big + g), yaw: 0 }));
+      y += big + g;
+    }
     return out;
   }
 
@@ -1328,6 +1378,7 @@ export class App {
   // Stack them (each re-forms in its place: see Healer._startMulti).
   stack() {
     if (this.cubes.length < 2) return false;
+    this._arena();
     return this.heal({ layout: this.stackLayout() });
   }
 
@@ -1338,16 +1389,13 @@ export class App {
     this.applyStyle(); // (saved with the room)
   }
 
-  // The mesh's resolution for n cubes: fewer cells a cube as they multiply
-  // (eight at full resolution took the physics 120 ms a frame). Changing it
-  // builds every cube afresh where it is, as it's turned.
-  static resFor(n) {
-    return n <= 1 ? 11 : n === 2 ? 9 : n <= 4 ? 8 : 7;
-  }
-
-  _resolution(n) {
-    const sb = this.sb, res = App.resFor(n);
-    if (res === sb.p.res) return;
+  // Every cube's resolution, for the cubes there (and extra: the sizes of
+  // ones about to join): any that changes, and every cube is built afresh
+  // where it is, as it's turned.
+  _resolution(extra = []) {
+    const sb = this.sb, h = App.cellFor([...this.cubes.map((cb) => this.sizeOf(cb)), ...extra]);
+    this.cell = h;
+    if (this.cubes.every((cb) => sb.cRes[cb.slot] === this.resOf(cb, h) && Math.abs(sb.cSize[cb.slot] - this.sizeOf(cb)) < 1e-6)) return;
     // (from the vertices: a rebuild leaves the pieces' own centres blank
     // till the next step)
     const at = [];
@@ -1364,17 +1412,17 @@ export class App {
           y0 = Math.min(y0, sb.x[i * 3 + 1]);
         }
       }
-      at.push({ slot: cb.slot, x: M > 0 ? x / M : 0, z: M > 0 ? z / M : 0, y: Number.isFinite(y0) ? Math.max(0, y0) : 0, yaw: main ? this.healer._yawOf(main) : 0, bevel: this.bevelOf(cb) });
+      at.push({ slot: cb.slot, x: M > 0 ? x / M : 0, z: M > 0 ? z / M : 0, y: Number.isFinite(y0) ? Math.max(0, y0) : 0, yaw: main ? this.healer._yawOf(main) : 0, bevel: this.bevelOf(cb), size: this.sizeOf(cb), res: this.resOf(cb, h) });
     }
     this._edgeMorph = null; // (each built afresh with its own edges)
-    sb.p.res = res;
     sb.nV = 0;
     sb.nT = 0;
     sb.embeds.length = 0;
     sb.grabs.length = 0;
     this.nails.clearAll();
-    for (const a of at) sb.addCube(a.slot, a.x, a.y, a.z, a.yaw, a.bevel);
+    for (const a of at) sb.addCube(a.slot, a.x, a.y, a.z, a.yaw, a.bevel, a.size, a.res);
     sb.rebuild();
+    this._syncSel();
     this.onTopologyChanged();
     this.markHealed();
   }
@@ -1384,7 +1432,16 @@ export class App {
   _arena(n = this.cubes.length) {
     const sb = this.sb, view = this._viewArena || sb.p.arenaRadius;
     this._viewArena = view;
-    sb.p.arenaRadius = n > 1 ? Math.max(view, sb.p.size * (0.9 + 0.62 * Math.sqrt(n - 1))) : view;
+    const mean = this.cubes?.length ? this.cubes.reduce((a, cb) => a + this.sizeOf(cb), 0) / this.cubes.length : sb.p.size;
+    sb.p.arenaRadius = n > 1 ? Math.max(view, mean * (0.9 + 0.62 * Math.sqrt(n - 1))) : view;
+    // (and high enough over the tallest stack they make: a cube re-formed
+    // above the ceiling was crushed flat against it)
+    let top = 0;
+    for (const L of this.stackLayout()) {
+      const cb = this.cubes.find((c) => c.slot === L.slot);
+      top = Math.max(top, L.y + (cb ? this.sizeOf(cb) : sb.p.size));
+    }
+    sb.p.ceiling = Math.max(4.2, top + 1.2);
   }
 
   // A spot clear of the cubes there: [x, z, the height to set a cube down
@@ -1394,8 +1451,9 @@ export class App {
   // (exclude: a cube not to keep clear of - it's the one going there; near:
   // [x, z] to try first and work out from; gap: how far apart their middles
   // must be, in cube sides - two turned cubes' corners reach ~1.41 apart)
-  _clearSpot({ exclude = -1, near = null, gap = 1.25 } = {}) {
-    const sb = this.sb, size = sb.p.size, R = Math.max(0, sb.p.arenaRadius - size * 0.75);
+  // (size: the one going there's - each cube its own)
+  _clearSpot({ exclude = -1, near = null, gap = 1.25, size = this.sb.p.size } = {}) {
+    const sb = this.sb, R = Math.max(0, sb.p.arenaRadius - size * 0.75);
     // (each cube's box from its vertices: a piece's own centre and box are
     // only filled in by the next step, and a rebuild has just made them new)
     const boxes = new Map();
@@ -1409,7 +1467,8 @@ export class App {
         if (q > b[k + 3]) b[k + 3] = q;
       }
     }
-    const centres = [...boxes.values()].map((b) => [(b[0] + b[3]) / 2, (b[2] + b[5]) / 2]);
+    // (each with how far it reaches: its own size, near enough)
+    const centres = [...boxes.values()].map((b) => [(b[0] + b[3]) / 2, (b[2] + b[5]) / 2, Math.max(b[3] - b[0], b[5] - b[2]) / 1.2]);
     let best = [0, 0], bestD = -1;
     const [nx, nz] = near || [0, 0];
     for (let k = 0; k < 96; k++) {
@@ -1421,9 +1480,10 @@ export class App {
         x *= R / rr;
         z *= R / rr;
       }
+      // (how clear: the gap to the nearest, over the gap it needs)
       let d = Infinity;
-      for (const [cx, cz] of centres) d = Math.min(d, Math.hypot(x - cx, z - cz));
-      if (d > size * gap) return [x, z, 0];
+      for (const [cx, cz, s2] of centres) d = Math.min(d, Math.hypot(x - cx, z - cz) / (((size + s2) / 2) * gap));
+      if (d > 1) return [x, z, 0];
       if (d > bestD) {
         bestD = d;
         best = [x, z];
@@ -1446,27 +1506,32 @@ export class App {
     }
     if (!sc || !Array.isArray(sc.cubes) || sc.cubes.length < 2) return;
     const sb = this.sb, keepSel = Math.min(Math.max(0, sc.sel | 0), sc.cubes.length - 1);
-    this._resolution(Math.min(MAX_CUBES, sc.cubes.length));
-    this._arena(Math.min(MAX_CUBES, sc.cubes.length));
     // the selected one is the cube already built (slot 0), the rest around it
     this.cubes = [{ slot: 0, style: this.style, tune: this.tune, name: String(sc.cubes[keepSel]?.name || '') }];
     // (old slot -> new, for the stack's order)
     const was = new Map([[sc.cubes[keepSel]?.slot, 0]]);
+    // (the rest first: their sizes set the cells)
+    const more = [];
     for (const [j, c] of sc.cubes.entries()) {
-      if (j === keepSel || this.cubes.length >= MAX_CUBES || !c || !c.style || !TEXTURES[c.style.texture]) continue;
-      const slot = this.cubes.length;
+      if (j === keepSel || 1 + more.length >= MAX_CUBES || !c || !c.style || !TEXTURES[c.style.texture]) continue;
       const style = { ...DEFAULT_STYLE, ...c.style, layers: { ...DEFAULT_STYLE.layers, ...(c.style.layers || {}) } };
       if (!EDGES[style.edges]) style.edges = DEFAULT_STYLE.edges;
       const tune = {};
-      for (const k of Object.keys(this.tune)) if (!SETTING_BY_KEY[k]?.mat) tune[k] = this.tune[k];
-      for (const k of Object.keys(c.tune || {})) if (SETTING_BY_KEY[k]?.mat && Number.isFinite(c.tune[k])) tune[k] = c.tune[k];
-      const [x, z, top] = this._clearSpot();
-      const cb = { slot, style, tune, name: String(c.name || '') };
-      sb.addCube(slot, x, top, z, (Math.random() - 0.5) * 0.8, this.bevelOf(cb));
+      for (const k of Object.keys(this.tune)) if (!PER_CUBE(k)) tune[k] = this.tune[k];
+      for (const k of Object.keys(c.tune || {})) if (PER_CUBE(k) && Number.isFinite(c.tune[k])) tune[k] = c.tune[k];
+      more.push({ style, tune, name: String(c.name || ''), was: c.slot });
+    }
+    this._resolution(more.map((m) => this.sizeOf(m)));
+    this._arena(1 + more.length);
+    for (const m of more) {
+      const slot = this.cubes.length, cb = { slot, style: m.style, tune: m.tune, name: m.name }, size = this.sizeOf(cb);
+      const [x, z, top] = this._clearSpot({ size });
+      sb.addCube(slot, x, top, z, (Math.random() - 0.5) * 0.8, this.bevelOf(cb), size, this.resOf(cb));
       sb.rebuild();
       this.cubes.push(cb);
-      was.set(c.slot, slot);
+      was.set(m.was, slot);
     }
+    this._syncSel();
     const order = (Array.isArray(sc.order) ? sc.order : []).map((s) => was.get(s)).filter((s) => s !== undefined);
     this.stackOrder = [...new Set([...order, ...this.cubes.map((cb) => cb.slot)])];
     this.ui?.cubesChanged?.();
@@ -1489,8 +1554,8 @@ export class App {
     // (its world - gravity, size, the Cubicle - is everyone's)
     for (const cb of this.cubes) {
       if (cb === this.cube) continue;
-      for (const k of Object.keys(cb.tune)) if (!SETTING_BY_KEY[k]?.mat && !['volume', 'impacts', 'wobble'].includes(k)) delete cb.tune[k];
-      for (const k of Object.keys(tune)) if (!SETTING_BY_KEY[k]?.mat) cb.tune[k] = tune[k];
+      for (const k of Object.keys(cb.tune)) if (!PER_CUBE(k) && !['volume', 'impacts', 'wobble'].includes(k)) delete cb.tune[k];
+      for (const k of Object.keys(tune)) if (!PER_CUBE(k)) cb.tune[k] = tune[k];
     }
     this.tune = tune;
     this.cube.tune = tune;
@@ -1510,7 +1575,7 @@ export class App {
     this.swapper.stop();
     this._wearStyle(c);
     const size = this.settings.size;
-    if (Math.abs(size - this.sb.p.size) > 1e-6) {
+    if (Math.abs(size - this.sb.cSize[this.cube.slot]) > 1e-6) {
       // (re-formed at the new size, with the new edges too)
       s.edges = c.edges;
       this._edgeMorph = null;
