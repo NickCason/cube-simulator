@@ -520,7 +520,7 @@ export class KnifeTool {
   cut(ax, ay, bx, by) {
     const app = this.app;
     if (app.sb.nT > 30000) {
-      app.ui?.hint('That is a lot of jelly bits — hit Heal first');
+      app.ui?.hint('That is a lot of jelly bits — hit Re-cube first');
       return false;
     }
     const cam = app.camera;

@@ -4,7 +4,7 @@ import { roundBoxSDF } from '../sim/mesh.js';
 
 const MAX = 9000;
 const MAXBB = 24;
-export const GLITTER_MODES = { off: -1, silver: 0, gold: 1, holo: 2, rose: 3 };
+export const GLITTER_MODES = { off: -1, silver: 0, gold: 1, holo: 2, rose: 3, cubic: 4 };
 
 // Glitter suspended in the jelly. Each flake is anchored barycentrically in a
 // tet; the GPU reads the simulated vertex positions from a float texture, so
@@ -56,6 +56,14 @@ export class Glitter {
     g.setAttribute('aInfo', this.aInfo);
     g.instanceCount = 0;
     this.geo = g;
+    // cubic zirconia: each flake a tiny cube (the same flakes, a box to draw)
+    const box = new THREE.BoxGeometry(2, 2, 2);
+    const gc = new THREE.InstancedBufferGeometry();
+    for (const k of ['position', 'normal', 'uv']) gc.setAttribute(k, box.getAttribute(k));
+    gc.setIndex(box.getIndex());
+    for (const k of ['aTet', 'aBary', 'aM', 'aSeed', 'aInfo']) gc.setAttribute(k, g.getAttribute(k));
+    gc.instanceCount = 0;
+    this.geoCube = gc;
 
     this.posW = 128;
     this._allocPosTex(4096);
@@ -132,10 +140,17 @@ export class Glitter {
           vec4 mvc = viewMatrix * vec4(c, 1.0);
           float px = r * uPxScale / max(-mvc.z, 0.05);
           float k = max(1.0, uMinPx / max(px, 1e-4));
+          #ifdef CUBE
+          // a little cube on the flake's own axes, turning with the jelly
+          vec3 wp = c + (t * position.x + b * position.y + n * position.z) * r * k * 0.72;
+          vN = t * normal.x + b * normal.y + n * normal.z;
+          vUv = uv * 2.0 - 1.0;
+          #else
           vec3 wp = c + (t * position.x + b * position.y) * r * k;
           vN = n;
-          vV = cameraPosition - wp;
           vUv = position.xy;
+          #endif
+          vV = cameraPosition - wp;
           vHue = aSeed.y;
           vBoost = 1.0 / sqrt(k);
           // how much jelly sits in front: enter the piece's bounding box
@@ -179,7 +194,13 @@ export class Glitter {
         }
         void main() {
           vec2 q = abs(vUv);
+          #ifdef CUBE
+          // cut-glass: each face's rim catches the light
+          float rim = 1.0 + 1.6 * smoothstep(0.5, 1.0, max(q.x, q.y));
+          #else
           if (max(q.x * 0.8660254 + q.y * 0.5, q.y) > 1.0) discard; // hexagonal flake
+          float rim = 1.0;
+          #endif
           if (dot(vN, vN) < 1e-20) discard; // (a flattened flake has no normal)
           vec3 n = normalize(vN);
           vec3 V = normalize(vV);
@@ -193,11 +214,16 @@ export class Glitter {
           if (uMode == 1) col = vec3(1.0, 0.74, 0.32);
           else if (uMode == 2) col = mix(vec3(1.0), hue(fract(vHue + ndv * 1.8)), 0.85);
           else if (uMode == 3) col = vec3(1.0, 0.6, 0.56);
+          else if (uMode == 4) col = mix(vec3(1.0), hue(fract(vHue + ndv * 2.6 + dot(n, L) * 0.7)), 0.55); // white, with fire
           else col = vec3(0.92, 0.95, 1.0);
-          vec3 c = col * (env + uLightColor * glint * 14.0) * uSparkle + col * 0.03;
+          vec3 c = col * (env + uLightColor * glint * 14.0) * uSparkle * rim + col * 0.03;
           gl_FragColor = vec4(min(c * vTint * vBoost, vec3(64.0)), 1.0);
         }`,
     });
+    this.mat = mat;
+    this.matCube = mat.clone();
+    this.matCube.uniforms = this.uniforms;
+    this.matCube.defines = { CUBE: '' };
     this.mesh = new THREE.Mesh(g, mat);
     this.mesh.frustumCulled = false;
     this.mesh.renderOrder = 4;
@@ -224,6 +250,9 @@ export class Glitter {
     if (sparkle !== undefined) this.sparkle = sparkle;
     this.uniforms.uMode.value = Math.max(0, GLITTER_MODES[this.mode] ?? 0);
     this.uniforms.uSparkle.value = this.sparkle;
+    const cube = this.mode === 'cubic';
+    this.mesh.geometry = cube ? this.geoCube : this.geo;
+    this.mesh.material = cube ? this.matCube : this.mat;
   }
 
   // (Re)anchor flakes at their rest positions in the current mesh.
@@ -260,6 +289,7 @@ export class Glitter {
     }
     for (const at of [this.aTet, this.aBary, this.aM, this.aSeed, this.aInfo]) at.needsUpdate = true;
     this.geo.instanceCount = n;
+    this.geoCube.instanceCount = n;
     this.topo = sb.topoVersion;
     this.anchoredFor = `${n}|${sb.p.size}`;
   }
@@ -291,6 +321,6 @@ export class Glitter {
     const cam = app.camera;
     U.uPxScale.value = app.size.ph / (2 * Math.tan((cam.fov * Math.PI) / 360));
     U.uMinPx.value = 1.5 * Math.max(1, app.pixelRatio * 0.9);
-    U.uSize.value = 0.0072 * this.size * sb.p.size;
+    U.uSize.value = 0.0072 * this.size * sb.p.size * (this.mode === 'cubic' ? 1.3 : 1);
   }
 }

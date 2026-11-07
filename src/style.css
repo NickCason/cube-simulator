@@ -448,7 +448,7 @@ body {
   position: relative;
   width: 40px;
   height: 24px;
-  border-radius: 12px;
+  border-radius: 9px;
   background: rgba(0, 0, 0, 0.14);
   transition: background 0.2s;
 }
@@ -459,10 +459,16 @@ body {
   left: 2px;
   width: 20px;
   height: 20px;
-  border-radius: 50%;
-  background: #fff;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
-  transition: transform 0.2s;
+  border-radius: 6.5px;
+  background: linear-gradient(155deg, #fff 30%, #f0eef3);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25), inset 0 -2px 0 rgba(0, 0, 0, 0.05);
+  /* a cube that springs across, squashing as it's pressed */
+  transition: transform 0.5s cubic-bezier(0.3, 1.8, 0.45, 1);
+}
+
+.palette .switch:active i {
+  transform: scale(1.22, 0.8);
+  transition-duration: 0.12s;
 }
 
 .palette .switch.on {
@@ -471,6 +477,10 @@ body {
 
 .palette .switch.on i {
   transform: translateX(16px);
+}
+
+.palette .switch.on:active i {
+  transform: translateX(16px) scale(1.22, 0.8);
 }
 
 .palette .row .word {
@@ -745,12 +755,20 @@ body {
 
 .palette input[type='range']::-webkit-slider-thumb {
   -webkit-appearance: none;
-  width: 17px;
-  height: 17px;
-  margin-top: -6.5px;
-  border-radius: 50%;
-  background: #fff;
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3), 0 0 0 0.5px rgba(0, 0, 0, 0.12);
+  width: 18px;
+  height: 18px;
+  margin-top: -7px;
+  border-radius: 5.5px;
+  background: linear-gradient(155deg, #fff 25%, color-mix(in srgb, var(--jelly) 22%, #fff));
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3), 0 0 0 0.5px rgba(0, 0, 0, 0.12), inset 0 -2px 0 color-mix(in srgb, var(--jelly) 22%, transparent);
+  /* a little jelly cube: squashes while held, wobbles back when let go */
+  transition: transform 0.5s cubic-bezier(0.25, 2.1, 0.45, 1), border-radius 0.3s;
+}
+
+.palette input[type='range']:active::-webkit-slider-thumb {
+  transform: scale(1.34, 0.76);
+  border-radius: 7px;
+  transition: transform 0.12s ease-out, border-radius 0.12s;
 }
 
 .palette input[type='range']::-moz-range-track {
@@ -766,12 +784,19 @@ body {
 }
 
 .palette input[type='range']::-moz-range-thumb {
-  width: 17px;
-  height: 17px;
+  width: 18px;
+  height: 18px;
   border: 0;
-  border-radius: 50%;
-  background: #fff;
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3), 0 0 0 0.5px rgba(0, 0, 0, 0.12);
+  border-radius: 5.5px;
+  background: linear-gradient(155deg, #fff 25%, color-mix(in srgb, var(--jelly) 22%, #fff));
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3), 0 0 0 0.5px rgba(0, 0, 0, 0.12), inset 0 -2px 0 color-mix(in srgb, var(--jelly) 22%, transparent);
+  transition: transform 0.5s cubic-bezier(0.25, 2.1, 0.45, 1), border-radius 0.3s;
+}
+
+.palette input[type='range']:active::-moz-range-thumb {
+  transform: scale(1.34, 0.76);
+  border-radius: 7px;
+  transition: transform 0.12s ease-out, border-radius 0.12s;
 }
 
 .tune-foot {
@@ -795,6 +820,7 @@ body {
 }
 
 .heal {
+  white-space: nowrap;
   height: 42px;
   padding: 0 16px 0 12px !important;
   margin-left: 4px;
@@ -2472,4 +2498,9 @@ html.dark .f-acts button:first-child {
 html.dark .card-healed {
   background: rgba(30, 29, 36, 0.86);
   color: #f1eff4;
+}
+
+/* cubic zirconia glitter: its dot is a little cube too */
+.palette .opt[data-glit='cubic'] .gdot {
+  border-radius: 2.5px;
 }

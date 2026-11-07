@@ -432,7 +432,7 @@ export class Cubby {
     card.dataset.id = it.id;
     card.innerHTML = `<button class="card-main"><span class="card-thumb"></span><span class="card-name"></span><span class="card-sub"></span></button><button class="card-more">${ICON.more}</button>`;
     if (it.id === this.activeId) card.insertAdjacentHTML('beforeend', '<span class="card-on">On</span>');
-    if (it.rec.healed) card.insertAdjacentHTML('beforeend', `<span class="card-healed" title="Times healed">${ICON.heal}${it.rec.healed}</span>`);
+    if (it.rec.healed) card.insertAdjacentHTML('beforeend', `<span class="card-healed" title="Times re-cubed">${ICON.heal}${it.rec.healed}</span>`);
     const main = card.querySelector('.card-main'), thumb = card.querySelector('.card-thumb');
     if (it.thumb) {
       const img = new Image();

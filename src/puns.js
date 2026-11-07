@@ -18,7 +18,7 @@ const BY_MATERIAL = {
   jello: ['Jell-Oh Yeah', 'Wiggle Room', 'The Big Jiggle', 'Shake It Off'],
   gummy: ['Gummy Bear Hug', 'Chew-bacca', 'Gummy Gummy', 'Chewsday'],
   sour: ['Sour Power', 'Sourpuss', 'Pucker Up', 'Sweet & Sour'],
-  crystal: ['Cubic Zirconia', 'Crystal Clear', 'Clear as Jelly', 'Ice Ice Cubey'],
+  crystal: ['Cubic Zirconia', 'Crystal Clear', 'Clear as Jelly', 'Glass Act'],
   creamy: ['Cubes & Cream', 'Cream of the Crop', 'Panna Cube-ta', 'Creamsicle'],
   slime: ['Slime Time', 'Slimer', 'Ooze Clues', 'Slime Lord'],
   water: ['Water Balloon Fight', 'Splash Cube', 'Making Waves', 'Hydro Cube'],
@@ -26,10 +26,12 @@ const BY_MATERIAL = {
   mochi: ['Mochi Mochi', 'Mochi Ado About Nothing', 'Mochi Business', 'Squish Me'],
   marshmallow: ['Marsh-mellow', "S'more Cube", 'Toast of the Town', 'Puffed Up'],
   rubber: ['Bounce Castle', 'Rubber Ducky', 'Boing Boing', 'Rubik’s Rubber'],
-  glass: ['Glass Act', 'Glass Half Full', 'Pane Killer', 'Window Shopping'],
+  glass: ['Glass Half Full', 'Pane Killer', 'Window Shopping', 'Clearly Cubed'],
   tofu: ['Firm Believer', 'Tofu Good to Be True', 'Bean There', 'Cube-d Tofu'],
   putty: ['Putty in My Hands', 'Silly Putty', 'Slump Day', 'Stay Put'],
-  candy: ['Rock Candy', 'Sugar Cube', 'Hard Cube to Crack', 'Jawbreaker'],
+  candy: ['Rock Candy', 'Hard Cube to Crack', 'Jawbreaker', 'Sweet Nothing'],
+  sugar: ['Sugar Rush', 'Sugar Cube-d', 'Pour Some Sugar on Me', 'Sweet Cube-ns'],
+  ice: ['Ice Ice Cubey', 'Ice to Meet You', 'Cool Cube', 'Chill Out'],
 };
 
 const ANY = [

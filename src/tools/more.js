@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { cutBody, sphereField, planeField, removeTets, removeSmallPieces } from '../sim/cutting.js';
 import { makeMallet, makeTorch, makeSpray, makeBaller, makeBomb, makeSyringe, makeMagnet, orient } from '../world/models.js';
 import { fitRotation } from '../heal.js';
+import { TEXTURES } from '../styles.js';
 
 const V = (a) => new THREE.Vector3(a[0], a[1], a[2]);
 const _a = new THREE.Vector3();
@@ -231,8 +232,10 @@ export class MalletTool {
     const p = a.tg.point, d = a.d;
     app.shake(0.035);
     if (a.tg.jelly) {
-      if (avgTemp(sb, p, 0.3) < -0.4) {
-        this.shatter(a);
+      // frozen jelly shatters - and so do brittle things (sugar, ice) as they are
+      const brittle = !!TEXTURES[app.style.texture]?.brittle;
+      if (brittle || avgTemp(sb, p, 0.3) < -0.4) {
+        this.shatter(a, brittle);
         return;
       }
       const piece = a.tg.hit.piece;
@@ -432,7 +435,7 @@ export class MalletTool {
   // part breaks. They open one a frame through the hit-stop, so they're seen
   // to run, then the shards fly. (It used to break along the mesh's own
   // tets round nine random points - the same jagged staircase every time.)
-  shatter(a) {
+  shatter(a, brittle = false) {
     const app = this.app;
     const sb = app.sb;
     const p = a.tg.point.clone();
@@ -460,10 +463,11 @@ export class MalletTool {
       tN[c]++;
       all += sb.temp[i];
     }
-    const allCold = all / Math.max(1, pc.verts.length) < -0.4;
+    const allCold = brittle || all / Math.max(1, pc.verts.length) < -0.4;
     const m = 0.04;
     const ice = (x, y, z) => {
       if (x < bb[0] - m || x > bb[3] + m || y < bb[1] - m || y > bb[4] + m || z < bb[2] - m || z > bb[5] + m) return false;
+      if (brittle) return true;
       const c = cell(x, y, z);
       return c >= 0 && tN[c] ? tSum[c] / tN[c] < -0.25 : allCold;
     };
@@ -503,7 +507,7 @@ export class MalletTool {
     }
     // (the shards are the pieces holding the frozen piece's vertices; the
     // star breaks the first frame, the rest the next)
-    this.shards = { cracks, batches: [N, cracks.length], verts: pc.verts.slice(), p, d, n: 0 };
+    this.shards = { cracks, batches: [N, cracks.length], verts: pc.verts.slice(), p, d, n: 0, chip: (brittle && TEXTURES[app.style.texture].chip) || '#dcefff' };
     sb.selfQuietUntil = sb.time + 0.5;
     app.hitStop(0.1);
     app.audio.crack(1);
@@ -546,7 +550,7 @@ export class MalletTool {
       const c = new THREE.Vector3(crumbs[k], crumbs[k + 1], crumbs[k + 2]);
       const v = c.clone().sub(p).normalize().multiplyScalar(2 + Math.random() * 2);
       v.y += 2;
-      app.droplets.spawn(c, v, 0.012 + Math.cbrt(crumbs[k + 3]) * 0.35, '#dcefff');
+      app.droplets.spawn(c, v, 0.012 + Math.cbrt(crumbs[k + 3]) * 0.35, S.chip);
     }
     if (crumbs.length) app.onTopologyChanged();
     sb.radialImpulse(p.x, p.y, p.z, 1.4, 3.2, 1.5);
@@ -991,7 +995,7 @@ export class BallerTool {
     const app = this.app;
     const sb = app.sb;
     if (sb.nT > 30000) {
-      app.ui?.hint('That is a lot of jelly bits — hit Heal first');
+      app.ui?.hint('That is a lot of jelly bits — hit Re-cube first');
       return;
     }
     const res = cutBody(sb, sphereField(a.c.x, a.c.y, a.c.z, a.r), { separate: 0, snap: 0.38, anchors: app.allAnchors() });

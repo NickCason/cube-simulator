@@ -50,7 +50,7 @@ export const TOOL_DEFS = [
   { id: 'knife', label: 'Knife', hint: 'Swipe across the jelly to slice it', key: '2' },
   { id: 'nailgun', label: 'Nail gun', hint: 'Click to fire · hold for auto', key: '3' },
   { id: 'holegun', label: 'Hole gun', hint: 'Click to shoot a hole through it', key: 'g' },
-  { id: 'mallet', label: 'Mallet', hint: 'Click to smack · hit on its beat to build resonance · frozen jelly shatters', key: '4' },
+  { id: 'mallet', label: 'Mallet', hint: 'Click to smack · hit on its beat to build resonance · frozen, sugar and ice cubes shatter', key: '4' },
   { id: 'torch', label: 'Torch', hint: 'Hold over the jelly to melt it · it runs off as liquid', key: '5' },
   { id: 'freeze', label: 'Cryo spray', hint: 'Hold to freeze it solid · spray a puddle to set it back into jelly', key: '6' },
   { id: 'baller', label: 'Melon baller', hint: 'Click to scoop out a ball', key: '7' },
@@ -95,7 +95,7 @@ export class UI {
 
         </div>
         <button class="tune-btn" aria-label="Settings" title="Settings">${ICONS.tune}</button>
-        <button class="heal" title="Heal (H)">${ICONS.heal}<span>Heal</span></button>
+        <button class="heal" title="Re-cube (H)" aria-label="Re-cube">${ICONS.heal}<span>Re-cube</span></button>
         <button class="mute" title="Sound (M)" aria-label="Toggle sound">${ICONS.sound}</button>
       </nav>
       <div class="palette style-panel" hidden>
@@ -326,7 +326,7 @@ export class UI {
     {
       const row = document.createElement('div');
       row.className = 'row toggle lab-switch';
-      row.innerHTML = '<span class="name">Lab controls</span><button class="switch" role="switch" aria-checked="false" aria-label="Lab controls"><i></i></button><span class="word">Off</span>';
+      row.innerHTML = '<span class="name">The Cubicle</span><button class="switch" role="switch" aria-checked="false" aria-label="The Cubicle: lab controls"><i></i></button><span class="word">Off</span>';
       const sw = row.querySelector('.switch'), word = row.querySelector('.word');
       let on = false;
       try {
@@ -350,7 +350,7 @@ export class UI {
         } catch (e) {
           /* private mode */
         }
-        if (on) this.hint('Lab: the knobs inside the hand and each tool', 2400);
+        if (on) this.hint('The Cubicle: the knobs inside the hand and every tool', 2400);
       });
       const first = scroll.querySelector('.lab-row');
       if (first) scroll.insertBefore(row, first);
@@ -450,7 +450,9 @@ export class UI {
       input.style.setProperty('--p', `${t * 100}%`);
       readout(word, settingWord(def, v), settingNum(def, v));
     }
-    this.tuneEl.querySelector('.reset').textContent = `Reset to ${tex.name}`;
+    const reset = this.tuneEl.querySelector('.reset');
+    reset.textContent = 'Back to square one';
+    reset.title = `Every slider back to ${tex.name}'s own`;
   }
 
   closePalette() {

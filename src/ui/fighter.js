@@ -6,7 +6,7 @@ import { cubeSummary, cubeStats } from '../cubecode.js';
 import { resolveFlavor, flavorSwatchCSS, flavorMainHex } from '../styles.js';
 
 const RECORD = [
-  ['healed', 'Healed'],
+  ['healed', 'Re-cubed'],
   ['picked', 'Picked'],
   ['cuts', 'Cuts'],
   ['tears', 'Tears'],

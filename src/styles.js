@@ -72,6 +72,11 @@ export const TEXTURES = {
   putty: { name: 'Putty', depth: 0.55, opacity: 0.97, glow: 0.3, rough: 0.5, ior: 1.3, sugar: 0, milk: 0.75, mu: 240, damping: 14, weight: 1.35, lambda: 20, bounce: 0, grip: 1.5, rigidity: 0.2, goo: 0.75 },
   // rigid: a boiled sweet - knocks about like a solid, won't tear in your hands
   candy: { name: 'Hard candy', label: 'Hard candy', depth: 1.1, opacity: 0.1, glow: 0.4, rough: 0.012, ior: 1.5, sugar: 0, milk: 0, mu: 1000, damping: 3, weight: 1.4, lambda: 40, bounce: 0.35, grip: 0.6, rigidity: 0.92, goo: 0 },
+  // brittle (the mallet shatters it, chips fly - see MalletTool.strike):
+  // a sugar cube - white, sparkly-grainy, firm and crumbly
+  sugar: { name: 'Sugar cube', label: 'Sugar cube', depth: 0.32, opacity: 0.93, glow: 0.55, rough: 0.55, ior: 1.32, sugar: 1, milk: 1, mu: 760, damping: 8, weight: 1.15, lambda: 14, bounce: 0.03, grip: 1.35, rigidity: 0.6, tough: 0.45, goo: 0, brittle: true, chip: '#fffaf3' },
+  // an ice cube - clear, slippery, hard; the torch runs it to water, cryo sets it again
+  ice: { name: 'Ice cube', label: 'Ice cube', depth: 0.2, opacity: 0.02, glow: 0.32, rough: 0.012, ior: 1.31, sugar: 0, milk: 0.06, mu: 1000, damping: 3, weight: 0.92, lambda: 40, bounce: 0.18, grip: 0.05, rigidity: 0.94, goo: 0, brittle: true, chip: '#dcefff' },
 };
 
 export const EDGES = {
@@ -87,6 +92,7 @@ export const GLITTERS = [
   { id: 'gold', name: 'Gold', dot: 'linear-gradient(135deg, #fff1b8, #d39a2c 55%, #ffe08a)' },
   { id: 'holo', name: 'Holo', dot: 'conic-gradient(#ff5f9e, #ffd25f, #6dffb0, #5fc8ff, #b28cff, #ff5f9e)' },
   { id: 'rose', name: 'Rose', dot: 'linear-gradient(135deg, #ffe0dc, #d9827a 55%, #ffd3cc)' },
+  { id: 'cubic', name: 'Cubic', dot: 'conic-gradient(from 45deg, #ffffff, #cfe8ff, #ffd9f2, #fff3c4, #d6ffe9, #ffffff)' },
 ];
 
 export const DEFAULT_STYLE = {
