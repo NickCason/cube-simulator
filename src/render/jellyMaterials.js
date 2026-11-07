@@ -60,6 +60,9 @@ const OCT = /* glsl */ `
 // layers averages the profile over the heights it spans.
 export const MAX_LAYERS = 10;
 export const MAX_CAVITIES = 12;
+// each cube's gradient strip: this many steps along it, two rows a cube
+export const GRAD_N = 512;
+export const GRAD_ROWS = 16;
 export const MAX_PULSES = 6;
 export const LAYER_GLSL = /* glsl */ `
   uniform int uLayers;
@@ -110,8 +113,10 @@ export const LAYER_GLSL = /* glsl */ `
 // picks the row (the front shader reads its own way, all at once).
 export const CUBE_GLSL = /* glsl */ `
   uniform highp sampler2D uCubeTex;
+  uniform highp sampler2D uGradTex;
   int gK = 0;
   int cLayers = 0; // (-1: Rubik)
+  int cShape = 0; // (its gradient's: up, across, corner, core, shell, rings - styles.js GRAD_SHAPES)
   float cLY0 = 0.0, cLSpan = 1.0, cLRep = 1.0, cLExp = 1.0, cLBlur = 0.0, cRubikSeed = 0.0;
   vec4 cubeT(int x) { return texelFetch(uCubeTex, ivec2(x, gK), 0); }
   void useCube(float k) {
@@ -119,6 +124,7 @@ export const CUBE_GLSL = /* glsl */ `
     vec4 q4 = cubeT(4), q5 = cubeT(5);
     cLayers = int(floor(q4.y + 0.5));
     cLY0 = q4.z; cLSpan = q4.w; cLRep = q5.x; cLExp = q5.y; cLBlur = q5.z; cRubikSeed = q5.w;
+    cShape = int(cubeT(6).w + 0.5);
   }
   // Rubik: the colour (0..5) at rest point p - each face a 3x3 of stickers
   // run in to the middle, centres their own face's colour, the rest
@@ -142,40 +148,36 @@ export const CUBE_GLSL = /* glsl */ `
     h ^= h >> 16u; h *= 2246822519u; h ^= h >> 13u; h *= 3266489917u; h ^= h >> 16u;
     return int(h % 6u);
   }
-  // the colour of its light scattered inside, at rest point p (layers by
-  // height, Rubik by sticker)
-  vec3 cScatterAt(vec3 p, vec3 base);
-  void cLayerPair(float y, out int a, out int b, out float s) {
-    float n = float(cLayers), m = n * cLRep;
-    float h = pow(max(clamp((y - cLY0) / cLSpan, 0.0, 1.0), 1e-6), cLExp);
-    float f = h * m - 0.5;
-    float i0 = floor(f);
-    float w = max(cLBlur * 0.5, 0.012);
-    s = smoothstep(0.5 - w, 0.5 + w, f - i0);
-    a = int(mod(clamp(i0, 0.0, m - 1.0), n));
-    b = int(mod(clamp(i0 + 1.0, 0.0, m - 1.0), n));
+  // Its gradient (layered): a rest point's place along its shape, 0..1 (as
+  // styles.js gradT); its absorption there (row 0) or the colour of the light
+  // scattered inside (row 1), off its strip (worked out from the stops: see
+  // JellyView.setCubeLook); the absorption averaged along a stretch of it
+  float cGradT(vec3 p) {
+    float h = 0.5 * cLSpan;
+    if (cShape == 1) return p.x / cLSpan + 0.5;
+    if (cShape == 2) return (p.x + p.y + p.z) / (3.0 * cLSpan) + 0.5;
+    if (cShape == 3) return length(p) / h;
+    if (cShape == 4) return max(abs(p.x), max(abs(p.y), abs(p.z))) / h;
+    if (cShape == 5) return length(p.xz) / h;
+    return (p.y - cLY0) / cLSpan;
   }
-  vec3 cSigmaAt(float y) {
-    int a, b; float s;
-    cLayerPair(y, a, b, s);
-    return mix(cubeT(7 + a).rgb, cubeT(7 + b).rgb, s);
+  vec3 cGradAt(vec3 p, int row) {
+    float t = clamp(cGradT(p), 0.0, 1.0);
+    return textureLod(uGradTex, vec2((t * ${GRAD_N - 1}.0 + 0.5) / ${GRAD_N}.0, (float(gK * 2 + row) + 0.5) / ${GRAD_ROWS}.0), 0.0).rgb;
   }
-  vec3 cLayerSigma(float ya, float yb, vec3 base) {
+  vec3 cGradPath(vec3 a, vec3 b, vec3 base) {
     if (cLayers <= 0) return base;
-    if (abs(yb - ya) < 1e-3) return cSigmaAt(ya);
+    if (dot(b - a, b - a) < 1e-6) return cGradAt(a, 0);
     vec3 acc = vec3(0.0);
-    for (int k = 0; k < 16; k++) acc += cSigmaAt(mix(ya, yb, (float(k) + 0.5) / 16.0));
+    for (int k = 0; k < 16; k++) acc += cGradAt(mix(a, b, (float(k) + 0.5) / 16.0), 0);
     return acc * 0.0625;
   }
-  vec3 cLayerScatter(float y, vec3 base) {
-    if (cLayers <= 0) return base;
-    int a, b; float s;
-    cLayerPair(y, a, b, s);
-    return mix(cubeT(17 + a).rgb, cubeT(17 + b).rgb, s);
-  }
+  // the colour of its light scattered inside, at rest point p (by its
+  // gradient, or Rubik's sticker)
   vec3 cScatterAt(vec3 p, vec3 base) {
     if (cLayers < 0) return cubeT(17 + rubikAt(p)).rgb;
-    return cLayerScatter(p.y, base);
+    if (cLayers == 0) return base;
+    return cGradAt(p, 1);
   }
 `;
 
@@ -240,7 +242,7 @@ const VERT = /* glsl */ `
 `;
 
 // Back faces: linear view depth, packed view-space exit normal, exit rest height.
-export function createBackMaterial() {
+export function createBackMaterial(rest = false) {
   return new THREE.ShaderMaterial({
     side: THREE.BackSide,
     vertexShader: VERT,
@@ -252,9 +254,14 @@ export function createBackMaterial() {
       varying vec4 vData;
       ${OCT}
       ${SAFE_GLSL}
+      ${rest ? 'layout(location = 1) out highp vec4 oRest;' : ''}
       void main() {
         vec3 vn = safeNormalize((viewMatrix * vec4(safeNormalize(vNormal), 0.0)).xyz);
         gl_FragColor = finite4(vec4(-vViewPos.z, octEncode(vn), vRest.y));
+        // (rest: and the whole rest point there, into a second target - for
+        // a gradient across, corner to corner or out from the middle, the
+        // way through from where it went in to here)
+        ${rest ? 'oRest = finite4(vec4(vRest, 1.0));' : ''}
       }`,
   });
 }
@@ -274,6 +281,9 @@ export function createJellyMaterial(env, layerUniforms) {
       uHazeMin: { value: 0 },
       tScene: { value: null },
       tBack: { value: null },
+      tBackRest: { value: null }, // (where the line of sight leaves: its rest point - see createBackMaterial)
+      uBackRest: { value: 0 }, // (whether that's there: else only its height is)
+      uGradTex: { value: null },
       envMap: { value: env.texture },
       envMaxLod: { value: env.maxLod },
       envIntensity: { value: 1.0 },
@@ -321,6 +331,8 @@ export function createJellyMaterial(env, layerUniforms) {
       uniform mat4 projectionMatrix;
       uniform sampler2D tScene;
       uniform sampler2D tBack;
+      uniform sampler2D tBackRest;
+      uniform float uBackRest;
       uniform samplerCube envMap;
       uniform float envMaxLod;
       uniform float envIntensity;
@@ -560,6 +572,7 @@ export function createJellyMaterial(env, layerUniforms) {
         float cSugar = cq3.x, cMilk = cq3.y, cIrid = cq3.z, cMetal = cq3.w, cOpal = cq4.x;
         cLayers = int(floor(cq4.y + 0.5));
         cLY0 = cq4.z; cLSpan = cq4.w; cLRep = cq5.x; cLExp = cq5.y; cLBlur = cq5.z; cRubikSeed = cq5.w;
+        cShape = int(cq6.w + 0.5);
         float temp = vData.x;
         float glow = vData.y;
         float fresh = vData.z;
@@ -633,7 +646,10 @@ export function createJellyMaterial(env, layerUniforms) {
         float frontDepth = cavity > 0.5 ? -(viewMatrix * vec4(Pw, 1.0)).z : -vViewPos.z;
         float thick = back.r > 0.0 ? clamp(back.r - frontDepth, 0.0, 4.0) : 0.0;
         vec3 Nb = back.r > 0.0 ? normalize((vec4(octDecode(back.gb), 0.0) * viewMatrix).xyz) : -N;
-        float exitY = back.r > 0.0 ? back.a : vRest.y;
+        // (where the line of sight leaves, as a rest point: for a gradient -
+        // else nothing's looked up for it, here or below)
+        vec3 exitR = Rp;
+        if (cLayers > 0 && back.r > 0.0) exitR = uBackRest > 0.5 ? textureLod(tBackRest, uv, 0.0).xyz : vec3(Rp.x, back.a, Rp.z);
 
         float rough = clamp(cRough + fresh * 0.02 + frost * 0.5 - melt * 0.02 + coat * 0.18, 0.015, 1.0);
         // (specular anti-aliasing: where the surface turns faster than a
@@ -654,8 +670,13 @@ export function createJellyMaterial(env, layerUniforms) {
         // Rubik: the sticker you look into (its seams dark, its white milky)
         int rk = cLayers < 0 ? rubikAt(Rp) : 0;
         float rkSeam = cLayers < 0 ? cRubikSeam : 0.0, rkMilk = cLayers < 0 ? cubeT(7 + rk).a : 0.0;
-        // layered: lean toward the layer you look into, so bands stay crisp
-        vec3 sigma = cLayers > 0 ? mix(cLayerSigma(Rp.y, Rp.y, cAbsorb), cLayerSigma(Rp.y, exitY, cAbsorb), 0.22) : cLayers < 0 ? cubeT(7 + rk).rgb : cAbsorb;
+        // layered: lean toward the colour you look into, so bands stay crisp
+        // - out from the middle, toward all that's along the way (the core
+        // shows through what's round it)
+        bool deepGrad = cShape >= 3;
+        vec3 sigma = cAbsorb;
+        if (cLayers > 0) sigma = mix(cGradAt(Rp, 0), cGradPath(Rp, exitR, cAbsorb), deepGrad ? 0.8 : 0.22);
+        else if (cLayers < 0) sigma = cubeT(7 + rk).rgb;
         vec3 Tr = exp(-sigma * pathLen * (1.0 + melt * 0.35));
         float haze = 1.0 - exp(-(cScatter + (cMilk + rkMilk) * 7.0 + frost * 2.5) * pathLen);
         haze = max(haze, max((cMilk + rkMilk) * 0.72, cHazeMin));
@@ -667,7 +688,9 @@ export function createJellyMaterial(env, layerUniforms) {
         float wrap = max((NdL + 0.7) / 1.7, 0.0);
         vec3 irr = envLookup(N, 1.0) * (1.0 - 0.22 * gShadowOcc);
         float backlit = pow(clamp(dot(V, -L), 0.0, 1.0), 3.0);
-        vec3 baseSc = cLayers > 0 ? mix(cLayerScatter(Rp.y, cScatterColor), cLayerScatter(exitY, cScatterColor), 0.25) : cLayers < 0 ? cubeT(17 + rk).rgb : cScatterColor;
+        vec3 baseSc = cScatterColor;
+        if (cLayers > 0) baseSc = deepGrad ? mix(cGradAt(Rp, 1), cGradAt(mix(Rp, exitR, 0.5), 1), 0.6) : mix(cGradAt(Rp, 1), cGradAt(exitR, 1), 0.25);
+        else if (cLayers < 0) baseSc = cubeT(17 + rk).rgb;
         // creamy jelly: pastel, milky body colour
         baseSc = mix(baseSc, mix(baseSc, vec3(1.0), 0.45) * 1.05, cMilk);
         vec3 sc = mix(baseSc, vec3(0.92, 0.96, 1.0), frost * 0.85);
@@ -783,10 +806,12 @@ export function createJellyMaterial(env, layerUniforms) {
           float deep = 1.0 - exp(-pathLen * 1.8);
           // its colour just inside the surface: in layered jelly the light
           // from the layers further in is mostly absorbed on the way out
-          // (mixing in theirs turns a rainbow's middle to white)
+          // (mixing in theirs turns a rainbow's middle to white) - but a
+          // gradient out from the middle glows from there too (a hot core)
           vec3 scE = sc;
           if (cLayers > 0) {
-            scE = cLayerScatter(mix(Rp.y, exitY, 0.12), cScatterColor);
+            scE = cScatterAt(mix(Rp, exitR, 0.12), cScatterColor);
+            if (deepGrad) scE = mix(scE, cScatterAt(mix(Rp, exitR, 0.5), cScatterColor), 0.55);
             scE = mix(scE, mix(scE, vec3(1.0), 0.45) * 1.05, cMilk);
             scE = mix(scE, vec3(0.92, 0.96, 1.0), frost * 0.85);
           }
@@ -950,6 +975,7 @@ export function createLightViewMaterial(kind) {
       varying vec3 vW;
       varying vec3 vN;
       varying float vRestY;
+      varying vec3 vRest3;
       varying float vTemp;
       varying float vCubeK;
       void main() {
@@ -957,6 +983,7 @@ export function createLightViewMaterial(kind) {
         vW = wp.xyz;
         vN = mat3(modelMatrix) * normal;
         vRestY = aRest.y;
+        vRest3 = aRest;
         vTemp = aData.x;
         vCubeK = aCube;
         gl_Position = projectionMatrix * viewMatrix * wp;
@@ -966,13 +993,15 @@ export function createLightViewMaterial(kind) {
       varying vec3 vW;
       varying vec3 vN;
       varying float vRestY;
+      varying vec3 vRest3;
       varying float vTemp;
       varying float vCubeK;
       ${SAFE_GLSL}
+      ${kind === 1 ? '' : 'layout(location = 1) out highp vec4 oRest;'}
       void main() {
         // (w: the rest height, + 10 so 0 is "nothing here", + 4 a cube -
-        // see lightViewCube)
-        ${kind === 1 ? 'gl_FragColor = finite4(vec4(safeNormalize(vN), vTemp));' : 'gl_FragColor = finite4(vec4(vW - uOrigin, vRestY + 10.0 + 4.0 * floor(vCubeK + 0.5)));'}
+        // see lightViewCube; and the rest point, for the gradients)
+        ${kind === 1 ? 'gl_FragColor = finite4(vec4(safeNormalize(vN), vTemp));' : 'gl_FragColor = finite4(vec4(vW - uOrigin, vRestY + 10.0 + 4.0 * floor(vCubeK + 0.5))); oRest = finite4(vec4(vRest3, 1.0));'}
       }`,
   });
 }
@@ -1009,6 +1038,9 @@ export function createCausticMaterial(layerUniforms) {
       tEntry: { value: null },
       tNormal: { value: null },
       tExit: { value: null },
+      tEntryRest: { value: null },
+      tExitRest: { value: null },
+      uGradTex: { value: null },
       uOrigin: { value: new THREE.Vector3() },
       uLightInvVP: { value: new THREE.Matrix4() },
       uGridN: { value: 256 },
@@ -1018,6 +1050,8 @@ export function createCausticMaterial(layerUniforms) {
       uniform sampler2D tEntry;
       uniform sampler2D tNormal;
       uniform sampler2D tExit;
+      uniform sampler2D tEntryRest;
+      uniform sampler2D tExitRest;
       uniform highp sampler2D uCubeTex;
       uniform vec3 uOrigin;
       uniform mat4 uLightInvVP;
@@ -1030,8 +1064,8 @@ export function createCausticMaterial(layerUniforms) {
       varying vec3 vOld;
       varying vec3 vNew;
       varying float vValid;
-      varying float vRestA;
-      varying float vRestB;
+      varying vec3 vRestA;
+      varying vec3 vRestB;
       varying float vPath;
       varying float vNdL;
       varying float vTemp;
@@ -1054,8 +1088,8 @@ export function createCausticMaterial(layerUniforms) {
           vOld = F;
           vNew = F;
           vValid = 0.0;
-          vRestA = 0.0;
-          vRestB = 0.0;
+          vRestA = vec3(0.0);
+          vRestB = vec3(0.0);
           vPath = 0.0;
           vNdL = 1.0;
           vTemp = 0.0;
@@ -1095,8 +1129,8 @@ export function createCausticMaterial(layerUniforms) {
           vValid = nl > 1e-12 ? smoothstep(0.0, 0.05, P.y) : 0.0;
           vOld = P + Ld * (-P.y / Ld.y);
           vNew = F;
-          vRestA = lightViewRestY(E.w);
-          vRestB = X.w > 0.5 ? lightViewRestY(X.w) : vRestA;
+          vRestA = texelFetch(tEntryRest, ij, 0).xyz;
+          vRestB = X.w > 0.5 ? texelFetch(tExitRest, ij, 0).xyz : vRestA;
           vNdL = dot(N, normalize(uLightDir));
           vTemp = Nt.w;
         }
@@ -1109,8 +1143,8 @@ export function createCausticMaterial(layerUniforms) {
       varying vec3 vOld;
       varying vec3 vNew;
       varying float vValid;
-      varying float vRestA;
-      varying float vRestB;
+      varying vec3 vRestA;
+      varying vec3 vRestB;
       varying float vPath;
       varying float vNdL;
       varying float vTemp;
@@ -1126,7 +1160,7 @@ export function createCausticMaterial(layerUniforms) {
         float ratio = clamp(oldA / max(newA, 1e-9), 0.0, 3.5);
         float F0 = pow((ior - 1.0) / (ior + 1.0), 2.0);
         float Ft = 1.0 - (F0 + (1.0 - F0) * pow(clamp(1.0 - vNdL, 0.0, 1.0), 5.0));
-        vec3 sig = cLayerSigma(vRestA, vRestB, q0.rgb);
+        vec3 sig = cGradPath(vRestA, vRestB, q0.rgb);
         vec3 T = exp(-sig * vPath) * exp(-scatter * vPath * 0.7);
         // frosted jelly scatters light: no sharp caustics
         T *= 1.0 - 0.9 * smoothstep(0.05, 0.6, -vTemp);
@@ -1148,6 +1182,7 @@ export function createReflectMaterial() {
     side: THREE.FrontSide,
     uniforms: {
       uCubeTex: { value: null },
+      uGradTex: { value: null },
       uEmit: { value: 0 },
       uFade: { value: 2.6 },
     },
@@ -1211,6 +1246,7 @@ export function createGlowMaterial() {
     depthWrite: false,
     uniforms: {
       uCubeTex: { value: null },
+      uGradTex: { value: null },
       uFloorRect: { value: new THREE.Vector4(-3, -3, 1 / 6, 1 / 6) },
     },
     vertexShader: /* glsl */ `
@@ -1293,6 +1329,7 @@ export function createTintMaterial() {
     depthWrite: false,
     uniforms: {
       uCubeTex: { value: null },
+      uGradTex: { value: null },
       uLightDir: { value: new THREE.Vector3(-0.45, 0.8, 0.4).normalize() },
       uFloorRect: { value: new THREE.Vector4(-3, -3, 1 / 6, 1 / 6) },
     },

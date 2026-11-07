@@ -8,6 +8,9 @@
 //   f  flavour id (cherry, lime, …, layers)       c  a custom colour instead (6 hex digits)
 //   l  layer colours bottom to top, 6 hex digits each, run together
 //   b  layer blend 0..100     r  layer repeat 1..6     i  layer bias -100..100
+//   p  the layers' stops - where each colour sits, 0..255 along one round,
+//      2 hex digits each, run together (missing: evenly spaced)
+//   h  the layers' shape: across, corner, core, shell, rings (missing: up)
 //   m  material     e  edges     g  glitter     d  look (light, dark)
 //   w  tearing: 0 when it's switched off
 //   k  Rubik's scramble (with f rubik): 0 solved, 1..65535
@@ -18,7 +21,7 @@
 // open forever. Never change what a letter or a slider code means: add new ones.
 
 import { SETTINGS, resolveSettings } from './settings.js';
-import { FLAVORS, TEXTURES, EDGES, GLITTERS, MIN_LAYERS, MAX_LAYERS, MAX_REPEAT, DEFAULT_STYLE } from './styles.js';
+import { FLAVORS, TEXTURES, EDGES, GLITTERS, MIN_LAYERS, MAX_LAYERS, MAX_REPEAT, DEFAULT_STYLE, GRAD_SHAPE_INDEX, copyLayers } from './styles.js';
 
 export const CODE_VERSION = 1;
 export const SITE_URL = 'https://nickcason.github.io/cube-simulator/';
@@ -76,7 +79,7 @@ export function captureCube(app, name = '') {
   return {
     name: cleanName(name),
     flavor: s.flavor,
-    layers: { colors: [...L.colors], blur: L.blur || 0, repeat: L.repeat || 1, bias: L.bias || 0 },
+    layers: copyLayers(L),
     texture: s.texture,
     edges: s.edges,
     glitter: s.glitter || 'off',
@@ -99,6 +102,8 @@ export function encodeCube(c) {
     if (L.blur) f.push('b' + Math.round(L.blur * 100));
     if (L.repeat > 1) f.push('r' + L.repeat);
     if (Math.round(L.bias * 100)) f.push('i' + Math.round(L.bias * 100));
+    if (Array.isArray(L.stops) && L.stops.length === L.colors.length) f.push('p' + L.stops.map((v) => Math.round(Math.min(1, Math.max(0, v)) * 255).toString(16).padStart(2, '0')).join(''));
+    if (L.shape && L.shape !== 'up' && GRAD_SHAPE_INDEX[L.shape] !== undefined) f.push('h' + L.shape);
   }
   if (c.flavor === 'rubik') f.push('k' + Math.max(0, Math.min(65535, Math.round(c.rubik ?? 1))));
   f.push('m' + c.texture, 'e' + c.edges);
@@ -149,7 +154,7 @@ export function decodeCube(text) {
     theme: null,
     rubik: 1,
   };
-  let flavor = null, custom = null;
+  let flavor = null, custom = null, stops = null;
   for (const p of parts.slice(1)) {
     const k = p[0], v = p.slice(1);
     if (!k) continue;
@@ -162,6 +167,8 @@ export function decodeCube(text) {
     } else if (k === 'b') c.layers.blur = clamp(+v / 100, 0, 1, 0);
     else if (k === 'r') c.layers.repeat = Math.round(clamp(+v, 1, MAX_REPEAT, 1));
     else if (k === 'i') c.layers.bias = clamp(+v / 100, -1, 1, 0);
+    else if (k === 'p') stops = (v.match(/[0-9a-f]{2}/gi) || []).map((h) => parseInt(h, 16) / 255);
+    else if (k === 'h' && GRAD_SHAPE_INDEX[v] !== undefined) c.layers.shape = v;
     else if (k === 'm') c.texture = TEXTURES[v] ? v : c.texture;
     else if (k === 'e') c.edges = EDGES[v] ? v : c.edges;
     else if (k === 'g') c.glitter = GLITTERS.some((g) => g.id === v) ? v : 'off';
@@ -186,6 +193,8 @@ export function decodeCube(text) {
   }
   if (custom) c.flavor = '#' + custom;
   else if (flavor && FLAVORS.some((f) => f.id === flavor)) c.flavor = flavor;
+  // (stops: one a colour, in order - else evenly spaced)
+  if (stops && stops.length === c.layers.colors.length && stops.every((v, i) => !i || v >= stops[i - 1])) c.layers.stops = stops;
   return c;
 }
 

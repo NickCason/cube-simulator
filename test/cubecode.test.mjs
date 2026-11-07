@@ -114,3 +114,20 @@ test('fighter stats: six, 0..100, and they read like the material', async () => 
   assert.ok(stat('candy', 'Tough') > 85 && stat('glass', 'Squish') === 0);
   assert.ok(stat('jello', 'Goo', { goo: 1 }) === 100); // (tuned sliders count)
 });
+
+test('gradients: stops and shape survive the round trip; codes without them read as before', () => {
+  const g = { ...full, layers: { ...full.layers, stops: [0, 0.1, 0.5, 0.52, 1], shape: 'core' } };
+  const code = encodeCube(g);
+  assert.match(code, /~p001a8085ff~/);
+  assert.match(code, /~hcore~/);
+  const c = decodeCube(code);
+  assert.equal(c.layers.shape, 'core');
+  assert.equal(c.layers.stops.length, 5);
+  c.layers.stops.forEach((v, i) => assert.ok(Math.abs(v - g.layers.stops[i]) < 0.5 / 255 + 1e-9, `stop ${i}: ${v}`));
+  // (stops that don't fit the colours, or out of order, or a shape not known: as before)
+  assert.equal(decodeCube('1~flayers~l7b22d61572ff2cc23a~p0080~mjello~eround').layers.stops, undefined);
+  assert.equal(decodeCube('1~flayers~l7b22d61572ff2cc23a~p80ff00~mjello~eround').layers.stops, undefined);
+  assert.equal(decodeCube('1~flayers~l7b22d61572ff2cc23a~hspiral~mjello~eround').layers.shape, undefined);
+  // (up and evenly spaced aren't written: a code says only what's different)
+  assert.doesNotMatch(encodeCube(full), /~[ph]/);
+});

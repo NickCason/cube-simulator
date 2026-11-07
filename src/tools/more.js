@@ -788,7 +788,7 @@ function smoothMelted(sb, gone) {
 // swollen) into the liquid at their middles, moving as they were, coloured
 // by their rest height; then they go.
 TorchTool.prototype._liquefy = function (set) {
-  const app = this.app, sb = app.sb, T = sb.T, x = sb.x, X = sb.X, v = sb.v;
+  const app = this.app, sb = app.sb, T = sb.T, x = sb.x, v = sb.v;
   const col = new THREE.Color();
   // (how much of what melts drips off on strings: the gooier, the more)
   const dripShare = app.strands ? 0.3 * Math.min(1, (app.st?.goo ?? 0.35) * 1.5) : 0;
@@ -846,14 +846,13 @@ TorchTool.prototype._liquefy = function (set) {
   }
   for (const t of set) {
     if (t >= sb.nT) continue;
-    let cx = 0, cy = 0, cz = 0, ry = 0, vx = 0, vy = 0, vz = 0;
+    let cx = 0, cy = 0, cz = 0, vx = 0, vy = 0, vz = 0;
     for (let k = 0; k < 4; k++) {
       const i = T[t * 4 + k] * 3;
       cx += x[i] / 4; cy += x[i + 1] / 4; cz += x[i + 2] / 4;
-      ry += X[i + 1] / 4;
       vx += v[i] / 4; vy += v[i + 1] / 4; vz += v[i + 2] / 4;
     }
-    col.set(app.flavorColorAtRestY(ry));
+    col.set(app.flavorColorAtTet(t));
     // (the space it leaves - slumped, it's shrunk - and half of that boils
     // off in the flame)
     // (and a share of it drips off on a string instead - see below)
@@ -901,12 +900,12 @@ TorchTool.prototype._liquefy = function (set) {
       if (picked.length >= nd) break;
       if (picked.some((j) => (sb.x[i * 3] - sb.x[j * 3]) ** 2 + (sb.x[i * 3 + 1] - sb.x[j * 3 + 1]) ** 2 + (sb.x[i * 3 + 2] - sb.x[j * 3 + 2]) ** 2 < min2)) continue;
       picked.push(i);
-      col.set(app.flavorColorAtRestY(sb.X[i * 3 + 1]));
+      col.set(app.flavorColorAtVertex(i));
       app.strands.add(i, -1, g, [col.r, col.g, col.b], liquid / nd);
     }
     // (no drip this time: its share runs off with the rest)
     if (!picked.length) {
-      col.set(app.flavorColorAtRestY(sy));
+      col.set(app.flavorColorAt(sx, sy, sz));
       app.fluid.add(sx, sy, sz, liquid, 0, -0.3, 0, col.r, col.g, col.b, 0.05);
     }
   }

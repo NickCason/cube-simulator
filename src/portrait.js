@@ -2,7 +2,8 @@ import * as THREE from 'three';
 import { SoftBody } from './sim/softbody.js';
 import { createStudioEnvironment } from './render/env.js';
 import { CUBE_TEX_W } from './render/jellyView.js';
-import { DEFAULT_STYLE, TEXTURES, EDGES, resolveFlavor } from './styles.js';
+import { GRAD_N } from './render/jellyMaterials.js';
+import { DEFAULT_STYLE, TEXTURES, EDGES, resolveFlavor, copyLayers } from './styles.js';
 import { resolveSettings } from './settings.js';
 
 // A cube's portrait - its card in the Cubby, the picture it's shared as: a
@@ -47,7 +48,8 @@ export class Portraits {
     // what's put back after
     const S = {
       sb: app.sb, cubes: app.cubes, camera: app.camera, sel: app.sel,
-      multi: J.multiCube, tintLocal: fx.tintLocal.value, row: J.cubeData.slice(0, CUBE_TEX_W * 4),
+      multi: J.multiCube, needRest: J.needRest, tintLocal: fx.tintLocal.value, row: J.cubeData.slice(0, CUBE_TEX_W * 4),
+      grad: J.gradData.slice(0, GRAD_N * 2 * 4),
       emit: F.uEmit.value, pulse: F.uPulseAmp.value.slice(), cavN: F.uCavN.value, fire: [app.fireLevel, app.fireGoal], flash: app.flash,
       dim: C.uDim.value, wash: C.uWash.value, selA: fx.selCol.value.w,
       env: F.envMap.value, floorEnv: app.floor.material.envMap, glitterEnv: G?.uniforms.envMap.value,
@@ -87,7 +89,10 @@ export class Portraits {
       J.topoVersion = -1;
       J.cubeData.set(S.row, 0);
       J.cubeTex.needsUpdate = true;
+      J.gradData.set(S.grad, 0);
+      J.gradTex.needsUpdate = true;
       J.multiCube = S.multi;
+      J.needRest = S.needRest;
       J.setStyle(resolveFlavor(app.style), { ...TEXTURES[app.style.texture], ...app.settings }, S.sb.p.size);
       fx.tintLocal.value = S.tintLocal;
       app._applyLook(app._look(app.theme), 1, false);
@@ -125,7 +130,7 @@ export class Portraits {
     const theme = c.theme === 'dark' ? 'dark' : 'light';
     const style = {
       flavor: c.flavor,
-      layers: { colors: [...c.layers.colors], blur: c.layers.blur, repeat: c.layers.repeat, bias: c.layers.bias },
+      layers: copyLayers(c.layers),
       texture: TEXTURES[c.texture] ? c.texture : DEFAULT_STYLE.texture,
       edges: EDGES[c.edges] ? c.edges : DEFAULT_STYLE.edges,
       glitter: c.glitter || 'off',
@@ -138,6 +143,7 @@ export class Portraits {
     const flavor = resolveFlavor(style), m = { ...tex, ...st };
     J.setCubeLook(0, flavor, m, size);
     J.setStyle(flavor, m, size);
+    J.needRest = !!flavor.layers && flavor.shape !== 'up';
     J.fxUniforms.tintLocal.value = flavor.layers ? 1 : 0;
     app.sb = sb;
     app.cubes = [{ slot: 0, style, tune: c.tune || {}, name: c.name || '' }];

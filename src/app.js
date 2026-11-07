@@ -31,7 +31,8 @@ import { Portraits } from './portrait.js';
 import { captureCube } from './cubecode.js';
 import { bevelPoint, unbevelPoint } from './sim/mesh.js';
 import { RUBIK_COLORS, rubikIndex, rubikCellAt } from './styles.js';
-import { DEFAULT_STYLE, TEXTURES, EDGES, LAYER_PRESETS, MIN_LAYERS, MAX_LAYERS, MAX_REPEAT, biasExp, resolveFlavor, flavorMainHex, nextLayerColor } from './styles.js';
+import { DEFAULT_STYLE, TEXTURES, EDGES, LAYER_PRESETS, MIN_LAYERS, MAX_LAYERS, MAX_REPEAT, resolveFlavor, flavorMainHex, nextLayerColor } from './styles.js';
+import { GRAD_SHAPE_INDEX, gradStops, gradT, gradColorAt, copyLayers } from './styles.js';
 import { SETTINGS, resolveSettings } from './settings.js';
 
 const SETTING_BY_KEY = Object.fromEntries(SETTINGS.map((s) => [s.key, s]));
@@ -369,11 +370,15 @@ export class App {
     if (opts.blend !== undefined && Number.isFinite(opts.blend)) st.layers.blur = Math.min(1, Math.max(0, opts.blend));
     if (opts.repeat !== undefined && Number.isFinite(opts.repeat)) st.layers.repeat = Math.min(MAX_REPEAT, Math.max(1, Math.round(opts.repeat)));
     if (opts.bias !== undefined && Number.isFinite(opts.bias)) st.layers.bias = Math.min(1, Math.max(-1, opts.bias));
+    if (opts.shape && GRAD_SHAPE_INDEX[opts.shape] !== undefined) {
+      st.flavor = 'layers';
+      st.layers.shape = opts.shape;
+    }
     if (!(st.layers.repeat >= 1)) st.layers.repeat = 1;
     if (!Number.isFinite(st.layers.bias)) st.layers.bias = 0;
-    const L = st.layers;
-    if (!Array.isArray(L.colors) || L.colors.length < MIN_LAYERS) L.colors = [...DEFAULT_STYLE.layers.colors];
-    L.colors = L.colors.slice(0, MAX_LAYERS);
+    if (!Array.isArray(st.layers.colors) || st.layers.colors.length < MIN_LAYERS) st.layers.colors = [...DEFAULT_STYLE.layers.colors];
+    st.layers.colors = st.layers.colors.slice(0, MAX_LAYERS);
+    st.layers = copyLayers(st.layers);
     if (!TEXTURES[st.texture]) st.texture = DEFAULT_STYLE.texture;
     if (!EDGES[st.edges]) st.edges = DEFAULT_STYLE.edges;
     return st;
@@ -409,6 +414,12 @@ export class App {
       this.jelly.setCubeLook(cb.slot, resolveFlavor(cb.style), { ...ct, ...cs }, sb.cSize[cb.slot]);
     }
     this.jelly.multiCube = this.cubes.length > 1; // (their shadows on each other)
+    // (a gradient across, corner to corner or out from the middle: the jelly
+    // draws where each line of sight leaves it as a whole rest point)
+    this.jelly.needRest = this.cubes.some((cb) => {
+      const f = resolveFlavor(cb.style);
+      return !!f.layers && f.shape !== 'up';
+    });
     // (any layered one: the floor takes its shadow's colour band by band)
     this.jelly.fxUniforms.tintLocal.value = this.cubes.some((cb) => resolveFlavor(cb.style).layers) ? 1 : 0;
     sb.p.mu = App.safeMu(st.mu, st.weight, sb.p.size, st.lambda, st.gravity);
@@ -461,15 +472,26 @@ export class App {
     this.applyStyle();
   }
 
+  // (a colour more goes on the end - set stops: halfway from the last to the
+  // end, or all evened out if there's no room; a colour fewer comes off it)
   setLayerCount(n) {
     const L = this.style.layers;
     n = Math.max(MIN_LAYERS, Math.min(MAX_LAYERS, n));
-    while (L.colors.length < n) L.colors.push(nextLayerColor(L.colors[L.colors.length - 1]));
+    while (L.colors.length < n) {
+      L.colors.push(nextLayerColor(L.colors[L.colors.length - 1]));
+      if (L.stops) {
+        const last = L.stops[L.stops.length - 1];
+        if (1 - last > 0.08) L.stops.push((last + 1) / 2);
+        else L.stops = null;
+      }
+    }
     if (L.colors.length > n) L.colors.length = n;
+    if (L.stops) L.stops.length = L.colors.length;
     this.style.flavor = 'layers';
     this.applyStyle();
   }
 
+  // (a preset's colours evenly spaced; its shape, if it has one)
   setLayerPreset(id) {
     const p = LAYER_PRESETS.find((q) => q.id === id);
     if (!p) return;
@@ -478,8 +500,69 @@ export class App {
     if (p.blur !== undefined) L.blur = p.blur;
     L.repeat = p.repeat || 1;
     L.bias = p.bias || 0;
+    L.stops = null;
+    if (p.shape) L.shape = p.shape;
     this.style.flavor = 'layers';
     this.applyStyle();
+  }
+
+  // ---- the gradient (see styles.js): its shape; its stops' places (0..1
+  // along one round of it - null, evenly spaced), kept in order with their
+  // colours. Moving one past another swaps them: it returns where it is now.
+  setLayerShape(id) {
+    if (GRAD_SHAPE_INDEX[id] === undefined) return;
+    this.style.layers.shape = id;
+    this.style.flavor = 'layers';
+    this.applyStyle();
+  }
+
+  setLayerStops(stops) {
+    const L = this.style.layers;
+    L.stops = Array.isArray(stops) && stops.length === L.colors.length ? stops.map((v) => Math.min(1, Math.max(0, v))) : null;
+    this.style.flavor = 'layers';
+    this.applyStyle();
+  }
+
+  moveLayerStop(i, p) {
+    const L = this.style.layers, s = gradStops({ layers: L.colors, stops: L.stops });
+    if (i < 0 || i >= s.length) return i;
+    s[i] = Math.min(1, Math.max(0, p));
+    const order = s.map((_, k) => k).sort((a, b) => s[a] - s[b] || a - b);
+    L.colors = order.map((k) => L.colors[k]);
+    L.stops = order.map((k) => s[k]);
+    this.style.flavor = 'layers';
+    this.applyStyle();
+    return order.indexOf(i);
+  }
+
+  // a stop more at place p, in the colour there (one round, no bias - as
+  // the editor shows it): its index, or -1 when there are all there can be
+  addLayerStop(p, hex = null) {
+    const L = this.style.layers;
+    if (L.colors.length >= MAX_LAYERS) return -1;
+    p = Math.min(1, Math.max(0, p));
+    const s = gradStops({ layers: L.colors, stops: L.stops });
+    const col = hex || gradColorAt({ layers: L.colors, stops: L.stops, blur: L.blur, repeat: 1, bias: 0 }, p);
+    let at = s.findIndex((v) => v > p);
+    if (at < 0) at = s.length;
+    L.colors.splice(at, 0, col);
+    s.splice(at, 0, p);
+    L.stops = s;
+    this.style.flavor = 'layers';
+    this.applyStyle();
+    return at;
+  }
+
+  removeLayerStop(i) {
+    const L = this.style.layers;
+    if (L.colors.length <= MIN_LAYERS || i < 0 || i >= L.colors.length) return false;
+    const s = gradStops({ layers: L.colors, stops: L.stops });
+    L.colors.splice(i, 1);
+    s.splice(i, 1);
+    L.stops = s;
+    this.style.flavor = 'layers';
+    this.applyStyle();
+    return true;
   }
 
   setLayerBlur(b) {
@@ -654,30 +737,45 @@ export class App {
     }
   }
 
-  // Jelly colour at a world point (layered flavours vary with rest height).
+  // Jelly colour at a world point (the cube that's there: where it is in
+  // its gradient, or which of its Rubik's stickers).
   flavorColorAt(x, y, z) {
     const sb = this.sb, r = sb.locate(x, y, z);
     if (!r) return this.color;
-    // (the cube that's there: its colour - where it came out of its layers,
-    // or out of which Rubik's sticker)
-    const k = sb.tCube[r.tet], cb = this.cubes.find((c) => c.slot === k) || this.cube;
-    const f = resolveFlavor(cb.style);
-    if (!f.layers && f.id !== 'rubik') return flavorMainHex(f);
     const p = [0, 0, 0], T = sb.T;
     for (let q = 0; q < 4; q++) for (let c = 0; c < 3; c++) p[c] += sb.X[T[r.tet * 4 + q] * 3 + c] * r.bary[q];
-    if (f.id === 'rubik') {
-      const [face, cell] = rubikCellAt(p[0] - k * REST_STEP, p[1], p[2], sb.cSize[k]);
-      return RUBIK_COLORS[rubikIndex(f.rubik, face, cell)];
-    }
-    return this.flavorColorAtRestY(p[1], f, sb.cSize[k]);
+    return this.flavorColorAtRest(p[0], p[1], p[2], sb.tCube[r.tet]);
   }
 
-  // the jelly's colour at a rest height (layered flavours: its band)
-  flavorColorAtRestY(ry, f = this.flavor, size = this.sb.cSize[this.cube?.slot ?? 0]) {
-    if (!f || !f.layers) return this.color;
-    const n = f.layers.length, m = n * (f.repeat || 1);
-    const h = Math.pow(Math.min(1, Math.max(0, ry / size + 0.5)), biasExp(f.bias));
-    return f.layers[Math.min(m - 1, Math.floor(h * m)) % n];
+  // ...at a rest point of cube slot k (as the body keeps them: its slot's
+  // offset in x)
+  flavorColorAtRest(rx, ry, rz, k = this.cube?.slot ?? 0) {
+    const sb = this.sb, cb = this.cubes.find((c) => c.slot === k) || this.cube;
+    const f = resolveFlavor(cb.style), x = rx - k * REST_STEP;
+    if (f.id === 'rubik') {
+      const [face, cell] = rubikCellAt(x, ry, rz, sb.cSize[k]);
+      return RUBIK_COLORS[rubikIndex(f.rubik, face, cell)];
+    }
+    if (!f.layers) return flavorMainHex(f);
+    return gradColorAt(f, gradT(f.shape, x, ry, rz, sb.cSize[k]));
+  }
+
+  // ...where vertex i, or tet t (its middle), sits
+  flavorColorAtVertex(i) {
+    const X = this.sb.X;
+    return this.flavorColorAtRest(X[i * 3], X[i * 3 + 1], X[i * 3 + 2], this.sb.vCube[i]);
+  }
+
+  flavorColorAtTet(t) {
+    const sb = this.sb, T = sb.T, X = sb.X;
+    let x = 0, y = 0, z = 0;
+    for (let q = 0; q < 4; q++) {
+      const i = T[t * 4 + q] * 3;
+      x += X[i] / 4;
+      y += X[i + 1] / 4;
+      z += X[i + 2] / 4;
+    }
+    return this.flavorColorAtRest(x, y, z, sb.tCube[t]);
   }
 
   setCursor(c) {
@@ -1367,8 +1465,8 @@ export class App {
     while (used.has(slot)) slot++;
     const flavors = ['cherry', 'lime', 'blue', 'grape', 'orange', 'lemon', 'watermelon', 'cola'];
     const style = c
-      ? { flavor: c.flavor, layers: { colors: [...c.layers.colors], blur: c.layers.blur, repeat: c.layers.repeat, bias: c.layers.bias }, texture: c.texture, edges: EDGES[c.edges] ? c.edges : DEFAULT_STYLE.edges, glitter: c.glitter, rubik: Number.isFinite(c.rubik) ? c.rubik : 1 }
-      : { flavor: flavors[Math.floor(Math.random() * flavors.length)], layers: { ...DEFAULT_STYLE.layers, colors: [...DEFAULT_STYLE.layers.colors] }, texture: 'jello', edges: DEFAULT_STYLE.edges, glitter: 'off' };
+      ? { flavor: c.flavor, layers: copyLayers(c.layers), texture: c.texture, edges: EDGES[c.edges] ? c.edges : DEFAULT_STYLE.edges, glitter: c.glitter, rubik: Number.isFinite(c.rubik) ? c.rubik : 1 }
+      : { flavor: flavors[Math.floor(Math.random() * flavors.length)], layers: copyLayers(DEFAULT_STYLE.layers), texture: 'jello', edges: DEFAULT_STYLE.edges, glitter: 'off' };
     // (its own material sliders; the world's as everyone's)
     const tune = {};
     for (const k of Object.keys(this.tune)) if (!PER_CUBE(k)) tune[k] = this.tune[k];
@@ -1622,7 +1720,7 @@ export class App {
     const more = [];
     for (const [j, c] of sc.cubes.entries()) {
       if (j === keepSel || 1 + more.length >= MAX_CUBES || !c || !c.style || !TEXTURES[c.style.texture]) continue;
-      const style = { ...DEFAULT_STYLE, ...c.style, layers: { ...DEFAULT_STYLE.layers, ...(c.style.layers || {}) } };
+      const style = { ...DEFAULT_STYLE, ...c.style, layers: copyLayers({ ...DEFAULT_STYLE.layers, ...(c.style.layers || {}) }) };
       if (!EDGES[style.edges]) style.edges = DEFAULT_STYLE.edges;
       const tune = {};
       for (const k of Object.keys(this.tune)) if (!PER_CUBE(k)) tune[k] = this.tune[k];
@@ -1652,7 +1750,7 @@ export class App {
   _wearStyle(c) {
     const s = this.style;
     s.flavor = c.flavor;
-    s.layers = { colors: [...c.layers.colors], blur: c.layers.blur, repeat: c.layers.repeat, bias: c.layers.bias };
+    s.layers = copyLayers(c.layers);
     s.texture = c.texture;
     s.glitter = c.glitter;
     if (Number.isFinite(c.rubik)) s.rubik = c.rubik;

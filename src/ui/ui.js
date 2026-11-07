@@ -3,6 +3,7 @@ import { SETTINGS, settingWord, settingNum } from '../settings.js';
 import { Cubby } from './cubby.js';
 import { StackPanel, STACK_ICON } from './stackpanel.js';
 import { PlacesPanel, PLACE_ICON } from './places.js';
+import { GradEditor } from './gradedit.js';
 
 const svg = (inner) =>
   `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${inner}</svg>`;
@@ -121,12 +122,14 @@ export class UI {
         <div class="sec"><span class="lbl">Flavor</span><div class="chips"></div></div>
         <div class="sec layers-sec" hidden>
           <div class="lbl-row">
-            <span class="lbl">Layers <em>tap a band to recolour</em></span>
+            <span class="lbl">Layers <em>drag, tap or add stops</em></span>
             <div class="stepper">
               <button class="minus" aria-label="Fewer layers">&minus;</button><span class="n"></span><button class="plus" aria-label="More layers">+</button>
             </div>
           </div>
-          <div class="stack" role="group" aria-label="Layer colours, top to bottom"></div>
+          <div class="seg gshape" role="group" aria-label="The gradient's shape"></div>
+          <div class="grad" role="group" aria-label="The gradient's colours"><div class="grad-strip"></div><div class="grad-stops"></div></div>
+          <div class="grad-ends"><span class="a"></span><button class="even" hidden>Even out</button><span class="b"></span></div>
           <div class="presets"></div>
           <label class="row blend"><span class="name">Blend</span><input type="range" min="0" max="1" step="0.01" aria-label="Blend between layers"><span class="word"></span></label>
           <label class="row repeat"><span class="name">Repeat</span><input type="range" min="1" max="${MAX_REPEAT}" step="1" aria-label="How many times the colours repeat up the cube"><span class="word"></span></label>
@@ -180,7 +183,7 @@ export class UI {
     }
     // ---- layer editor
     this.layersSec = this.paletteEl.querySelector('.layers-sec');
-    this.stackEl = this.layersSec.querySelector('.stack');
+    this.grad = new GradEditor(app, this.layersSec);
     this.nEl = this.layersSec.querySelector('.n');
     this.minusEl = this.layersSec.querySelector('.minus');
     this.plusEl = this.layersSec.querySelector('.plus');
@@ -210,7 +213,7 @@ export class UI {
       const b = document.createElement('button');
       b.className = 'preset';
       b.dataset.preset = p.id;
-      b.innerHTML = `<i style="background:${flavorSwatchCSS({ layers: p.colors, blur: p.blur, repeat: p.repeat, bias: p.bias })}"></i>${p.name}`;
+      b.innerHTML = `<i style="background:${flavorSwatchCSS({ layers: p.colors, blur: p.blur, repeat: p.repeat, bias: p.bias, shape: p.shape })}"></i>${p.name}`;
       b.addEventListener('click', () => {
         app.audio.ui();
         app.setLayerPreset(p.id);
@@ -580,32 +583,14 @@ export class UI {
     this.hint(touch ? h.replace(/\bClick\b/g, 'Tap').replace(/\bclick\b/g, 'tap') : h);
   }
 
-  // Layer editor: bands top -> bottom; the stack background shows the
-  // actual blend, the bands are transparent tap targets with colour inputs.
+  // Layer editor: the gradient (see gradedit.js), how many colours, the sliders
   renderLayers(L) {
     const cols = L.colors;
     const n = cols.length;
     this.nEl.textContent = n;
     this.minusEl.disabled = n <= MIN_LAYERS;
     this.plusEl.disabled = n >= MAX_LAYERS;
-    if (this.stackEl.children.length !== n) {
-      this.stackEl.innerHTML = '';
-      for (let j = 0; j < n; j++) {
-        const k = n - 1 - j; // top band first
-        const bar = document.createElement('label');
-        bar.className = 'bar';
-        bar.title = k === n - 1 ? 'Top layer' : k === 0 ? 'Bottom layer' : `Layer ${k + 1}`;
-        bar.innerHTML = '<input type="color" aria-label="Layer colour">';
-        bar.querySelector('input').addEventListener('input', (e) => this.app.setLayerColor(k, e.target.value));
-        this.stackEl.appendChild(bar);
-      }
-    }
-    for (let j = 0; j < n; j++) {
-      const input = this.stackEl.children[j].querySelector('input');
-      const c = cols[n - 1 - j];
-      if (input.value.toLowerCase() !== c.toLowerCase()) input.value = c;
-    }
-    this.stackEl.style.background = flavorSwatchCSS({ layers: cols, blur: L.blur });
+    this.grad.render(L);
     if (document.activeElement !== this.blendEl) this.blendEl.value = L.blur;
     this.blendEl.style.setProperty('--p', `${L.blur * 100}%`);
     readout(this.blendWord, blendWord(L.blur), Math.round(L.blur * 100));
@@ -619,7 +604,7 @@ export class UI {
     const key = cols.join(',').toLowerCase();
     for (const b of this.layersSec.querySelectorAll('.preset')) {
       const p = LAYER_PRESETS.find((q) => q.id === b.dataset.preset);
-      b.classList.toggle('active', p.colors.join(',').toLowerCase() === key && (p.repeat || 1) === rep && Math.abs((p.bias || 0) - bias) < 0.02);
+      b.classList.toggle('active', p.colors.join(',').toLowerCase() === key && (p.repeat || 1) === rep && Math.abs((p.bias || 0) - bias) < 0.02 && !L.stops && (!p.shape || p.shape === L.shape));
     }
   }
 
@@ -632,7 +617,7 @@ export class UI {
     document.documentElement.style.setProperty('--jelly', jl);
     this.swatchBtn.querySelector('.swatch').style.background = css;
     const layerChip = this.paletteEl.querySelector('.chip.layered');
-    if (layerChip) layerChip.style.setProperty('--c', flavorSwatchCSS({ layers: style.layers.colors, blur: style.layers.blur, repeat: style.layers.repeat, bias: style.layers.bias }));
+    if (layerChip) layerChip.style.setProperty('--c', flavorSwatchCSS({ layers: style.layers.colors, blur: style.layers.blur, repeat: style.layers.repeat, bias: style.layers.bias, stops: style.layers.stops, shape: style.layers.shape }));
     this.layersSec.hidden = !flavor.layers;
     if (flavor.layers) this.renderLayers(style.layers);
     for (const b of this.paletteEl.querySelectorAll('.chip[data-flavor]')) b.classList.toggle('active', b.dataset.flavor === style.flavor);

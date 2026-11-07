@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { LAYER_GLSL } from '../render/jellyMaterials.js';
+import { CUBE_GLSL } from '../render/jellyMaterials.js';
 import { roundBoxSDF } from '../sim/mesh.js';
 import { REST_STEP } from '../sim/softbody.js';
 
@@ -51,12 +51,14 @@ export class Glitter {
     this.aSeed = ia(3);
     this.aInfo = ia(2);
     this.aMode = ia(1); // (each flake its cube's glitter)
+    this.aRestK = ia(4); // (where it sits in its cube at rest, and which cube: its tint by that cube's colours)
     g.setAttribute('aTet', this.aTet);
     g.setAttribute('aBary', this.aBary);
     g.setAttribute('aM', this.aM);
     g.setAttribute('aSeed', this.aSeed);
     g.setAttribute('aInfo', this.aInfo);
     g.setAttribute('aMode', this.aMode);
+    g.setAttribute('aRestK', this.aRestK);
     g.instanceCount = 0;
     this.geo = g;
     // cubic zirconia: each flake a tiny cube (the same flakes, a box to draw)
@@ -64,7 +66,7 @@ export class Glitter {
     const gc = new THREE.InstancedBufferGeometry();
     for (const k of ['position', 'normal', 'uv']) gc.setAttribute(k, box.getAttribute(k));
     gc.setIndex(box.getIndex());
-    for (const k of ['aTet', 'aBary', 'aM', 'aSeed', 'aInfo', 'aMode']) gc.setAttribute(k, g.getAttribute(k));
+    for (const k of ['aTet', 'aBary', 'aM', 'aSeed', 'aInfo', 'aMode', 'aRestK']) gc.setAttribute(k, g.getAttribute(k));
     gc.instanceCount = 0;
     this.geoCube = gc;
 
@@ -72,7 +74,8 @@ export class Glitter {
     this._allocPosTex(4096);
     const F = app.jelly.frontMat.uniforms;
     this.uniforms = {
-      ...app.jelly.layerUniforms,
+      uCubeTex: { value: app.jelly.cubeTex },
+      uGradTex: { value: app.jelly.gradTex },
       uPos: { value: this.posTex },
       uPosW: { value: this.posW },
       uSize: { value: 0.0055 },
@@ -80,9 +83,6 @@ export class Glitter {
       uMinPx: { value: 1.6 },
       uBBMin: { value: Array.from({ length: MAXBB }, () => new THREE.Vector3()) },
       uBBMax: { value: Array.from({ length: MAXBB }, () => new THREE.Vector3()) },
-      uAbsorb: F.uAbsorb,
-      uScatter: F.uScatter,
-      uHazeMin: F.uHazeMin,
       uTime: { value: 0 },
       uLight: { value: app.lightDir },
       uLightColor: F.uLightColor,
@@ -106,17 +106,15 @@ export class Glitter {
         uniform float uMinPx;
         uniform vec3 uBBMin[MAXBB];
         uniform vec3 uBBMax[MAXBB];
-        uniform vec3 uAbsorb;
-        uniform float uScatter;
-        uniform float uHazeMin;
         uniform float uTime;
-        ${LAYER_GLSL}
+        ${CUBE_GLSL}
         attribute vec4 aTet;
         attribute vec4 aBary;
         attribute vec3 aM;
         attribute vec3 aSeed;
         attribute vec2 aInfo;
         attribute float aMode;
+        attribute vec4 aRestK;
         varying float vMode;
         varying vec3 vN;
         varying vec3 vV;
@@ -179,8 +177,11 @@ export class Glitter {
             tEntry = clamp(max(max(tm.x, tm.y), tm.z), 0.0, len);
           }
           float L = len - tEntry;
-          vec3 sig = layerSigma(aInfo.x, aInfo.x, uAbsorb);
-          vTint = exp(-sig * L) * exp(-(uScatter * 0.8 + uHazeMin * 8.0) * L);
+          // (tinted by its own cube's colour where it sits - its gradient,
+          // its Rubik sticker - and dimmed by its haze)
+          useCube(aRestK.w);
+          vec3 sig = cLayers > 0 ? cGradAt(aRestK.xyz, 0) : cLayers < 0 ? cubeT(7 + rubikAt(aRestK.xyz)).rgb : cubeT(0).rgb;
+          vTint = exp(-sig * L) * exp(-(cubeT(0).a * 0.8 + cubeT(1).a * 8.0) * L);
           vec3 ep = o + d * tEntry;
           vec4 mve = viewMatrix * vec4(ep, 1.0);
           vec4 clip = projectionMatrix * viewMatrix * vec4(wp, 1.0);
@@ -318,8 +319,9 @@ export class Glitter {
       this.aSeed.array[k * 3 + 2] = this.seed[k * 3 + 2];
       this.aInfo.array[k * 2] = py;
       this.aInfo.array[k * 2 + 1] = sb.tPiece[t];
+      this.aRestK.array.set([px, py, pz, grp.slot], k * 4);
     }
-    for (const at of [this.aTet, this.aBary, this.aM, this.aSeed, this.aInfo, this.aMode]) at.needsUpdate = true;
+    for (const at of [this.aTet, this.aBary, this.aM, this.aSeed, this.aInfo, this.aMode, this.aRestK]) at.needsUpdate = true;
     this.geo.instanceCount = n;
     this.geoCube.instanceCount = n;
     this.topo = sb.topoVersion;

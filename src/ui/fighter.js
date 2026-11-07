@@ -3,7 +3,7 @@
 // healed, picked, cut, torn, shot and blown up.
 
 import { cubeSummary, cubeStats } from '../cubecode.js';
-import { resolveFlavor, flavorSwatchCSS, flavorMainHex } from '../styles.js';
+import { resolveFlavor, flavorMainHex, gradientCSS } from '../styles.js';
 
 const RECORD = [
   ['healed', 'Re-cubed'],
@@ -42,7 +42,7 @@ export class FighterCard {
     this._clear();
     const f = resolveFlavor({ flavor: c.flavor, layers: c.layers });
     el.style.setProperty('--f-col', flavorMainHex(f));
-    el.style.setProperty('--f-grad', f.layers ? flavorSwatchCSS({ ...f, blur: 1 }).replace('180deg', '90deg') : f.hex);
+    el.style.setProperty('--f-grad', f.layers ? gradientCSS({ ...f, blur: 1 }, 90) : f.hex);
     el.querySelector('.f-kicker').textContent = kicker;
     el.querySelector('.f-name span').textContent = c.name || 'Mystery cube';
     el.querySelector('.f-sub').textContent = cubeSummary(c, true);

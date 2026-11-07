@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { biasExp, RUBIK_COLORS } from '../styles.js';
+import { biasExp, RUBIK_COLORS, gradAt, gradSequence, GRAD_SHAPE_INDEX } from '../styles.js';
 import { MAX_CUBES, REST_STEP } from '../sim/softbody.js';
 import {
   createBackMaterial,
@@ -14,6 +14,8 @@ import {
   createLayerUniforms,
   absorptionFromColor,
   MAX_PULSES,
+  GRAD_N,
+  GRAD_ROWS,
 } from './jellyMaterials.js';
 
 const FLOOR_SPAN = 6.4;
@@ -260,6 +262,12 @@ export class JellyView {
     this.topoVersion = -1;
     this.layerUniforms = createLayerUniforms();
     this.backMat = createBackMaterial();
+    // (a gradient across, corner to corner or out from the middle wants the
+    // whole rest point where the line of sight leaves, in a second target:
+    // only drawn while there's one - see needRest, setSize, renderPieces)
+    this.backMatRest = createBackMaterial(true);
+    this.needRest = false;
+    this.rtBackRest = null;
     this.frontMat = createJellyMaterial(env, this.layerUniforms);
     // each cube's look, a row each (see setCubeLook; the front shader reads it)
     this.cubeData = new Float32Array(CUBE_TEX_W * MAX_CUBES * 4);
@@ -268,6 +276,14 @@ export class JellyView {
     this.cubeTex.generateMipmaps = false;
     this.cubeTex.needsUpdate = true;
     this.frontMat.uniforms.uCubeTex.value = this.cubeTex;
+    // each cube's gradient (layered), as a strip: its absorption and the
+    // colour inside along it, two rows a cube (see setCubeLook, CUBE_GLSL)
+    this.gradData = new Uint16Array(GRAD_N * GRAD_ROWS * 4);
+    this.gradTex = new THREE.DataTexture(this.gradData, GRAD_N, GRAD_ROWS, THREE.RGBAFormat, THREE.HalfFloatType);
+    this.gradTex.minFilter = this.gradTex.magFilter = THREE.LinearFilter;
+    this.gradTex.generateMipmaps = false;
+    this.gradTex.needsUpdate = true;
+    this.frontMat.uniforms.uGradTex.value = this.gradTex;
     // (depth first, so the front shader - the heavy one - runs once a pixel:
     // a stepped, folded or many-sided piece seen low drew over itself 2-4x)
     this.depthMat = new THREE.ShaderMaterial({ vertexShader: this.frontMat.vertexShader, fragmentShader: 'void main() { gl_FragColor = vec4(0.0); }', colorWrite: false });
@@ -279,13 +295,17 @@ export class JellyView {
     const lvRes = coarse ? 384 : 512, gridN = coarse ? 192 : 256;
     const lvType = renderer.extensions.has('EXT_color_buffer_float') ? THREE.FloatType : THREE.HalfFloatType;
     const lvOpts = { type: lvType, minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter, depthBuffer: true };
+    // (entry and exit: a second target each, the rest point there - for
+    // gradients out from the middle, the way through)
     this.lightView = [0, 1, 2].map((kind) => ({
-      rt: new THREE.WebGLRenderTarget(lvRes, lvRes, kind === 1 ? { ...lvOpts, type: THREE.HalfFloatType } : lvOpts),
+      rt: new THREE.WebGLRenderTarget(lvRes, lvRes, kind === 1 ? { ...lvOpts, type: THREE.HalfFloatType } : { ...lvOpts, count: 2 }),
       mat: createLightViewMaterial(kind),
     }));
     this.causticMat.uniforms.tEntry.value = this.lightView[0].rt.texture;
     this.causticMat.uniforms.tNormal.value = this.lightView[1].rt.texture;
     this.causticMat.uniforms.tExit.value = this.lightView[2].rt.texture;
+    this.causticMat.uniforms.tEntryRest.value = this.lightView[0].rt.textures[1];
+    this.causticMat.uniforms.tExitRest.value = this.lightView[2].rt.textures[1];
     // (and the jelly, for one cube's shadow on another - see cubeShadowAt)
     this.frontMat.uniforms.tLightEntry.value = this.lightView[0].rt.texture;
     this.frontMat.uniforms.tLightExit.value = this.lightView[2].rt.texture;
@@ -305,7 +325,10 @@ export class JellyView {
     this.reflectMat = createReflectMaterial();
     this.glowMat = createGlowMaterial();
     // (each cube's own colour in all of them)
-    for (const m of [this.causticMat, this.tintMat, this.reflectMat, this.glowMat]) m.uniforms.uCubeTex.value = this.cubeTex;
+    for (const m of [this.causticMat, this.tintMat, this.reflectMat, this.glowMat]) {
+      m.uniforms.uCubeTex.value = this.cubeTex;
+      m.uniforms.uGradTex.value = this.gradTex;
+    }
     // the pieces again, upside down below the floor (its reflection)
     this.reflScene = new THREE.Scene();
     this.mirror = null;
@@ -528,7 +551,7 @@ export class JellyView {
     put(3, m.sugar || 0, m.milk || 0, m.irid || 0, m.metal || 0);
     put(4, m.opal || 0, rubik ? -1 : flavor.layers ? flavor.layers.length : 0, -size / 2, size);
     put(5, Math.max(1, Math.round(flavor.repeat || 1)), biasExp(flavor.bias), flavor.blur || 0, rubik ? flavor.rubik : 0);
-    put(6, glowC.r, glowC.g, glowC.b, 0);
+    put(6, glowC.r, glowC.g, glowC.b, flavor.layers ? GRAD_SHAPE_INDEX[flavor.shape] || 0 : 0);
     for (let j = 0; j < 10; j++) {
       const a = abs[Math.min(j, abs.length - 1)], c = scs[Math.min(j, scs.length - 1)];
       // (alpha: a Rubik's white sticker is milky, not clear)
@@ -544,6 +567,28 @@ export class JellyView {
     if (cloud) tint.lerp(new THREE.Color(1, 1, 1), 0.35 * cloud).multiplyScalar(1 - 0.35 * cloud);
     put(27, tint.r, tint.g, tint.b, 9 * o * o + (m.milk || 0) * 3);
     this.cubeTex.needsUpdate = true;
+    if (flavor.layers) this._gradStrip(k, flavor, abs, scs);
+  }
+
+  // A layered cube's gradient as its strip: absorption (its first row) and
+  // the colour of the light inside (its second) at GRAD_N steps along its
+  // shape - the stops, blend, repeat and bias worked in (styles.js gradAt).
+  _gradStrip(k, flavor, abs, scs) {
+    const D = this.gradData, N = GRAD_N, seq = gradSequence(flavor), h = THREE.DataUtils.toHalfFloat;
+    const r0 = k * 2 * N * 4, r1 = r0 + N * 4;
+    for (let j = 0; j < N; j++) {
+      const { a, b, s } = gradAt(flavor, j / (N - 1), seq), t = 1 - s, i = j * 4;
+      const A = abs[a], B = abs[b], P = scs[a], Q = scs[b];
+      D[r0 + i] = h(Math.min(6e4, A.x * t + B.x * s));
+      D[r0 + i + 1] = h(Math.min(6e4, A.y * t + B.y * s));
+      D[r0 + i + 2] = h(Math.min(6e4, A.z * t + B.z * s));
+      D[r0 + i + 3] = h(1);
+      D[r1 + i] = h(P.r * t + Q.r * s);
+      D[r1 + i + 1] = h(P.g * t + Q.g * s);
+      D[r1 + i + 2] = h(P.b * t + Q.b * s);
+      D[r1 + i + 3] = h(1);
+    }
+    this.gradTex.needsUpdate = true;
   }
 
   _setWeldSeams(near) {
@@ -572,6 +617,8 @@ export class JellyView {
   setSize(w, h) {
     if (this.rtBack) this.rtBack.dispose();
     this.rtBack = new THREE.WebGLRenderTarget(w, h, { type: THREE.HalfFloatType, depthBuffer: true });
+    this.rtBackRest?.dispose();
+    this.rtBackRest = null;
     this.frontMat.uniforms.resolution.value.set(w, h);
   }
 
@@ -1056,16 +1103,26 @@ export class JellyView {
     const prevClear = r.getClearColor(new THREE.Color());
     const prevAlpha = r.getClearAlpha();
     this.frontMat.uniforms.tScene.value = rtTrans.texture;
-    this.frontMat.uniforms.tBack.value = this.rtBack.texture;
+    // (the back: depth, normal and rest height where the line of sight
+    // leaves - and, for a gradient that needs it, the whole rest point)
+    const rest = this.needRest;
+    if (rest && !this.rtBackRest) {
+      const { width, height } = this.rtBack;
+      this.rtBackRest = new THREE.WebGLRenderTarget(width, height, { type: THREE.HalfFloatType, depthBuffer: true, count: 2 });
+    }
+    const rtBack = rest ? this.rtBackRest : this.rtBack;
+    this.frontMat.uniforms.tBack.value = rtBack.texture;
+    this.frontMat.uniforms.tBackRest.value = rest ? rtBack.textures[1] : rtBack.texture;
+    this.frontMat.uniforms.uBackRest.value = rest ? 1 : 0;
     this.layers = nLayers;
     this.allMesh.visible = false;
     for (let L = 0; L < nLayers; L++) {
       for (let q = 0; q < this.layerMeshes.length; q++) this.layerMeshes[q].visible = q === L && this.layerCount[q] > 0;
       r.autoClear = false;
       r.setClearColor(0x000000, 0);
-      r.setRenderTarget(this.rtBack);
+      r.setRenderTarget(rtBack);
       r.clear(true, true, false);
-      this.scene.overrideMaterial = this.backMat;
+      this.scene.overrideMaterial = rest ? this.backMatRest : this.backMat;
       r.render(this.scene, camera);
       r.setRenderTarget(rtScene);
       // (a big mesh, or several pieces sharing the layer: depth first)

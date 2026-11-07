@@ -24,6 +24,7 @@ function boot() {
       blend: params.has('blend') ? +params.get('blend') : undefined,
       repeat: params.has('repeat') ? +params.get('repeat') : undefined,
       bias: params.has('bias') ? +params.get('bias') : undefined,
+      shape: params.get('shape') || undefined,
       theme: params.get('theme') || undefined,
       upscale: params.has('upscale'),
     });

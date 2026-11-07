@@ -396,7 +396,7 @@ export class HandTool {
       const i = pairs[k * 2], j = pairs[k * 2 + 1];
       if (picked.some((p) => (x[i * 3] - x[p * 3]) ** 2 + (x[i * 3 + 1] - x[p * 3 + 1]) ** 2 + (x[i * 3 + 2] - x[p * 3 + 2]) ** 2 < min2)) continue;
       picked.push(i);
-      col.set(app.flavorColorAtRestY(sb.X[i * 3 + 1]));
+      col.set(app.flavorColorAtVertex(i));
       app.strands.add(i, j, g, [col.r, col.g, col.b]);
     }
   }

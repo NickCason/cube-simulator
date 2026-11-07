@@ -64,6 +64,11 @@ export const LAYER_PRESETS = [
   { id: 'neon', name: 'Neon', colors: ['#ff00a8', '#00e5ff', '#76ff03', '#ffea00'] },
   { id: 'candy', name: 'Candy', colors: ['#e8102e', '#f4f4f4', '#e8102e', '#f4f4f4', '#e8102e', '#f4f4f4', '#e8102e'] },
   { id: 'duo', name: 'Duo', colors: ['#3a86ff', '#ff006e'] },
+  // (shaped: listed middle → outside)
+  { id: 'jawbreaker', name: 'Jawbreaker', colors: ['#ffe14d', '#2ec5ff', '#ff2d6f', '#7cff4f', '#b04dff', '#ff8a1f'], shape: 'shell' },
+  { id: 'hotcore', name: 'Hot core', colors: ['#fff3b0', '#ffb703', '#fb5607', '#c1121f', '#4a0412'], blur: 1, shape: 'core' },
+  { id: 'agate', name: 'Agate', colors: ['#f2e8cf', '#8ecae6', '#457b9d', '#e9c46a', '#264653'], blur: 0.3, repeat: 3, shape: 'rings' },
+  { id: 'prism', name: 'Prism', colors: ['#ff1744', '#ffea00', '#00e676', '#2979ff', '#d500f9'], blur: 1, shape: 'corner' },
 ];
 
 export const MAX_REPEAT = 6;
@@ -80,6 +85,117 @@ export function layerBands(colors, repeat = 1, bias = 0) {
 
 export const MIN_LAYERS = 2;
 export const MAX_LAYERS = 10;
+
+// ---- Gradients: a layered flavour's colours as stops along a line through
+// the cube - up it (the bands they started as), across, corner to corner -
+// or out from its middle: a core, cube-shaped shells (a jawbreaker), rings
+// round its upright axis. A stop is a colour at a place 0..1 along (stops
+// null: evenly spaced, the bands' middles, as they always were). Blend runs
+// from hard bands (each colour out to halfway to the next) to smooth fades;
+// Repeat cycles them; Bias crowds them toward one end. All in the cube's
+// rest shape, so they ride its wobble, show where it's cut and come back
+// with a Re-cube. (The shaders read them as a strip worked out from these:
+// see JellyView.setCubeLook.)
+export const GRAD_SHAPES = [
+  { id: 'up', name: 'Up', ends: ['Bottom', 'Top'] },
+  { id: 'across', name: 'Across', ends: ['One side', 'Other side'] },
+  { id: 'corner', name: 'Corner', ends: ['Corner', 'Corner'] },
+  { id: 'core', name: 'Core', ends: ['Middle', 'Outside'] },
+  { id: 'shell', name: 'Shell', ends: ['Middle', 'Skin'] },
+  { id: 'rings', name: 'Rings', ends: ['Middle', 'Outside'] },
+];
+export const GRAD_SHAPE_INDEX = Object.fromEntries(GRAD_SHAPES.map((g, i) => [g.id, i]));
+// (out from the middle: drawn round, not along)
+export const gradFromMiddle = (shape) => shape === 'core' || shape === 'shell' || shape === 'rings';
+
+const clamp01 = (v) => Math.min(1, Math.max(0, v));
+const smooth = (a, b, x) => {
+  const t = clamp01((x - a) / (b - a));
+  return t * t * (3 - 2 * t);
+};
+
+// the stops' places, one per colour, in order
+export function gradStops(f) {
+  const n = f.layers.length, s = f.stops;
+  if (Array.isArray(s) && s.length === n && s.every(Number.isFinite)) return s.map(clamp01);
+  return Array.from({ length: n }, (_, i) => (i + 0.5) / n);
+}
+
+// every stop over 0..1, the repeats in: { p, i } (i: which colour)
+export function gradSequence(f) {
+  const s = gradStops(f), r = Math.max(1, Math.round(f.repeat || 1)), out = [];
+  for (let c = 0; c < r; c++) for (let i = 0; i < s.length; i++) out.push({ p: (c + s[i]) / r, i });
+  return out;
+}
+
+// Where t (0..1 along the shape) falls: the colours either side (a, b) and
+// how far it is from a to b (s), the bias and the blend taken in.
+export function gradAt(f, t, seq = gradSequence(f)) {
+  const h = Math.pow(Math.min(1, Math.max(1e-6, t)), biasExp(f.bias)), last = seq.length - 1;
+  if (h <= seq[0].p) return { a: seq[0].i, b: seq[0].i, s: 0 };
+  if (h >= seq[last].p) return { a: seq[last].i, b: seq[last].i, s: 0 };
+  let k = 0;
+  while (k < last - 1 && seq[k + 1].p <= h) k++;
+  const A = seq[k], B = seq[k + 1], span = B.p - A.p;
+  const u = span > 1e-6 ? (h - A.p) / span : 1;
+  const w = Math.max((f.blur || 0) * 0.5, 0.012);
+  return { a: A.i, b: B.i, s: smooth(0.5 - w, 0.5 + w, u) };
+}
+
+// A rest point's place along the shape, 0..1 (x, y, z from the cube's
+// middle; size: its side). Out from the middle, 1 is the middle of a face
+// (its corners and edges are past the end: the last colour).
+export function gradT(shape, x, y, z, size) {
+  const h = size / 2;
+  if (shape === 'across') return x / size + 0.5;
+  if (shape === 'corner') return (x + y + z) / (3 * size) + 0.5;
+  if (shape === 'core') return Math.hypot(x, y, z) / h;
+  if (shape === 'shell') return Math.max(Math.abs(x), Math.abs(y), Math.abs(z)) / h;
+  if (shape === 'rings') return Math.hypot(x, z) / h;
+  return y / size + 0.5;
+}
+
+export function mixHex(a, b, s) {
+  const p = parseInt(a.slice(1), 16), q = parseInt(b.slice(1), 16);
+  const ch = (sh) => Math.round(((p >> sh) & 255) * (1 - s) + ((q >> sh) & 255) * s);
+  return '#' + ((1 << 24) | (ch(16) << 16) | (ch(8) << 8) | ch(0)).toString(16).slice(1);
+}
+
+// its colour at t
+export function gradColorAt(f, t) {
+  const { a, b, s } = gradAt(f, t);
+  return s <= 0 ? f.layers[a] : s >= 1 ? f.layers[b] : mixHex(f.layers[a], f.layers[b], s);
+}
+
+// as CSS colour stops along 0..1 (hard edges kept hard)
+export function gradCSSStops(f) {
+  const C = f.layers, seq = gradSequence(f), e = biasExp(f.bias), w = Math.max((f.blur || 0) * 0.5, 0.012);
+  const at = (h) => `${(Math.pow(clamp01(h), 1 / e) * 100).toFixed(2)}%`;
+  const out = [`${C[seq[0].i]} 0%`];
+  for (let k = 0; k + 1 < seq.length; k++) {
+    const A = seq[k], B = seq[k + 1], span = B.p - A.p;
+    out.push(`${C[A.i]} ${at(A.p + span * (0.5 - w))}`, `${C[B.i]} ${at(A.p + span * (0.5 + w))}`);
+  }
+  out.push(`${C[seq[seq.length - 1].i]} 100%`);
+  return out.join(', ');
+}
+
+// a CSS picture of it: along its line (angle: forced, for a strip), or
+// round, out from the middle
+export function gradientCSS(f, angle = null) {
+  const stops = gradCSSStops(f), shape = f.shape || 'up';
+  if (angle === null && gradFromMiddle(shape)) return `radial-gradient(circle closest-side, ${stops})`;
+  return `linear-gradient(${angle ?? (shape === 'across' ? 90 : shape === 'corner' ? 45 : 0)}deg, ${stops})`;
+}
+
+// a style's layers, copied whole (stops kept only if they match the colours)
+export function copyLayers(L) {
+  const D = DEFAULT_STYLE.layers;
+  L = L || D;
+  const colors = [...(Array.isArray(L.colors) && L.colors.length >= MIN_LAYERS ? L.colors : D.colors)];
+  const stops = Array.isArray(L.stops) && L.stops.length === colors.length && L.stops.every(Number.isFinite) ? L.stops.map(clamp01) : null;
+  return { colors, blur: L.blur || 0, repeat: L.repeat || 1, bias: L.bias || 0, stops, shape: GRAD_SHAPE_INDEX[L.shape] !== undefined ? L.shape : 'up' };
+}
 
 // Material presets. Look: depth (colour), opacity, glow (translucency),
 // rough, ior, sugar (crystal coating), milk (creamy body).
@@ -141,7 +257,7 @@ export const DEFAULT_STYLE = {
   texture: 'jello',
   edges: 'round',
   glitter: 'off',
-  layers: { colors: [...LAYER_PRESETS[0].colors], blur: 0, repeat: 1, bias: 0 },
+  layers: { colors: [...LAYER_PRESETS[0].colors], blur: 0, repeat: 1, bias: 0, stops: null, shape: 'up' },
   rubik: 0, // (0: solved - picking Rubik scrambles it)
 };
 
@@ -150,11 +266,13 @@ export function flavorById(id) {
   return FLAVORS.find((f) => f.id === id && !f.layered && !f.rubik) || FLAVORS[0];
 }
 
-// Resolve the style's flavour into { hex } or { layers, blur }.
+// Resolve the style's flavour into { hex } or { layers, blur, repeat, bias,
+// stops, shape } (see gradAt).
 export function resolveFlavor(style) {
   if (style.flavor === 'layers' || style.flavor === 'rainbow') {
     const L = style.layers || DEFAULT_STYLE.layers;
-    return { id: 'layers', name: 'Layers', layers: L.colors, blur: L.blur || 0, repeat: L.repeat || 1, bias: L.bias || 0 };
+    const stops = Array.isArray(L.stops) && L.stops.length === L.colors.length ? L.stops : null;
+    return { id: 'layers', name: 'Layers', layers: L.colors, blur: L.blur || 0, repeat: L.repeat || 1, bias: L.bias || 0, stops, shape: GRAD_SHAPE_INDEX[L.shape] !== undefined ? L.shape : 'up' };
   }
   // (Rubik: its scramble, and red for where one colour has to stand for it)
   if (style.flavor === 'rubik') return { id: 'rubik', name: 'Rubik', rubik: Number.isFinite(style.rubik) ? style.rubik : 1, hex: RUBIK_COLORS[2] };
@@ -163,16 +281,7 @@ export function resolveFlavor(style) {
 
 export function flavorSwatchCSS(f) {
   if (f.id === 'rubik') return RUBIK_SWATCH;
-  if (f.layers) {
-    // top first (the gradient runs down)
-    const bands = layerBands(f.layers, f.repeat, f.bias).reverse();
-    const pct = (h) => `${((1 - h) * 100).toFixed(2)}%`;
-    if ((f.blur || 0) > 0.05) {
-      // blended: colour stops at the band centres
-      return `linear-gradient(180deg, ${bands.map((b) => `${b.color} ${pct((b.h0 + b.h1) / 2)}`).join(', ')})`;
-    }
-    return `linear-gradient(180deg, ${bands.map((b) => `${b.color} ${pct(b.h1)} ${pct(b.h0)}`).join(', ')})`;
-  }
+  if (f.layers) return gradientCSS(f);
   return f.hex;
 }
 
