@@ -1,8 +1,9 @@
 // The stack: the cubes in the room as bars, bottom to top - the order they
 // stack in. Drag a bar up or down to move that cube in the stack (the way the
 // layers of a flavour stack), tap one to pick it (the panels edit it), x to
-// take it out. Add a plain jelly cube, and stack them: a tower of up to four,
-// a 2x2 base with the rest on top, eight make one big cube.
+// take it out. Add a plain jelly cube or a saved one (the Cubby, where each
+// card's + drops it in), and stack them: a tower of up to four, a 2x2 base
+// with the rest on top, eight make one big cube.
 
 import { resolveFlavor, flavorSwatchCSS, TEXTURES, FLAVORS } from '../styles.js';
 
@@ -36,10 +37,13 @@ export class StackPanel {
       'beforeend',
       `<div class="palette stackp" hidden role="dialog" aria-label="Stack">
         <div class="stack-head">
-          <div><b>Stack</b><span class="stack-form"></span></div>
-          <button class="stack-add" aria-label="Add a jelly cube" title="Add a jelly cube">+ Jelly cube</button>
+          <b>Stack</b>
+          <div class="stack-adds">
+            <button class="stack-add" aria-label="Add a jelly cube" title="Add a jelly cube">+ Jelly cube</button>
+            <button class="stack-saved" aria-label="Add a saved cube from the Cubby" title="Add a saved cube from the Cubby">+ Saved cube</button>
+          </div>
         </div>
-        <div class="stack-hint">Top of the stack first · drag to reorder · tap to pick</div>
+        <div class="stack-hint"><span class="stack-form"></span> · top first · drag to reorder · tap to pick</div>
         <div class="stack-list" role="list"></div>
         <button class="stack-go">${STACK_ICON}<span>Stack them</span></button>
       </div>`,
@@ -50,6 +54,14 @@ export class StackPanel {
     this.el.querySelector('.stack-add').addEventListener('click', () => {
       app.audio.ui();
       app.addCube();
+    });
+    this.el.querySelector('.stack-saved').addEventListener('click', () => {
+      app.audio.ui();
+      this.close();
+      const cubby = this.ui.cubby;
+      if (!cubby) return;
+      cubby.open();
+      this.ui.hint(cubby.items.length ? 'Tap + on a saved cube to drop it in' : 'Save a cube here first, then + drops it in', 2600);
     });
     this.el.querySelector('.stack-go').addEventListener('click', () => {
       app.audio.ui();

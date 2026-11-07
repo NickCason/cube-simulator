@@ -213,18 +213,19 @@ function roundedBox(px, py, pz, a, r) {
   _cp[3 + ax] = sg;
   return -gap;
 }
-function snapToShape(pos, nrm, mids, first, disp, shape) {
-  const { a, r } = shape;
-  if (!(a > 0) || !(r >= 0)) return;
-  // (whether each vertex below `first` is on the shape, worked out once)
+// (shapes: each cube's { a, r }; cube: each render vertex's cube)
+function snapToShape(pos, nrm, mids, first, disp, shapes, cube) {
+  // (whether each vertex below `first` is on its cube's shape, worked out once)
   const on = new Int8Array(first);
   const onShape = (v) => {
-    if (!on[v]) on[v] = Math.abs(roundedBox(pos[v * 3], pos[v * 3 + 1], pos[v * 3 + 2], a, r)) > 4e-3 ? -1 : 1;
+    const s = shapes[cube[v]];
+    if (!on[v]) on[v] = !(s.a > 0) || Math.abs(roundedBox(pos[v * 3], pos[v * 3 + 1], pos[v * 3 + 2], s.a, s.r)) > 4e-3 ? -1 : 1;
     return on[v] > 0;
   };
   for (let m = 0, k = first, j = 0; m < mids.length; m += 3, k++, j++) {
     if (mids[m + 2]) continue;
     if (!onShape(mids[m]) || !onShape(mids[m + 1])) continue;
+    const { a, r } = shapes[cube[mids[m]]];
     const ia = mids[m] * 3, ib = mids[m + 1] * 3, o = k * 3;
     const ex = pos[ia] - pos[ib], ey = pos[ia + 1] - pos[ib + 1], ez = pos[ia + 2] - pos[ib + 2];
     const len = Math.sqrt(ex * ex + ey * ey + ez * ez);
@@ -572,10 +573,15 @@ export class JellyView {
       rest[r * 3] = sb.X[i] - sb.vCube[rSim[r]] * REST_STEP; rest[r * 3 + 1] = sb.X[i + 1]; rest[r * 3 + 2] = sb.X[i + 2];
     }
     vertexNormals(rIndex, rest, restN, nB);
-    const shape = { a: sb.p.size / 2 - sb.p.bevel, r: sb.p.bevel };
+    // (each cube its own rounding; each render vertex knows its cube - the
+    // new points their edge's)
+    const shapes = Array.from(sb.cBevel, (b) => ({ a: sb.p.size / 2 - b, r: b }));
+    const cube = new Float32Array(maxN);
+    for (let r = 0; r < nB; r++) cube[r] = sb.vCube[rSim[r]];
+    for (let m = 0, k = nB; m < L1.mids.length; m += 3, k++) cube[k] = cube[L1.mids[m]];
     this.disp1 = new Float32Array(L1.mids.length / 3);
     tessellate(rest, restN, null, L1.mids, nB, this.disp1);
-    snapToShape(rest, restN, L1.mids, nB, this.disp1, shape);
+    snapToShape(rest, restN, L1.mids, nB, this.disp1, shapes, cube);
     // the second level only where the surface curves (bevels, corners): flat
     // faces - and the cut faces a burst leaves - gain nothing from it
     const t1 = L1.index.length / 3;
@@ -598,18 +604,15 @@ export class JellyView {
     this.nrm = new Float32Array(n * 3);
     this.data = new Float32Array(n * 4);
     this.disp2 = new Float32Array(L2.mids.length / 3);
+    for (let m = 0, k = nL1; m < L2.mids.length; m += 3, k++) cube[k] = cube[L2.mids[m]];
     tessellate(rest, restN, null, L2.mids, nL1, this.disp2);
-    snapToShape(rest, restN, L2.mids, nL1, this.disp2, shape);
+    snapToShape(rest, restN, L2.mids, nL1, this.disp2, shapes, cube);
     const index = L2.index;
     this.aPos = new THREE.BufferAttribute(this.pos, 3).setUsage(THREE.DynamicDrawUsage);
     this.aNrm = new THREE.BufferAttribute(this.nrm, 3).setUsage(THREE.DynamicDrawUsage);
     this.aData = new THREE.BufferAttribute(this.data, 4).setUsage(THREE.DynamicDrawUsage);
     this.aRest = new THREE.BufferAttribute(rest.slice(0, n * 3), 3);
-    // which cube each render vertex is of (the new points: their edge's)
-    const cube = new Float32Array(n);
-    for (let r = 0; r < nB; r++) cube[r] = sb.vCube[rSim[r]];
-    for (const [mids, first] of [[this.mids1, nB], [this.mids2, nL1]]) for (let m = 0, k = first; m < mids.length; m += 3, k++) cube[k] = cube[mids[m]];
-    this.aCube = new THREE.BufferAttribute(cube, 1);
+    this.aCube = new THREE.BufferAttribute(cube.slice(0, n), 1);
     // distance from the just-healed seams (see Healer._fuse, weldFieldJob)
     const weld = new Float32Array(n).fill(99);
     if (sb.weld && sb.weld.topo === sb.topoVersion) {

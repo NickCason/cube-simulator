@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { SoftBody, MAX_CUBES } from './sim/softbody.js';
+import { SoftBody, MAX_CUBES, REST_STEP } from './sim/softbody.js';
 import { createStudioEnvironment } from './render/env.js';
 import { createFloor } from './render/floor.js';
 import { Post } from './render/post.js';
@@ -402,7 +402,7 @@ export class App {
     try {
       localStorage.setItem('cube-sim-style', JSON.stringify(this.style));
       localStorage.setItem('cube-sim-tune', JSON.stringify(this.tune));
-      localStorage.setItem('cube-sim-scene', JSON.stringify({ sel: this.sel, order: this.stackOrder, cubes: this.cubes.map((c) => ({ slot: c.slot, style: c.style, tune: c.tune })) }));
+      localStorage.setItem('cube-sim-scene', JSON.stringify({ sel: this.sel, order: this.stackOrder, cubes: this.cubes.map((c) => ({ slot: c.slot, style: c.style, tune: c.tune, name: c.name || '' })) }));
     } catch (e) {
       /* private mode */
     }
@@ -524,6 +524,7 @@ export class App {
     const old = this.sb.p.size;
     if (Math.abs(size - old) < 1e-6) return;
     this.tune.size = size;
+    this._edgeMorphTick(0, true);
     this.sb.p.size = size;
     this.sb.p.bevel = EDGES[this.style.edges].bevel * size;
     this.applyStyle();
@@ -532,49 +533,74 @@ export class App {
     this.heal({ scale: size / old });
   }
 
+  // The selected cube's edges (each cube has its own).
   setEdges(id) {
     if (!EDGES[id] || this.style.edges === id) return;
-    const from = this._edgeMorph ? this._edgeMorph.cur : this.sb.p.bevel;
+    const sb = this.sb, slot = this.cube.slot;
+    // (one cube's change of shape at a time)
+    if (this._edgeMorph && this._edgeMorph.slot !== slot) this._edgeMorphTick(0, true);
+    const from = this._edgeMorph ? this._edgeMorph.cur : sb.cBevel[slot];
     this.style.edges = id;
-    this.sb.p.bevel = EDGES[id].bevel * this.sb.p.size;
+    sb.p.bevel = sb.cBevel[slot] = this.bevelOf(this.cube);
     this.applyStyle();
     // A whole cube changes shape: its rest shape eases from one rounding to
     // the other and the jelly springs after it. A cut or battered one
-    // re-forms with the new rounding (the heal).
-    if (this.damaged || this.healer.active || this.sb.pieces.length !== 1 || !this.intro.done) {
+    // re-forms with the new rounding (the heal - with others in the room,
+    // they all do, each with its own).
+    if (!this._whole(slot) || this.healer.active || !this.intro.done) {
       this._edgeMorph = null;
       this.healer.active = false;
       this.heal();
       return;
     }
-    const sb = this.sb, n = sb.nV, half = sb.p.size / 2;
-    const M = this._edgeMorph;
-    // (the rest positions with no rounding at all, worked out once)
-    let G = M && M.topo === sb.topoVersion ? M.G : null;
+    const half = sb.p.size / 2, R = slot * REST_STEP, M = this._edgeMorph;
+    // (the rest positions with no rounding at all, worked out once; its
+    // rest shape sits R along x)
+    let G = M && M.topo === sb.topoVersion ? M.G : null, idx = G ? M.idx : null;
     if (!G) {
-      G = new Float64Array(n * 3);
-      for (let i = 0; i < n; i++) unbevelPoint(sb.X[i * 3], sb.X[i * 3 + 1], sb.X[i * 3 + 2], half, from, G, i * 3);
+      idx = [];
+      for (let i = 0; i < sb.nV; i++) if (sb.vCube[i] === slot) idx.push(i);
+      G = new Float64Array(idx.length * 3);
+      idx.forEach((i, j) => unbevelPoint(sb.X[i * 3] - R, sb.X[i * 3 + 1], sb.X[i * 3 + 2], half, from, G, j * 3));
     }
-    this._edgeMorph = { G, topo: sb.topoVersion, half, from, to: this.sb.p.bevel, cur: from, t: 0, dur: 0.6 };
+    this._edgeMorph = { G, idx, slot, R, topo: sb.topoVersion, half, from, to: sb.cBevel[slot], cur: from, t: 0, dur: 0.6 };
   }
 
-  _edgeMorphTick(dt) {
+  // cube slot all in one piece, nothing cut out of it, nothing melted
+  _whole(slot) {
+    const sb = this.sb, ps = sb.pieces.filter((pc) => pc.cube === slot);
+    if (ps.length !== 1 || ps[0].verts.length !== sb.cN[slot]) return false;
+    for (const i of ps[0].verts) if (sb.melt[i]) return false;
+    return !this.damaged || this.cubes.length > 1;
+  }
+
+  // (finish: all the way there now - another cube's turn, or a rebuild)
+  _edgeMorphTick(dt, finish = false) {
     const M = this._edgeMorph;
     if (!M) return;
-    const sb = this.sb, n = sb.nV;
+    const sb = this.sb, X = sb.X, R = M.R;
     // (cut or rebuilt meanwhile: the new rounding as it is, at once)
-    const broken = M.topo !== sb.topoVersion || M.G.length !== n * 3;
+    const broken = M.topo !== sb.topoVersion;
     M.t += dt;
-    const k = broken ? 1 : Math.min(1, M.t / M.dur);
+    const k = broken || finish ? 1 : Math.min(1, M.t / M.dur);
+    const was = M.cur;
     M.cur = M.from + (M.to - M.from) * k * k * (3 - 2 * k);
-    const X = sb.X, G = M.G;
     if (broken) {
       const g = new Float64Array(3);
-      for (let i = 0; i < n; i++) {
-        unbevelPoint(X[i * 3], X[i * 3 + 1], X[i * 3 + 2], M.half, M.from, g);
+      for (let i = 0; i < sb.nV; i++) {
+        if (sb.vCube[i] !== M.slot) continue;
+        unbevelPoint(X[i * 3] - R, X[i * 3 + 1], X[i * 3 + 2], M.half, was, g);
         bevelPoint(g[0], g[1], g[2], M.half, M.to, X, i * 3);
+        X[i * 3] += R;
       }
-    } else for (let i = 0; i < n; i++) bevelPoint(G[i * 3], G[i * 3 + 1], G[i * 3 + 2], M.half, M.cur, X, i * 3);
+    } else {
+      const G = M.G;
+      for (let j = 0; j < M.idx.length; j++) {
+        const i = M.idx[j];
+        bevelPoint(G[j * 3], G[j * 3 + 1], G[j * 3 + 2], M.half, M.cur, X, i * 3);
+        X[i * 3] += R;
+      }
+    }
     sb._computeRest();
     sb._computeMass();
     sb.wakeAll();
@@ -635,6 +661,7 @@ export class App {
   heal(opts) {
     if (this.healer.active || this.swapper?.active) return false;
     this.tool?.up?.();
+    this._edgeMorphTick(0, true);
     this.healer.start(opts);
     return true;
   }
@@ -1098,6 +1125,11 @@ export class App {
     return this.cubes[this.sel];
   }
 
+  // a cube's rounding (each has its own edges), at the size they all are
+  bevelOf(cb) {
+    return (EDGES[cb.style.edges] || EDGES[DEFAULT_STYLE.edges]).bevel * this.sb.p.size;
+  }
+
   // The cube in slot k is the one the panels edit now.
   selectCube(slot) {
     const i = this.cubes.findIndex((c) => c.slot === slot);
@@ -1105,6 +1137,7 @@ export class App {
     this.sel = i;
     this.style = this.cubes[i].style;
     this.tune = this.cubes[i].tune;
+    this.sb.p.bevel = this.sb.cBevel[slot];
     this.applyStyle();
     // (a glimmer through it, so you see which)
     const sb = this.sb;
@@ -1119,13 +1152,19 @@ export class App {
       this.ui?.hint('That is a full house: eight cubes', 1800);
       return -1;
     }
+    // (not while they're re-forming, or one alone is being swapped out)
+    if (this.healer.active || (this.swapper.active && !this.swapper.multi)) {
+      this.ui?.hint('One sec - still re-cubing', 1400);
+      return -1;
+    }
+    this._edgeMorphTick(0, true);
     const used = new Set(this.cubes.map((cb) => cb.slot));
     let slot = 0;
     while (used.has(slot)) slot++;
     const flavors = ['cherry', 'lime', 'blue', 'grape', 'orange', 'lemon', 'watermelon', 'cola'];
     const style = c
-      ? { flavor: c.flavor, layers: { colors: [...c.layers.colors], blur: c.layers.blur, repeat: c.layers.repeat, bias: c.layers.bias }, texture: c.texture, edges: this.style.edges, glitter: c.glitter }
-      : { flavor: flavors[Math.floor(Math.random() * flavors.length)], layers: { ...DEFAULT_STYLE.layers, colors: [...DEFAULT_STYLE.layers.colors] }, texture: 'jello', edges: this.style.edges, glitter: 'off' };
+      ? { flavor: c.flavor, layers: { colors: [...c.layers.colors], blur: c.layers.blur, repeat: c.layers.repeat, bias: c.layers.bias }, texture: c.texture, edges: EDGES[c.edges] ? c.edges : DEFAULT_STYLE.edges, glitter: c.glitter }
+      : { flavor: flavors[Math.floor(Math.random() * flavors.length)], layers: { ...DEFAULT_STYLE.layers, colors: [...DEFAULT_STYLE.layers.colors] }, texture: 'jello', edges: DEFAULT_STYLE.edges, glitter: 'off' };
     // (its own material sliders; the world's as everyone's)
     const tune = {};
     for (const k of Object.keys(this.tune)) if (!SETTING_BY_KEY[k]?.mat) tune[k] = this.tune[k];
@@ -1136,10 +1175,12 @@ export class App {
     this._arena(this.cubes.length + 1);
     const [x, z, top] = this._clearSpot();
     const y = drop ? Math.max(this.swapper._dropHeight(size), top + 0.3) : top;
-    sb.addCube(slot, x, y, z, (Math.random() - 0.5) * 0.8);
+    const cb = { slot, style, tune };
+    sb.addCube(slot, x, y, z, (Math.random() - 0.5) * 0.8, this.bevelOf(cb));
+    sb.p.bevel = sb.cBevel[slot];
     sb.rebuild();
     if (drop) for (let v = 0; v < sb.nV; v++) if (sb.vCube[v] === slot) sb.v[v * 3 + 1] = -3;
-    this.cubes.push({ slot, style, tune });
+    this.cubes.push(cb);
     this.stackOrder.push(slot);
     // (the new one is the one the panels edit now)
     this.sel = this.cubes.length - 1;
@@ -1157,11 +1198,24 @@ export class App {
     if (this.cubes.length <= 1) return false;
     const i = this.cubes.findIndex((c) => c.slot === slot);
     if (i < 0) return false;
+    if (this.healer.active || this.swapper.active) {
+      this.ui?.hint('One sec - still re-cubing', 1400);
+      return false;
+    }
     this.tool?.up?.();
+    this._edgeMorphTick(0, true);
     this.nails.clearAll();
     this.sb.removeCube(slot);
-    this.sb.rebuild();
     this.cubes.splice(i, 1);
+    // (the last one left is cube 0 again: one cube alone is always that)
+    const last = this.cubes.length === 1 ? this.cubes[0] : null;
+    if (last && last.slot !== 0) {
+      this.sb.moveCube(last.slot, 0);
+      for (const w of this.swapper.watch) if (w.slot === last.slot) w.slot = 0;
+      last.slot = 0;
+    }
+    this.sb.rebuild();
+    if (last) this.stackOrder = [0];
     this._resolution(this.cubes.length);
     this._arena(this.cubes.length);
     this.stackOrder = this.stackOrder.filter((s) => s !== slot);
@@ -1169,6 +1223,7 @@ export class App {
     else if (i < this.sel) this.sel--;
     this.style = this.cube.style;
     this.tune = this.cube.tune;
+    this.sb.p.bevel = this.sb.cBevel[this.cube.slot];
     this.onTopologyChanged();
     this.applyStyle();
     this.ui?.cubesChanged?.();
@@ -1228,15 +1283,16 @@ export class App {
           y0 = Math.min(y0, sb.x[i * 3 + 1]);
         }
       }
-      at.push({ slot: cb.slot, x: M > 0 ? x / M : 0, z: M > 0 ? z / M : 0, y: Number.isFinite(y0) ? Math.max(0, y0) : 0, yaw: main ? this.healer._yawOf(main) : 0 });
+      at.push({ slot: cb.slot, x: M > 0 ? x / M : 0, z: M > 0 ? z / M : 0, y: Number.isFinite(y0) ? Math.max(0, y0) : 0, yaw: main ? this.healer._yawOf(main) : 0, bevel: this.bevelOf(cb) });
     }
+    this._edgeMorph = null; // (each built afresh with its own edges)
     sb.p.res = res;
     sb.nV = 0;
     sb.nT = 0;
     sb.embeds.length = 0;
     sb.grabs.length = 0;
     this.nails.clearAll();
-    for (const a of at) sb.addCube(a.slot, a.x, a.y, a.z, a.yaw);
+    for (const a of at) sb.addCube(a.slot, a.x, a.y, a.z, a.yaw, a.bevel);
     sb.rebuild();
     this.onTopologyChanged();
     this.markHealed();
@@ -1302,21 +1358,26 @@ export class App {
     this._resolution(Math.min(MAX_CUBES, sc.cubes.length));
     this._arena(Math.min(MAX_CUBES, sc.cubes.length));
     // the selected one is the cube already built (slot 0), the rest around it
-    this.cubes = [{ slot: 0, style: this.style, tune: this.tune }];
-    this.stackOrder = [0];
+    this.cubes = [{ slot: 0, style: this.style, tune: this.tune, name: String(sc.cubes[keepSel]?.name || '') }];
+    // (old slot -> new, for the stack's order)
+    const was = new Map([[sc.cubes[keepSel]?.slot, 0]]);
     for (const [j, c] of sc.cubes.entries()) {
       if (j === keepSel || this.cubes.length >= MAX_CUBES || !c || !c.style || !TEXTURES[c.style.texture]) continue;
       const slot = this.cubes.length;
-      const style = { ...DEFAULT_STYLE, ...c.style, edges: this.style.edges, layers: { ...DEFAULT_STYLE.layers, ...(c.style.layers || {}) } };
+      const style = { ...DEFAULT_STYLE, ...c.style, layers: { ...DEFAULT_STYLE.layers, ...(c.style.layers || {}) } };
+      if (!EDGES[style.edges]) style.edges = DEFAULT_STYLE.edges;
       const tune = {};
       for (const k of Object.keys(this.tune)) if (!SETTING_BY_KEY[k]?.mat) tune[k] = this.tune[k];
       for (const k of Object.keys(c.tune || {})) if (SETTING_BY_KEY[k]?.mat && Number.isFinite(c.tune[k])) tune[k] = c.tune[k];
       const [x, z, top] = this._clearSpot();
-      sb.addCube(slot, x, top, z, (Math.random() - 0.5) * 0.8);
+      const cb = { slot, style, tune, name: String(c.name || '') };
+      sb.addCube(slot, x, top, z, (Math.random() - 0.5) * 0.8, this.bevelOf(cb));
       sb.rebuild();
-      this.cubes.push({ slot, style, tune, name: c.name || '' });
-      this.stackOrder.push(slot);
+      this.cubes.push(cb);
+      was.set(c.slot, slot);
     }
+    const order = (Array.isArray(sc.order) ? sc.order : []).map((s) => was.get(s)).filter((s) => s !== undefined);
+    this.stackOrder = [...new Set([...order, ...this.cubes.map((cb) => cb.slot)])];
     this.ui?.cubesChanged?.();
   }
 

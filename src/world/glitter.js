@@ -297,7 +297,7 @@ export class Glitter {
       const px = this.u[k * 3] * (half - m), py = this.u[k * 3 + 1] * (half - m), pz = this.u[k * 3 + 2] * (half - m);
       this.aMode.array[k] = grp.mode;
       let r = null;
-      if (roundBoxSDF(px, py, pz, half, sb.p.bevel) < -m * 0.5) r = sb.locateRestFast(px + grp.slot * REST_STEP, py, pz, out);
+      if (roundBoxSDF(px, py, pz, half, sb.cBevel[grp.slot]) < -m * 0.5) r = sb.locateRestFast(px + grp.slot * REST_STEP, py, pz, out);
       if (!r) {
         this.aSeed.array[k * 3] = 0;
         continue;

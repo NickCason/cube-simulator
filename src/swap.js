@@ -45,7 +45,7 @@ export class Swapper {
     sb.fill = null;
     sb.collisionsEnabled = true;
     sb.dampBoost = 1;
-    app._edgeMorph = null;
+    app._edgeMorphTick(0, true);
     app.tool?.up?.();
     sb.endGrab();
     for (const f of app.onHealStart) f(); // (puddles drain, strings of goo go, bombs fizzle)
@@ -171,15 +171,24 @@ export class Swapper {
     const app = this.app, sb = app.sb, c = this.cube;
     app.nails.clearAll();
     app.droplets.clear();
+    // (a change of edges under way: dropped with the cube it was on, the
+    // others' done now - the bodies are built afresh)
+    const M = app._edgeMorph;
+    if (M && (!this.multi || M.slot === this.slot)) app._edgeMorph = null;
+    else if (M) app._edgeMorphTick(0, true);
+    // (the one that went: picked again if another was meanwhile)
+    if (this.multi && app.cube.slot !== this.slot) app.selectCube(this.slot);
     app._wearStyle(c);
     if (this.multi) {
+      if (EDGES[c.edges]) app.style.edges = c.edges;
       app.applyStyle();
       this._unholdBounce();
       this.bounce = sb.cBounce[this.slot];
       sb.cBounce[this.slot] = Math.min(this.bounce, 0.42);
       const [x, z] = this.exitXZ || [0, 0];
       sb.removeCube(this.slot);
-      sb.addCube(this.slot, x, this._dropHeight(sb.p.size), z, (Math.random() - 0.5) * 0.7);
+      sb.addCube(this.slot, x, this._dropHeight(sb.p.size), z, (Math.random() - 0.5) * 0.7, app.bevelOf(app.cube));
+      sb.p.bevel = sb.cBevel[this.slot];
       sb.rebuild();
       for (let i = 0; i < sb.nV; i++) if (sb.vCube[i] === this.slot) sb.v[i * 3 + 1] = DROP_V;
       sb.weld = null;

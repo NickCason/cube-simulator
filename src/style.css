@@ -2775,18 +2775,22 @@ html.dark .card-healed {
   font-size: 17px;
   font-weight: 780;
   letter-spacing: -0.015em;
-  margin-right: 8px;
+}
+
+.stack-adds {
+  display: flex;
+  gap: 6px;
 }
 
 .stack-form {
-  font-size: 12px;
-  font-weight: 560;
-  color: rgba(28, 28, 31, 0.55);
+  font-weight: 650;
+  color: rgba(28, 28, 31, 0.72);
 }
 
-.palette .stack-add {
+.palette .stack-add,
+.palette .stack-saved {
   height: 30px;
-  padding: 0 12px;
+  padding: 0 11px;
   border-radius: 999px;
   background: rgba(0, 0, 0, 0.06);
   font-size: 12.5px;
@@ -2902,6 +2906,36 @@ html.dark .card-healed {
   height: 20px;
 }
 
+/* a saved cube's +: into the room too */
+.palette .card-drop {
+  position: absolute;
+  right: 5px;
+  bottom: 40px;
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: #1c1c1f;
+  color: #fff;
+  box-shadow: 0 2px 7px rgba(0, 0, 0, 0.26), 0 0 0 2px rgba(255, 255, 255, 0.7);
+  transition: transform 0.16s cubic-bezier(0.3, 1.5, 0.5, 1);
+}
+
+.palette .card-drop svg {
+  width: 17px;
+  height: 17px;
+  stroke-width: 2.5;
+}
+
+.palette .card-drop:hover {
+  transform: scale(1.1);
+}
+
+.palette .card-drop:active {
+  transform: scale(0.88);
+}
+
 /* the Cubby's first card: another cube into the room */
 .cube-card.add-card .card-thumb {
   background: transparent;
@@ -2927,7 +2961,10 @@ html.dark .card-healed {
   }
 }
 
-html.dark .stack-form,
+html.dark .stack-form {
+  color: rgba(241, 239, 244, 0.8);
+}
+
 html.dark .stack-hint,
 html.dark .stack-row .lab i {
   color: rgba(241, 239, 244, 0.55);
@@ -2941,13 +2978,20 @@ html.dark .stack-row.on {
   background: rgba(255, 255, 255, 0.1);
 }
 
-html.dark .palette .stack-add {
+html.dark .palette .stack-add,
+html.dark .palette .stack-saved {
   background: rgba(255, 255, 255, 0.08);
 }
 
 html.dark .palette .stack-go {
   background: #f1eff4;
   color: #141318;
+}
+
+html.dark .palette .card-drop {
+  background: #f1eff4;
+  color: #141318;
+  box-shadow: 0 2px 7px rgba(0, 0, 0, 0.4), 0 0 0 2px rgba(20, 19, 24, 0.6);
 }
 
 html.dark .cube-card.add-card .card-thumb {

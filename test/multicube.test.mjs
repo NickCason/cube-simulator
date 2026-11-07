@@ -75,3 +75,45 @@ test('taking a cube out leaves the other as it was', () => {
   const after = box(sb, 1);
   assert.ok(Math.abs(after.y1 - before.y1) < 0.05);
 });
+
+test('each cube its own edges: its outside faces found on its own shape', () => {
+  const sb = new SoftBody({ res: 7, size: 0.6, bevel: 0.02 });
+  sb.loadCube(-0.6, 0, 0, 0);
+  sb.addCube(1, 0.6, 0, 0, 0, 0.6 * 0.21); // (a pillow beside a sharp one)
+  sb.rebuild();
+  assert.equal(sb.cBevel[0], 0.02);
+  assert.ok(Math.abs(sb.cBevel[1] - 0.126) < 1e-9);
+  // every face of both, whole as they are, is outside
+  const out = [0, 0], all = [0, 0];
+  for (let f = 0; f < sb.nF; f++) {
+    const k = sb.vCube[sb.sTri[f * 3]];
+    all[k]++;
+    if (sb.sTag[f] === 1) out[k]++;
+  }
+  assert.deepEqual(out, all);
+  // the pillow's corners are rounder: its rest shape reaches less far out on the diagonal
+  const far = (k) => { let m = 0; for (let i = 0; i < sb.nV; i++) if (sb.vCube[i] === k) m = Math.max(m, Math.hypot(sb.X[i * 3] - k * REST_STEP, sb.X[i * 3 + 1], sb.X[i * 3 + 2])); return m; };
+  assert.ok(far(1) < far(0) - 0.03, `${far(1)} vs ${far(0)}`);
+});
+
+test('the last cube left moves back to slot 0, rest shape and all', () => {
+  const sb = two();
+  settle(sb, 0.5);
+  sb.removeCube(0);
+  const x0 = Array.from(sb.x.slice(0, sb.nV * 3));
+  sb.moveCube(1, 0);
+  sb.rebuild();
+  assert.equal(sb.pieces.length, 1);
+  assert.equal(sb.pieces[0].cube, 0);
+  let lo = Infinity, hi = -Infinity;
+  for (let i = 0; i < sb.nV; i++) {
+    assert.equal(sb.vCube[i], 0);
+    lo = Math.min(lo, sb.X[i * 3]);
+    hi = Math.max(hi, sb.X[i * 3]);
+  }
+  assert.ok(lo > -0.31 && hi < 0.31, `rest x ${lo}..${hi}`);
+  assert.equal(sb.cMu[0], 900); // (its stuff came with it)
+  assert.deepEqual(Array.from(sb.x.slice(0, sb.nV * 3)), x0); // (and it stays where it is)
+  settle(sb, 1);
+  assert.ok(finite(sb));
+});

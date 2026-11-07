@@ -23,7 +23,8 @@ const ICON = {
   share: svg('<path d="M12 15V4"/><path d="m7.5 8 4.5-4.5L16.5 8"/><path d="M6 11.5H5a1.5 1.5 0 0 0-1.5 1.5v5.5A1.5 1.5 0 0 0 5 20h14a1.5 1.5 0 0 0 1.5-1.5V13a1.5 1.5 0 0 0-1.5-1.5h-1"/>'),
   rename: svg('<path d="M4 20h4L19 9a2.1 2.1 0 0 0-3-3L5 17z"/><path d="m14.5 7.5 3 3"/>'),
   update: svg('<path d="M5 12.5 9.5 17 19 7.5"/>'),
-  heal: svg('<path d="M12 6v12M6 12h12"/>', ' stroke-width="3.2"'),
+  // (Re-cube's sparkle: a plus here read as one more "+ add")
+  heal: svg('<path d="M11 3.5 12.7 8l4.6 1.7-4.6 1.7L11 16l-1.7-4.6-4.6-1.7L9.3 8z"/><path d="m18.5 14.5.8 2.1 2.2.8-2.2.8-.8 2.3-.8-2.3-2.2-.8 2.2-.8z"/>', ' fill="currentColor" stroke-width="1.2"'),
   qr: svg('<rect x="4" y="4" width="6" height="6" rx="1"/><rect x="14" y="4" width="6" height="6" rx="1"/><rect x="4" y="14" width="6" height="6" rx="1"/><path d="M14 14h2v2h-2zM18 14h2M14 18v2M18 18h2v2"/>'),
 };
 
@@ -404,6 +405,7 @@ export class Cubby {
   open() {
     this.ui.closePalette();
     this.ui.closeTune();
+    this.ui.stack?.close();
     this.fighter.hide();
     this.el.hidden = false;
     this.btn.classList.add('open');
@@ -442,7 +444,7 @@ export class Cubby {
     const card = document.createElement('div');
     card.className = it.id === this.activeId ? 'cube-card on' : 'cube-card';
     card.dataset.id = it.id;
-    card.innerHTML = `<button class="card-main"><span class="card-thumb"></span><span class="card-name"></span><span class="card-sub"></span></button><button class="card-more">${ICON.more}</button>`;
+    card.innerHTML = `<button class="card-main"><span class="card-thumb"></span><span class="card-name"></span><span class="card-sub"></span></button><button class="card-more">${ICON.more}</button><button class="card-drop" title="Drop it into the room too">${ICON.plus}</button>`;
     if (it.id === this.activeId) card.insertAdjacentHTML('beforeend', '<span class="card-on">On</span>');
     if (it.rec.healed) card.insertAdjacentHTML('beforeend', `<span class="card-healed" title="Times re-cubed">${ICON.heal}${it.rec.healed}</span>`);
     const main = card.querySelector('.card-main'), thumb = card.querySelector('.card-thumb');
@@ -459,6 +461,14 @@ export class Cubby {
     main.addEventListener('click', () => {
       this.app.audio.ui();
       this.wear(it);
+    });
+    // (+: this one into the room too, beside what's there)
+    const drop = card.querySelector('.card-drop');
+    drop.setAttribute('aria-label', `Drop ${c.name || 'this cube'} into the room too`);
+    drop.addEventListener('click', (e) => {
+      e.stopPropagation();
+      this.app.audio.ui();
+      this.dropIn(it);
     });
     const more = card.querySelector('.card-more');
     more.setAttribute('aria-label', `More for ${c.name || 'this cube'}`);

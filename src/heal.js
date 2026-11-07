@@ -773,7 +773,10 @@ export class Healer {
     sb.nT = 0;
     sb.embeds.length = 0;
     sb.grabs.length = 0;
-    for (const [slot, h] of this.homes) sb.addCube(slot, h.cx, h.cy + LIFT_FUSE, h.cz, h.yaw);
+    for (const [slot, h] of this.homes) {
+      const cb = app.cubes.find((c) => c.slot === slot);
+      sb.addCube(slot, h.cx, h.cy + LIFT_FUSE, h.cz, h.yaw, cb ? app.bevelOf(cb) : sb.cBevel[slot]);
+    }
     sb.rebuild();
     sb.fill = null;
     sb.weld = null;

@@ -139,6 +139,8 @@ export class SoftBody {
     this.cRigid = new Float64Array(MAX_CUBES);
     this.cDens = new Float64Array(MAX_CUBES);
     this.cAir = new Float64Array(MAX_CUBES);
+    this.cBevel = new Float64Array(MAX_CUBES).fill(this.p.bevel); // (each its own edges)
+    this.cN = new Int32Array(MAX_CUBES); // (each one's vertices, built whole)
     for (let k = 0; k < MAX_CUBES; k++) this.setCube(k, this.p, true);
     this.heatActive = false;
     this._heatResidual = 0;
@@ -322,7 +324,9 @@ export class SoftBody {
 
   // ---------------------------------------------------------------- setup
   loadCube(ox = 0, oy = 0, oz = 0, yaw = 0) {
+    this.cBevel[0] = this.p.bevel;
     const mesh = buildCubeMesh(this.p.res, this.p.size, this.p.bevel);
+    this.cN[0] = mesh.nV;
     this.hCell = mesh.h;
     this.nV = 0;
     this.ensureV(mesh.nV);
@@ -345,8 +349,10 @@ export class SoftBody {
 
   // Another cube (k: its slot), its bottom at oy, turned by yaw: added to
   // what's there (rebuild() after). Its rest shape is offset k * REST_STEP.
-  addCube(k, ox = 0, oy = 0, oz = 0, yaw = 0) {
-    const mesh = buildCubeMesh(this.p.res, this.p.size, this.p.bevel);
+  addCube(k, ox = 0, oy = 0, oz = 0, yaw = 0, bevel = this.p.bevel) {
+    this.cBevel[k] = bevel;
+    const mesh = buildCubeMesh(this.p.res, this.p.size, bevel);
+    this.cN[k] = mesh.nV;
     this.hCell = mesh.h;
     const base = this.nV, tBase = this.nT;
     const c = Math.cos(yaw), s = Math.sin(yaw), half = this.p.size / 2, R = k * REST_STEP;
@@ -392,6 +398,21 @@ export class SoftBody {
     }
     this.nV = n;
     this.nT = m;
+    this.embeds.length = 0;
+    this.grabs.length = 0;
+    this._bpNV = 0;
+  }
+
+  // Cube k becomes cube j (a free slot): its rest shape moves over with it,
+  // and its stuff. rebuild() after.
+  moveCube(k, j) {
+    const d = (j - k) * REST_STEP;
+    for (let i = 0; i < this.nV; i++) {
+      if (this.vCube[i] !== k) continue;
+      this.vCube[i] = j;
+      this.X[i * 3] += d;
+    }
+    for (const a of [this.cMu, this.cLam, this.cDens, this.cDamp, this.cFric, this.cBounce, this.cRigid, this.cAir, this.cBevel, this.cN]) a[j] = a[k];
     this.embeds.length = 0;
     this.grabs.length = 0;
     this._bpNV = 0;
@@ -1007,7 +1028,7 @@ export class SoftBody {
     const sTet = new Int32Array(nF);
     const sTag = new Uint8Array(nF);
     const sRestN = new Float32Array(nF * 3);
-    const half = this.p.size / 2, bevel = this.p.bevel;
+    const half = this.p.size / 2, vCube = this.vCube, cBevel = this.cBevel;
     const nrm = [0, 0, 0];
     let f = 0;
     const tetBoundary = new Int32Array(nT).fill(-1); // first boundary face of tet (linked)
@@ -1028,7 +1049,9 @@ export class SoftBody {
       const l = Math.hypot(nx, ny, nz) || 1;
       nx /= l; ny /= l; nz /= l;
       sRestN[f * 3] = nx; sRestN[f * 3 + 1] = ny; sRestN[f * 3 + 2] = nz;
-      const cx = (ax + X[b * 3] + X[c * 3]) / 3, cy = (ay + X[b * 3 + 1] + X[c * 3 + 1]) / 3, cz = (az + X[b * 3 + 2] + X[c * 3 + 2]) / 3;
+      // (against its own cube's shape, where that sits in rest space)
+      const cb = vCube[a], bevel = cBevel[cb];
+      const cx = (ax + X[b * 3] + X[c * 3]) / 3 - cb * REST_STEP, cy = (ay + X[b * 3 + 1] + X[c * 3 + 1]) / 3, cz = (az + X[b * 3 + 2] + X[c * 3 + 2]) / 3;
       const sd = roundBoxSDF(cx, cy, cz, half, bevel);
       let tag = TAG_FRESH;
       if (Math.abs(sd) < 0.03 * this.p.size) {

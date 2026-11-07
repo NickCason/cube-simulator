@@ -4,6 +4,7 @@
 
 import * as THREE from 'three';
 import { cutBody, planeField, boxField } from '../sim/cutting.js';
+import { REST_STEP } from '../sim/softbody.js';
 import { makeCuber, makeDicer } from '../world/models.js';
 import { fitRotation } from '../heal.js';
 
@@ -78,9 +79,10 @@ export class CuberTool {
     // The scoop, worked out in the jelly's rest shape: square to its own
     // faces, 2.5 cells of its mesh a side, every face of it half way between
     // two rows of the mesh's vertices - so the cut never runs along a row
-    // (a face snapped onto one left the cube welded in).
-    const g = sb.hCell, half = sb.p.size / 2;
-    const mid = (v) => -half + (Math.round((v + half) / g - 0.5) + 0.5) * g;
+    // (a face snapped onto one left the cube welded in). (Its cube's rows:
+    // each cube's rest shape sits apart along x - see REST_STEP.)
+    const g = sb.hCell, half = sb.p.size / 2, R = (sb.pieces[hit.piece].cube || 0) * REST_STEP;
+    const mid = (v, o) => o - half + (Math.round((v - o + half) / g - 0.5) + 0.5) * g;
     const d = p.clone().sub(F.c);
     const X = [0, 1, 2].map((k) => F.C.getComponent(k) + d.dot(F.ax[k]));
     let kd = 0;
@@ -89,11 +91,11 @@ export class CuberTool {
     const ctr = [0, 0, 0], hs = [0, 0, 0];
     for (let k = 0; k < 3; k++) {
       if (k === kd) {
-        const inner = mid(X[k] - sg * 2.5 * g), outer = X[k] + sg * 0.6 * g;
+        const inner = mid(X[k] - sg * 2.5 * g, k ? 0 : R), outer = X[k] + sg * 0.6 * g;
         ctr[k] = (inner + outer) / 2;
         hs[k] = Math.abs(outer - inner) / 2;
       } else {
-        ctr[k] = mid(X[k]);
+        ctr[k] = mid(X[k], k ? 0 : R);
         hs[k] = 1.25 * g;
       }
     }
