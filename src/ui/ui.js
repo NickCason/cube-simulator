@@ -25,6 +25,7 @@ export const ICONS = {
     '<path d="M12 2.5v19"/><path d="m3.8 7.25 16.4 9.5"/><path d="m3.8 16.75 16.4-9.5"/><path d="m9.6 4.2 2.4 1.8 2.4-1.8"/><path d="m9.6 19.8 2.4-1.8 2.4 1.8"/><path d="m4.1 10.4 2.8-1.2-.4-3"/><path d="m19.9 13.6-2.8 1.2.4 3"/><path d="m4.1 13.6 2.8 1.2-.4 3"/><path d="m19.9 10.4-2.8-1.2.4-3"/>',
   ),
   dicer: svg('<rect x="3.8" y="3.8" width="16.4" height="16.4" rx="3"/><path d="M9.3 3.8v16.4M14.7 3.8v16.4M3.8 9.3h16.4M3.8 14.7h16.4"/>'),
+  feed: svg('<path d="M3.5 10.5h12a6 6 0 0 1-12 0Z"/><path d="m15.5 10.5 5-6.2"/><path d="M8.4 6.6c0-1 .8-1.6.8-2.6M11.6 6.6c0-1 .8-1.6.8-2.6"/>'),
   cuber: svg('<rect x="3.2" y="11.6" width="9" height="9" rx="2"/><path d="M5.6 15.6v-1.4h1.4"/><path d="m11.6 12.4 6.3-6.3a1.8 1.8 0 0 1 2.5 2.5l-6.3 6.3"/>'),
   baller: svg(
     '<circle cx="8" cy="16" r="4.8"/><path d="M5.6 15.2a2.6 2.6 0 0 1 2.9-1.9"/><path d="m11.5 12.5 6.4-6.4a1.8 1.8 0 0 1 2.5 2.5L14 15"/>',
@@ -61,6 +62,7 @@ export const TOOL_DEFS = [
   { id: 'cuber', label: 'Cube cuber', hint: 'Click to scoop out a cube', key: 'c' },
   { id: 'bomb', label: 'Cherry bomb', hint: 'Click to plant · stand back', key: '8' },
   { id: 'syringe', label: 'Syringe', hint: 'Hold to pump it up', key: '9' },
+  { id: 'feed', label: 'Add jelly', hint: 'Hold on a cube to ladle jelly in · feed it enough and it cubiplies', key: 'j' },
   { id: 'magnet', label: 'Magnet', hint: 'Hold near nails to pull them out (and drag the jelly with them)', key: '0' },
 ];
 

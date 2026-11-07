@@ -14,6 +14,8 @@ import { UI } from './ui/ui.js';
 import { HandTool, KnifeTool, NailGunTool, HoleGunTool } from './tools/basic.js';
 import { MalletTool, TorchTool, FreezeTool, BallerTool, BombTool, SyringeTool, MagnetTool } from './tools/more.js';
 import { CuberTool, DicerTool } from './tools/cubey.js';
+import { FeedTool } from './tools/feed.js';
+import { Cubiplication } from './cubiplication.js';
 import { makeMaterials, makeBomb } from './world/models.js';
 import { physicsWarmJob } from './sim/warm.js';
 import { Droplets } from './world/droplets.js';
@@ -171,6 +173,7 @@ export class App {
     this.anchorProviders = [() => this.nails.anchors()];
     this.bubbles = new Bubbles(this);
     this.glitter = new Glitter(this);
+    this.cubiplication = new Cubiplication(this); // (fed jelly, a cube cubiplies - see tools/feed.js)
     // the glass room (Settings > World), as it was left
     this.room = new GlassRoom(this);
     try {
@@ -219,6 +222,7 @@ export class App {
       freeze: new FreezeTool(this),
       baller: new BallerTool(this),
       cuber: new CuberTool(this),
+      feed: new FeedTool(this),
       bomb: new BombTool(this),
       syringe: new SyringeTool(this),
       magnet: new MagnetTool(this),
@@ -1057,6 +1061,7 @@ export class App {
       this._edgeMorphTick(dt);
       this._selRing(dt);
       this.room.update(dt);
+      this.cubiplication.update(dt);
       const nS = Math.max(4, Math.min(24, Math.round(this.substepRate * sdt)));
       this.sb.p.substeps = nS;
       const p0 = performance.now();

@@ -57,8 +57,8 @@ export const SETTINGS = [
     word: (g) => (g < 7 ? 'Moon' : g < 13 ? 'Mars' : g < 32 ? 'Earth' : g < 45 ? 'Heavy' : 'Jupiter'),
   },
   {
-    id: 'size', group: 'World', label: 'Cube size', key: 'size', def: 1, ...linMap(0.6, 1.35), release: true,
-    word: (v) => (v < 0.72 ? 'Bite' : v < 0.9 ? 'Small' : v < 1.1 ? 'Regular' : v < 1.25 ? 'Big' : 'Huge'),
+    id: 'size', group: 'World', label: 'Cube size', key: 'size', def: 1, ...linMap(0.35, 1.6), release: true,
+    word: (v) => (v < 0.5 ? 'Tiny' : v < 0.72 ? 'Bite' : v < 0.9 ? 'Small' : v < 1.1 ? 'Regular' : v < 1.25 ? 'Big' : v < 1.45 ? 'Huge' : 'Giant'),
   },
   {
     id: 'volume', group: 'Sound', label: 'Volume', key: 'volume', def: 0.75, ...linMap(0, 1),

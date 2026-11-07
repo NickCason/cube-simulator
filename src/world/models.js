@@ -104,6 +104,27 @@ export function makeBaller(M) {
   return shadowed(g);
 }
 
+// The jelly ladle (Add jelly): a deep steel bowl (its rim at the origin,
+// open along +Y) on a long handle that rises away from it.
+export function makeLadle(M) {
+  const g = new THREE.Group();
+  const bowl = new THREE.Mesh(new THREE.SphereGeometry(0.14, 32, 16, 0, Math.PI * 2, Math.PI / 2, Math.PI / 2), M.steel.clone());
+  bowl.material.side = THREE.DoubleSide;
+  g.add(bowl);
+  const rim = new THREE.Mesh(new THREE.TorusGeometry(0.14, 0.008, 8, 48), M.steel);
+  rim.rotation.x = Math.PI / 2;
+  g.add(rim);
+  const handle = new THREE.Mesh(new THREE.CylinderGeometry(0.011, 0.014, 0.62, 12), M.steel);
+  handle.position.set(0.3, 0.2, 0);
+  handle.rotation.z = -1.05;
+  g.add(handle);
+  const grip = new THREE.Mesh(new THREE.CylinderGeometry(0.024, 0.02, 0.2, 16), M.wood);
+  grip.position.set(0.53, 0.33, 0);
+  grip.rotation.z = -1.05;
+  g.add(grip);
+  return shadowed(g);
+}
+
 // Cube cuber: a melon baller with a square cup (open side down, its rim at
 // the origin) on a neck and handle along +Y.
 export function makeCuber(M) {
