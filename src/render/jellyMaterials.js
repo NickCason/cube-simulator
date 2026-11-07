@@ -198,6 +198,19 @@ export const CUBE_GLSL = /* glsl */ `
     float t = clamp(cGradT(p), 0.0, 1.0);
     return textureLod(uGradTex, vec2((t * ${GRAD_N - 1}.0 + 0.5) / ${GRAD_N}.0, (float(gK * 2 + row) + 0.5) / ${GRAD_ROWS}.0), 0.0).rgb;
   }
+  // both at once: its absorption (a) and the colour of its light scattered (s)
+  void cGradBoth(vec3 p, out vec3 a, out vec3 s) {
+    p = cTile(p);
+    if (cShape == 6) {
+      vec3 c = cFreeAt(p);
+      a = -log(clamp(c, 0.004, 0.995)) * cFreeK;
+      s = c / max(max(c.r, c.g), max(c.b, 1e-3));
+      return;
+    }
+    float u = (clamp(cGradT(p), 0.0, 1.0) * ${GRAD_N - 1}.0 + 0.5) / ${GRAD_N}.0;
+    a = textureLod(uGradTex, vec2(u, (float(gK * 2) + 0.5) / ${GRAD_ROWS}.0), 0.0).rgb;
+    s = textureLod(uGradTex, vec2(u, (float(gK * 2 + 1) + 0.5) / ${GRAD_ROWS}.0), 0.0).rgb;
+  }
   vec3 cGradPath(vec3 a, vec3 b, vec3 base) {
     if (cLayers <= 0) return base;
     if (dot(b - a, b - a) < 1e-6) return cGradAt(a, 0);
@@ -709,14 +722,50 @@ export function createJellyMaterial(env, layerUniforms) {
         // Rubik: the sticker you look into (its seams dark, its white milky)
         int rk = cLayers < 0 ? rubikAt(Rp) : 0;
         float rkSeam = cLayers < 0 ? cRubikSeam : 0.0, rkMilk = cLayers < 0 ? cubeT(7 + rk).a : 0.0;
-        // layered: lean toward the colour you look into, so bands stay crisp
-        // - out from the middle, toward all that's along the way (the core
-        // shows through what's round it)
-        bool deepGrad = false, freeGrad = cShape == 6;
-        // (freeform: what's painted where you look, and just under it - its
-        // middle, where all its colours meet, would make every face mud)
-        vec3 sigma = cAbsorb;
-        if (cLayers > 0) sigma = freeGrad ? mix(cGradAt(Rp, 0), cGradPath(Rp, mix(Rp, exitR, 0.2), cAbsorb), 0.35) : mix(cGradAt(Rp, 0), cGradPath(Rp, exitR, cAbsorb), deepGrad ? 0.8 : 0.22);
+        // Gradients: what you see is all of it along the way, not just its
+        // skin - blue in front of pink, you see the pink through the blue.
+        // Stepped from where the line of sight goes in to where it comes
+        // out: every band's absorption added up (the light from behind
+        // crossed them all), and the light scattered inside from each, the
+        // deeper the fainter - the colour you look into leads, what's behind
+        // tints it - with some of the light that made it through all of it,
+        // coloured by every band (blue then pink: purple). For the light
+        // coming through, part of the skin's own (a sunburst's bright middle
+        // stays bright, looked at from the side).
+        // (glow mode: its own light from all of it - light from further in
+        // comes out through what's in front, coloured by it: mixed in plain,
+        // a rainbow's middle went white)
+        vec3 sigma = cAbsorb, gradSc = cScatterColor, gradEm = cScatterColor;
+        if (cLayers > 0) {
+          float fade = 1.0 + (cScatter + cMilk * 7.0 + frost * 2.5) * 0.3, dl = pathLen / 12.0;
+          vec3 tau = vec3(0.0), S = vec3(0.0), E = vec3(0.0);
+          float W = 0.0;
+          for (int k = 0; k < 12; k++) {
+            vec3 ak, sk;
+            cGradBoth(mix(Rp, exitR, (float(k) + 0.5) / 12.0), ak, sk);
+            float w = exp(-fade * dl * (float(k) + 0.5));
+            S += sk * w;
+            W += w;
+            vec3 Tk = exp(-(tau + ak * (0.5 * dl)));
+            E += sk * Tk;
+            tau += ak * dl;
+          }
+          float em = max(E.r, max(E.g, E.b));
+          gradEm = em > 1e-5 ? E / em : cGradAt(Rp, 1);
+          sigma = pathLen > 1e-4 ? tau / pathLen : cGradAt(Rp, 0);
+          // (the skin you look into, and all that's behind it - as much as
+          // that adds a colour: blue then pink, a purple, strongly; a jumble
+          // of many bands averages to grey, and the skin's bands hold)
+          vec3 deepSc = S / W;
+          float dm = max(deepSc.r, max(deepSc.g, deepSc.b));
+          float chroma = (dm - min(deepSc.r, min(deepSc.g, deepSc.b))) / max(dm, 1e-3);
+          gradSc = mix(cGradAt(Rp, 1), deepSc, mix(0.25, 0.75, smoothstep(0.25, 0.7, chroma)));
+          // (where nothing gets through, its mix of everything is only mud)
+          vec3 Tall = exp(-tau);
+          sigma = mix(sigma, cGradAt(Rp, 0), 0.35);
+          float mt = max(Tall.r, max(Tall.g, Tall.b));
+          gradSc = mix(gradSc, Tall / max(mt, 1e-4), 0.3 * smoothstep(0.0, 0.3, mt));
+        }
         else if (cLayers < 0) sigma = cubeT(7 + rk).rgb;
         vec3 Tr = exp(-sigma * pathLen * (1.0 + melt * 0.35));
         float haze = 1.0 - exp(-(cScatter + (cMilk + rkMilk) * 7.0 + frost * 2.5) * pathLen);
@@ -729,9 +778,8 @@ export function createJellyMaterial(env, layerUniforms) {
         float wrap = max((NdL + 0.7) / 1.7, 0.0);
         vec3 irr = envLookup(N, 1.0) * (1.0 - 0.22 * gShadowOcc);
         float backlit = pow(clamp(dot(V, -L), 0.0, 1.0), 3.0);
-        vec3 baseSc = cScatterColor;
-        if (cLayers > 0) baseSc = freeGrad ? mix(cGradAt(Rp, 1), cGradAt(mix(Rp, exitR, 0.15), 1), 0.3) : deepGrad ? mix(cGradAt(Rp, 1), cGradAt(mix(Rp, exitR, 0.5), 1), 0.6) : mix(cGradAt(Rp, 1), cGradAt(exitR, 1), 0.25);
-        else if (cLayers < 0) baseSc = cubeT(17 + rk).rgb;
+        vec3 baseSc = gradSc;
+        if (cLayers < 0) baseSc = cubeT(17 + rk).rgb;
         // creamy jelly: pastel, milky body colour
         baseSc = mix(baseSc, mix(baseSc, vec3(1.0), 0.45) * 1.05, cMilk);
         vec3 sc = mix(baseSc, vec3(0.92, 0.96, 1.0), frost * 0.85);
@@ -864,15 +912,10 @@ export function createJellyMaterial(env, layerUniforms) {
         vec3 emLit = vec3(0.0);
         if (uEmit > 0.0) {
           float deep = 1.0 - exp(-pathLen * 1.8);
-          // its colour just inside the surface: in layered jelly the light
-          // from the layers further in is mostly absorbed on the way out
-          // (mixing in theirs turns a rainbow's middle to white) - but a
-          // gradient out from the middle glows from there too (a hot core)
+          // its colour (layered: see gradEm)
           vec3 scE = sc;
           if (cLayers > 0) {
-            scE = cScatterAt(mix(Rp, exitR, 0.12), cScatterColor);
-            if (deepGrad) scE = mix(scE, cScatterAt(mix(Rp, exitR, 0.5), cScatterColor), 0.55);
-            scE = mix(scE, mix(scE, vec3(1.0), 0.45) * 1.05, cMilk);
+            scE = mix(gradEm, mix(gradEm, vec3(1.0), 0.45) * 1.05, cMilk);
             scE = mix(scE, vec3(0.92, 0.96, 1.0), frost * 0.85);
           }
           // (light from deeper in has crossed more of it: a richer colour -
