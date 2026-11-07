@@ -1044,6 +1044,84 @@ export class App {
     }
   }
 
+  // ------------------------------------------------------------ whole cubes
+  // Put on a saved or shared cube (a CubeR code, see cubecode.js): flavour,
+  // material, edges, glitter, every tuned slider, tearing and the look. Your
+  // sound levels stay yours. A battered jelly re-forms as the new cube.
+  loadCube(c) {
+    const s = this.style;
+    s.flavor = c.flavor;
+    s.layers = { colors: [...c.layers.colors], blur: c.layers.blur, repeat: c.layers.repeat, bias: c.layers.bias };
+    s.texture = c.texture;
+    s.glitter = c.glitter;
+    const tune = { ...c.tune };
+    for (const k of ['volume', 'impacts', 'wobble']) if (this.tune[k] !== undefined) tune[k] = this.tune[k];
+    if (c.tear === false) tune.tear = false;
+    this.tune = tune;
+    const size = this.settings.size;
+    if (Math.abs(size - this.sb.p.size) > 1e-6) {
+      // (re-formed at the new size, with the new edges too)
+      s.edges = c.edges;
+      this._edgeMorph = null;
+      this.setCubeSize(size);
+      if (c.tune.size === undefined) delete this.tune.size;
+    } else if (c.edges !== s.edges) this.setEdges(c.edges);
+    else this.applyStyle();
+    if (this.damaged && !this.healer.active) this.heal();
+    else if (!this.healer.active) this.sb.impulse(0, 0.6, 0, 0, -1, 0, 3, 1.2); // (a jiggle: here it is)
+    if (c.theme && c.theme !== this.theme) {
+      this.setTheme(c.theme);
+      this.ui?.setTheme(c.theme);
+    }
+    this.ui?.syncSwitches?.();
+  }
+
+  // A small square picture of the jelly as it is now (a JPEG data URL), for
+  // the Cubby: a frame drawn without the tool in hand, cropped to the cube.
+  snapshot(px = 168) {
+    const hidden = [];
+    for (const t of Object.values(this.tools)) {
+      if (t.model?.visible) {
+        t.model.visible = false;
+        hidden.push(t.model);
+      }
+    }
+    try {
+      this.render();
+      const c = this.renderer.domElement, sb = this.sb;
+      // the cube's box on screen
+      let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+      const v = this._snapV || (this._snapV = new THREE.Vector3());
+      let lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
+      for (let i = 0; i < sb.nV; i++) {
+        for (let k = 0; k < 3; k++) {
+          const q = sb.x[i * 3 + k];
+          if (q < lo[k]) lo[k] = q;
+          if (q > hi[k]) hi[k] = q;
+        }
+      }
+      if (!(lo[0] <= hi[0])) lo = [-0.5, 0, -0.5], hi = [0.5, 1, 0.5];
+      for (let k = 0; k < 8; k++) {
+        v.set(k & 1 ? hi[0] : lo[0], k & 2 ? hi[1] : lo[1], k & 4 ? hi[2] : lo[2]).project(this.camera);
+        const sx = ((v.x + 1) / 2) * c.width, sy = ((1 - v.y) / 2) * c.height;
+        x0 = Math.min(x0, sx), x1 = Math.max(x1, sx), y0 = Math.min(y0, sy), y1 = Math.max(y1, sy);
+      }
+      // a square around it with some room (and a little floor below)
+      const side = Math.min(Math.max(x1 - x0, y1 - y0) * 1.45, c.width, c.height);
+      let sx = (x0 + x1) / 2 - side / 2, sy = (y0 + y1) / 2 - side * 0.47;
+      sx = Math.max(0, Math.min(c.width - side, sx));
+      sy = Math.max(0, Math.min(c.height - side, sy));
+      const out = document.createElement('canvas');
+      out.width = out.height = px;
+      out.getContext('2d').drawImage(c, sx, sy, side, side, 0, 0, px, px);
+      return out.toDataURL('image/jpeg', 0.84);
+    } catch (e) {
+      return null;
+    } finally {
+      for (const m of hidden) m.visible = true;
+    }
+  }
+
   // ------------------------------------------------------------ looks
   _loadTheme(opts) {
     if (THEMES[opts.theme]) return opts.theme;

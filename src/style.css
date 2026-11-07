@@ -1258,3 +1258,872 @@ html.dark .hint {
 .palette.tune .lab-switch {
   margin-top: 6px;
 }
+
+/* ---------------------------------------------------------------- cubby: saved cubes */
+.cubby-btn {
+  position: fixed;
+  top: max(14px, calc(env(safe-area-inset-top) + 6px));
+  left: max(14px, calc(env(safe-area-inset-left) + 8px));
+  height: 40px;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0 15px 0 11px;
+  border-radius: 999px;
+  appearance: none;
+  border: 1px solid var(--line);
+  background: var(--glass);
+  -webkit-backdrop-filter: blur(16px) saturate(1.6);
+  backdrop-filter: blur(16px) saturate(1.6);
+  box-shadow: 0 6px 18px rgba(40, 30, 20, 0.12), inset 0 1px 0 rgba(255, 255, 255, 0.85);
+  color: var(--ink);
+  font: 640 13.5px/1 var(--font);
+  cursor: pointer;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+  transition: opacity 0.3s ease, transform 0.15s;
+}
+
+.cubby-btn svg {
+  width: 20px;
+  height: 20px;
+}
+
+.cubby-btn:active {
+  transform: scale(0.94);
+}
+
+.cubby-btn.open {
+  background: rgba(255, 255, 255, 0.92);
+}
+
+.cubby-btn.bump {
+  animation: cube-jiggle 0.7s ease;
+}
+
+.splashing .cubby-btn {
+  opacity: 0;
+}
+
+@keyframes cube-jiggle {
+  0% { transform: scale(1, 1); }
+  22% { transform: scale(1.14, 0.86); }
+  44% { transform: scale(0.92, 1.08); }
+  66% { transform: scale(1.04, 0.97); }
+  100% { transform: scale(1, 1); }
+}
+
+@keyframes cube-pop {
+  from { opacity: 0; transform: scale(0.86); }
+  to { opacity: 1; transform: none; }
+}
+
+@keyframes cube-shake {
+  0%, 100% { transform: none; }
+  25% { transform: translateX(-5px); }
+  50% { transform: translateX(4px); }
+  75% { transform: translateX(-2px); }
+}
+
+@keyframes cube-roll {
+  0% { transform: rotate(0) scale(1); }
+  50% { transform: rotate(200deg) scale(0.8); }
+  100% { transform: rotate(360deg) scale(1); }
+}
+
+@keyframes cube-bob {
+  0%, 100% { transform: translateY(0) rotate(-2deg); }
+  50% { transform: translateY(-5px) rotate(2deg); }
+}
+
+.palette.cubby {
+  top: calc(max(14px, calc(env(safe-area-inset-top) + 6px)) + 50px);
+  left: max(14px, calc(env(safe-area-inset-left) + 8px));
+  right: auto;
+  bottom: auto;
+  width: 392px;
+  max-height: calc(100vh - 220px);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.cubby-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.cubby-title {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.cubby-title b {
+  font-size: 18px;
+  font-weight: 780;
+  letter-spacing: -0.015em;
+}
+
+.cubby-count {
+  font-size: 12px;
+  font-weight: 520;
+  color: rgba(28, 28, 31, 0.5);
+}
+
+.palette .cubby-save {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  height: 32px;
+  padding: 0 13px 0 9px;
+  border-radius: 999px;
+  background: var(--ink);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.cubby-save svg {
+  width: 17px;
+  height: 17px;
+}
+
+.cubby-new {
+  display: grid;
+  grid-template-columns: 96px 1fr;
+  gap: 12px;
+  padding: 10px;
+  border-radius: 15px;
+  background: rgba(0, 0, 0, 0.045);
+  animation: cube-pop 0.22s ease both;
+}
+
+.new-thumb,
+.share-art {
+  width: 96px;
+  height: 96px;
+  border-radius: 12px;
+  overflow: hidden;
+  display: grid;
+  place-items: center;
+  background: linear-gradient(#efedea, #e2dfdb);
+}
+
+.new-thumb img,
+.share-art img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.new-thumb svg {
+  width: 64%;
+}
+
+.new-side {
+  display: grid;
+  gap: 7px;
+  align-content: start;
+  min-width: 0;
+}
+
+.new-name {
+  display: flex;
+  gap: 6px;
+}
+
+.cubby input {
+  -webkit-user-select: text;
+  user-select: text;
+  min-width: 0;
+  height: 34px;
+  box-sizing: border-box;
+  padding: 0 10px;
+  border-radius: 10px;
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  background: rgba(255, 255, 255, 0.9);
+  color: var(--ink);
+  font: 540 14px var(--font);
+  outline: none;
+}
+
+.cubby input:focus {
+  border-color: color-mix(in srgb, var(--jelly) 70%, #fff);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--jelly) 22%, transparent);
+}
+
+.new-name input {
+  flex: 1;
+}
+
+.palette .dice {
+  flex: none;
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.9);
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.12);
+}
+
+.dice svg {
+  width: 19px;
+  height: 19px;
+}
+
+.dice.roll svg {
+  animation: cube-roll 0.45s ease;
+}
+
+.new-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.palette .new-actions button {
+  height: 32px;
+  padding: 0 14px;
+  border-radius: 10px;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.palette .new-actions .primary,
+.modal .primary {
+  background: var(--ink);
+  color: #fff;
+  box-shadow: 0 4px 14px color-mix(in srgb, var(--jelly) 40%, transparent);
+}
+
+html.dark .palette .new-actions .primary,
+html.dark .modal .primary {
+  color: #141318;
+}
+
+.palette .new-actions .ghost {
+  color: rgba(28, 28, 31, 0.6);
+}
+
+.cubby-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  margin: 0 -14px;
+  padding: 2px 14px 4px;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+}
+
+.cubby-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px 10px;
+}
+
+.cube-card {
+  position: relative;
+  animation: cube-pop 0.26s cubic-bezier(0.3, 1.4, 0.5, 1) both;
+}
+
+.palette .card-main {
+  display: grid;
+  width: 100%;
+  text-align: left;
+}
+
+.card-thumb {
+  aspect-ratio: 1;
+  border-radius: 14px;
+  overflow: hidden;
+  display: grid;
+  place-items: center;
+  background: linear-gradient(#efedea, #e2dfdb);
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.05), 0 2px 6px rgba(40, 30, 20, 0.08);
+  transition: transform 0.18s ease, box-shadow 0.18s ease;
+}
+
+.card-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.card-thumb svg {
+  width: 62%;
+  height: 62%;
+}
+
+.card-main:hover .card-thumb {
+  transform: translateY(-2px);
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.05), 0 8px 16px rgba(40, 30, 20, 0.14);
+}
+
+.card-main:active .card-thumb {
+  transform: scale(0.95);
+}
+
+.cube-card.fresh .card-thumb {
+  animation: cube-jiggle 0.8s 0.15s ease;
+}
+
+.card-name,
+.card-rename {
+  margin-top: 6px;
+  font-size: 12.5px;
+  font-weight: 650;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cubby input.card-rename {
+  width: 100%;
+  height: 26px;
+  padding: 0 6px;
+  border-radius: 7px;
+  font-size: 12.5px;
+}
+
+.card-sub {
+  font-size: 11px;
+  font-weight: 500;
+  color: rgba(28, 28, 31, 0.5);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.palette .card-more {
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.82);
+  -webkit-backdrop-filter: blur(8px);
+  backdrop-filter: blur(8px);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.16);
+}
+
+.card-more svg {
+  width: 17px;
+  height: 17px;
+}
+
+.cubby-empty {
+  display: grid;
+  justify-items: center;
+  gap: 5px;
+  padding: 14px 18px 12px;
+  text-align: center;
+  font-size: 12.5px;
+  line-height: 1.4;
+  color: rgba(28, 28, 31, 0.6);
+}
+
+.cubby-empty b {
+  font-size: 14.5px;
+  color: rgba(28, 28, 31, 0.88);
+}
+
+.empty-art svg {
+  width: 70px;
+  height: 70px;
+  margin-bottom: 4px;
+  animation: cube-bob 3.2s ease-in-out infinite;
+  filter: drop-shadow(0 8px 10px rgba(40, 30, 20, 0.16));
+}
+
+.cubby-paste {
+  display: flex;
+  gap: 6px;
+  padding-top: 10px;
+  border-top: 1px solid rgba(0, 0, 0, 0.07);
+}
+
+.cubby-paste input {
+  flex: 1;
+}
+
+.cubby-paste input.bad {
+  border-color: #e5484d;
+  animation: cube-shake 0.35s ease;
+}
+
+.palette .cubby-paste button {
+  height: 34px;
+  padding: 0 15px;
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.06);
+  font-size: 13px;
+  font-weight: 650;
+}
+
+/* a card's menu */
+.card-menu {
+  position: fixed;
+  z-index: 30;
+  display: grid;
+  min-width: 200px;
+  padding: 5px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.96);
+  -webkit-backdrop-filter: blur(18px);
+  backdrop-filter: blur(18px);
+  border: 1px solid var(--line);
+  box-shadow: 0 12px 32px rgba(40, 30, 20, 0.22);
+  animation: cube-pop 0.16s ease both;
+}
+
+.card-menu[hidden] {
+  display: none;
+}
+
+.card-menu button {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 38px;
+  padding: 0 11px;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--ink);
+  font: 560 13.5px var(--font);
+  text-align: left;
+  cursor: pointer;
+}
+
+.card-menu button:hover {
+  background: rgba(0, 0, 0, 0.05);
+}
+
+.card-menu svg {
+  width: 18px;
+  height: 18px;
+}
+
+.card-menu .danger {
+  color: #d1242f;
+}
+
+/* a note at the top, with Undo / Save */
+.toast {
+  position: fixed;
+  z-index: 40;
+  left: 50%;
+  width: max-content;
+  top: calc(max(14px, calc(env(safe-area-inset-top) + 6px)) + 56px);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  max-width: calc(100vw - 24px);
+  box-sizing: border-box;
+  padding: 8px 15px;
+  border-radius: 21px;
+  background: rgba(28, 28, 31, 0.92);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 560;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.25);
+  opacity: 0;
+  transform: translate(-50%, -10px) scale(0.96);
+  transition: opacity 0.25s, transform 0.3s cubic-bezier(0.3, 1.4, 0.5, 1);
+  pointer-events: none !important;
+}
+
+.toast.has-acts {
+  padding: 5px 5px 5px 15px;
+}
+
+.toast.show {
+  opacity: 1;
+  transform: translate(-50%, 0);
+  pointer-events: auto !important;
+}
+
+.toast-msg {
+  min-width: 0;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-height: 1.3;
+  padding-right: 6px;
+}
+
+.toast-acts {
+  display: flex;
+  gap: 4px;
+  flex: none;
+}
+
+.toast button {
+  height: 30px;
+  padding: 0 13px;
+  border: 0;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.16);
+  color: #fff;
+  font: 680 12.5px var(--font);
+  cursor: pointer;
+}
+
+.toast button:hover {
+  background: rgba(255, 255, 255, 0.26);
+}
+
+/* "You've been cubed!" and the share card */
+.modal {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: rgba(20, 16, 12, 0.3);
+  -webkit-backdrop-filter: blur(5px);
+  backdrop-filter: blur(5px);
+  animation: cube-pop 0.18s ease both;
+}
+
+.modal[hidden] {
+  display: none;
+}
+
+.modal-card {
+  position: relative;
+  width: min(360px, 100%);
+  box-sizing: border-box;
+  display: grid;
+  justify-items: center;
+  padding: 22px 20px 18px;
+  border-radius: 24px;
+  background: rgba(255, 255, 255, 0.97);
+  box-shadow: 0 24px 64px rgba(20, 16, 12, 0.3);
+  text-align: center;
+  animation: cube-pop 0.32s cubic-bezier(0.3, 1.35, 0.5, 1) both;
+}
+
+.modal button {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.modal h2 {
+  margin: 8px 0 2px;
+  font-size: 22px;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+}
+
+.cubed-art svg {
+  width: 112px;
+  height: 112px;
+  animation: cube-jiggle 0.9s 0.2s ease;
+  filter: drop-shadow(0 12px 14px rgba(40, 30, 20, 0.2));
+}
+
+.cubed-name {
+  margin: 2px 0 0;
+  font-size: 15.5px;
+  font-weight: 640;
+}
+
+.cubed-meta {
+  margin: 4px 0 0;
+  font-size: 12.5px;
+  color: rgba(28, 28, 31, 0.55);
+}
+
+.modal-actions {
+  display: flex;
+  gap: 8px;
+  width: 100%;
+  margin-top: 16px;
+}
+
+.modal-actions button {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 44px;
+  border-radius: 13px;
+  font-size: 14.5px;
+  font-weight: 700;
+}
+
+.modal-actions button[hidden] {
+  display: none;
+}
+
+.modal-actions svg {
+  width: 18px;
+  height: 18px;
+}
+
+.modal .soft {
+  background: rgba(0, 0, 0, 0.06);
+}
+
+.modal .ghost {
+  color: rgba(28, 28, 31, 0.6);
+}
+
+.cubed-app {
+  margin: 12px 0 0;
+  font-size: 12px;
+  line-height: 1.45;
+  color: rgba(28, 28, 31, 0.58);
+}
+
+.modal .linkish {
+  padding: 0;
+  color: color-mix(in srgb, var(--jelly) 85%, #000);
+  font-weight: 700;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.modal-x {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  width: 32px;
+  height: 32px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+}
+
+.modal .modal-x {
+  background: rgba(0, 0, 0, 0.05);
+}
+
+.modal-x svg {
+  width: 17px;
+  height: 17px;
+}
+
+.share-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding-right: 34px;
+  box-sizing: border-box;
+  text-align: left;
+}
+
+.share-head .share-art {
+  width: 52px;
+  height: 52px;
+  flex: none;
+}
+
+.share-art svg {
+  width: 70%;
+}
+
+.share-head h2 {
+  margin: 0;
+  font-size: 18px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.share-head > div {
+  min-width: 0;
+}
+
+.share-sub {
+  font-size: 12px;
+  font-weight: 650;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: rgba(28, 28, 31, 0.45);
+}
+
+.share-qr {
+  width: min(250px, 70vw);
+  margin: 16px 0 4px;
+  padding: 6px;
+  border-radius: 18px;
+  background: #fff;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.06), 0 6px 18px rgba(40, 30, 20, 0.1);
+}
+
+.share-qr svg {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.share-tip {
+  margin: 8px 0 0;
+  font-size: 12.5px;
+  color: rgba(28, 28, 31, 0.55);
+}
+
+@media (pointer: coarse) {
+  .cubby input {
+    font-size: 16px; /* (no zoom on focus, iOS) */
+  }
+}
+
+@media (max-width: 720px) {
+  .cubby-btn {
+    width: 40px;
+    padding: 0;
+    justify-content: center;
+  }
+  .cubby-btn span {
+    display: none;
+  }
+  .palette.cubby {
+    top: auto;
+    left: 50%;
+    right: auto;
+    bottom: calc(max(18px, calc(env(safe-area-inset-bottom) + 8px)) + 60px);
+    width: calc(100vw - 24px);
+    max-height: 64vh;
+  }
+  .cubby-scroll {
+    margin: 0 -11px;
+    padding: 2px 11px 4px;
+  }
+  .new-thumb {
+    width: 84px;
+    height: 84px;
+  }
+  .cubby-new {
+    grid-template-columns: 84px 1fr;
+  }
+}
+
+html.dark .cubby-btn {
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.07), 0 0 16px color-mix(in srgb, var(--jelly) 22%, transparent);
+}
+
+html.dark .cubby-btn.open {
+  background: rgba(46, 44, 54, 0.9);
+}
+
+html.dark .palette .cubby-save {
+  background: #f1eff4;
+  color: #141318;
+}
+
+html.dark .cubby-count,
+html.dark .card-sub,
+html.dark .cubby-empty,
+html.dark .cubed-meta,
+html.dark .cubed-app,
+html.dark .share-tip,
+html.dark .share-sub,
+html.dark .palette .new-actions .ghost,
+html.dark .modal .ghost {
+  color: rgba(241, 239, 244, 0.55);
+}
+
+html.dark .cubby-empty b {
+  color: rgba(241, 239, 244, 0.9);
+}
+
+html.dark .cubby-new,
+html.dark .palette .cubby-paste button,
+html.dark .modal .soft,
+html.dark .modal .modal-x {
+  background: rgba(255, 255, 255, 0.07);
+}
+
+html.dark .cubby input,
+html.dark .palette .dice {
+  background: rgba(255, 255, 255, 0.07);
+  border-color: rgba(255, 255, 255, 0.12);
+  box-shadow: none;
+}
+
+html.dark .palette .dice {
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.12);
+}
+
+html.dark .cubby-paste {
+  border-top-color: rgba(255, 255, 255, 0.08);
+}
+
+html.dark .card-thumb,
+html.dark .new-thumb,
+html.dark .share-art {
+  background: linear-gradient(#2a2832, #1d1c23);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.06);
+}
+
+html.dark .palette .card-more {
+  background: rgba(30, 29, 36, 0.82);
+}
+
+html.dark .card-menu {
+  background: rgba(30, 29, 36, 0.97);
+}
+
+html.dark .card-menu button:hover {
+  background: rgba(255, 255, 255, 0.07);
+}
+
+html.dark .card-menu .danger {
+  color: #ff6b6b;
+}
+
+html.dark .toast {
+  background: rgba(241, 239, 244, 0.94);
+  color: #141318;
+}
+
+html.dark .toast button {
+  background: rgba(0, 0, 0, 0.08);
+  color: #141318;
+}
+
+html.dark .modal {
+  background: rgba(0, 0, 0, 0.5);
+}
+
+html.dark .modal-card {
+  background: rgba(26, 25, 31, 0.97);
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(255, 255, 255, 0.06);
+}
+
+html.dark .cubed-art svg {
+  filter: drop-shadow(0 0 14px color-mix(in srgb, var(--jelly) 45%, transparent));
+}
+
+html.dark .modal .linkish {
+  color: color-mix(in srgb, var(--jelly) 70%, #fff);
+}
+
+.modal button:focus-visible,
+.cubby button:focus-visible,
+.card-menu button:focus-visible,
+.toast button:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--jelly) 65%, var(--ink));
+  outline-offset: 2px;
+}

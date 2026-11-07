@@ -1,5 +1,6 @@
 import { FLAVORS, TEXTURES, EDGES, GLITTERS, LAYER_PRESETS, MIN_LAYERS, MAX_LAYERS, MAX_REPEAT, flavorSwatchCSS, flavorMainHex, materialSwatchCSS } from '../styles.js';
 import { SETTINGS, settingWord, settingNum } from '../settings.js';
+import { Cubby } from './cubby.js';
 
 const svg = (inner) =>
   `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${inner}</svg>`;
@@ -288,6 +289,7 @@ export class UI {
         word.textContent = on ? 'On' : 'Off';
       };
       show(app.tearing);
+      this._showTear = show;
       sw.addEventListener('click', () => {
         app.audio.ui();
         app.setTearing(!app.tearing);
@@ -363,6 +365,7 @@ export class UI {
       app.audio.init();
       const open = this.tuneEl.hidden;
       this.closePalette();
+      if (open) this.cubby?.close();
       this.tuneEl.hidden = !open;
       this.tuneBtn.classList.toggle('open', open);
     });
@@ -401,10 +404,12 @@ export class UI {
       else if (e.key === 'm' || e.key === 'M') this.setMuted(!app.audio.muted);
       else if ((e.key === 'l' || e.key === 'L') && !e.repeat) this.toggleTheme();
     });
+    this.cubby = new Cubby(this, app);
   }
 
   openPalette() {
     this.closeTune();
+    this.cubby?.close();
     this.paletteEl.hidden = false;
     this.swatchBtn.classList.add('open');
     // (the chosen material and layer preset in view, where they scroll sideways)
@@ -423,10 +428,15 @@ export class UI {
   // Fraction of the screen height covered by an open panel (bottom sheet on phones).
   get panelCover() {
     if (window.innerWidth > 720) return 0;
-    const el = !this.tuneEl.hidden ? this.tuneEl : !this.paletteEl.hidden ? this.paletteEl : null;
+    const el = !this.tuneEl.hidden ? this.tuneEl : !this.paletteEl.hidden ? this.paletteEl : this.cubby && !this.cubby.el.hidden ? this.cubby.el : null;
     if (!el) return 0;
     const r = el.getBoundingClientRect();
     return Math.max(0, (window.innerHeight - r.top) / window.innerHeight);
+  }
+
+  // switches that live outside the sliders, after a whole cube is put on
+  syncSwitches() {
+    this._showTear?.(this.app.tearing);
   }
 
   setSettings(st, tex) {
