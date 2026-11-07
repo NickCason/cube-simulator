@@ -2033,7 +2033,7 @@ export class SoftBody {
     // one (not on its skin) that isn't within 2 steps of it in the mesh
     const sv = this._surfV, nSV = this._nSurfV, vp = this.vPiece, hood = this._hood;
     const nbS = this.nbStart, nbL = this.nbList, foldU = this._foldUntil, ct = this._ct;
-    const hold = this.time + 0.6;
+    const hold = this.time + 0.6, X = this.X, near2 = (1.1 * this.hCell) ** 2;
     let hs = this._hoodStamp;
     for (let q = 0; q < nSV; q++) {
       const i = sv[q], k = vp[i];
@@ -2061,6 +2061,16 @@ export class SoftBody {
           }
         }
         if (hood[T[o]] === hs || hood[T[o + 1]] === hs || hood[T[o + 2]] === hs || hood[T[o + 3]] === hs) continue;
+        // (nor one from just across a cut - the face it was cut from, where it
+        // lay at rest: the cut's two faces pressed together read as folded, and
+        // pushing them apart against the body pulling them back rocked a
+        // part-cut firm cube for ever)
+        let across = false;
+        for (let j = 0; j < 4 && !across; j++) {
+          const u = T[o + j] * 3, dx = X[u] - X[i * 3], dy = X[u + 1] - X[i * 3 + 1], dz = X[u + 2] - X[i * 3 + 2];
+          across = dx * dx + dy * dy + dz * dz < near2;
+        }
+        if (across) continue;
         foldU[i] = hold;
         P[k].foldUntil = hold;
         if (P[k].asleep) this.wake(k);
@@ -2089,7 +2099,11 @@ export class SoftBody {
     let budget = 9000, any = false;
     for (let n = 0; n < NP && budget > 0; n++) {
       const k = (this._tangleNext + n) % NP, pc = P[k];
-      if (pc.asleep || (GP && GP[k]) || pc.untangle > 0 || pc.verts.length < 30 || this.time - pc.touchT > 4) continue;
+      // (not a piece still joined across a cut - a flap on its hinge: the cut's
+      // two faces lie against each other and read as passing through, and its
+      // rest shape is the whole cube - springing back closed the cut, the
+      // halves fell open again, and round it went: the "twerk")
+      if (pc.asleep || pc.hinge || (GP && GP[k]) || pc.untangle > 0 || pc.verts.length < 30 || this.time - pc.touchT > 4) continue;
       // (a tangle three springings back haven't undone - a fold stuck fast -
       // is left be till the piece is next touched: trying for ever kept it
       // awake, pulled about, for ever)

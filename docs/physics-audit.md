@@ -395,6 +395,22 @@ default).
 Fold and tangle checks catch what slips through and pull the piece back into
 shape.
 
+**Fixed: the "twerk" on part-cut and part-torn cubes (2026-11-06).** The
+two faces of a cut that hasn't gone all the way through lie against each
+other, and two checks read that as damage:
+- **Tangle check:** the faces read as "passed through itself". The untangle
+  then pulled the whole piece to its rest shape, the uncut cube, which
+  closed the cut. The halves fell open again and it repeated. Hinged pieces
+  are now skipped.
+- **Fold check:** the faces pressed together read as "folded", and the
+  push-out against the body pulling them back rocked firm cubes forever.
+  A vertex is no longer counted as folded inside a tet within 1.1 cells of
+  it in the rest shape (the face it was cut from).
+
+Repro scripts: `scratch/twerk.mjs`, `twerk2.mjs`, `twerktear.mjs`. A real
+partial tear went from 3 spring-backs and 296/300 frames flagged folded to
+none, settled and asleep.
+
 **Open.**
 - The gate uses global Firmness, so melting or torn jelly doesn't
   self-collide.
