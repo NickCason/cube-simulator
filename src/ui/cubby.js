@@ -5,12 +5,14 @@
 
 import { captureCube, encodeCube, decodeCube, cubeLink, cubeSummary, cleanName } from '../cubecode.js';
 import { nameCube } from '../namegen.js';
+import { cubeOfTheDay, dayKey } from '../cotd.js';
 import { qrEncode, qrSVG } from './qr.js';
 import { FighterCard } from './fighter.js';
 import { resolveFlavor, layerBands, TEXTURES } from '../styles.js';
 
 const KEY = 'cube-sim-cubby';
 const ON_KEY = 'cube-sim-cubby-on'; // which saved cube is on show, and the record of one that isn't saved
+const DAY_KEY = 'cube-sim-day'; // the last day the cube of the day said hello
 
 const svg = (inner, extra = '') =>
   `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"${extra}>${inner}</svg>`;
@@ -320,6 +322,7 @@ export class Cubby {
     // a link with a code in it (now, or pasted into the address bar later)
     this._incoming();
     window.addEventListener('hashchange', () => this._incoming());
+    this.daily();
   }
 
   // ---- the shelf
@@ -436,8 +439,80 @@ export class Cubby {
       if (this.app.addCube() >= 0 && window.innerWidth <= 720) this.close();
     });
     this.gridEl.appendChild(add);
+    this.gridEl.appendChild(this._todayCard());
     for (const it of this.items) this.gridEl.appendChild(this._card(it));
     this.randomBtn.hidden = this.items.filter((it) => it.id !== this.activeId).length < 2;
+  }
+
+  // the cube of the day: tap to put it on, + to drop it in
+  _todayCard() {
+    const c = cubeOfTheDay();
+    const card = document.createElement('div');
+    card.className = 'cube-card today-card';
+    card.innerHTML = `<button class="card-main"><span class="card-thumb"></span><span class="card-name"></span><span class="card-sub">Cube of the day</span></button><button class="card-drop" title="Drop it into the room too">${ICON.plus}</button><span class="today-tag">Today</span>`;
+    card.querySelector('.card-thumb').innerHTML = cubeArt(c);
+    card.querySelector('.card-name').textContent = c.name;
+    const main = card.querySelector('.card-main');
+    main.setAttribute('aria-label', `Put on today's cube, ${c.name}`);
+    main.addEventListener('click', () => {
+      this.app.audio.ui();
+      this.tryDaily(c);
+      if (window.innerWidth <= 720) this.close();
+    });
+    const drop = card.querySelector('.card-drop');
+    drop.setAttribute('aria-label', `Drop today's cube, ${c.name}, into the room too`);
+    drop.addEventListener('click', (e) => {
+      e.stopPropagation();
+      this.app.audio.ui();
+      this.dropIn({ code: encodeCube(c) });
+    });
+    return card;
+  }
+
+  // put the cube of the day on (Save keeps it; Undo puts back what was on)
+  tryDaily(c = cubeOfTheDay()) {
+    const back = this._state();
+    this._setOn(null, {});
+    this._swapTo(c, 'Cube of the day', null, [
+      { label: 'Save', run: () => this.add(c, true) },
+      { label: 'Undo', run: () => this._restore(back) },
+    ]);
+  }
+
+  // The cube of the day says hello, once a day, once the intro's done - not
+  // over a cube that came in a link (nor for test runs, unless ?daily)
+  daily() {
+    const q = location.search;
+    if ((/[?&](shot|nosplash)\b/.test(q) || navigator.webdriver) && !/[?&]daily\b/.test(q)) return;
+    const day = dayKey();
+    try {
+      if (localStorage.getItem(DAY_KEY) === day) return;
+    } catch (e) {
+      /* private mode: say hello anyway */
+    }
+    const show = () => {
+      if (!this.app.intro?.done || document.documentElement.classList.contains('splashing')) {
+        setTimeout(show, 300);
+        return;
+      }
+      if (this._offered || !this.cubedEl.hidden) return;
+      try {
+        localStorage.setItem(DAY_KEY, day);
+      } catch (e) {
+        /* private mode */
+      }
+      const c = cubeOfTheDay();
+      const when = new Date().toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
+      this.fighter.show(c, {
+        kicker: `Cube of the day · ${when}`,
+        actions: [
+          { label: 'Try it', run: () => this.tryDaily(c) },
+          { label: 'Save', run: () => this.add(c, false) },
+        ],
+        ms: 9000,
+      });
+    };
+    setTimeout(show, 1200);
   }
 
   _card(it) {

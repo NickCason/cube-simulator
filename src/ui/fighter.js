@@ -37,7 +37,7 @@ export class FighterCard {
 
   // c: a decoded cube; kicker: the line above the name; rec: its record (null:
   // not in the Cubby); actions: [{ label, run }] (Undo, Save)
-  show(c, { kicker = 'Cube select', rec = null, actions = [] } = {}) {
+  show(c, { kicker = 'Cube select', rec = null, actions = [], ms = 0 } = {}) {
     const app = this.app, el = this.el;
     this._clear();
     const f = resolveFlavor({ flavor: c.flavor, layers: c.layers });
@@ -93,7 +93,7 @@ export class FighterCard {
     void el.offsetWidth;
     el.classList.add('show');
     app.audio?.stinger();
-    this._timers.push(setTimeout(() => this.hide(), actions.length ? 6500 : 4800));
+    this._timers.push(setTimeout(() => this.hide(), ms || (actions.length ? 6500 : 4800)));
   }
 
   hide() {

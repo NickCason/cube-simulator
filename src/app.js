@@ -1443,6 +1443,9 @@ export class App {
     }
     this.tune = tune;
     this.cube.tune = tune;
+    // (its name comes with it - a saved one's, the day's, a link's)
+    this.cube.name = c.name || '';
+    this.ui?.stack?.render();
     if (c.theme && c.theme !== this.theme) {
       this.setTheme(c.theme);
       this.ui?.setTheme(c.theme);
