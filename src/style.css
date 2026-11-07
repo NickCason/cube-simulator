@@ -1224,3 +1224,11 @@ html.dark .hint {
   color: rgba(241, 239, 244, 0.85);
   background: rgba(22, 21, 27, 0.6);
 }
+
+/* the Lab (Settings): the knobs inside each tool, shown when its switch is on */
+.palette.tune:not(.lab-on) .lab-row {
+  display: none;
+}
+.palette.tune .lab-switch {
+  margin-top: 6px;
+}

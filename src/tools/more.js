@@ -258,7 +258,8 @@ export class MalletTool {
       sb.wake(piece);
       const pusher = { c: [p.x, p.y, p.z], d: [d.x, d.y, d.z], r: 0.105, len: 0.34, s0: 0, s1: 0 };
       sb.pushers.push(pusher);
-      a.press = { pusher, piece, s: 0, D: (0.13 + 0.13 * lv) * size, V: 4.5 + 1.8 * lv, phase: 'in', hold: 0, lv, p: p.clone(), n: a.tg.normal.clone() };
+      const mf = app.st?.malletForce ?? 1;
+      a.press = { pusher, piece, s: 0, D: (0.13 + 0.13 * lv) * size * mf, V: (4.5 + 1.8 * lv) * Math.sqrt(mf), phase: 'in', hold: 0, lv, p: p.clone(), n: a.tg.normal.clone() };
       // resonance: it rings longer the more of the beat it has caught
       if (!app.healer.active) sb.dampBoost = hits > 1 ? Math.max(0.3, 1 - 0.7 * lv) : 1;
       app.shake(0.012 + 0.025 * lv);
@@ -649,7 +650,7 @@ export class TorchTool extends NozzleTool {
     app.fireAt(tip.clone().addScaledVector(dir, 0.12), 1.0);
     if (tg.jelly) {
       const sb = app.sb;
-      sb.addHeat(tg.point.x, tg.point.y, tg.point.z, 0.3, 2.1 * dt, 1.6, -1.3);
+      sb.addHeat(tg.point.x, tg.point.y, tg.point.z, 0.3, 2.1 * dt * (app.st?.torchHeat ?? 1), 1.6, -1.3);
       // very hot jelly slumps, then turns to liquid and runs off (see Fluid),
       // from the surface in: its tets go - a batch every 0.15 s, one rebuild
       // each - and their volume flows on as molten jelly, in its colour
@@ -703,18 +704,28 @@ export class TorchTool extends NozzleTool {
   }
 }
 
-// The corners a melt leaves bare (in the tets going and the ones staying),
-// eased toward the average of their bare neighbours - rest and current
-// shape alike - twice, unless a tet round one would turn inside out or
-// flatten: the hole's rim rounds off rather than standing in shards.
+// The corners this melt leaves bare (in a tet going and one staying),
+// eased toward the average of their neighbours on the melted surface -
+// rest and current shape alike - twice: the hole's rim rounds off rather
+// than standing in shards. Only this melt's corners: each melt used to ease
+// every corner any melt had ever bared, all over the body, so a long
+// torching smoothed the same corners dozens of times over until tets were
+// squeezed flat and blew up in spikes. And never so far that a tet round
+// one shrinks below 70% of what it was, or below a tenth of a cell's. The
+// rest shape only: the jelly follows it round (a rest-space move added to
+// the current positions as it was pointed the wrong way on a turned piece).
 function smoothMelted(sb, gone) {
-  const T = sb.T, X = sb.X, x = sb.x, px = sb.px;
-  const rim = new Set(), keep = new Map();
+  const T = sb.T, X = sb.X;
+  const fresh = new Set();
+  for (const t of gone) for (let k = 0; k < 4; k++) fresh.add(T[t * 4 + k]);
+  const rim = new Set(), surf = new Set(), keep = new Map();
   for (let t = 0; t < sb.nT; t++) {
     if (gone.has(t) || sb.vol0[t] <= 0) continue;
     for (let k = 0; k < 4; k++) {
       const i = T[t * 4 + k];
       if (!sb.melt[i]) continue;
+      surf.add(i);
+      if (!fresh.has(i)) continue;
       rim.add(i);
       if (!keep.has(i)) keep.set(i, []);
       keep.get(i).push(t);
@@ -727,6 +738,8 @@ function smoothMelted(sb, gone) {
     const wx = X[d] - X[a], wy = X[d + 1] - X[a + 1], wz = X[d + 2] - X[a + 2];
     return ux * (vy * wz - vz * wy) - uy * (vx * wz - vz * wx) + uz * (vx * wy - vy * wx);
   };
+  const start = new Map(), floor = 0.1 * (sb.hCell ** 3) / 5 * 6; // (x6: vol() is 6x the volume)
+  for (const ts of keep.values()) for (const t of ts) if (!start.has(t)) start.set(t, vol(t));
   for (let pass = 0; pass < 2; pass++) {
     const moves = [];
     for (const i of rim) {
@@ -735,7 +748,7 @@ function smoothMelted(sb, gone) {
       for (const t of keep.get(i))
         for (let k = 0; k < 4; k++) {
           const j = T[t * 4 + k];
-          if (j === i || !rim.has(j) || seen.has(j)) continue;
+          if (j === i || !surf.has(j) || seen.has(j)) continue;
           seen.add(j);
           ax += X[j * 3]; ay += X[j * 3 + 1]; az += X[j * 3 + 2];
           m++;
@@ -745,15 +758,10 @@ function smoothMelted(sb, gone) {
     }
     for (let q = 0; q < moves.length; q += 4) {
       const i = moves[q], o = i * 3, ts = keep.get(i);
-      const before = ts.map(vol);
       for (let c = 0; c < 3; c++) X[o + c] += moves[q + 1 + c];
-      if (ts.some((t, n) => !(vol(t) > before[n] * 0.35))) {
+      if (ts.some((t) => { const v = vol(t); return !(v > start.get(t) * 0.7 && v > floor); })) {
         for (let c = 0; c < 3; c++) X[o + c] -= moves[q + 1 + c];
         continue;
-      }
-      for (let c = 0; c < 3; c++) {
-        x[o + c] += moves[q + 1 + c];
-        px[o + c] += moves[q + 1 + c];
       }
     }
   }
@@ -828,7 +836,7 @@ TorchTool.prototype._liquefy = function (set) {
     col.set(app.flavorColorAtRestY(ry));
     // (the space it leaves - slumped, it's shrunk - and half of that boils
     // off in the flame)
-    const vol = sb.vol0[t] * Math.min(1, sb.tVS[t]) * 0.5;
+    const vol = sb.vol0[t] * Math.min(1, sb.tVS[t]) * (1 - (app.st?.boilOff ?? 0.5));
     app.fluid.add(cx, cy, cz, vol, vx, vy - 0.3, vz, col.r, col.g, col.b, Math.cbrt(sb.vol0[t]) * 1.5);
   }
   // (steam off the boil)
@@ -870,7 +878,8 @@ export class FreezeTool extends NozzleTool {
     const app = this.app;
     app.particles.mist(tip, dir, 3);
     // molten jelly where it's aimed cools - cold enough, it sets (see Fluid)
-    if (app.fluid.n && app.fluid.cool(tg.point.x, tg.point.y, tg.point.z, 0.45, 2.4 * dt)) {
+    const cold = app.st?.cryoCold ?? 1;
+    if (app.fluid.n && app.fluid.cool(tg.point.x, tg.point.y, tg.point.z, 0.45, 2.4 * dt * cold)) {
       this.crackle += dt;
       if (this.crackle > 0.05) {
         this.crackle = 0;
@@ -878,7 +887,7 @@ export class FreezeTool extends NozzleTool {
       }
     }
     if (tg.jelly) {
-      app.sb.addHeat(tg.point.x, tg.point.y, tg.point.z, 0.3, -1.5 * dt, 1.5, -1.3);
+      app.sb.addHeat(tg.point.x, tg.point.y, tg.point.z, 0.3, -1.5 * dt * cold, 1.5, -1.3);
       this.crackle += dt;
       if (this.crackle > 0.05) {
         this.crackle = 0;
@@ -1108,7 +1117,8 @@ export class BombTool {
       void removed;
     }
     app.onTopologyChanged();
-    sb.radialImpulse(p.x, p.y, p.z, 1.7, 10, 2.5);
+    const bp = app.st?.bombPower ?? 1;
+    sb.radialImpulse(p.x, p.y, p.z, 1.7 * Math.sqrt(bp), 10 * bp, 2.5 * bp);
     app.markDamaged();
   }
 }
@@ -1192,7 +1202,7 @@ export class SyringeTool {
       const d = Math.hypot(cx / 4 - s.tip.x, cy / 4 - s.tip.y, cz / 4 - s.tip.z);
       if (d > R) continue;
       const f = 0.5 + 0.5 * Math.cos((Math.PI * d) / R);
-      sb.tVS[t] = Math.min(3.2, sb.tVS[t] + 1.25 * dt * f);
+      sb.tVS[t] = Math.min(3.2, sb.tVS[t] + 1.25 * dt * f * (app.st?.syringePump ?? 1));
       if (sb.tVS[t] > maxVS) maxVS = sb.tVS[t];
     }
     sb.wake(sb.tPiece[s.a1.tet]);
@@ -1328,7 +1338,7 @@ export class MagnetTool {
       const d = poles.clone().sub(c);
       const dist = d.length();
       if (dist > 2.6) continue;
-      const f = Math.min(60, 2.2 / (dist * dist + 0.02));
+      const f = Math.min(60, 2.2 / (dist * dist + 0.02)) * (app.st?.magnetPull ?? 1);
       d.normalize();
       if (n.state === 'embedded') {
         sb.pushAnchor(n.aTip, d.x * f, d.y * f, d.z * f, dt * 0.05);

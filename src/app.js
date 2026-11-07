@@ -129,6 +129,7 @@ export class App {
     this.post = new Post(renderer);
     this.style = this._loadStyle(opts);
     this.tune = this._loadTune();
+    this.st = null; // (resolved settings: see applyStyle)
     const t0 = resolveSettings(this.tune, TEXTURES[this.style.texture]);
     this.sb = new SoftBody({ ...(opts.sim || {}), size: t0.size, bevel: EDGES[this.style.edges].bevel * t0.size });
     this.sb.loadCube(0, opts.dropHeight ?? 1.1, 0, 0.18);
@@ -355,7 +356,12 @@ export class App {
     sb.p.lambdaRatio = st.lambda;
     sb.p.bounce = st.bounce;
     sb.p.friction = st.grip;
+    sb.p.rigidity = st.rigidity;
+    sb.p.grabK = st.handPull;
+    sb.p.contactGrip = st.contactGrip;
+    sb.p.airDrag = st.airDrag;
     sb.p.gravity = -st.gravity;
+    this.st = st; // (resolved settings, for tools that read them each use)
     sb.setDensity(st.weight);
     sb.wakeAll();
     this.audio.setLevels(st.volume, st.impacts, st.wobble);

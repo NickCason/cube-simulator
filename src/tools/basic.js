@@ -1,6 +1,7 @@
 import * as THREE from 'three';
-import { cutBody, planeField } from '../sim/cutting.js';
+import { cutBody, planeField, removeTets, removeSmallPieces } from '../sim/cutting.js';
 import { maxStretch } from '../sim/strain.js';
+import { polarRot } from '../sim/softbody.js';
 import { makeNailGun } from '../world/models.js';
 
 const _v = new THREE.Vector3();
@@ -8,7 +9,8 @@ const _w = new THREE.Vector3();
 
 // ------------------------------------------------------------------ hand
 // How far each material stretches before it tears (frozen jelly: barely).
-const TEAR = { jello: 1.75, gummy: 1.9, sour: 1.8, crystal: 1.6, creamy: 2.0, slime: 3.4, water: 2.4, syrup: 3.8, mochi: 3.2, marshmallow: 2.6, rubber: 2.8, glass: 1.3 };
+// (soft ones: what two hands can actually draw them to - they give for longer instead)
+const TEAR = { jello: 1.75, gummy: 1.9, sour: 1.8, crystal: 1.6, creamy: 2.0, slime: 2.6, water: 2.2, syrup: 2.8, mochi: 2.6, marshmallow: 2.3, rubber: 2.5, glass: 1.3, tofu: 1.3, putty: 2.5, candy: 1.12 };
 
 // Grab and drag; a quick tap pokes. Each finger holds on by itself - two on
 // the jelly squish it between them or pull it apart - and pulled too far
@@ -22,7 +24,8 @@ export class HandTool {
     this.cursor = 'grab';
     this.multiTouch = true; // (a second finger on the jelly grabs too - see App._bindInput)
     this.drags = new Map(); // pointerId -> { grab, plane, t0, x0, y0, moved, hit, dir }
-    this._over = 0; // looks in a row something held was stretched past tearing
+    this.tear = null; // a tear under way: { piece, ver, band (tets), prof (0..1 each), p (0..1 through), n (axis), creak }
+    this._acc = 0; // (s) since the last look
     this._tick = 0;
     this._cool = 0;
   }
@@ -47,9 +50,9 @@ export class HandTool {
     const p = hit.point;
     app.camera.getWorldDirection(_v);
     const plane = new THREE.Plane().setFromNormalAndCoplanarPoint(_v.negate(), _w.set(p[0], p[1], p[2]));
-    const grab = app.sb.startGrab(hit, p[0], p[1], p[2], 0.2);
+    const grab = app.sb.startGrab(hit, p[0], p[1], p[2], 0.2 * app.sb.p.size * (app.st?.grabSize ?? 1));
     if (!grab) return false;
-    this.drags.set(e.pointerId ?? 0, { grab, plane, t0: performance.now(), x0: e.clientX, y0: e.clientY, moved: 0, hit, dir: ray.direction.clone() });
+    this.drags.set(e.pointerId ?? 0, { grab, plane, t0: performance.now(), x0: e.clientX, y0: e.clientY, moved: 0, hit, dir: ray.direction.clone(), pt: [p[0], p[1], p[2]], off: [0, 0, 0] });
     app.setCursor('grabbing');
     app.audio?.squish(0.35, this.drags.size > 1 ? 1.15 : 0.9);
     return true;
@@ -59,18 +62,26 @@ export class HandTool {
     const d = this.drags.get(e.pointerId ?? 0);
     if (!d) return;
     d.moved = Math.max(d.moved, Math.hypot(e.clientX - d.x0, e.clientY - d.y0));
-    const g = d.grab;
     const pt = ray.intersectPlane(d.plane, _v);
     if (pt) {
-      g.tx = pt.x;
-      g.ty = Math.max(pt.y, 0.03);
-      g.tz = pt.z;
-      const R = this.app.sb.p.arenaRadius - 0.05;
-      const r = Math.hypot(g.tx, g.tz);
-      if (r > R) {
-        g.tx *= R / r;
-        g.tz *= R / r;
-      }
+      d.pt[0] = pt.x; d.pt[1] = pt.y; d.pt[2] = pt.z;
+      this._aim(d);
+    }
+  }
+
+  // Where the hand pulls: the finger, less what's left of an offset (after
+  // a tear each half is held where it is, and eased back to the finger -
+  // else it raced to catch up, 20 m/s); above the floor, inside the arena.
+  _aim(d) {
+    const g = d.grab;
+    g.tx = d.pt[0] - d.off[0];
+    g.ty = Math.max(d.pt[1] - d.off[1], 0.03);
+    g.tz = d.pt[2] - d.off[2];
+    const R = this.app.sb.p.arenaRadius - 0.05;
+    const r = Math.hypot(g.tx, g.tz);
+    if (r > R) {
+      g.tx *= R / r;
+      g.tz *= R / r;
     }
   }
 
@@ -93,7 +104,7 @@ export class HandTool {
     app.sb.endGrab(d.grab);
     if (quick) {
       const [x, y, z] = d.hit.point;
-      app.sb.impulse(x, y, z, d.dir.x, d.dir.y, d.dir.z, 0.34, 4.2, d.grab.piece);
+      app.sb.impulse(x, y, z, d.dir.x, d.dir.y, d.dir.z, 0.34 * app.sb.p.size, 4.2 * (app.st?.poke ?? 1), d.grab.piece);
       app.audio?.poke(0.7);
       app.glowPulse?.(x, y, z, 0.9);
     } else if (!this.drags.size) {
@@ -104,22 +115,40 @@ export class HandTool {
     }
   }
 
-  // Each frame (every other): two hands on one piece pulling it apart -
-  // stretched between them past its limit twice running, it splits there,
-  // across the line between the hands, a half in each. (Torn wherever the
-  // stretch peaked, a fingertip's shallow hold peeled thin flaps and
-  // shredded them; and a rip that ran on in steps cut one plane over and
-  // over - each cut splits every tet on its plane anew: millions. One hand
-  // tore a ball out of anything dragged fast.) Bits under 5% of a cube
-  // don't tear again.
+  // Each frame (every other): two hands on one piece pulling it apart.
+  // Stretched between them past its limit, it starts to give: a band across
+  // the line between the hands, where it's stretched most, softens (see
+  // SoftBody.tDmg) and draws out thin - as long as the pull's kept up, for
+  // longer the softer the jelly (pulling harder hurries it) - then splits
+  // there, a half in each. Eased off before then, it firms up again. Both
+  // the stretch it takes and how long it gives first come from how stiff it
+  // is (_tearLimit, _tearTime), times Settings > Toughness. (Torn wherever
+  // the stretch peaked, a fingertip's shallow hold peeled thin flaps and
+  // shredded them; a rip that ran on in steps cut one plane over and over -
+  // each cut splits every tet on its plane anew: millions - so it's one cut,
+  // at the end. One hand tore a ball out of anything dragged fast: one hand
+  // never tears.) Bits under 5% of a cube don't tear again.
   update(sdt, dt = 1 / 60) {
     const app = this.app, sb = app.sb;
+    // (the tear runs on the jelly's time: in slow motion it gives slowly too)
+    this._acc += sdt;
+    const ease = Math.exp(-dt * 6);
+    for (const d of this.drags.values()) {
+      if (d.off[0] === 0 && d.off[1] === 0 && d.off[2] === 0) continue;
+      for (let c = 0; c < 3; c++) d.off[c] = Math.abs(d.off[c] * ease) < 1e-4 ? 0 : d.off[c] * ease;
+      this._aim(d);
+    }
     if (this.drags.size < 2 || app.healer.active || !app.tearing) {
-      this._over = 0;
+      this._endTear();
+      this._acc = 0;
       return;
     }
-    this._cool -= dt;
+    this._cool -= sdt;
     if (++this._tick % 2 || this._cool > 0 || sb.nT > 30000) return;
+    const step = this._acc;
+    this._acc = 0;
+    const tr = this.tear;
+    if (tr && tr.ver !== sb.topoVersion) this._endTear(); // (cut by something else meanwhile)
     const G = sb._grabbedP;
     if (!G) return;
     const size = sb.p.size, minVol = 0.05 * size ** 3;
@@ -157,18 +186,80 @@ export class HandTool {
         return u > 0.2 && u < 0.8;
       });
       if (!m || Math.abs(m.dir[0] * ax + m.dir[1] * ay + m.dir[2] * az) / L < 0.7) continue;
-      if (!best || m.s / this._limit(m) > best.over) best = { over: m.s / this._limit(m), m, k, n: [ax / L, ay / L, az / L] };
+      const lim = this._tearLimit(m), over = m.s / lim;
+      if (!best || over > best.over) best = { over, m, k, n: [ax / L, ay / L, az / L] };
+      this.lastStretch = m.s;
+      this.lastLimit = lim;
     }
-    if (best && best.over > 1) this._over++;
-    else this._over = 0;
-    if (this._over < 2) return;
-    this._over = 0;
-    const { m, k } = best;
-    const o = tetCentre(sb, m.t);
-    const [nx, ny, nz] = best.n;
+    const cur = this.tear;
+    // (once it's giving, it goes on giving near its limit)
+    if (!best || best.over <= (cur ? 0.92 : 1) || (cur && cur.piece !== best.k)) {
+      // (not pulled hard enough - eased off: it firms up again)
+      if (cur) {
+        cur.p -= step * 0.8;
+        if (cur.p <= 0) this._endTear();
+        else this._damage(cur);
+      }
+      return;
+    }
+    const t = cur || this._startTear(best);
+    t.p += (step * (1 + 3 * Math.max(0, best.over - 1))) / this._tearTime();
+    t.n = best.n;
+    if (t.p < 1) {
+      this._damage(t);
+      // (a creak now and then as it gives)
+      if ((t.creak -= step) <= 0) {
+        t.creak = 0.18;
+        app.audio?.squish(0.15 + 0.35 * t.p, 0.55 + 0.3 * t.p);
+      }
+      return;
+    }
+    // through: one ragged cut across the band, where it's drawn out now
+    const o = [0, 0, 0];
+    let wsum = 0;
+    for (let q = 0; q < t.band.length; q++) {
+      const c = tetCentre(sb, t.band[q]), wq = t.prof[q];
+      for (let e = 0; e < 3; e++) o[e] += c[e] * wq;
+      wsum += wq;
+    }
+    for (let e = 0; e < 3; e++) o[e] /= wsum || 1;
+    const k = t.piece, [nx, ny, nz] = t.n, half = t.half;
+    this.tear = null;
+    for (const d of this.drags.values()) {
+      const g = d.grab;
+      if (g.piece !== k) continue;
+      const c = [0, 0, 0];
+      for (let j = 0; j < g.n; j++) for (let q = 0; q < 3; q++) c[q] += sb.x[g.idx[j] * 3 + q] / g.n;
+      for (let q = 0; q < 3; q++) d.off[q] = d.pt[q] - c[q];
+      this._aim(d);
+    }
     const field = ragged(planeField(nx, ny, nz, nx * o[0] + ny * o[1] + nz * o[2]), 0.035 * size);
     const res = cutBody(sb, field, { separate: 0.3, anchors: app.allAnchors(), pieces: [k] });
     if (!res.changed) return;
+    // (the torn ends keep most of the shape they were drawn out to - see
+    // _yield; the cut leaves slivers in a neck drawn out several times over,
+    // a hair thick in the jelly's own shape, that buzz the ends at 17 m/s:
+    // they go, and any crumb they leave)
+    const thin = 0.03 * sb.hCell ** 3, h2 = 2 * half;
+    // (the halves: the pieces the hands hold now)
+    const halves = new Set();
+    for (const d of this.drags.values()) halves.add(sb.vPiece[d.grab.idx[0]]);
+    this._yield(o, t.n, h2, this._plastic(), halves);
+    sb.calmT = 0.3;
+    const cut = removeTets(sb, (q, cx, cy, cz) => sb.vol0[q] < thin && Math.abs((cx - o[0]) * nx + (cy - o[1]) * ny + (cz - o[2]) * nz) < h2, app.allAnchors());
+    if (!cut.length) sb.rebuild();
+    removeSmallPieces(sb, 0.002 * size ** 3, app.allAnchors());
+    // (the torn ends were drawn out soft: they stay soft and firm up over a
+    // moment - given their full stiffness back at once, stretched as they
+    // are, the halves sprang apart at 30+ m/s)
+    const held = new Set();
+    for (const d of this.drags.values()) held.add(sb.vPiece[d.grab.idx[0]]);
+    for (let q = 0; q < sb.nT; q++) {
+      if (sb.vol0[q] <= 0 || !held.has(sb.tPiece[q])) continue;
+      const c = tetCentre(sb, q), d = Math.abs((c[0] - o[0]) * nx + (c[1] - o[1]) * ny + (c[2] - o[2]) * nz);
+      if (d < h2) sb.tDmg[q] = 0.97 * (1 - (d / h2) * (d / h2));
+    }
+    sb.dmgHeal = 1;
     app.onTopologyChanged();
     app.markDamaged();
     this._cool = 0.35; // (let it snap back before looking again)
@@ -177,10 +268,102 @@ export class HandTool {
     app.glowPulse?.(o[0], o[1], o[2], 0.8);
   }
 
-  // the stretch a piece tears at: its material's, much less where frozen
-  _limit(m) {
+  // A tear begins: the band of the piece's tets across the line between the
+  // hands, through the most stretched one - its full width, ~a cell either
+  // side, weighted toward the middle.
+  _startTear(best) {
+    const sb = this.app.sb, pc = sb.pieces[best.k], o = tetCentre(sb, best.m.t), [nx, ny, nz] = best.n;
+    const half = 1.5 * sb.hCell, band = [], prof = [];
+    for (const t of pc.tets) {
+      if (sb.vol0[t] <= 0) continue;
+      const c = tetCentre(sb, t), d = Math.abs((c[0] - o[0]) * nx + (c[1] - o[1]) * ny + (c[2] - o[2]) * nz);
+      if (d >= half) continue;
+      band.push(t);
+      prof.push(1 - (d / half) * (d / half));
+    }
+    this.tear = { piece: best.k, ver: sb.topoVersion, band: Int32Array.from(band), prof: Float32Array.from(prof), p: 0, n: best.n, creak: 0, half };
+    return this.tear;
+  }
+
+  // Plastic yield: near the tear (within h2 of the plane through o, normal
+  // n), each piece's rest shape eased toward the shape it's in now, put back
+  // in its rest frame (its rigid fit) - beta of the way at the plane, less
+  // further off. Stretched 4-5x and let go, a neck sprang back at 15-25 m/s
+  // even softened (each substep the solver takes back most of a stretch,
+  // however soft); now the ends stay drawn out, as torn slime does. The
+  // caller rebuilds (rest shapes, masses).
+  _yield(o, n, h2, beta, only) {
+    const sb = this.app.sb, x = sb.x, X = sb.X;
+    const A = new Float64Array(9), R = new Float64Array(9);
+    for (const pc of sb.pieces) {
+      if (!only.has(pc.id)) continue;
+      const vs = pc.verts;
+      let near = false;
+      for (const i of vs) if (Math.abs((x[i * 3] - o[0]) * n[0] + (x[i * 3 + 1] - o[1]) * n[1] + (x[i * 3 + 2] - o[2]) * n[2]) < h2) near = true;
+      if (!near) continue;
+      let M = 0, Cx = 0, Cy = 0, Cz = 0, cx = 0, cy = 0, cz = 0;
+      for (const i of vs) {
+        const o3 = i * 3, m = sb.m[i] || 1e-6;
+        M += m;
+        Cx += X[o3] * m; Cy += X[o3 + 1] * m; Cz += X[o3 + 2] * m;
+        cx += x[o3] * m; cy += x[o3 + 1] * m; cz += x[o3 + 2] * m;
+      }
+      Cx /= M; Cy /= M; Cz /= M; cx /= M; cy /= M; cz /= M;
+      A.fill(0);
+      for (const i of vs) {
+        const o3 = i * 3, m = sb.m[i] || 1e-6;
+        const dx = (x[o3] - cx) * m, dy = (x[o3 + 1] - cy) * m, dz = (x[o3 + 2] - cz) * m;
+        const rx = X[o3] - Cx, ry = X[o3 + 1] - Cy, rz = X[o3 + 2] - Cz;
+        A[0] += dx * rx; A[1] += dx * ry; A[2] += dx * rz;
+        A[3] += dy * rx; A[4] += dy * ry; A[5] += dy * rz;
+        A[6] += dz * rx; A[7] += dz * ry; A[8] += dz * rz;
+      }
+      polarRot(new Float64Array([0, 0, 0, 1]), A, R, 24);
+      for (const i of vs) {
+        const o3 = i * 3, d = Math.abs((x[o3] - o[0]) * n[0] + (x[o3 + 1] - o[1]) * n[1] + (x[o3 + 2] - o[2]) * n[2]);
+        if (d >= h2) continue;
+        const w = beta * (1 - (d / h2) * (d / h2));
+        // R^T (x - c) + C: where it is now, in the rest frame
+        const ux = x[o3] - cx, uy = x[o3 + 1] - cy, uz = x[o3 + 2] - cz;
+        const gx = Cx + R[0] * ux + R[3] * uy + R[6] * uz, gy = Cy + R[1] * ux + R[4] * uy + R[7] * uz, gz = Cz + R[2] * ux + R[5] * uy + R[8] * uz;
+        X[o3] += w * (gx - X[o3]); X[o3 + 1] += w * (gy - X[o3 + 1]); X[o3 + 2] += w * (gz - X[o3 + 2]);
+      }
+    }
+  }
+
+  // (0..1) how much it yields rather than springs back: goo all, jello some,
+  // gummy and stiffer hardly or not at all
+  _plastic() {
+    return Math.max(0, Math.min(1, 1.1 - 1.6 * this._stiffness()));
+  }
+
+  // (how far through it is, as softness in the band: most in its middle)
+  _damage(t) {
+    const D = this.app.sb.tDmg, p = Math.min(1, t.p);
+    for (let q = 0; q < t.band.length; q++) D[t.band[q]] = p * t.prof[q];
+  }
+
+  _endTear() {
+    const t = this.tear;
+    if (!t) return;
+    this.tear = null;
+    const sb = this.app.sb;
+    if (t.ver !== sb.topoVersion) return; // (a rebuild cleared it already)
+    for (let q = 0; q < t.band.length; q++) sb.tDmg[t.band[q]] = 0;
+  }
+
+  // How stiff the jelly is, 0 (pudding) .. 1 (rubber, or rigid)
+  _stiffness() {
+    const p = this.app.sb.p;
+    return Math.max(Math.min(1, Math.max(0, Math.log(p.mu / 45) / Math.log(1000 / 45))), p.rigidity);
+  }
+
+  // The stretch it starts to tear at: its material's, more the softer it
+  // is (stiff stuff can't be drawn out far), times the toughness; much less
+  // where frozen, more where melting.
+  _tearLimit(m) {
     const app = this.app, sb = app.sb;
-    let lim = TEAR[app.style?.texture] || 2;
+    let lim = (TEAR[app.style?.texture] || 2) * (1.08 + 0.17 * (1 - this._stiffness())) * Math.sqrt(app.st?.tough ?? 1);
     if (m) {
       const T = sb.T, t4 = m.t * 4;
       const temp = (sb.temp[T[t4]] + sb.temp[T[t4 + 1]] + sb.temp[T[t4 + 2]] + sb.temp[T[t4 + 3]]) / 4;
@@ -188,6 +371,12 @@ export class HandTool {
       else if (temp > 0.4) lim *= 1.3; // (melting: gooier)
     }
     return lim;
+  }
+
+  // (s) how long it gives, pulled just past its limit, before it parts:
+  // stiff stuff quickly, soft stuff draws out
+  _tearTime() {
+    return (0.35 + 1.1 * (1 - this._stiffness())) * (this.app.st?.tough ?? 1);
   }
 }
 
@@ -285,7 +474,7 @@ export class KnifeTool {
     };
     const before = app.sb.pieces.length;
     const res = cutBody(app.sb, planeField(n.x, n.y, n.z, d, region), {
-      separate: 0.35,
+      separate: 0.35 * (this.app.st?.knifePush ?? 1),
       anchors: app.allAnchors(),
     });
     if (!res.changed) {
@@ -395,7 +584,7 @@ export class NailGunTool {
     dir.x += (Math.random() - 0.5) * 0.006;
     dir.y += (Math.random() - 0.5) * 0.006;
     dir.normalize();
-    app.nails.fire(origin, dir);
+    app.nails.fire(origin, dir, 34 * (app.st?.nailPower ?? 1));
     app.audio?.nailgun();
     app.shake(0.004);
   }

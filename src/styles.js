@@ -65,7 +65,13 @@ export const TEXTURES = {
   mochi: { name: 'Mochi', depth: 0.45, opacity: 0.86, glow: 0.62, rough: 0.3, ior: 1.32, sugar: 0, milk: 0.9, mu: 70, damping: 9, weight: 1.1, lambda: 18, bounce: 0.04, grip: 1.45 },
   marshmallow: { name: 'Marshmallow', label: 'Marsh\u00admallow', depth: 0.22, opacity: 0.95, glow: 0.85, rough: 0.45, ior: 1.3, sugar: 0, milk: 1, mu: 80, damping: 7, weight: 0.35, lambda: 1.8, bounce: 0.25, grip: 1 },
   rubber: { name: 'Rubber', depth: 1.25, opacity: 0.97, glow: 0.15, rough: 0.26, ior: 1.5, sugar: 0, milk: 0.4, mu: 900, damping: 1, weight: 1.2, lambda: 30, bounce: 0.9, grip: 1.3 },
-  glass: { name: 'Glass', depth: 0.14, opacity: 0, glow: 0.22, rough: 0.008, ior: 1.52, sugar: 0, milk: 0, mu: 1000, damping: 2.5, weight: 1.6, lambda: 40, bounce: 0.25, grip: 0.4 },
+  glass: { name: 'Glass', depth: 0.14, opacity: 0, glow: 0.22, rough: 0.008, ior: 1.52, sugar: 0, milk: 0, mu: 1000, damping: 2.5, weight: 1.6, lambda: 40, bounce: 0.25, grip: 0.4, rigidity: 0.85 },
+  // firm and dead: barely gives, doesn't bounce, crumbles more than it stretches
+  tofu: { name: 'Tofu', depth: 0.5, opacity: 0.94, glow: 0.4, rough: 0.38, ior: 1.33, sugar: 0, milk: 0.95, mu: 600, damping: 6, weight: 1.05, lambda: 12, bounce: 0.04, grip: 1.1, rigidity: 0.45 },
+  // soft and dead: heavy, sticky, slumps and stays
+  putty: { name: 'Putty', depth: 0.55, opacity: 0.97, glow: 0.3, rough: 0.5, ior: 1.3, sugar: 0, milk: 0.75, mu: 240, damping: 14, weight: 1.35, lambda: 20, bounce: 0, grip: 1.5, rigidity: 0.2 },
+  // rigid: a boiled sweet - knocks about like a solid, won't tear in your hands
+  candy: { name: 'Hard candy', label: 'Hard candy', depth: 1.1, opacity: 0.1, glow: 0.4, rough: 0.012, ior: 1.5, sugar: 0, milk: 0, mu: 1000, damping: 3, weight: 1.4, lambda: 40, bounce: 0.35, grip: 0.6, rigidity: 0.92 },
 };
 
 export const EDGES = {

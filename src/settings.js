@@ -18,6 +18,10 @@ export const SETTINGS = [
   { id: 'squash', group: 'Feel', label: 'Squash', key: 'lambda', mat: true, ...logMap(40, 1.6), words: ['Solid', 'Squishy', 'Spongy', 'Foam'] },
   { id: 'bounce', group: 'Feel', label: 'Bounce', key: 'bounce', mat: true, def: 0.55, ...linMap(0, 0.95), words: ['Splat', 'Thud', 'Jelly', 'Springy', 'Super ball'] },
   { id: 'grip', group: 'Feel', label: 'Grip', key: 'grip', mat: true, def: 0.85, ...linMap(0.02, 1.5), words: ['Ice', 'Slippery', 'Normal', 'Grippy', 'Sticky'] },
+  // how much it holds its shape as a whole (beyond firmness: see SoftBody._solveRigidity)
+  { id: 'rigidity', group: 'Feel', label: 'Rigidity', key: 'rigidity', mat: true, def: 0, ...linMap(0, 1), words: ['Jelly', 'Firm', 'Stiff', 'Solid', 'Rigid'] },
+  // how much stretch and how long a pull it takes to tear (scales both; see HandTool)
+  { id: 'tough', group: 'Feel', label: 'Toughness', key: 'tough', mat: true, def: 1, ...logMap(0.4, 2.5), words: ['Brittle', 'Tender', 'Normal', 'Tough', 'Taffy'] },
   { id: 'opacity', group: 'Look', label: 'Opacity', key: 'opacity', mat: true, ...linMap(0, 1), words: ['Clear', 'Hazy', 'Cloudy', 'Milky', 'Solid'] },
   { id: 'translucency', group: 'Look', label: 'Translucency', key: 'glow', mat: true, ...linMap(0, 1), words: ['Dull', 'Soft', 'Glowing', 'Radiant'] },
   { id: 'depth', group: 'Look', label: 'Colour depth', key: 'depth', mat: true, ...logMap(0.15, 4), words: ['Pale', 'Light', 'Rich', 'Deep', 'Inky'] },
@@ -54,6 +58,22 @@ export const SETTINGS = [
     id: 'wobble', group: 'Sound', label: 'Wobble', key: 'wobble', def: 0.5, ...linMap(0, 1),
     word: (v) => (v < 0.02 ? 'Off' : v < 0.3 ? 'Faint' : v < 0.65 ? 'Soft' : v < 0.85 ? 'Lively' : 'Loud'),
   },
+  // ---- the Lab (Settings > Lab controls): the knobs inside each tool, 1 =
+  // as it comes. See docs/physics-audit.md for what each one moves.
+  { id: 'grabSize', group: 'Hand', lab: true, label: 'Grab size', key: 'grabSize', def: 1, ...logMap(0.5, 2), words: ['Fingertip', 'Small', 'Hand', 'Big', 'Paw'] },
+  { id: 'handPull', group: 'Hand', lab: true, label: 'Hand strength', key: 'handPull', def: 1, ...logMap(0.4, 2.5), words: ['Gentle', 'Light', 'Normal', 'Strong', 'Iron'] },
+  { id: 'poke', group: 'Hand', lab: true, label: 'Poke', key: 'poke', def: 1, ...logMap(0.25, 4), words: ['Tap', 'Nudge', 'Poke', 'Jab', 'Punch'] },
+  { id: 'knifePush', group: 'Tools', lab: true, label: 'Knife push', key: 'knifePush', def: 1, ...linMap(0, 2), words: ['None', 'Slight', 'Normal', 'Firm', 'Shove'] },
+  { id: 'nailPower', group: 'Tools', lab: true, label: 'Nail power', key: 'nailPower', def: 1, ...logMap(0.4, 2.5), words: ['Tack', 'Light', 'Normal', 'Heavy', 'Rivet'] },
+  { id: 'malletForce', group: 'Tools', lab: true, label: 'Mallet force', key: 'malletForce', def: 1, ...logMap(0.4, 2), words: ['Tap', 'Light', 'Normal', 'Hard', 'Sledge'] },
+  { id: 'torchHeat', group: 'Tools', lab: true, label: 'Torch heat', key: 'torchHeat', def: 1, ...logMap(0.3, 3.3), words: ['Warm', 'Hot', 'Normal', 'Fierce', 'Inferno'] },
+  { id: 'boilOff', group: 'Tools', lab: true, label: 'Boil-off', key: 'boilOff', def: 0.5, ...linMap(0, 0.9), word: (v) => `${Math.round(v * 100)}%` },
+  { id: 'cryoCold', group: 'Tools', lab: true, label: 'Cryo cold', key: 'cryoCold', def: 1, ...logMap(0.3, 3.3), words: ['Chill', 'Cold', 'Normal', 'Frigid', 'Absolute'] },
+  { id: 'bombPower', group: 'Tools', lab: true, label: 'Bomb power', key: 'bombPower', def: 1, ...logMap(0.25, 4), words: ['Pop', 'Bang', 'Normal', 'Boom', 'Nuke'] },
+  { id: 'syringePump', group: 'Tools', lab: true, label: 'Syringe pump', key: 'syringePump', def: 1, ...logMap(0.3, 3.3), words: ['Trickle', 'Slow', 'Normal', 'Fast', 'Firehose'] },
+  { id: 'magnetPull', group: 'Tools', lab: true, label: 'Magnet pull', key: 'magnetPull', def: 1, ...logMap(0.3, 3.3), words: ['Fridge', 'Weak', 'Normal', 'Strong', 'MRI'] },
+  { id: 'contactGrip', group: 'Contact', lab: true, label: 'Jelly on jelly', key: 'contactGrip', def: 1, ...linMap(0, 2.5), words: ['Frictionless', 'Slippery', 'Normal', 'Grippy', 'Velcro'] },
+  { id: 'airDrag', group: 'Contact', lab: true, label: 'Air drag', key: 'airDrag', def: 0.05, ...logMap(0.01, 4), words: ['Vacuum', 'Air', 'Breezy', 'Water', 'Honey'] },
 ];
 
 export function settingWord(s, value) {

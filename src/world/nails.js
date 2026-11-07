@@ -101,8 +101,13 @@ export class NailSystem {
       vt.addScaledVector(side, spin);
       vh.addScaledVector(side, -spin);
     }
-    n.q0 = n.p0.clone().addScaledVector(vt, -1 / 60);
-    n.q1 = n.p1.clone().addScaledVector(vh, -1 / 60);
+    // (its velocity goes in as the last step back - a substep's worth, set
+    // at the first update: 1/60 s back, when the rod steps 3 substeps a
+    // frame, sent freed nails off 3x too fast - 15x in slow motion)
+    n.q0 = n.p0.clone();
+    n.q1 = n.p1.clone();
+    n.v0 = vt;
+    n.v1 = vh;
     n.rest = 0;
   }
 
@@ -207,7 +212,7 @@ export class NailSystem {
     n.depth = pen;
     n.embed = { a: aTip, b: aBack, len: last.d - first.d, compliance: 2e-7 };
     sb.embeds.push(n.embed);
-    sb.impulse(hp.x, hp.y, hp.z, dir.x, dir.y, dir.z, 0.28, 2.6, hit.piece);
+    sb.impulse(hp.x, hp.y, hp.z, dir.x, dir.y, dir.z, 0.28, 2.6 * (this.app.st?.nailPower ?? 1), hit.piece);
     this.app.onNailHit?.(hp, dir, hit);
     this._updateEmbedded(n);
   }
@@ -289,6 +294,11 @@ export class NailSystem {
     if (n.rest > 1.0) return;
     const sub = 3;
     const h = dt / sub;
+    if (n.v0) {
+      n.q0.copy(n.p0).addScaledVector(n.v0, -h);
+      n.q1.copy(n.p1).addScaledVector(n.v1, -h);
+      n.v0 = n.v1 = null;
+    }
     for (let s = 0; s < sub; s++) {
       for (const [p, q] of [[n.p0, n.q0], [n.p1, n.q1]]) {
         const vx = (p.x - q.x) * 0.999, vy = (p.y - q.y) * 0.999, vz = (p.z - q.z) * 0.999;

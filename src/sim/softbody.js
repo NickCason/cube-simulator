@@ -28,6 +28,9 @@ const DEFAULTS = {
   maxSpeed: 45,
   collide: true,
   selfCollide: true, // a piece's surface against the rest of its own body (folds, hinged flaps)
+  rigidity: 0, // 0..1: pulled toward its rest shape as a whole (see _solveRigidity) - 0 none, 1 near rigid
+  grabK: 1, // how hard a hand pulls (reach and stiffness; Settings > Lab > Hand strength)
+  contactGrip: 1, // friction between pieces, x the base 0.5 (Settings > Lab > Jelly on jelly)
 };
 
 function growArr(a, n, C) {
@@ -49,13 +52,46 @@ function asFloat(o, keys) {
   }
   return o;
 }
+// The rotation part of A (3x3, A[i*3+j]): Muller et al. 2016 - q (a unit
+// quaternion, x y z w) iterated toward it from where it was; R (A's layout)
+// out. Robust through flips and flat shapes, and a few rounds from a warm q.
+export function polarRot(q, A, R, iters) {
+  for (let it = 0; ; it++) {
+    const qx = q[0], qy = q[1], qz = q[2], qw = q[3];
+    R[0] = 1 - 2 * (qy * qy + qz * qz); R[1] = 2 * (qx * qy - qz * qw); R[2] = 2 * (qx * qz + qy * qw);
+    R[3] = 2 * (qx * qy + qz * qw); R[4] = 1 - 2 * (qx * qx + qz * qz); R[5] = 2 * (qy * qz - qx * qw);
+    R[6] = 2 * (qx * qz - qy * qw); R[7] = 2 * (qy * qz + qx * qw); R[8] = 1 - 2 * (qx * qx + qy * qy);
+    if (it === iters) return;
+    // omega = sum_j col_j(R) x col_j(A) / |sum_j col_j(R) . col_j(A)|
+    let ox = 0, oy = 0, oz = 0, dd = 0;
+    for (let j = 0; j < 3; j++) {
+      const r0 = R[j], r1 = R[3 + j], r2 = R[6 + j], a0 = A[j], a1 = A[3 + j], a2 = A[6 + j];
+      ox += r1 * a2 - r2 * a1; oy += r2 * a0 - r0 * a2; oz += r0 * a1 - r1 * a0;
+      dd += r0 * a0 + r1 * a1 + r2 * a2;
+    }
+    dd = Math.abs(dd) + 1e-12;
+    ox /= dd; oy /= dd; oz /= dd;
+    const wl = Math.sqrt(ox * ox + oy * oy + oz * oz);
+    if (wl < 1e-9) {
+      iters = it + 1; // (converged: R is already q's)
+      continue;
+    }
+    const sh = Math.sin(wl / 2) / wl, ch = Math.cos(wl / 2);
+    const px = ox * sh, py = oy * sh, pz = oz * sh, pw = ch;
+    const nx = pw * qx + px * qw + py * qz - pz * qy, ny = pw * qy - px * qz + py * qw + pz * qx;
+    const nz = pw * qz + px * qy - py * qx + pz * qw, nw = pw * qw - px * qx - py * qy - pz * qz;
+    const ql = Math.sqrt(nx * nx + ny * ny + nz * nz + nw * nw) || 1;
+    q[0] = nx / ql; q[1] = ny / ql; q[2] = nz / ql; q[3] = nw / ql;
+  }
+}
+
 const PIECE_FLOATS = ['sleepT', 'rebT', 'impY', 'rebR', 'impR', 'impUx', 'impUz', 'impT', 'impDv', 'foldUntil', 'buzzT', 'buzzA', 'buzzB', 'untangle', 'touchT', 'vib'];
 // (piece state a rebuild carries over to an untouched piece: see _buildPieces)
 const CARRY = ['sleepT', 'asleep', 'rebT', 'impY', 'boosted', 'rebR', 'impR', 'impUx', 'impUz', 'boostedR', 'impPend', 'impT', 'impDv', 'sleepLogMu', 'foldUntil', 'foldAsk', 'buzzT', 'buzzA', 'buzzB', 'tangleN', 'untangle', 'touchT', 'hinge'];
 
 export class SoftBody {
   constructor(opts = {}) {
-    this.p = Object.assign({}, DEFAULTS, opts);
+    this.p = asFloat(Object.assign({}, DEFAULTS, opts), ['rigidity', 'grabK', 'contactGrip', 'airDrag']);
     this.nV = 0;
     this.nT = 0;
     this.vCap = 0;
@@ -85,6 +121,8 @@ export class SoftBody {
     this.rebuildMs = 0;
     this.rebuilds = 0;
     this.dampBoost = 1;
+    this.dmgHeal = 0; // (s) left of torn ends firming up (tDmg decaying)
+    this.calmT = 0; // (s) left of the jiggle damped hard (just torn: the halves settle, not flail)
     this.heatActive = false;
     this._heatResidual = 0;
     this.weld = null; // set by the heal: distances to the healed seams
@@ -206,7 +244,7 @@ export class SoftBody {
     this._ti4 = new Int32Array(4);
     this._tb4 = new Float64Array(4);
     this._fq = asFloat({ ok: false, dist: 0, prev: 0, nx: 0, ny: 0, nz: 0, on: false, crossS: Infinity }, ['dist', 'prev', 'nx', 'ny', 'nz']);
-    asFloat(this, ['time', 'gravityScale', 'rebuildMs', 'dampBoost', '_heatResidual', '_hashAge', '_grabPress', '_gap', '_foldClock', '_tangleClock']);
+    asFloat(this, ['time', 'gravityScale', 'rebuildMs', 'dampBoost', 'dmgHeal', 'calmT', '_heatResidual', '_hashAge', '_grabPress', '_gap', '_foldClock', '_tangleClock']);
   }
 
   // ---------------------------------------------------------------- storage
@@ -235,6 +273,7 @@ export class SoftBody {
     this.tVS = growArr(this.tVS, cap, Float32Array);
     this.tMu = growArr(this.tMu, cap, Float32Array);
     this.tKs = growArr(this.tKs, cap, Float32Array);
+    this.tDmg = growArr(this.tDmg, cap, Float32Array); // (0..1: torn that far - softer, see _solveTets; cleared on a rebuild)
     this.tCap = cap;
   }
 
@@ -320,6 +359,7 @@ export class SoftBody {
   // body is stepped or drawn again.
   rebuildLight() {
     this.topoStale = true;
+    this.tDmg.fill(0, 0, this.nT);
     this._computeRest();
     this._computeMass();
     this._buildAdjacency();
@@ -329,6 +369,8 @@ export class SoftBody {
   rebuild() {
     const t0 = performance.now();
     this.topoStale = false;
+    this.tDmg.fill(0, 0, this.nT);
+    this.dmgHeal = 0;
     this._computeRest();
     this._computeMass();
     this._buildAdjacency();
@@ -741,6 +783,7 @@ export class SoftBody {
         vib: 0, // (m/s) how fast it jiggles: its vertices' rms speed apart from moving as a whole (the jelly's voice follows it)
         untangle: 0, // (s) left of springing back out of that
         fitQ: new Float64Array([0, 0, 0, 1]), // its last fitted rotation (rest -> now)
+        rigQ: new Float64Array([0, 0, 0, 1]), // (the same, for _solveRigidity: warm from the last substep)
       }, PIECE_FLOATS);
     });
     // A piece the change didn't touch - the very same vertices as one piece
@@ -762,7 +805,7 @@ export class SoftBody {
       for (let k = 1; k < vs.length && same; k++) same = vs[k] < oldNV && oldVP[vs[k]] === op;
       if (!same) continue;
       for (const f of CARRY) pc[f] = o[f];
-      pc.com.set(o.com); pc.vel.set(o.vel); pc.bbox.set(o.bbox); pc.omega.set(o.omega); pc.impPrev.set(o.impPrev); pc.fitQ.set(o.fitQ);
+      pc.com.set(o.com); pc.vel.set(o.vel); pc.bbox.set(o.bbox); pc.omega.set(o.omega); pc.impPrev.set(o.impPrev); pc.fitQ.set(o.fitQ); pc.rigQ.set(o.rigQ);
       kept[op] = 1;
       carried[pc.id] = 1;
       if (pc.asleep) anyAsleep = true;
@@ -1060,6 +1103,13 @@ export class SoftBody {
     this._imp.fill(0, 0, NP0 * 12);
     this._impPartner.fill(-1, 0, NP0);
     this._updateMaterial(dt);
+    if (this.calmT > 0) this.calmT -= dt;
+    if (this.dmgHeal > 0) {
+      // (torn ends firming up again: see HandTool)
+      this.dmgHeal -= dt;
+      const D = this.tDmg, f = this.dmgHeal > 0 ? Math.exp(-dt * 3.5) : 0;
+      for (let t = 0; t < this.nT; t++) if (D[t] > 0) D[t] *= f;
+    }
     this._foldCheck(dt);
     if (this.grabs.length) {
       const G = this._markGrabbed();
@@ -1109,6 +1159,7 @@ export class SoftBody {
       // the body, leaving it passed through itself)
       for (let n = 0; n < this.grabs.length; n++) this._solveGrab(this.grabs[n], h);
       this._solveTets(h);
+      if (this.p.rigidity > 0) this._solveRigidity(h);
       if (this.embeds.length) this._solveEmbeds(h);
       if (this.attract) this._solveAttract(h);
       if (this.pushers.length) this._solvePushers((s + 1) / nS);
@@ -1201,7 +1252,7 @@ export class SoftBody {
   }
 
   _solveTets(h) {
-    const { T, B, vol0, x, w, tMu, tVS, tKs } = this;
+    const { T, B, vol0, x, w, tMu, tVS, tKs, tDmg } = this;
     const mu0 = this.p.mu;
     const lam = mu0 * this.p.lambdaRatio;
     // frozen tets stiffen, but only up to what these substeps can hold
@@ -1229,7 +1280,8 @@ export class SoftBody {
       // frozen (stiffer) tets stiffen in volume too, keeping lambda/mu: a stiff
       // shear term against a soft volume term rings violently
       const boost = tMu[t] > 1 ? Math.min(tMu[t], boostHi) : tMu[t];
-      const ks = tKs[t];
+      // (a tear on its way through: it gives - see HandTool)
+      const ks = tDmg[t] > 0 ? tKs[t] * (1 - 0.85 * tDmg[t]) : tKs[t];
       const mu = mu0 * boost * ks;
       const lamT = (boost > 1 ? lam * boost : lam) * ks;
 
@@ -1305,14 +1357,15 @@ export class SoftBody {
     const ease = Math.max(0.08, 1 - Math.max(0, press - 0.006) / 0.02);
     // (firmer jelly pulls the held patch back harder before the next pull:
     // a longer reach keeps it with the hand)
-    const maxStep = 0.012 * this.p.size * ease * (1 + Math.min(2, Math.max(0, (this.p.mu - 100) / 70)));
+    const gk = this.p.grabK;
+    const maxStep = 0.012 * gk * this.p.size * ease * (1 + Math.min(2, Math.max(0, (this.p.mu - 100) / 70)));
     for (let j = 0; j < g.n; j++) {
       const i = g.idx[j];
       const wi = w[i];
       if (wi === 0) continue;
       const o = i * 3;
       const tx = g.tx + g.off[j * 3], ty = g.ty + g.off[j * 3 + 1], tz = g.tz + g.off[j * 3 + 2];
-      const alpha = (g.compliance / g.wt[j]) * ih2;
+      const alpha = (g.compliance / (g.wt[j] * gk)) * ih2;
       const k = (wi / (wi + alpha)) * ease;
       x[o] += (tx - x[o]) * k;
       x[o + 1] += (ty - x[o + 1]) * k;
@@ -1487,7 +1540,7 @@ export class SoftBody {
         const tx = vx - vn * nx, tz = vz - vn * nz;
         const tl = Math.sqrt(tx * tx + vy * vy + tz * tz);
         if (tl > 0) {
-          const k = Math.max(0, 1 - (0.4 * wpen[i] * ih) / tl);
+          const k = Math.max(0, 1 - (0.47 * this.p.friction * wpen[i] * ih) / tl); // (the wall grips as the floor does: 0.4 at the default Grip)
           vx = vn * nx + tx * k;
           vy *= k;
           vz = vn * nz + tz * k;
@@ -1505,7 +1558,7 @@ export class SoftBody {
   // Damp deviation from rigid motion per piece (keeps throws ballistic).
   _dampPieces(dt) {
     const { x, v, m } = this;
-    const kd = 1 - Math.exp(-this.p.damping * dt * (this.dampBoost || 1));
+    const kd = 1 - Math.exp(-this.p.damping * dt * (this.dampBoost || 1) * (this.calmT > 0 ? 10 : 1));
     const air = Math.exp(-this.p.airDrag * dt);
     for (const pc of this.pieces) {
       const vs = pc.verts;
@@ -2056,6 +2109,60 @@ export class SoftBody {
   // through each other. (Its rest shape has nothing passed through; self-
   // contact would only hold the tangle in place, and pulling it apart from
   // the inside made it worse.)
+  // Rigidity (p.rigidity, 0..1): each moving piece pulled toward its rest
+  // shape, turned and placed as the piece is now (shape matching, Muller et
+  // al. 2005; the turn by polarRot, warm from the last substep). What the
+  // tets alone can't be made to hold at a stable time step: stiff, dead,
+  // near-rigid bodies. A time constant, not a per-substep share, so it feels
+  // the same at any substep count: 0.5 s at 0 (off) down to 0.5 ms at 1.
+  // Vertices a hand holds aren't pulled back (else a stiff piece fought the
+  // hand every substep) - nor ones with no mass (w = 0).
+  _solveRigidity(h) {
+    const r = this.p.rigidity;
+    const amt = 1 - Math.exp(-h / (0.5 * Math.pow(10, -3 * r)));
+    if (!(amt > 1e-4)) return;
+    const P = this.pieces, x = this.x, X = this.X, m = this.m, w = this.w, aw = this._awake;
+    const A = this._rgA || (this._rgA = new Float64Array(9)), R = this._rgR || (this._rgR = new Float64Array(9));
+    let held = null;
+    if (this.grabs.length) {
+      held = this._rgHeld && this._rgHeld.length >= this.nV ? this._rgHeld : (this._rgHeld = new Uint8Array(this.vCap));
+      held.fill(0, 0, this.nV);
+      for (const g of this.grabs) for (let j = 0; j < g.n; j++) held[g.idx[j]] = 1;
+    }
+    for (let k = 0; k < P.length; k++) {
+      const pc = P[k];
+      if (!aw[k] || pc.untangle > 0) continue;
+      const vs = pc.verts;
+      let M = 0, Cx = 0, Cy = 0, Cz = 0, cx = 0, cy = 0, cz = 0;
+      for (let n = 0; n < vs.length; n++) {
+        const i = vs[n], o = i * 3, mi = m[i];
+        M += mi;
+        Cx += X[o] * mi; Cy += X[o + 1] * mi; Cz += X[o + 2] * mi;
+        cx += x[o] * mi; cy += x[o + 1] * mi; cz += x[o + 2] * mi;
+      }
+      if (!(M > 0)) continue;
+      Cx /= M; Cy /= M; Cz /= M; cx /= M; cy /= M; cz /= M;
+      A.fill(0);
+      for (let n = 0; n < vs.length; n++) {
+        const i = vs[n], o = i * 3, mi = m[i];
+        const dx = (x[o] - cx) * mi, dy = (x[o + 1] - cy) * mi, dz = (x[o + 2] - cz) * mi;
+        const rx = X[o] - Cx, ry = X[o + 1] - Cy, rz = X[o + 2] - Cz;
+        A[0] += dx * rx; A[1] += dx * ry; A[2] += dx * rz;
+        A[3] += dy * rx; A[4] += dy * ry; A[5] += dy * rz;
+        A[6] += dz * rx; A[7] += dz * ry; A[8] += dz * rz;
+      }
+      polarRot(pc.rigQ, A, R, 4);
+      for (let n = 0; n < vs.length; n++) {
+        const i = vs[n];
+        if (w[i] === 0 || (held && held[i])) continue;
+        const o = i * 3, rx = X[o] - Cx, ry = X[o + 1] - Cy, rz = X[o + 2] - Cz;
+        x[o] += amt * (cx + R[0] * rx + R[1] * ry + R[2] * rz - x[o]);
+        x[o + 1] += amt * (cy + R[3] * rx + R[4] * ry + R[5] * rz - x[o + 1]);
+        x[o + 2] += amt * (cz + R[6] * rx + R[7] * ry + R[8] * rz - x[o + 2]);
+      }
+    }
+  }
+
   _untangle(dt) {
     const P = this.pieces, x = this.x, X = this.X, v = this.v, m = this.m;
     for (let k = 0; k < P.length; k++) {
@@ -2975,7 +3082,7 @@ export class SoftBody {
       sx -= sn * nx; sy -= sn * ny; sz -= sn * nz;
       const sl = Math.hypot(sx, sy, sz);
       if (sl > 1e-9) {
-        const kf = (Math.min(1, (0.5 * d) / sl) * 0.7) / W;
+        const kf = (Math.min(1, (0.5 * this.p.contactGrip * d) / sl) * 0.7) / W;
         for (let j = 0; j < n; j++) {
           const i = pi3[j], s = w[i] * pw3[j] * mOwn * kf;
           x[i * 3] -= sx * s; x[i * 3 + 1] -= sy * s; x[i * 3 + 2] -= sz * s;

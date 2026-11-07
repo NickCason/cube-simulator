@@ -242,12 +242,12 @@ export class UI {
       if (st.group !== group) {
         group = st.group;
         const h = document.createElement('div');
-        h.className = 'lbl';
+        h.className = st.lab ? 'lbl lab-row' : 'lbl';
         h.textContent = group;
         scroll.appendChild(h);
       }
       const row = document.createElement('label');
-      row.className = 'row';
+      row.className = st.lab ? 'row lab-row' : 'row';
       row.innerHTML = `<span class="name">${st.label}</span><input type="range" min="0" max="1" step="${st.int ? 1 / 240 : 0.001}"><span class="word"></span>`;
       const input = row.querySelector('input');
       const word = row.querySelector('.word');
@@ -283,7 +283,7 @@ export class UI {
         show(app.tearing);
         this.hint(app.tearing ? 'Pull it apart with two fingers and it tears' : 'Two fingers squish and stretch it · it won\'t tear', 2600);
       });
-      this.rows.grip.input.closest('.row').after(row);
+      this.rows.tough.input.closest('.row').after(row);
     }
     // tilt & shake (phones with motion sensors): a switch under World
     if (app.tilt.supported) {
@@ -308,6 +308,40 @@ export class UI {
         this.hint(ok ? 'Tilt your phone to slide the jelly · shake it to jiggle' : 'Motion access is off for this page', 3200);
       });
       this.rows.size.input.closest('.row').after(row);
+    }
+    // the Lab: the knobs inside each tool, behind a switch (kept on if left on)
+    {
+      const row = document.createElement('div');
+      row.className = 'row toggle lab-switch';
+      row.innerHTML = '<span class="name">Lab controls</span><button class="switch" role="switch" aria-checked="false" aria-label="Lab controls"><i></i></button><span class="word">Off</span>';
+      const sw = row.querySelector('.switch'), word = row.querySelector('.word');
+      let on = false;
+      try {
+        on = localStorage.getItem('cube-sim-lab') === '1';
+      } catch (e) {
+        /* private mode */
+      }
+      const show = () => {
+        sw.setAttribute('aria-checked', String(on));
+        sw.classList.toggle('on', on);
+        word.textContent = on ? 'On' : 'Off';
+        this.tuneEl.classList.toggle('lab-on', on);
+      };
+      show();
+      sw.addEventListener('click', () => {
+        app.audio.ui();
+        on = !on;
+        show();
+        try {
+          localStorage.setItem('cube-sim-lab', on ? '1' : '0');
+        } catch (e) {
+          /* private mode */
+        }
+        if (on) this.hint('Lab: the knobs inside the hand and each tool', 2400);
+      });
+      const first = scroll.querySelector('.lab-row');
+      if (first) scroll.insertBefore(row, first);
+      else scroll.appendChild(row);
     }
     this.tuneEl.querySelector('.reset').addEventListener('click', () => {
       app.audio.ui();
