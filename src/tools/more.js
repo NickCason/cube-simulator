@@ -563,7 +563,7 @@ export class MalletTool {
       const c = new THREE.Vector3(crumbs[k], crumbs[k + 1], crumbs[k + 2]);
       const v = c.clone().sub(p).normalize().multiplyScalar(2 + Math.random() * 2);
       v.y += 2;
-      app.droplets.spawn(c, v, 0.012 + Math.cbrt(crumbs[k + 3]) * 0.35, S.chip);
+      app.droplets.spawn(c, v, 0.012 + Math.cbrt(crumbs[k + 3]) * 0.35, S.chip, { frozen: true });
     }
     if (crumbs.length) app.onTopologyChanged();
     sb.radialImpulse(p.x, p.y, p.z, 1.4, 3.2, 1.5);
@@ -932,6 +932,8 @@ export class FreezeTool extends NozzleTool {
     app.particles.mist(tip, dir, 3);
     // molten jelly where it's aimed cools - cold enough, it sets (see Fluid)
     const cold = app.st?.cryoCold ?? 1;
+    // blobs of jelly in the spray freeze into little ice cubes
+    if (app.droplets.n && app.droplets.freeze(tip, tg.point, 0.3 * cold, dt * cold)) app.audio.frostCrackle(0.7);
     if (app.fluid.n && app.fluid.cool(tg.point.x, tg.point.y, tg.point.z, 0.45, 2.4 * dt * cold)) {
       this.crackle += dt;
       if (this.crackle > 0.05) {
