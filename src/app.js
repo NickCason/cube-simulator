@@ -34,6 +34,7 @@ import { RUBIK_COLORS, rubikIndex, rubikCellAt } from './styles.js';
 import { DEFAULT_STYLE, TEXTURES, EDGES, LAYER_PRESETS, MIN_LAYERS, MAX_LAYERS, MAX_REPEAT, resolveFlavor, flavorMainHex, nextLayerColor } from './styles.js';
 import { GRAD_SHAPE_INDEX, gradStops, gradT, gradColorAt, copyLayers } from './styles.js';
 import { freeNodes, freeNodesDefault, freeColorAt, FREE_K_MIN, FREE_K_MAX } from './freeform.js';
+import { randomGradient } from './genetics.js';
 import { SETTINGS, resolveSettings } from './settings.js';
 
 const SETTING_BY_KEY = Object.fromEntries(SETTINGS.map((s) => [s.key, s]));
@@ -560,6 +561,16 @@ export class App {
     this.style.flavor = 'layers';
     this.applyStyle();
     return at;
+  }
+
+  // the die: a gradient no one's seen before, in the shape it has (see
+  // genetics.js randomGradient)
+  rollGradient() {
+    const L = this.style.layers;
+    Object.assign(L, copyLayers(randomGradient(L.shape || 'up')));
+    this.style.flavor = 'layers';
+    this.applyStyle();
+    this.sb.impulse(0, 0.6, 0, 0, -1, 0, 3, 0.8); // (a jiggle to show it off)
   }
 
   // ---- a freeform gradient's points (see freeform.js): each colour's place

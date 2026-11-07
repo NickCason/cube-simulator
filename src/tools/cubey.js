@@ -330,6 +330,9 @@ export class DicerTool {
     const app = this.app, sb = app.sb;
     j.t += dt;
     const t = j.t;
+    // (held first: the second pass cuts what's gripped where it was, not
+    // where this frame's physics shoved it)
+    if (j.grip) this._hold(j);
     // first pass: shing as the blades go down through it, and as they
     // bottom out - slam - it's in columns
     if (j.stage === 0 && t >= T.down * 0.58) {
@@ -340,6 +343,7 @@ export class DicerTool {
       j.stage = 2;
       j.F = frameOf(sb, j.verts.filter((i) => sb.alive[i]));
       this._slice([...this._cuts(j.F, j.i1, j.n), ...this._cuts(j.F, j.i2, j.n)]);
+      this._grip(j);
       app.audio.diceSlam(0);
       app.shake(0.025);
       const top = j.F.c.clone().addScaledVector(F_up(j.F, j.iu), j.ext[j.iu] / 2);
@@ -358,10 +362,12 @@ export class DicerTool {
       j.stage = 5;
       // (square to the same axes as the first pass)
       this._slice(this._cuts(frameOf(sb, j.verts.filter((i) => sb.alive[i])), j.iu, j.n));
+      this._grip(j);
       app.audio.thud(0.7);
     }
     if (j.stage === 5 && t >= T.pop) {
       j.stage = 6;
+      j.grip = null;
       this._pop(j);
     }
     // (between the passes the columns would topple out of the frame's reach:
@@ -374,8 +380,38 @@ export class DicerTool {
     }
   }
 
+  // From the first pass to the pop the dicer grips what it's dicing just
+  // where its blades left it: damped, columns of soft jelly still shoved
+  // each other about - now and then they'd bounce clean apart - and the
+  // second pass cut them wherever they'd got to. (Held after the physics,
+  // before the frame's drawn: still, not jittering.)
+  _grip(j) {
+    const sb = this.app.sb, seen = new Set(), idx = [];
+    for (const i of j.verts) {
+      const k = sb.vPiece[i];
+      if (!sb.alive[i] || k < 0 || seen.has(k)) continue;
+      seen.add(k);
+      for (const v of sb.pieces[k].verts) idx.push(v);
+    }
+    const X = new Float32Array(idx.length * 3);
+    idx.forEach((v, n) => X.set([sb.x[v * 3], sb.x[v * 3 + 1], sb.x[v * 3 + 2]], n * 3));
+    j.grip = { idx: Int32Array.from(idx), X };
+  }
+
   _hold(j) {
-    const sb = this.app.sb, seen = new Set();
+    const sb = this.app.sb, G = j.grip;
+    if (G) {
+      for (let n = 0; n < G.idx.length; n++) {
+        const v = G.idx[n];
+        if (!sb.alive[v]) continue;
+        sb.x[v * 3] = G.X[n * 3];
+        sb.x[v * 3 + 1] = G.X[n * 3 + 1];
+        sb.x[v * 3 + 2] = G.X[n * 3 + 2];
+        sb.v[v * 3] = sb.v[v * 3 + 1] = sb.v[v * 3 + 2] = 0;
+      }
+      return;
+    }
+    const seen = new Set();
     for (const i of j.verts) {
       const k = sb.vPiece[i];
       if (!sb.alive[i] || k < 0 || seen.has(k)) continue;

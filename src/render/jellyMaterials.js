@@ -162,8 +162,13 @@ export const CUBE_GLSL = /* glsl */ `
     float h = 0.5 * cLSpan;
     if (cShape == 1) return p.x / cLSpan + 0.5;
     if (cShape == 2) return (p.x + p.y + p.z) / (3.0 * cLSpan) + 0.5;
-    if (cShape == 3) return length(p) / h;
-    if (cShape == 4) return max(abs(p.x), max(abs(p.y), abs(p.z))) / h;
+    if (cShape == 3 || cShape == 4) {
+      // (radial, cubial: round the middle of the face it's nearest - in
+      // its two ways across that face - rings or squares on every face)
+      vec3 a = abs(p);
+      vec2 w = a.x >= a.y && a.x >= a.z ? p.yz : a.y >= a.z ? p.xz : p.xy;
+      return (cShape == 3 ? length(w) : max(abs(w.x), abs(w.y))) / h;
+    }
     if (cShape == 5) return length(p.xz) / h;
     return (p.y - cLY0) / cLSpan;
   }
@@ -693,9 +698,11 @@ export function createJellyMaterial(env, layerUniforms) {
         // layered: lean toward the colour you look into, so bands stay crisp
         // - out from the middle, toward all that's along the way (the core
         // shows through what's round it)
-        bool deepGrad = cShape >= 3 && cShape <= 5;
+        bool deepGrad = false, freeGrad = cShape == 6;
+        // (freeform: what's painted where you look, and just under it - its
+        // middle, where all its colours meet, would make every face mud)
         vec3 sigma = cAbsorb;
-        if (cLayers > 0) sigma = mix(cGradAt(Rp, 0), cGradPath(Rp, exitR, cAbsorb), deepGrad ? 0.8 : 0.22);
+        if (cLayers > 0) sigma = freeGrad ? mix(cGradAt(Rp, 0), cGradPath(Rp, mix(Rp, exitR, 0.2), cAbsorb), 0.35) : mix(cGradAt(Rp, 0), cGradPath(Rp, exitR, cAbsorb), deepGrad ? 0.8 : 0.22);
         else if (cLayers < 0) sigma = cubeT(7 + rk).rgb;
         vec3 Tr = exp(-sigma * pathLen * (1.0 + melt * 0.35));
         float haze = 1.0 - exp(-(cScatter + (cMilk + rkMilk) * 7.0 + frost * 2.5) * pathLen);
@@ -709,7 +716,7 @@ export function createJellyMaterial(env, layerUniforms) {
         vec3 irr = envLookup(N, 1.0) * (1.0 - 0.22 * gShadowOcc);
         float backlit = pow(clamp(dot(V, -L), 0.0, 1.0), 3.0);
         vec3 baseSc = cScatterColor;
-        if (cLayers > 0) baseSc = deepGrad ? mix(cGradAt(Rp, 1), cGradAt(mix(Rp, exitR, 0.5), 1), 0.6) : mix(cGradAt(Rp, 1), cGradAt(exitR, 1), 0.25);
+        if (cLayers > 0) baseSc = freeGrad ? mix(cGradAt(Rp, 1), cGradAt(mix(Rp, exitR, 0.15), 1), 0.3) : deepGrad ? mix(cGradAt(Rp, 1), cGradAt(mix(Rp, exitR, 0.5), 1), 0.6) : mix(cGradAt(Rp, 1), cGradAt(exitR, 1), 0.25);
         else if (cLayers < 0) baseSc = cubeT(17 + rk).rgb;
         // creamy jelly: pastel, milky body colour
         baseSc = mix(baseSc, mix(baseSc, vec3(1.0), 0.45) * 1.05, cMilk);

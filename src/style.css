@@ -360,6 +360,47 @@ body {
   font-weight: 650;
 }
 
+/* the die: a gradient no one's seen before */
+.lbl-acts {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.palette .gdie {
+  width: 30px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  border-radius: 9px;
+  background: rgba(0, 0, 0, 0.05);
+  color: rgba(28, 28, 31, 0.8);
+}
+
+.palette .gdie:hover {
+  background: rgba(0, 0, 0, 0.09);
+}
+
+.palette .gdie svg {
+  width: 18px;
+  height: 18px;
+}
+
+.gdie.roll svg {
+  animation: die-roll 0.5s cubic-bezier(0.3, 1.4, 0.5, 1);
+}
+
+@keyframes die-roll {
+  0% { transform: rotate(0) scale(1); }
+  40% { transform: rotate(200deg) scale(1.25); }
+  100% { transform: rotate(360deg) scale(1); }
+}
+
+html.dark .palette .gdie {
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(241, 239, 244, 0.85);
+}
+
 /* the gradient editor (see gradedit.js): its shape; a strip of it with its
    stops on it */
 .palette .gshape .opt {

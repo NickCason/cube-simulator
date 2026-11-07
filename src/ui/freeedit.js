@@ -31,7 +31,7 @@ export class FreeEditor {
     this.sel = 0;
     this.drag = null;
     this._tap = -1;
-    this._imgs = null;
+    this._faces = null; // (the faces' pictures, a canvas each)
     this._key = '';
     this.colIn.addEventListener('input', () => app.setLayerColor(this.sel, this.colIn.value));
     this.kIn.addEventListener('input', () => app.setLayerNodeStrength(this.sel, kOf(+this.kIn.value)));
@@ -164,10 +164,18 @@ export class FreeEditor {
     this.sel = Math.max(0, Math.min(this.sel, n - 1));
     const { F, W, H } = this._layout(), dpr = Math.min(2, window.devicePixelRatio || 1);
     // the faces' pictures (worked out again only when the gradient's changed)
+    // (each face its own little canvas: one reused for all six drew some
+    // faces with another's picture on Safari - its copies are put off)
     const key = JSON.stringify([L.colors, nodes, L.blur]);
     if (key !== this._key) {
       this._key = key;
-      this._imgs = netImages(f, IMG);
+      const imgs = netImages(f, IMG);
+      this._faces = this._faces || NET.map(() => {
+        const t = document.createElement('canvas');
+        t.width = t.height = IMG;
+        return t;
+      });
+      imgs.forEach((img, fi) => this._faces[fi].getContext('2d').putImageData(new ImageData(img, IMG, IMG), 0, 0));
     }
     const c = this.canvas;
     if (c.width !== Math.round(W * dpr) || c.height !== Math.round(H * dpr)) {
@@ -181,20 +189,16 @@ export class FreeEditor {
     const g = c.getContext('2d');
     g.setTransform(dpr, 0, 0, dpr, 0, 0);
     g.clearRect(0, 0, W, H);
-    const tmp = this._tmp || (this._tmp = document.createElement('canvas'));
-    tmp.width = tmp.height = IMG;
-    const tg = tmp.getContext('2d');
     g.imageSmoothingEnabled = true;
     g.imageSmoothingQuality = 'high';
     NET.forEach((face, fi) => {
       const x0 = face.col * (F + GAP), y0 = face.row * (F + GAP);
-      tg.putImageData(new ImageData(this._imgs[fi], IMG, IMG), 0, 0);
       g.save();
       g.beginPath();
       if (g.roundRect) g.roundRect(x0, y0, F, F, 6);
       else g.rect(x0, y0, F, F);
       g.clip();
-      g.drawImage(tmp, x0, y0, F, F);
+      g.drawImage(this._faces[fi], x0, y0, F, F);
       // (its name, small, in a corner)
       g.font = `600 ${Math.max(9, Math.round(F * 0.13))}px system-ui, sans-serif`;
       g.fillStyle = 'rgba(255, 255, 255, 0.85)';

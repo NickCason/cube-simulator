@@ -68,7 +68,7 @@ export const LAYER_PRESETS = [
   { id: 'duo', name: 'Duo', colors: ['#3a86ff', '#ff006e'] },
   // (shaped: listed middle → outside)
   { id: 'jawbreaker', name: 'Jawbreaker', colors: ['#ffe14d', '#2ec5ff', '#ff2d6f', '#7cff4f', '#b04dff', '#ff8a1f'], shape: 'shell' },
-  { id: 'hotcore', name: 'Hot core', colors: ['#fff3b0', '#ffb703', '#fb5607', '#c1121f', '#4a0412'], blur: 1, shape: 'core' },
+  { id: 'hotcore', name: 'Sunburst', colors: ['#fff3b0', '#ffb703', '#fb5607', '#c1121f', '#4a0412'], blur: 1, shape: 'core' },
   { id: 'agate', name: 'Agate', colors: ['#f2e8cf', '#8ecae6', '#457b9d', '#e9c46a', '#264653'], blur: 0.3, repeat: 3, shape: 'rings' },
   { id: 'prism', name: 'Prism', colors: ['#ff1744', '#ffea00', '#00e676', '#2979ff', '#d500f9'], blur: 1, shape: 'corner' },
 ];
@@ -90,8 +90,8 @@ export const MAX_LAYERS = 10;
 
 // ---- Gradients: a layered flavour's colours as stops along a line through
 // the cube - up it (the bands they started as), across, corner to corner -
-// or out from its middle: a core, cube-shaped shells (a jawbreaker), rings
-// round its upright axis. A stop is a colour at a place 0..1 along (stops
+// or out from the middle of every face: radial rings or cubial squares -
+// or rings round its upright axis, like a tree's. A stop is a colour at a place 0..1 along (stops
 // null: evenly spaced, the bands' middles, as they always were). Blend runs
 // from hard bands (each colour out to halfway to the next) to smooth fades;
 // Repeat cycles them; Bias crowds them toward one end. All in the cube's
@@ -102,8 +102,8 @@ export const GRAD_SHAPES = [
   { id: 'up', name: 'Up', ends: ['Bottom', 'Top'] },
   { id: 'across', name: 'Across', ends: ['One side', 'Other side'] },
   { id: 'corner', name: 'Corner', ends: ['Corner', 'Corner'] },
-  { id: 'core', name: 'Core', ends: ['Middle', 'Outside'] },
-  { id: 'shell', name: 'Shell', ends: ['Middle', 'Skin'] },
+  { id: 'core', name: 'Radial', ends: ['Face middle', 'Face edge'] },
+  { id: 'shell', name: 'Cubial', ends: ['Face middle', 'Face edge'] },
   { id: 'rings', name: 'Rings', ends: ['Middle', 'Outside'] },
   // (freeform: its colours at points on the cube, each with a strength - see freeform.js)
   { id: 'free', name: 'Free', ends: ['', ''] },
@@ -153,8 +153,12 @@ export function gradT(shape, x, y, z, size) {
   const h = size / 2;
   if (shape === 'across') return x / size + 0.5;
   if (shape === 'corner') return (x + y + z) / (3 * size) + 0.5;
-  if (shape === 'core') return Math.hypot(x, y, z) / h;
-  if (shape === 'shell') return Math.max(Math.abs(x), Math.abs(y), Math.abs(z)) / h;
+  if (shape === 'core' || shape === 'shell') {
+    // (round the middle of the face it's nearest, in its two ways across it)
+    const ax = Math.abs(x), ay = Math.abs(y), az = Math.abs(z);
+    const [u, v] = ax >= ay && ax >= az ? [y, z] : ay >= az ? [x, z] : [x, y];
+    return (shape === 'core' ? Math.hypot(u, v) : Math.max(Math.abs(u), Math.abs(v))) / h;
+  }
   if (shape === 'rings') return Math.hypot(x, z) / h;
   return y / size + 0.5;
 }

@@ -44,9 +44,12 @@ test('shapes: where a rest point sits along each', () => {
   assert.equal(gradT('across', 0.5, 0, 0, s), 1);
   assert.equal(gradT('corner', -0.5, -0.5, -0.5, s), 0);
   assert.equal(gradT('corner', 0.5, 0.5, 0.5, s), 1);
-  assert.equal(gradT('core', 0, 0, 0, s), 0);
-  assert.equal(gradT('core', 0, 0, 0.5, s), 1); // (the middle of a face)
-  assert.equal(gradT('shell', 0.25, -0.5, 0.1, s), 1); // (anywhere on the skin)
+  // (radial, concentric: round the middle of each face)
+  assert.equal(gradT('core', 0, 0, 0.5, s), 0);
+  assert.equal(gradT('core', 0.3, 0.4, 0.5, s), 1);
+  assert.equal(gradT('core', 0.5, 0, 0.25, s), 0.5);
+  assert.equal(gradT('shell', 0.25, -0.5, 0.1, s), 0.5);
+  assert.equal(gradT('shell', 0.5, 0.5, 0.1, s), 1);
   assert.equal(gradT('rings', 0, 0.4, 0.25, s), 0.5); // (up the axis: no matter)
 });
 

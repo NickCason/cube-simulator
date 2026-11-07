@@ -123,9 +123,12 @@ export class UI {
         <div class="sec"><span class="lbl">Flavor</span><div class="chips"></div></div>
         <div class="sec layers-sec" hidden>
           <div class="lbl-row">
-            <span class="lbl">Layers <em>drag, tap or add stops</em></span>
-            <div class="stepper">
-              <button class="minus" aria-label="Fewer layers">&minus;</button><span class="n"></span><button class="plus" aria-label="More layers">+</button>
+            <span class="lbl">Layers <em>drag or tap stops</em></span>
+            <div class="lbl-acts">
+              <button class="gdie" title="Roll a new one" aria-label="Roll a new gradient"><svg viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="3" y="3" width="14" height="14" rx="3.2"/><circle cx="7" cy="7" r="1.25" fill="currentColor" stroke="none"/><circle cx="13" cy="7" r="1.25" fill="currentColor" stroke="none"/><circle cx="10" cy="10" r="1.25" fill="currentColor" stroke="none"/><circle cx="7" cy="13" r="1.25" fill="currentColor" stroke="none"/><circle cx="13" cy="13" r="1.25" fill="currentColor" stroke="none"/></svg></button>
+              <div class="stepper">
+                <button class="minus" aria-label="Fewer layers">&minus;</button><span class="n"></span><button class="plus" aria-label="More layers">+</button>
+              </div>
             </div>
           </div>
           <div class="seg gshape" role="group" aria-label="The gradient's shape"></div>
@@ -205,6 +208,15 @@ export class UI {
     this.repeatWord = this.layersSec.querySelector('.repeat .word');
     this.biasEl = this.layersSec.querySelector('.bias input');
     this.biasWord = this.layersSec.querySelector('.bias .word');
+    const die = this.layersSec.querySelector('.gdie');
+    die.addEventListener('click', () => {
+      app.audio.ui();
+      app.audio.pop(0.35);
+      die.classList.remove('roll');
+      void die.offsetWidth;
+      die.classList.add('roll');
+      app.rollGradient();
+    });
     this.minusEl.addEventListener('click', () => {
       app.audio.ui();
       app.setLayerCount(app.style.layers.colors.length - 1);
@@ -608,7 +620,7 @@ export class UI {
     this.layersSec.classList.toggle('is-free', free);
     this.layersSec.querySelector('.free').hidden = !free;
     for (const sel of ['.grad', '.grad-ends', '.row.repeat', '.row.bias']) this.layersSec.querySelector(sel).hidden = free;
-    this.layersHint.textContent = free ? 'tap the cube to add a colour' : 'drag, tap or add stops';
+    this.layersHint.textContent = free ? 'tap a face to add' : 'drag or tap stops';
     if (free) this.free.render(L);
     if (document.activeElement !== this.blendEl) this.blendEl.value = L.blur;
     this.blendEl.style.setProperty('--p', `${L.blur * 100}%`);
