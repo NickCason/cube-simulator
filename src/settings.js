@@ -34,7 +34,7 @@ export const SETTINGS = [
     words: ['Matte', 'Satin', 'Glossy', 'Wet', 'Glass'],
   },
   { id: 'refraction', group: 'Look', label: 'Refraction', key: 'ior', mat: true, ...linMap(1.0, 1.75), words: ['None', 'Water', 'Gel', 'Glass', 'Diamond'] },
-  { id: 'bubbles', group: 'Bubbles', label: 'Count', key: 'bubbles', def: 34, ...linMap(0, 240), int: true, word: (v) => String(Math.round(v)) },
+  { id: 'bubbles', group: 'Bubbles', label: 'Count', key: 'bubbles', def: 34, ...linMap(0, 240), int: true, noNum: true, word: (v) => String(Math.round(v)) },
   { id: 'bubbleSize', group: 'Bubbles', label: 'Size', key: 'bubbleSize', def: 1, ...logMap(0.3, 3.5), words: ['Fizz', 'Tiny', 'Medium', 'Big', 'Huge'] },
   { id: 'glitterAmount', group: 'Glitter', label: 'Amount', key: 'glitterAmount', def: 2600, ...logMap(300, 9000), word: (v) => (v < 900 ? 'Sprinkle' : v < 2200 ? 'Dusting' : v < 4500 ? 'Sparkly' : v < 7000 ? 'Loaded' : 'Galaxy') },
   { id: 'glitterSize', group: 'Glitter', label: 'Size', key: 'glitterSize', def: 1, ...logMap(0.4, 2.8), words: ['Dust', 'Fine', 'Classic', 'Chunky', 'Sequins'] },
@@ -70,7 +70,7 @@ export const SETTINGS = [
   { id: 'gunPower', group: 'Tools', lab: true, label: 'Gun power', key: 'gunPower', def: 1, ...logMap(0.4, 2.5), words: ['Pea', 'Light', 'Normal', 'Heavy', 'Cannon'] },
   { id: 'malletForce', group: 'Tools', lab: true, label: 'Mallet force', key: 'malletForce', def: 1, ...logMap(0.4, 2), words: ['Tap', 'Light', 'Normal', 'Hard', 'Sledge'] },
   { id: 'torchHeat', group: 'Tools', lab: true, label: 'Torch heat', key: 'torchHeat', def: 1, ...logMap(0.3, 3.3), words: ['Warm', 'Hot', 'Normal', 'Fierce', 'Inferno'] },
-  { id: 'boilOff', group: 'Tools', lab: true, label: 'Boil-off', key: 'boilOff', def: 0.5, ...linMap(0, 0.9), word: (v) => `${Math.round(v * 100)}%` },
+  { id: 'boilOff', group: 'Tools', lab: true, label: 'Boil-off', key: 'boilOff', def: 0.5, ...linMap(0, 0.9), noNum: true, word: (v) => `${Math.round(v * 100)}%` },
   { id: 'cryoCold', group: 'Tools', lab: true, label: 'Cryo cold', key: 'cryoCold', def: 1, ...logMap(0.3, 3.3), words: ['Chill', 'Cold', 'Normal', 'Frigid', 'Absolute'] },
   { id: 'bombPower', group: 'Tools', lab: true, label: 'Bomb power', key: 'bombPower', def: 1, ...logMap(0.25, 4), words: ['Pop', 'Bang', 'Normal', 'Boom', 'Nuke'] },
   { id: 'syringePump', group: 'Tools', lab: true, label: 'Syringe pump', key: 'syringePump', def: 1, ...logMap(0.3, 3.3), words: ['Trickle', 'Slow', 'Normal', 'Fast', 'Firehose'] },
@@ -83,6 +83,12 @@ export function settingWord(s, value) {
   if (s.word) return s.word(value);
   const t = Math.min(1, Math.max(0, s.from(value)));
   return s.words[Math.min(s.words.length - 1, Math.floor(t * s.words.length))];
+}
+
+// Where the slider sits, 0–100, shown beside the word (null where the word is already a number).
+export function settingNum(s, value) {
+  if (s.noNum) return null;
+  return Math.round(100 * Math.min(1, Math.max(0, s.from(value))));
 }
 
 // Effective value of every setting: user overrides, else material, else default.

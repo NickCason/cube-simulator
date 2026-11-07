@@ -429,7 +429,7 @@ body {
 
 .palette .row {
   display: grid;
-  grid-template-columns: 64px 1fr 64px;
+  grid-template-columns: 64px 1fr 112px;
   align-items: center;
   gap: 10px;
   height: 28px;
@@ -474,11 +474,32 @@ body {
 }
 
 .palette .row .word {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 5px;
   font-size: 12px;
   font-weight: 500;
   color: rgba(28, 28, 31, 0.55);
   text-align: right;
   white-space: nowrap;
+}
+
+/* the number beside a slider's word: where the slider sits, 0–100 */
+.palette .row .word .num {
+  flex: none;
+  min-width: 28px;
+  padding: 2px 4px;
+  box-sizing: border-box;
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.055);
+  font-style: normal;
+  font-size: 11px;
+  font-weight: 640;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.25;
+  text-align: center;
+  color: rgba(28, 28, 31, 0.66);
 }
 
 .palette .chips {
@@ -656,7 +677,7 @@ body {
 }
 
 .tune.palette {
-  width: 330px;
+  width: 360px;
   padding: 6px 0 10px;
   gap: 0;
 }
@@ -687,7 +708,7 @@ body {
 
 .tune .row {
   display: grid;
-  grid-template-columns: 92px 1fr 74px;
+  grid-template-columns: 92px 1fr 104px;
   align-items: center;
   gap: 10px;
   height: 30px;
@@ -996,7 +1017,7 @@ body {
     padding: 4px 12px 2px;
   }
   .tune .row {
-    grid-template-columns: 84px 1fr 66px;
+    grid-template-columns: 84px 1fr 98px;
     gap: 8px;
     height: 30px;
     font-size: 12.5px;
@@ -1165,6 +1186,11 @@ html.dark .layers-sec .lbl em {
 html.dark .palette .row,
 html.dark .tune .row {
   color: rgba(241, 239, 244, 0.86);
+}
+
+html.dark .palette .row .word .num {
+  background: rgba(255, 255, 255, 0.075);
+  color: rgba(241, 239, 244, 0.68);
 }
 
 html.dark .palette .stepper button,

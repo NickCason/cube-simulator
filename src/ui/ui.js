@@ -1,5 +1,5 @@
 import { FLAVORS, TEXTURES, EDGES, GLITTERS, LAYER_PRESETS, MIN_LAYERS, MAX_LAYERS, MAX_REPEAT, flavorSwatchCSS, flavorMainHex, materialSwatchCSS } from '../styles.js';
-import { SETTINGS, settingWord } from '../settings.js';
+import { SETTINGS, settingWord, settingNum } from '../settings.js';
 
 const svg = (inner) =>
   `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${inner}</svg>`;
@@ -59,6 +59,13 @@ export const TOOL_DEFS = [
 ];
 
 const blendWord = (b) => (b < 0.12 ? 'Crisp' : b < 0.38 ? 'Soft' : b < 0.7 ? 'Blended' : 'Gradient');
+const biasWord = (b) => (b < -0.6 ? 'Bottom' : b < -0.2 ? 'Low' : b <= 0.2 ? 'Even' : b <= 0.6 ? 'High' : 'Top');
+const repeatWord = (r) => ['Once', 'Twice', 'Thrice', 'Banded', 'Stripy', 'Striped'][r - 1] || 'Striped';
+// A slider's readout: its word, and beside it a number for where the slider sits.
+const readout = (el, word, num) => {
+  el.innerHTML = num == null ? word : `${word}<i class="num">${num}</i>`;
+};
+const signed = (x) => (x > 0 ? `+${x}` : x < 0 ? `\u2212${-x}` : '0');
 
 export class UI {
   constructor(app, root) {
@@ -172,7 +179,7 @@ export class UI {
       app.setLayerCount(app.style.layers.colors.length + 1);
     });
     this.blendEl.addEventListener('input', () => {
-      this.blendWord.textContent = blendWord(+this.blendEl.value);
+      readout(this.blendWord, blendWord(+this.blendEl.value), Math.round(this.blendEl.value * 100));
       this.blendEl.style.setProperty('--p', `${this.blendEl.value * 100}%`);
       app.setLayerBlur(+this.blendEl.value);
     });
@@ -261,7 +268,7 @@ export class UI {
       };
       input.addEventListener('input', () => {
         const v = valueOf();
-        word.textContent = settingWord(st, v);
+        readout(word, settingWord(st, v), settingNum(st, v));
         input.style.setProperty('--p', `${input.value * 100}%`);
         app.setSetting(st.key, v, !st.release);
       });
@@ -429,7 +436,7 @@ export class UI {
       const t = Math.min(1, Math.max(0, def.from(v)));
       if (document.activeElement !== input) input.value = t;
       input.style.setProperty('--p', `${t * 100}%`);
-      word.textContent = settingWord(def, v);
+      readout(word, settingWord(def, v), settingNum(def, v));
     }
     this.tuneEl.querySelector('.reset').textContent = `Reset to ${tex.name}`;
   }
@@ -498,14 +505,14 @@ export class UI {
     this.stackEl.style.background = flavorSwatchCSS({ layers: cols, blur: L.blur });
     if (document.activeElement !== this.blendEl) this.blendEl.value = L.blur;
     this.blendEl.style.setProperty('--p', `${L.blur * 100}%`);
-    this.blendWord.textContent = blendWord(L.blur);
+    readout(this.blendWord, blendWord(L.blur), Math.round(L.blur * 100));
     const rep = L.repeat || 1, bias = L.bias || 0;
     if (document.activeElement !== this.repeatEl) this.repeatEl.value = rep;
     this.repeatEl.style.setProperty('--p', `${((rep - 1) / (MAX_REPEAT - 1)) * 100}%`);
-    this.repeatWord.textContent = rep === 1 ? 'Once' : `${rep}×`;
+    readout(this.repeatWord, repeatWord(rep), `${rep}×`);
     if (document.activeElement !== this.biasEl) this.biasEl.value = bias;
     this.biasEl.style.setProperty('--p', `${((bias + 1) / 2) * 100}%`);
-    this.biasWord.textContent = bias < -0.6 ? 'Bottom-heavy' : bias < -0.2 ? 'Low' : bias <= 0.2 ? 'Even' : bias <= 0.6 ? 'High' : 'Top-heavy';
+    readout(this.biasWord, biasWord(bias), signed(Math.round(bias * 100)));
     const key = cols.join(',').toLowerCase();
     for (const b of this.layersSec.querySelectorAll('.preset')) {
       const p = LAYER_PRESETS.find((q) => q.id === b.dataset.preset);
