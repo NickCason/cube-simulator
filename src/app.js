@@ -1204,10 +1204,10 @@ export class App {
   }
 
   // The jelly's own voice: the three pieces jiggling most (by how fast,
-  // and how big they are) each get a voice, pitched at the piece's own
-  // wobble - its natural frequency, set by its size and firmness, times 20
-  // to bring 3-30 Hz into hearing - and as loud as it jiggles this frame, so
-  // it swells with a smack and dies away as the piece settles. Frozen: silent.
+  // and how big they are) each blub once a swing - at the piece's own
+  // wobble, its natural frequency set by its size and firmness - as loud as
+  // it jiggles, so a smack sets off a run of blubs that dies away as the
+  // piece settles (see Audio.wobble). Frozen: silent.
   _wobbleSounds() {
     const a = this.audio;
     if (!a.ctx) return;
@@ -1224,8 +1224,8 @@ export class App {
       const L = Math.cbrt(Math.max(pc.volume, 1e-5));
       const fn = (6.7 * Math.sqrt(st.mu / 170 / sb.p.density)) / L;
       // (a poke jiggles it at ~0.07 m/s, a smack at ~0.3)
-      const amp = 0.25 * Math.min(1, (pc.vib - 0.015) / 0.25) ** 1.1 * Math.min(1.4, 0.5 + L);
-      out.push({ id: pc.id, f: Math.min(900, Math.max(55, fn * 20)), amp, firm: mat.firm, wet: mat.wet, pan: this._pan(pc.com[0], pc.com[1], pc.com[2]) });
+      const amp = 0.45 * Math.min(1, (pc.vib - 0.015) / 0.25) ** 1.1 * Math.min(1.4, 0.5 + L);
+      out.push({ id: pc.id, f: fn, amp, size: L, firm: mat.firm, wet: mat.wet, pan: this._pan(pc.com[0], pc.com[1], pc.com[2]) });
     }
     a.wobble(out);
   }

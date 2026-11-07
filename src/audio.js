@@ -13,7 +13,7 @@ export class AudioEngine {
     this.volume = 0.75; // master level (Settings > Sound)
     this.impactLevel = 0.55; // how loud bumps and landings are
     this.wobbleLevel = 0.5; // how loud the jelly's own hum is (see wobble)
-    this.wob = []; // its voices
+    this.wob = new Map(); // per jiggling piece: where it is in its swing (see wobble)
     this.last = {};
     this.loops = {};
     this.buckets = {};
@@ -140,65 +140,42 @@ export class AudioEngine {
     return o;
   }
 
-  // The jelly's own voice (see App._wobbleSounds): up to three held voices,
-  // each following one piece from frame to frame - a soft triangle tone at
-  // its wobble pitch through a low-pass (brighter the firmer), and a wet
-  // band of noise above it - their levels set each frame from how hard the
-  // piece jiggles. list: [{ id, f, amp, firm, wet, pan }].
+  // The jelly's own voice (see App._wobbleSounds): while a piece jiggles, a
+  // soft wet "blub" each time it swings - at its wobble rate, a little loose
+  // (never more than 5 a second: faster reads as a motor), as loud as it
+  // jiggles. A plop that drops in pitch (lower for a bigger piece, tighter
+  // and higher for firmer stuff) over a rounder gloop under it, and a
+  // squelch of noise whose band falls with it. (A held tone that followed
+  // the jiggle read as a buzz.) list: [{ id, f (wobbles a second), amp,
+  // size (m), firm, wet, pan }].
   wobble(list) {
     if (!this.ctx) return;
-    const now = this.ctx.currentTime, k = this.muted ? 0 : this.wobbleLevel;
-    for (const v of this.wob) v.used = false;
+    const now = this.ctx.currentTime;
+    const dt = Math.min(0.1, Math.max(0, now - (this._wobT ?? now)));
+    this._wobT = now;
+    const S = this.wob;
+    for (const st of S.values()) st.seen = false;
     for (const e of list) {
-      let v = this.wob.find((w) => w.id === e.id);
-      if (!v) v = this.wob.find((w) => !w.used && w.level < 0.003);
-      if (!v && this.wob.length < 3) v = this._wobVoice();
-      if (!v || v.used) continue;
-      v.id = e.id;
-      v.used = true;
-      v.level = e.amp;
-      v.osc.frequency.setTargetAtTime(e.f, now, 0.03);
-      v.filt.frequency.setTargetAtTime(Math.min(8000, e.f * (2 + 3 * e.firm)), now, 0.05);
-      v.nf.frequency.setTargetAtTime(Math.min(8000, e.f * 2.6), now, 0.05);
-      v.g.gain.setTargetAtTime(e.amp * k, now, 0.015);
-      v.ng.gain.setTargetAtTime(e.amp * e.wet * 0.45 * k, now, 0.015);
-      if (v.pan) v.pan.pan.setTargetAtTime(Math.max(-1, Math.min(1, e.pan)), now, 0.05);
+      let st = S.get(e.id);
+      if (!st) S.set(e.id, (st = { ph: 0.6 + Math.random() * 0.4, seen: true }));
+      st.seen = true;
+      st.ph += dt * Math.min(5, e.f);
+      if (st.ph < 1) continue;
+      st.ph -= 1 + (Math.random() - 0.5) * 0.3;
+      if (!this.muted && this.wobbleLevel > 0.01) this._blub(e.amp * this.wobbleLevel, e.size, e.firm, e.wet, e.pan);
     }
-    for (const v of this.wob) {
-      if (v.used) continue;
-      v.level *= 0.6;
-      v.g.gain.setTargetAtTime(0, now, 0.05);
-      v.ng.gain.setTargetAtTime(0, now, 0.05);
-    }
+    for (const [id, st] of S) if (!st.seen) S.delete(id);
   }
 
-  _wobVoice() {
-    const ctx = this.ctx;
-    const pan = ctx.createStereoPanner ? ctx.createStereoPanner() : null;
-    const dest = pan || this.bus;
-    if (pan) pan.connect(this.bus);
-    const osc = ctx.createOscillator();
-    osc.type = 'triangle';
-    const filt = ctx.createBiquadFilter();
-    filt.type = 'lowpass';
-    filt.Q.value = 0.8;
-    const g = ctx.createGain();
-    g.gain.value = 0;
-    osc.connect(filt).connect(g).connect(dest);
-    const ns = ctx.createBufferSource();
-    ns.buffer = this.noiseBuf;
-    ns.loop = true;
-    const nf = ctx.createBiquadFilter();
-    nf.type = 'bandpass';
-    nf.Q.value = 2.2;
-    const ng = ctx.createGain();
-    ng.gain.value = 0;
-    ns.connect(nf).connect(ng).connect(dest);
-    osc.start();
-    ns.start();
-    const v = { osc, filt, g, ns, nf, ng, pan, id: -1, used: false, level: 0 };
-    this.wob.push(v);
-    return v;
+  _blub(amp, size, firm, wet, pan, at = this.ctx.currentTime) {
+    if (amp < 0.004) return;
+    const t = at + 0.003, out = this._panned(pan);
+    const pitch = Math.pow(1 / Math.min(1.6, Math.max(0.08, size)), 0.5) * rnd(0.92, 1.08);
+    const f0 = (95 + 85 * firm) * pitch, dur = (0.13 - 0.05 * firm) * Math.min(1.3, 0.7 + 0.5 * size);
+    this._tone(t, 'sine', f0 * 1.9, f0, dur, 0.55 * amp, 0.006, out);
+    this._tone(t, 'sine', f0 * 1.3, f0 * 0.68, dur * 1.2, 0.3 * amp, 0.008, out);
+    const fc = (900 + 700 * (1 - wet)) * Math.sqrt(pitch);
+    this._noise(t, dur * 0.7, 'bandpass', fc * 1.6, fc * 0.6, 3.5, 0.22 * amp * wet, 0.004, out);
   }
 
   // wet squelch: resonant noise grains + low bloop
