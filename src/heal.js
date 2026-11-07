@@ -510,6 +510,9 @@ export class Healer {
   // slot -> { cx, cy (its bottom), cz, yaw, cW (centre, as it re-forms), qF }
   _homes(layout) {
     const app = this.app, sb = app.sb, size = sb.p.size;
+    // (a stack re-forms all but touching: let down from LIFT_FUSE, the cubes
+    // dropped onto each other and threw firm and bouncy ones off the top)
+    this.lift = layout ? 0.012 : LIFT_FUSE;
     // (each cube its own size)
     const sz = (slot) => {
       const cb = app.cubes.find((c) => c.slot === slot);
@@ -574,7 +577,7 @@ export class Healer {
       for (let i = 0; i < H.length; i++) for (let j = i + 1; j < H.length; j++) if (Math.hypot(H[i].cx - H[j].cx, H[i].cz - H[j].cz) < ((H[i].s + H[j].s) / 2) * 1.02) return this._homes(app.stackLayout());
     }
     for (const [slot, h] of homes) {
-      h.cW = new THREE.Vector3(h.cx, h.cy + sz(slot) / 2 + LIFT_FUSE, h.cz);
+      h.cW = new THREE.Vector3(h.cx, h.cy + sz(slot) / 2 + this.lift, h.cz);
       h.qF = new THREE.Quaternion().setFromAxisAngle(UP, h.yaw);
     }
     return homes;
@@ -847,8 +850,9 @@ export class Healer {
     sb.grabs.length = 0;
     for (const [slot, h] of this.homes) {
       const cb = app.cubes.find((c) => c.slot === slot);
-      if (cb) sb.addCube(slot, h.cx, h.cy + LIFT_FUSE, h.cz, h.yaw, app.bevelOf(cb), app.sizeOf(cb), app.resOf(cb));
-      else sb.addCube(slot, h.cx, h.cy + LIFT_FUSE, h.cz, h.yaw, sb.cBevel[slot], sb.cSize[slot], sb.cRes[slot]);
+      const lift = this.lift ?? LIFT_FUSE;
+      if (cb) sb.addCube(slot, h.cx, h.cy + lift, h.cz, h.yaw, app.bevelOf(cb), app.sizeOf(cb), app.resOf(cb));
+      else sb.addCube(slot, h.cx, h.cy + lift, h.cz, h.yaw, sb.cBevel[slot], sb.cSize[slot], sb.cRes[slot]);
     }
     sb.rebuild();
     app._syncSel();

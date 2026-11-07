@@ -1066,7 +1066,10 @@ export class App {
       this.sb.p.substeps = nS;
       const p0 = performance.now();
       if (!this.intro.done) this._introStep(dt);
-      else if (sdt > 0) this.sb.step(sdt);
+      else if (sdt > 0) {
+        this.sb.step(sdt);
+        this._stackHold(sdt);
+      }
       const pm = performance.now() - p0;
       // the rest of the warm-up: a small slice a frame
       if (this.intro.done && this.intro.job) this._warmSlice(2);
@@ -1215,6 +1218,89 @@ export class App {
     this.ui?.cubeSelected?.(slot);
   }
 
+  // Towers that stand. Soft jelly stacked three high rocks over like an
+  // upturned pendulum - its contacts give too much under this gravity, and
+  // the smallest lean grows (a tower built dead straight fell in 2.5 s). So a
+  // cube resting calm in a stack is lightly held where it settled: a soft
+  // spring and a little damping on its middle - the whole cube, never its
+  // wobble. A real push lets go (moving fast, grabbed, or shoved a few cm),
+  // and down it comes.
+  _stackHold(dt) {
+    const sb = this.sb;
+    if (this.cubes.length < 2 || this.healer.active || this.swapper.active || this.cubiplication.active) {
+      this._holds = null;
+      return;
+    }
+    const holds = this._holds || (this._holds = new Map());
+    // each cube in one piece: that piece
+    const main = [];
+    for (const cb of this.cubes) {
+      let only = null, n = 0;
+      for (const pc of sb.pieces) if (pc.cube === cb.slot) (only = pc), n++;
+      if (n === 1 && only.bbox[3] > only.bbox[0]) main.push({ slot: cb.slot, pc: only, s: sb.cSize[cb.slot], stacked: false });
+    }
+    // which rest on or carry another: overlapping from above, top to bottom within a touch
+    for (let a = 0; a < main.length; a++)
+      for (let b = 0; b < main.length; b++) {
+        if (a === b) continue;
+        const A = main[a].pc.bbox, B = main[b].pc.bbox, s = Math.min(main[a].s, main[b].s);
+        const ox = Math.min(A[3], B[3]) - Math.max(A[0], B[0]), oz = Math.min(A[5], B[5]) - Math.max(A[2], B[2]);
+        if (ox > 0.3 * s && oz > 0.3 * s && Math.abs(A[1] - B[4]) < 0.08 * s) main[a].stacked = main[b].stacked = true;
+      }
+    const seen = new Set(), x = sb.x, X = sb.X, m = sb.m;
+    for (const M of main) {
+      if (!M.stacked) continue;
+      seen.add(M.slot);
+      const pc = M.pc, v = pc.vel, speed = Math.hypot(v[0], v[1], v[2]);
+      if (pc.asleep) continue;
+      if (speed > 1.0 || sb.grabs.some((g) => g.piece === pc.id)) {
+        holds.delete(M.slot);
+        continue;
+      }
+      // which way its own up points now (where its rest heights went)
+      let W = 0, cy = 0;
+      for (const i of pc.verts) {
+        W += m[i];
+        cy += X[i * 3 + 1] * m[i];
+      }
+      cy /= W || 1;
+      let ux = 0, uy = 0, uz = 0;
+      for (const i of pc.verts) {
+        const w = m[i] * (X[i * 3 + 1] - cy);
+        ux += (x[i * 3] - pc.com[0]) * w;
+        uy += (x[i * 3 + 1] - pc.com[1]) * w;
+        uz += (x[i * 3 + 2] - pc.com[2]) * w;
+      }
+      const ul = Math.hypot(ux, uy, uz) || 1;
+      ux /= ul;
+      uy /= ul;
+      uz /= ul;
+      let h = holds.get(M.slot);
+      if (!h) {
+        if (speed < 0.3) holds.set(M.slot, { x: pc.com[0], z: pc.com[2], ux, uy, uz });
+        continue;
+      }
+      const dx = pc.com[0] - h.x, dz = pc.com[2] - h.z;
+      // (the tilt back to where it settled: about up x settled-up)
+      const ex = uy * h.uz - uz * h.uy, ey = uz * h.ux - ux * h.uz, ez = ux * h.uy - uy * h.ux;
+      if (dx * dx + dz * dz > (0.14 * M.s) ** 2 || ex * ex + ey * ey + ez * ez > 0.2 ** 2) {
+        holds.delete(M.slot); // (shoved past it: over it goes)
+        continue;
+      }
+      const ax = (-60 * dx - 12 * v[0]) * dt, az = (-60 * dz - 12 * v[2]) * dt;
+      // (a turn back upright, its spin about up left alone)
+      const w = pc.omega, wu = w[0] * ux + w[1] * uy + w[2] * uz;
+      const tx = (60 * ex - 12 * (w[0] - wu * ux)) * dt, ty = (60 * ey - 12 * (w[1] - wu * uy)) * dt, tz = (60 * ez - 12 * (w[2] - wu * uz)) * dt;
+      for (const i of pc.verts) {
+        const rx = x[i * 3] - pc.com[0], ry = x[i * 3 + 1] - pc.com[1], rz = x[i * 3 + 2] - pc.com[2];
+        sb.v[i * 3] += ax + (ty * rz - tz * ry);
+        sb.v[i * 3 + 1] += tz * rx - tx * rz;
+        sb.v[i * 3 + 2] += az + (tx * ry - ty * rx);
+      }
+    }
+    for (const k of [...holds.keys()]) if (!seen.has(k)) holds.delete(k);
+  }
+
   // The ring on the floor round the selected cube (several of them): round
   // its biggest piece, turned as that is; it eases in and out.
   _selRing(dt) {
@@ -1339,7 +1425,7 @@ export class App {
   // Where each cube goes in a stack, in stackOrder from the bottom: a tower
   // of up to four, then a 2x2 base with the rest on top (eight: one big cube).
   stackLayout(order = this.stackOrder) {
-    const g = 0.03, n = order.length, out = [];
+    const g = 0.008, n = order.length, out = [];
     // (each its own size: a level as tall as its biggest)
     const sz = (slot) => {
       const cb = this.cubes.find((c) => c.slot === slot);
