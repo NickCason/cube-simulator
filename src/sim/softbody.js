@@ -739,6 +739,9 @@ export class SoftBody {
     for (let t = 0; t < nT; t++) {
       const k = this.vPiece[T[t * 4]];
       this.tPiece[t] = k;
+      // (a tet squeezed flat has no volume, so its corners can have no mass
+      // and be dead - it belongs to no piece; it used to throw here)
+      if (k < 0) continue;
       pieceTets[k].push(t);
     }
     const old = this.pieces || [];
