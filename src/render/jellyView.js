@@ -286,6 +286,10 @@ export class JellyView {
     this.causticMat.uniforms.tEntry.value = this.lightView[0].rt.texture;
     this.causticMat.uniforms.tNormal.value = this.lightView[1].rt.texture;
     this.causticMat.uniforms.tExit.value = this.lightView[2].rt.texture;
+    // (and the jelly, for one cube's shadow on another - see cubeShadowAt)
+    this.frontMat.uniforms.tLightEntry.value = this.lightView[0].rt.texture;
+    this.frontMat.uniforms.tLightExit.value = this.lightView[2].rt.texture;
+    this.multiCube = false; // (set by the app: several cubes)
     this.causticMat.uniforms.uGridN.value = gridN;
     this.lightCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 40);
     this.lightOrigin = new THREE.Vector3();
@@ -916,6 +920,13 @@ export class JellyView {
         r.render(this.scene, this.lightCam);
       }
       this.scene.overrideMaterial = null;
+    }
+    // (several cubes: the jelly looks up the light's view for their shadows on each other)
+    const F = this.frontMat.uniforms;
+    F.uCubeShadow.value = lit && this.multiCube ? 1 : 0;
+    if (lit) {
+      F.uLightVP.value.multiplyMatrices(this.lightCam.projectionMatrix, this.lightCam.matrixWorldInverse);
+      F.uLightOrigin.value.copy(this.lightOrigin);
     }
     r.setRenderTarget(this.rtCaustic);
     r.clear(true, false, false);

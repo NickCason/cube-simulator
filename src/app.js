@@ -380,6 +380,7 @@ export class App {
       });
       this.jelly.setCubeLook(cb.slot, resolveFlavor(cb.style), { ...ct, ...cs }, sb.p.size);
     }
+    this.jelly.multiCube = this.cubes.length > 1; // (their shadows on each other)
     // (any layered one: the floor takes its shadow's colour band by band)
     this.jelly.fxUniforms.tintLocal.value = this.cubes.some((cb) => resolveFlavor(cb.style).layers) ? 1 : 0;
     sb.p.mu = App.safeMu(st.mu, st.weight, sb.p.size, st.lambda, st.gravity);
