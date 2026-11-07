@@ -328,10 +328,17 @@ export class NailSystem {
             this.app.audio?.clink(Math.min(1, -vy / h / 6), p);
           }
         }
-        const r = Math.hypot(p.x, p.z);
-        if (r > R) {
-          p.x *= R / r;
-          p.z *= R / r;
+        if (this.app.sb.p.box) {
+          // (the glass room: square, at the glass)
+          const G = R - 0.22;
+          if (Math.abs(p.x) > G) p.x = Math.sign(p.x) * G;
+          if (Math.abs(p.z) > G) p.z = Math.sign(p.z) * G;
+        } else {
+          const r = Math.hypot(p.x, p.z);
+          if (r > R) {
+            p.x *= R / r;
+            p.z *= R / r;
+          }
         }
       }
     }

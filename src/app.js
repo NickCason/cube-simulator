@@ -20,6 +20,7 @@ import { Droplets } from './world/droplets.js';
 import { Fluid } from './world/fluid.js';
 import { Strands } from './world/strands.js';
 import { Bubbles } from './world/bubbles.js';
+import { GlassRoom } from './world/glassroom.js';
 import { Glitter, GLITTER_MODES } from './world/glitter.js';
 import { bevelPoint, unbevelPoint } from './sim/mesh.js';
 import { RUBIK_COLORS, rubikIndex, rubikCellAt } from './styles.js';
@@ -166,6 +167,13 @@ export class App {
     this.anchorProviders = [() => this.nails.anchors()];
     this.bubbles = new Bubbles(this);
     this.glitter = new Glitter(this);
+    // the glass room (Settings > World), as it was left
+    this.room = new GlassRoom(this);
+    try {
+      if (localStorage.getItem('cube-sim-room') === '1') this.room.setOn(true);
+    } catch (e) {
+      /* private mode */
+    }
     this.onNailHit = (hp) => {
       this.audio.nailHit(1);
       this.markDamaged();
@@ -1039,6 +1047,7 @@ export class App {
       this.tilt.update(dt);
       this._edgeMorphTick(dt);
       this._selRing(dt);
+      this.room.update(dt);
       const nS = Math.max(4, Math.min(24, Math.round(this.substepRate * sdt)));
       this.sb.p.substeps = nS;
       const p0 = performance.now();
@@ -1295,6 +1304,17 @@ export class App {
       }
     });
     return out;
+  }
+
+  // The glass room on or off (a see-through box instead of the open floor).
+  setGlassRoom(on) {
+    this.room.setOn(on);
+    this.sb.wakeAll();
+    try {
+      localStorage.setItem('cube-sim-room', on ? '1' : '0');
+    } catch (e) {
+      /* private mode */
+    }
   }
 
   // Re-cube just this one: it re-forms where it is, clear of the others,
@@ -1715,6 +1735,8 @@ export class App {
       if (!pc) continue;
       const size = Math.cbrt(e.mass / Math.max(0.05, this.sb.p.density));
       this.audio.impact(e.dv, size, this._impactMaterial(pc), this._pan(e.x, e.y, e.z));
+      // (against the glass room's glass: a knock on the pane too)
+      if (e.kind === 'wall' && this.room.on) this.audio.glassKnock(Math.min(1, e.dv / 6) * Math.min(1, size), this._pan(e.x, e.y, e.z));
       played++;
     }
   }

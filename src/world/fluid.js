@@ -602,11 +602,19 @@ export class Fluid {
     for (let i = 0; i < this.n; i++) {
       const o = i * 3;
       if (q[o + 1] < R_P) q[o + 1] = R_P;
-      const r2 = q[o] * q[o] + q[o + 2] * q[o + 2];
-      if (r2 > R * R) {
-        const r = Math.sqrt(r2);
-        q[o] *= R / r;
-        q[o + 2] *= R / r;
+      if (sb.p.box) {
+        // (the glass room: square)
+        if (q[o] > R) q[o] = R;
+        else if (q[o] < -R) q[o] = -R;
+        if (q[o + 2] > R) q[o + 2] = R;
+        else if (q[o + 2] < -R) q[o + 2] = -R;
+      } else {
+        const r2 = q[o] * q[o] + q[o + 2] * q[o + 2];
+        if (r2 > R * R) {
+          const r = Math.sqrt(r2);
+          q[o] *= R / r;
+          q[o + 2] *= R / r;
+        }
       }
       if (!this.cellsN) continue;
       const hb = (Math.imul(Math.floor(q[o] * 10), 92837111) ^ Math.imul(Math.floor(q[o + 1] * 10), 689287499) ^ Math.imul(Math.floor(q[o + 2] * 10), 283923481)) & CM;

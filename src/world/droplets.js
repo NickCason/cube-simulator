@@ -235,12 +235,25 @@ export class Droplets {
           d.spin.multiplyScalar(0.6);
         }
       }
-      const r = Math.hypot(d.p.x, d.p.z);
-      if (r > R) {
-        d.p.x *= R / r;
-        d.p.z *= R / r;
-        d.v.x *= -0.3;
-        d.v.z *= -0.3;
+      if (this.app.sb.p.box) {
+        // (the glass room's square walls: a knock off the glass)
+        const h = R - d.r;
+        if (Math.abs(d.p.x) > h) {
+          d.p.x = Math.sign(d.p.x) * h;
+          d.v.x *= -0.35;
+        }
+        if (Math.abs(d.p.z) > h) {
+          d.p.z = Math.sign(d.p.z) * h;
+          d.v.z *= -0.35;
+        }
+      } else {
+        const r = Math.hypot(d.p.x, d.p.z);
+        if (r > R) {
+          d.p.x *= R / r;
+          d.p.z *= R / r;
+          d.v.x *= -0.3;
+          d.v.z *= -0.3;
+        }
       }
     }
     let c = 0, ci = 0;

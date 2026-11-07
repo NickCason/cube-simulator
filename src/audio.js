@@ -413,6 +413,18 @@ export class AudioEngine {
     this._noise(t, 0.4, 'highpass', 3000, 9000, 0.5, 0.15 * amount, 0.002);
   }
 
+  // a knock on a pane of the glass room: a short low ring of glass, a soft thump
+  glassKnock(amount = 0.5, pan = 0) {
+    if (!this._ok('glassKnock', 0.06)) return;
+    amount *= Math.min(1, this.impactLevel * 1.8);
+    if (amount < 0.03) return;
+    const t = this.ctx.currentTime;
+    const out = this._panned(pan);
+    const f = rnd(560, 760), nyq = this.ctx.sampleRate * 0.45;
+    for (const [r, g, d] of [[1, 1, 0.22], [2.32, 0.45, 0.14], [4.25, 0.2, 0.09], [6.8, 0.08, 0.05]]) if (f * r < nyq) this._tone(t, 'sine', f * r, f * r * 0.997, d, 0.11 * amount * g, 0.001, out);
+    this._noise(t, 0.05, 'lowpass', 900, 300, 0.7, 0.22 * amount, 0.001, out);
+  }
+
   // glass (and hard candy) breaking: a bright crash, then the shards
   // tinkling down - little glass bells, each a few partials, falling
   // later and later (delay: when the tinkling starts)

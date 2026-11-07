@@ -24,6 +24,7 @@ const DEFAULTS = {
   friction: 0.85,
   bounce: -1, // rebound/impact speed ratio for floor & wall hits (-1 = natural)
   arenaRadius: 2.35,
+  box: false, // (the glass room: the walls square, half its width arenaRadius out)
   ceiling: 4.2,
   maxSpeed: 45,
   collide: true,
@@ -1632,7 +1633,7 @@ export class SoftBody {
   // kept them rocking forever.
   _solveBounds(h) {
     const { x, w, m, fpen, wpen } = this;
-    const R = this.p.arenaRadius, R2 = R * R;
+    const R = this.p.arenaRadius, R2 = R * R, box = this.p.box;
     const top = this.p.ceiling;
     const n = this.nV;
     const aw = this._awake, vp = this.vPiece, I = this._imp;
@@ -1648,6 +1649,25 @@ export class SoftBody {
         const q = vp[i] * 12, J = -y * m[i];
         I[q] += J; I[q + 1] += J * x[o]; I[q + 3] += J * x[o + 2];
       } else if (y > top) x[o + 1] = top;
+      // (the glass room: square walls, half its width R out)
+      if (box) {
+        const ax = Math.abs(x[o]), az = Math.abs(x[o + 2]);
+        if (ax > R || az > R) {
+          let pen = 0;
+          if (ax > R) {
+            pen = ax - R;
+            x[o] = x[o] > 0 ? R : -R;
+          }
+          if (az > R) {
+            pen = Math.max(pen, az - R);
+            x[o + 2] = x[o + 2] > 0 ? R : -R;
+          }
+          wpen[i] = pen;
+          const q = vp[i] * 12 + 4, J = pen * m[i];
+          I[q] += J; I[q + 1] += J * x[o]; I[q + 2] += J * x[o + 1]; I[q + 3] += J * x[o + 2];
+        }
+        continue;
+      }
       const r2 = x[o] * x[o] + x[o + 2] * x[o + 2];
       if (r2 > R2) {
         const r = Math.sqrt(r2);
@@ -1682,8 +1702,20 @@ export class SoftBody {
         }
       }
       if (wpen[i] > 0) {
-        const r = Math.sqrt(x[o] * x[o] + x[o + 2] * x[o + 2]) || 1;
-        const nx = x[o] / r, nz = x[o + 2] / r;
+        let nx, nz;
+        if (this.p.box) {
+          // (a square wall's normal: the side it's against - both, in a corner)
+          const R = this.p.arenaRadius - 1e-6;
+          nx = x[o] >= R ? 1 : x[o] <= -R ? -1 : 0;
+          nz = x[o + 2] >= R ? 1 : x[o + 2] <= -R ? -1 : 0;
+          const l = Math.hypot(nx, nz) || 1;
+          nx /= l;
+          nz /= l;
+        } else {
+          const r = Math.sqrt(x[o] * x[o] + x[o + 2] * x[o + 2]) || 1;
+          nx = x[o] / r;
+          nz = x[o + 2] / r;
+        }
         const vn = vx * nx + vz * nz;
         const tx = vx - vn * nx, tz = vz - vn * nz;
         const tl = Math.sqrt(tx * tx + vy * vy + tz * tz);

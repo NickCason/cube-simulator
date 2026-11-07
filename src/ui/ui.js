@@ -311,6 +311,26 @@ export class UI {
       });
       this.rows.tough.input.closest('.row').after(row);
     }
+    // the glass room: a switch under World
+    {
+      const row = document.createElement('div');
+      row.className = 'row toggle';
+      row.innerHTML = '<span class="name">Glass room</span><button class="switch" role="switch" aria-checked="false" aria-label="Glass room"><i></i></button><span class="word">Off</span>';
+      const sw = row.querySelector('.switch'), word = row.querySelector('.word');
+      const show = (on) => {
+        sw.setAttribute('aria-checked', String(on));
+        sw.classList.toggle('on', on);
+        word.textContent = on ? 'On' : 'Off';
+      };
+      show(!!app.room?.on);
+      sw.addEventListener('click', () => {
+        app.audio.ui();
+        app.setGlassRoom(!app.room.on);
+        show(app.room.on);
+        this.hint(app.room.on ? 'A glass room: throw it at the walls' : 'Back to the open floor', 2200);
+      });
+      this.rows.size.input.closest('.row').after(row);
+    }
     // tilt & shake (phones with motion sensors): a switch under World
     if (app.tilt.supported) {
       const row = document.createElement('div');
