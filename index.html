@@ -101,7 +101,8 @@
       }
       .sp-cube {
         opacity: 0;
-        animation: sp-rise 1.1s cubic-bezier(0.2, 0.75, 0.2, 1) 0.05s forwards;
+        transform-origin: 50% 92%;
+        animation: sp-rise 1.15s ease 0.05s forwards;
       }
       .sp-cube .f1 {
         fill: #0c0b0d;
@@ -120,7 +121,8 @@
       .sp-rim {
         opacity: 0;
         filter: drop-shadow(0 0 2px var(--jl)) drop-shadow(0 0 6px var(--jl));
-        animation: sp-light 1.3s cubic-bezier(0.3, 0, 0.2, 1) forwards;
+        transform-origin: 50% 92%;
+        animation: sp-light 1.2s ease forwards;
       }
       .sp-rim path {
         fill: none;
@@ -154,19 +156,19 @@
         height: 66.67%;
         opacity: 0;
         transform-origin: 50% 100%;
-        animation: sp-letter 0.9s cubic-bezier(0.16, 0.9, 0.2, 1) forwards;
+        animation: sp-letter 1.05s ease forwards;
       }
       .sp-word .l:nth-of-type(1) {
-        animation-delay: 0.3s;
+        animation-delay: 0.28s;
       }
       .sp-word .l:nth-of-type(2) {
-        animation-delay: 0.39s;
+        animation-delay: 0.4s;
       }
       .sp-word .l:nth-of-type(3) {
-        animation-delay: 0.48s;
+        animation-delay: 0.52s;
       }
       .sp-word .l:nth-of-type(4) {
-        animation-delay: 0.57s;
+        animation-delay: 0.64s;
       }
       .sp-word .sim {
         left: 0;
@@ -174,7 +176,26 @@
         width: 100%;
         height: 33.33%;
         opacity: 0;
-        animation: sp-sim 1s cubic-bezier(0.2, 0.7, 0.2, 1) 0.95s forwards;
+        animation: sp-sim 0.9s ease 1s forwards;
+      }
+      /* All is cube. Cube is all. - each word drops in after the name */
+      .sp-tag {
+        display: flex;
+        gap: 0.5em;
+        margin-top: calc(min(6vh, 9vw) * -0.55);
+        font: 700 clamp(11px, 1.6vh, 14px) / 1 'SF Pro Display', 'SF Pro Text', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Inter, Roboto, 'Helvetica Neue', Arial, sans-serif;
+        letter-spacing: 0.24em;
+        text-transform: uppercase;
+        color: #f3efeb;
+      }
+      .sp-tag span {
+        display: inline-block;
+        opacity: 0;
+        transform-origin: 50% 100%;
+        animation: sp-letter 0.75s ease forwards;
+      }
+      .sp-tag .dot {
+        color: var(--jl);
       }
       .sp-word use,
       .sp-word text {
@@ -206,64 +227,52 @@
           transform: none;
         }
       }
+      /* gummy: everything lands like jelly - squash, overshoot, wobble to rest */
       @keyframes sp-rise {
-        from {
-          opacity: 0;
-          transform: translateY(5%) scale(0.94);
-        }
-        to {
-          opacity: 1;
-          transform: none;
-        }
+        0% { opacity: 0; transform: translateY(-14%) scale(0.86, 1.14); }
+        38% { opacity: 1; transform: translateY(0) scale(1.12, 0.86); }
+        56% { transform: scale(0.94, 1.07); }
+        72% { transform: scale(1.04, 0.97); }
+        86% { transform: scale(0.99, 1.01); }
+        100% { opacity: 1; transform: none; }
       }
       @keyframes sp-light {
-        from {
-          opacity: 0;
-          transform: scale(0.97);
-        }
-        30% {
-          opacity: 1;
-        }
-        to {
-          opacity: 1;
-          transform: none;
-        }
+        0% { opacity: 0; transform: scale(0.94, 0.9); }
+        28% { opacity: 1; transform: scale(1.07, 0.94); }
+        50% { transform: scale(0.97, 1.04); }
+        72% { transform: scale(1.015, 0.99); }
+        100% { opacity: 1; transform: none; }
       }
       @keyframes sp-letter {
-        from {
-          opacity: 0;
-          transform: translateY(42%) scaleY(1.18);
-        }
-        60% {
-          opacity: 1;
-        }
-        to {
-          opacity: 1;
-          transform: none;
-        }
+        0% { opacity: 0; transform: translateY(-80%) scale(0.72, 1.38); }
+        28% { opacity: 1; transform: translateY(0) scale(1.32, 0.66); }
+        44% { transform: translateY(-16%) scale(0.85, 1.2); }
+        60% { transform: translateY(0) scale(1.12, 0.9); }
+        74% { transform: translateY(-4%) scale(0.96, 1.04); }
+        87% { transform: translateY(0) scale(1.02, 0.98); }
+        100% { opacity: 1; transform: none; }
       }
       @keyframes sp-sim {
-        from {
-          opacity: 0;
-          transform: scaleX(1.32);
-        }
-        to {
-          opacity: 0.62;
-          transform: none;
-        }
+        0% { opacity: 0; transform: scale(1.55, 0.5); }
+        38% { opacity: 0.62; transform: scale(0.9, 1.18); }
+        58% { transform: scale(1.05, 0.94); }
+        78% { transform: scale(0.98, 1.02); }
+        100% { opacity: 0.62; transform: none; }
       }
       /* the reveal waits for the app to have booted (src/ui/splash.js: go):
          booting stalls the page, and these must run smoothly */
       .sp-glow.flare,
       .sp-rim,
       .sp-word .l,
-      .sp-word .sim {
+      .sp-word .sim,
+      .sp-tag span {
         animation-play-state: paused;
       }
       #splash.go .sp-glow.flare,
       #splash.go .sp-rim,
       #splash.go .sp-word .l,
-      #splash.go .sp-word .sim {
+      #splash.go .sp-word .sim,
+      #splash.go .sp-tag span {
         animation-play-state: running;
       }
       /* leaving: the dark falls away, the cube's silhouette flies past, the
@@ -278,7 +287,13 @@
         transition: transform 0.7s cubic-bezier(0.55, 0, 0.75, 0.2), opacity 0.4s ease 0.12s;
       }
       #splash.out .sp-word {
-        transition: transform 0.9s cubic-bezier(0.65, 0, 0.25, 1);
+        /* (a little wind-up, then it springs up into the logotype) */
+        transition: transform 0.9s cubic-bezier(0.55, -0.3, 0.3, 1.32);
+      }
+      #splash.out .sp-tag {
+        opacity: 0;
+        transform: scale(1.3, 0.6);
+        transition: opacity 0.25s ease, transform 0.35s ease;
       }
       #splash.out .sp-word use,
       #splash.out .sp-word text {
@@ -335,6 +350,7 @@
           <svg class="l" style="left: 80.82%; width: 19.18%" viewBox="118 0 28 40"><use href="#bl-e" /></svg>
           <svg class="sim" viewBox="0 40 146 20"><text x="0" y="58" textLength="146" lengthAdjust="spacing">SIMULATOR</text></svg>
         </div>
+        <div class="sp-tag"><span style="animation-delay: 1.12s">All</span><span style="animation-delay: 1.18s">is</span><span style="animation-delay: 1.24s">cube</span><span class="dot" style="animation-delay: 1.31s">·</span><span style="animation-delay: 1.38s">Cube</span><span style="animation-delay: 1.44s">is</span><span style="animation-delay: 1.5s">all</span></div>
       </div>
     </div>
     <canvas id="stage"></canvas>

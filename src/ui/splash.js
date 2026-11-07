@@ -6,7 +6,7 @@
 // top. The cube is held up until then (see App._introStep), so the reveal is
 // the cube dropping in. A tap or a key skips it.
 
-const REVEAL = 2.05; // s: the reveal's length (index.html)
+const REVEAL = 2.3; // s: the reveal's length (index.html)
 
 export class Splash {
   constructor(app) {
@@ -65,6 +65,7 @@ export class Splash {
     setTimeout(() => {
       root.classList.remove('splashing');
       el.classList.add('gone');
+      this.app.ui?.jiggleBrand();
     }, 900);
     setTimeout(() => this._done(), 1150);
   }

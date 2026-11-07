@@ -69,6 +69,13 @@ const repeatWord = (r) => ['Once', 'Twice', 'Thrice', 'Banded', 'Stripy', 'Strip
 // A slider's readout: its word, and beside it a number for where the slider sits.
 const readout = (el, word, num) => {
   el.innerHTML = num == null ? word : `${word}<i class="num">${num}</i>`;
+  // (a new word gives it a jiggle)
+  if (el.dataset.w !== undefined && el.dataset.w !== word) {
+    el.classList.remove('bump');
+    void el.offsetWidth;
+    el.classList.add('bump');
+  }
+  el.dataset.w = word;
 };
 const signed = (x) => (x > 0 ? `+${x}` : x < 0 ? `\u2212${-x}` : '0');
 
@@ -541,7 +548,10 @@ export class UI {
   setStyle(style, flavor) {
     const css = flavorSwatchCSS(flavor);
     // (on the page, for the logotype's cube too)
-    document.documentElement.style.setProperty('--jelly', flavor.layers ? flavor.layers[flavor.layers.length - 1] : flavor.hex);
+    const jl = flavor.layers ? flavor.layers[flavor.layers.length - 1] : flavor.hex;
+    if (jl !== this._jl && this._jl !== undefined) this.jiggleBrand();
+    this._jl = jl;
+    document.documentElement.style.setProperty('--jelly', jl);
     this.swatchBtn.querySelector('.swatch').style.background = css;
     const layerChip = this.paletteEl.querySelector('.chip.layered');
     if (layerChip) layerChip.style.setProperty('--c', flavorSwatchCSS({ layers: style.layers.colors, blur: style.layers.blur, repeat: style.layers.repeat, bias: style.layers.bias }));
@@ -560,13 +570,29 @@ export class UI {
     for (const b of this.paletteEl.querySelectorAll('.opt[data-glit]')) b.classList.toggle('active', b.dataset.glit === style.glitter);
   }
 
+  // the logo gives a jiggle (a new jelly; the splash's name landing in it)
+  jiggleBrand() {
+    const b = this.root.querySelector('.brand');
+    if (!b) return;
+    b.classList.remove('jiggle');
+    void b.offsetWidth;
+    b.classList.add('jiggle');
+  }
+
   setDamaged(d) {
     this.healEl.classList.toggle('pulse', d);
   }
 
   hint(text, ms = 2600) {
-    this.hintEl.textContent = text;
-    this.hintEl.classList.add('show');
+    const el = this.hintEl;
+    // (one already up: a jiggle for the new one)
+    if (el.classList.contains('show') && el.textContent !== text) {
+      el.classList.remove('bump');
+      void el.offsetWidth;
+      el.classList.add('bump');
+    }
+    el.textContent = text;
+    el.classList.add('show');
     clearTimeout(this._ht);
     this._ht = setTimeout(() => this.hintEl.classList.remove('show'), ms);
   }

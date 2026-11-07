@@ -292,7 +292,7 @@ export class Cubby {
     document.addEventListener('pointerdown', (e) => {
       if (!this.menuEl.hidden && !this.menuEl.contains(e.target) && !e.target.closest('.card-more')) this.closeMenu();
       if (this.el.hidden || this.el.contains(e.target) || this.btn.contains(e.target)) return;
-      if (this.menuEl.contains(e.target) || this.toastEl.contains(e.target) || e.target.closest('.modal')) return;
+      if (this.menuEl.contains(e.target) || this.toastEl.contains(e.target) || e.target.closest('.modal, .fighter')) return;
       this.close();
     });
     window.addEventListener('keydown', (e) => {

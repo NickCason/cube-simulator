@@ -2504,3 +2504,215 @@ html.dark .card-healed {
 .palette .opt[data-glit='cubic'] .gdot {
   border-radius: 2.5px;
 }
+
+/* ---------------------------------------------------------------- gummy: all is cube, cube is all
+   Nothing slides in: it lands - squashes going in, overshoots, wobbles to rest. */
+@keyframes gummy-pop {
+  0% { opacity: 0; transform: scale(0.55, 0.6); }
+  34% { opacity: 1; transform: scale(1.13, 0.88); }
+  52% { transform: scale(0.93, 1.08); }
+  68% { transform: scale(1.04, 0.97); }
+  84% { transform: scale(0.99, 1.01); }
+  100% { opacity: 1; transform: none; }
+}
+
+@keyframes gummy-jiggle {
+  0%, 100% { transform: none; }
+  18% { transform: scale(1.18, 0.84); }
+  36% { transform: scale(0.9, 1.1); }
+  54% { transform: scale(1.06, 0.95); }
+  72% { transform: scale(0.98, 1.02); }
+}
+
+@keyframes gummy-jiggle-x {
+  0%, 100% { transform: translate(-50%, 0); }
+  18% { transform: translate(-50%, 0) scale(1.12, 0.88); }
+  36% { transform: translate(-50%, 0) scale(0.94, 1.07); }
+  54% { transform: translate(-50%, 0) scale(1.03, 0.97); }
+  72% { transform: translate(-50%, 0) scale(0.99, 1.01); }
+}
+
+/* buttons squash under a press and spring back */
+.tool,
+.swatch-btn,
+.tune-btn,
+.mute,
+.theme-btn,
+.cubby-btn,
+.heal {
+  transition: background 0.15s, color 0.15s, box-shadow 0.3s, opacity 0.3s, transform 0.5s cubic-bezier(0.25, 2.2, 0.45, 1);
+}
+
+.tool:active,
+.swatch-btn:active,
+.tune-btn:active,
+.mute:active,
+.theme-btn:active,
+.cubby-btn:active {
+  transform: scale(1.14, 0.84);
+  transition-duration: 0.15s, 0.15s, 0.3s, 0.3s, 0.08s;
+}
+
+.heal:active {
+  transform: scale(1.06, 0.86);
+  transition-duration: 0.15s, 0.15s, 0.3s, 0.3s, 0.08s;
+}
+
+.tool.active svg {
+  animation: gummy-jiggle 0.55s ease;
+}
+
+.tool .tip {
+  transform: translate(-50%, 6px) scale(0.7, 1.2);
+  transform-origin: 50% 100%;
+  transition: opacity 0.15s, transform 0.45s cubic-bezier(0.25, 2, 0.45, 1);
+}
+
+@media (hover: hover) {
+  .tool:hover .tip {
+    transform: translate(-50%, 0);
+  }
+}
+
+/* the hint lands; a new one while it's up gives it a jiggle */
+.hint {
+  transform: translate(-50%, 10px) scale(0.78, 1.18);
+  transform-origin: 50% 100%;
+  transition: opacity 0.25s, transform 0.55s cubic-bezier(0.25, 2, 0.45, 1);
+}
+
+.hint.show {
+  transform: translate(-50%, 0);
+}
+
+.hint.show.bump {
+  animation: gummy-jiggle-x 0.5s ease;
+}
+
+.toast {
+  transform: translate(-50%, -14px) scale(0.78, 1.18);
+  transform-origin: 50% 0;
+  transition: opacity 0.2s, transform 0.6s cubic-bezier(0.25, 2.1, 0.45, 1);
+}
+
+.toast.show {
+  transform: translate(-50%, 0);
+}
+
+/* panels land from where they open */
+@keyframes gummy-panel {
+  0% { opacity: 0; transform: translateY(16px) scale(0.86, 0.78); }
+  36% { opacity: 1; transform: scale(1.03, 1.05); }
+  56% { transform: scale(0.985, 0.975); }
+  76% { transform: scale(1.006, 1.008); }
+  100% { opacity: 1; transform: none; }
+}
+
+@keyframes gummy-sheet {
+  0% { opacity: 0; transform: translateX(-50%) translateY(46px) scale(0.94, 0.8); }
+  36% { opacity: 1; transform: translateX(-50%) scale(1.02, 1.045); }
+  56% { transform: translateX(-50%) scale(0.99, 0.98); }
+  76% { transform: translateX(-50%) scale(1.004, 1.006); }
+  100% { opacity: 1; transform: translateX(-50%); }
+}
+
+.palette:not([hidden]) {
+  animation: gummy-panel 0.55s ease both;
+  transform-origin: 100% 100%;
+}
+
+.palette.cubby:not([hidden]) {
+  transform-origin: 0 0;
+}
+
+.modal-card,
+.card-menu,
+.cubby-new {
+  animation: gummy-pop 0.55s ease both;
+}
+
+.card-menu {
+  animation-duration: 0.4s;
+}
+
+.cube-card {
+  animation: gummy-pop 0.5s ease both;
+}
+
+/* a fighter's name slams on */
+.f-name span {
+  display: inline-block;
+  animation: name-slam 0.6s 0.08s ease both;
+  transform-origin: 0 90%;
+}
+
+@keyframes name-slam {
+  0% { opacity: 0; transform: scale(1.7, 0.5); }
+  32% { opacity: 1; transform: scale(0.88, 1.14); }
+  52% { transform: scale(1.06, 0.95); }
+  72% { transform: scale(0.98, 1.02); }
+  100% { opacity: 1; transform: none; }
+}
+
+@keyframes fighter-in {
+  0% { opacity: 0; transform: translate(90px, -50%) skewX(-14deg) scale(0.8, 1.15); }
+  40% { opacity: 1; transform: translate(-8px, -50%) skewX(4deg) scale(1.06, 0.94); }
+  60% { transform: translate(3px, -50%) skewX(-2deg) scale(0.98, 1.03); }
+  80% { transform: translate(-1px, -50%) scale(1.01, 0.99); }
+  100% { opacity: 1; transform: translate(0, -50%); }
+}
+
+/* a slider's word jiggles when it changes (Jiggly -> Bouncy) */
+.palette .row .word.bump {
+  animation: gummy-jiggle 0.4s ease;
+  transform-origin: 100% 50%;
+}
+
+/* the logo jiggles when the jelly changes, and when the name lands in it */
+.brand.jiggle .mark {
+  animation: gummy-jiggle 0.7s ease;
+  transform-origin: 50% 85%;
+}
+
+.brand.jiggle .word {
+  animation: gummy-jiggle 0.7s 0.07s ease;
+  transform-origin: 50% 85%;
+}
+
+@media (max-width: 720px) {
+  .palette:not([hidden]) {
+    animation-name: gummy-sheet;
+    transform-origin: 50% 100%;
+  }
+  .palette.cubby:not([hidden]) {
+    transform-origin: 50% 100%;
+  }
+  @keyframes fighter-in {
+    0% { opacity: 0; transform: translateY(-30px) skewX(-8deg) scale(0.86, 1.15); }
+    40% { opacity: 1; transform: translateY(4px) skewX(2deg) scale(1.04, 0.95); }
+    60% { transform: translateY(-2px) scale(0.98, 1.02); }
+    80% { transform: scale(1.005, 0.995); }
+    100% { opacity: 1; transform: none; }
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .palette:not([hidden]),
+  .modal-card,
+  .card-menu,
+  .cubby-new,
+  .cube-card,
+  .fighter.show,
+  .f-name span,
+  .tool.active svg,
+  .hint.show.bump,
+  .palette .row .word.bump,
+  .brand.jiggle .mark,
+  .brand.jiggle .word {
+    animation: none !important;
+  }
+}
+
+.fighter.show {
+  animation: fighter-in 0.65s ease both;
+}
