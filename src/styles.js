@@ -77,6 +77,12 @@ export const TEXTURES = {
   sugar: { name: 'Sugar cube', label: 'Sugar cube', depth: 0.32, opacity: 0.93, glow: 0.55, rough: 0.55, ior: 1.32, sugar: 1, milk: 1, mu: 760, damping: 8, weight: 1.15, lambda: 14, bounce: 0.03, grip: 1.35, rigidity: 0.6, tough: 0.45, goo: 0, brittle: true, chip: '#fffaf3' },
   // an ice cube - clear, slippery, hard; the torch runs it to water, cryo sets it again
   ice: { name: 'Ice cube', label: 'Ice cube', depth: 0.2, opacity: 0.02, glow: 0.32, rough: 0.012, ior: 1.31, sugar: 0, milk: 0.06, mu: 1000, damping: 3, weight: 0.92, lambda: 40, bounce: 0.18, grip: 0.05, rigidity: 0.94, goo: 0, brittle: true, chip: '#dcefff' },
+  // finishes: a rainbow film on glass (soap bubble), holographic foil, pearl, opal, chrome
+  prism: { name: 'Prism', depth: 0.16, opacity: 0.02, glow: 0.62, rough: 0.01, ior: 1.5, sugar: 0, milk: 0, irid: 1, mu: 380, damping: 2.6, weight: 1.2, lambda: 30, bounce: 0.45, grip: 0.7, rigidity: 0.15, goo: 0.1 },
+  holo: { name: 'Holo', depth: 0.8, opacity: 0.97, glow: 0.3, rough: 0.07, ior: 1.5, sugar: 0, milk: 0.1, irid: 1, metal: 0.72, mu: 420, damping: 3, weight: 1.3, lambda: 30, bounce: 0.5, grip: 0.8, rigidity: 0.1, goo: 0.1 },
+  pearl: { name: 'Pearl', depth: 0.35, opacity: 0.9, glow: 0.7, rough: 0.12, ior: 1.45, sugar: 0, milk: 0.85, irid: 0.85, mu: 300, damping: 4, weight: 1.1, lambda: 26, bounce: 0.3, grip: 0.9, goo: 0.2 },
+  opal: { name: 'Opal', depth: 0.3, opacity: 0.55, glow: 0.88, rough: 0.025, ior: 1.45, sugar: 0, milk: 0.72, irid: 0.18, opal: 1, mu: 260, damping: 3, weight: 1.05, lambda: 28, bounce: 0.4, grip: 0.85, goo: 0.2 },
+  chrome: { name: 'Chrome', depth: 1, opacity: 1, glow: 0.1, rough: 0.045, ior: 1.6, sugar: 0, milk: 0, metal: 1, mu: 210, damping: 1.6, weight: 2.8, lambda: 30, bounce: 0.3, grip: 0.6, goo: 0.1 },
 };
 
 export const EDGES = {
@@ -166,13 +172,29 @@ export function materialSwatchCSS(t, hex) {
   const s = Math.max(0, Math.min(1, 1 - t.rough / 0.45)); // gloss sharpness
   const ha = 0.4 + 0.55 * s;
   const layers = [];
+  // opal: flecks of colour
+  if (t.opal > 0) {
+    for (const [x, y, col] of [[30, 34, '#ff5fa2'], [64, 28, '#5fe8ff'], [44, 62, '#9dff6b'], [70, 66, '#ffd25f'], [24, 72, '#b48cff']]) {
+      layers.push(`radial-gradient(circle at ${x}% ${y}%, ${col} 0 7%, transparent 11%)`);
+    }
+  }
   if (t.sugar > 0) {
     const a = 0.35 + 0.5 * Math.min(1, t.sugar);
     layers.push(`radial-gradient(circle, rgba(255, 255, 255, ${a}) 0 0.6px, transparent 1.1px) 1px 2px / 9px 8px`);
     layers.push(`radial-gradient(circle, rgba(255, 255, 255, ${a * 0.75}) 0 0.5px, transparent 1px) 5px 6px / 7px 9px`);
   }
   layers.push(`radial-gradient(ellipse 58% 34% at 36% 22%, rgba(255, 255, 255, ${ha}) 0%, rgba(255, 255, 255, ${ha * 0.85}) ${16 + 30 * (1 - s)}%, transparent ${30 + 42 * (1 - s)}%)`);
+  // a rainbow film (iridescence): over the body, under the highlight
+  if (t.irid > 0) {
+    const a = (0.32 + 0.4 * (t.metal || 0)) * t.irid;
+    const k = (r, g, b) => `rgba(${r}, ${g}, ${b}, ${a.toFixed(2)})`;
+    layers.push(`conic-gradient(from 200deg at 50% 46%, ${k(255, 82, 205)}, ${k(170, 100, 255)}, ${k(80, 200, 255)}, ${k(255, 238, 120)}, ${k(255, 140, 110)}, ${k(255, 82, 205)})`);
+  }
   layers.push(`radial-gradient(ellipse 80% 55% at 50% 100%, ${rgb(mix(c, W, 0.35), 0.55 * t.glow * (1 - 0.5 * o))}, transparent 70%)`);
-  layers.push(`radial-gradient(circle at 50% 58%, ${rgb(mid)} 0%, ${rgb(body)} 55%, ${rgb(edge)} 100%)`);
+  if (t.metal > 0.5) {
+    // metal: bands of its own colour, bright and dark, as a mirror shows a room
+    const lt = mix(c, W, 0.55), dk = mix(c, K, 0.55);
+    layers.push(`linear-gradient(165deg, ${rgb(lt)} 0%, ${rgb(c)} 32%, ${rgb(dk)} 50%, ${rgb(mix(c, W, 0.15))} 62%, ${rgb(lt)} 86%)`);
+  } else layers.push(`radial-gradient(circle at 50% 58%, ${rgb(mid)} 0%, ${rgb(body)} 55%, ${rgb(edge)} 100%)`);
   return layers.join(', ');
 }

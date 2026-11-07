@@ -34,6 +34,19 @@ export const SETTINGS = [
     words: ['Matte', 'Satin', 'Glossy', 'Wet', 'Glass'],
   },
   { id: 'refraction', group: 'Look', label: 'Refraction', key: 'ior', mat: true, ...linMap(1.0, 1.75), words: ['None', 'Water', 'Gel', 'Glass', 'Diamond'] },
+  // a rainbow film on it, a metal mirror of it, opal's flashes of colour in it
+  {
+    id: 'irid', group: 'Look', label: 'Iridescence', key: 'irid', mat: true, def: 0, ...linMap(0, 1),
+    word: (v) => (v < 0.02 ? 'None' : v < 0.3 ? 'Hint' : v < 0.55 ? 'Sheen' : v < 0.8 ? 'Rainbow' : 'Holo'),
+  },
+  {
+    id: 'metal', group: 'Look', label: 'Metallic', key: 'metal', mat: true, def: 0, ...linMap(0, 1),
+    word: (v) => (v < 0.02 ? 'None' : v < 0.3 ? 'Satin' : v < 0.55 ? 'Lustre' : v < 0.8 ? 'Metal' : 'Chrome'),
+  },
+  {
+    id: 'opal', group: 'Look', label: 'Opal fire', key: 'opal', mat: true, def: 0, ...linMap(0, 1),
+    word: (v) => (v < 0.02 ? 'None' : v < 0.3 ? 'Glint' : v < 0.55 ? 'Flash' : v < 0.8 ? 'Fire' : 'Galaxy'),
+  },
   { id: 'bubbles', group: 'Bubbles', label: 'Count', key: 'bubbles', def: 34, ...linMap(0, 240), int: true, noNum: true, word: (v) => String(Math.round(v)) },
   { id: 'bubbleSize', group: 'Bubbles', label: 'Size', key: 'bubbleSize', def: 1, ...logMap(0.3, 3.5), words: ['Fizz', 'Tiny', 'Medium', 'Big', 'Huge'] },
   { id: 'glitterAmount', group: 'Glitter', label: 'Amount', key: 'glitterAmount', def: 2600, ...logMap(300, 9000), word: (v) => (v < 900 ? 'Sprinkle' : v < 2200 ? 'Dusting' : v < 4500 ? 'Sparkly' : v < 7000 ? 'Loaded' : 'Galaxy') },

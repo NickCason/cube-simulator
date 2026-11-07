@@ -187,6 +187,9 @@ export function createJellyMaterial(env, layerUniforms) {
       ...layerUniforms,
       uSugar: { value: 0 },
       uMilk: { value: 0 },
+      uIrid: { value: 0 },
+      uMetal: { value: 0 },
+      uOpal: { value: 0 },
       uGlow: { value: 0.5 },
       uHazeMin: { value: 0 },
       tScene: { value: null },
@@ -251,6 +254,9 @@ export function createJellyMaterial(env, layerUniforms) {
       uniform vec3 uPLColor;
       uniform float uSugar;
       uniform float uMilk;
+      uniform float uIrid;
+      uniform float uMetal;
+      uniform float uOpal;
       uniform float uGlow;
       uniform float uHazeMin;
       uniform float uWeldT;
@@ -290,6 +296,27 @@ export function createJellyMaterial(env, layerUniforms) {
       ${LAYER_GLSL}
 
       float sq(float x) { return x * x; }
+      // a pure spectral colour, hue 0..1
+      vec3 spectrum(float h) {
+        return clamp(abs(mod(h * 6.0 + vec3(0.0, 4.0, 2.0), 6.0) - 3.0) - 1.0, 0.0, 1.0);
+      }
+      // thin-film interference, roughly: the colour a film reflects, by its
+      // phase - pink and magenta seen square on, through purple, blue and
+      // cyan to green and gold as the angle grazes (t: film + the angle)
+      // (a holographic palette, not a plain rainbow: pink, violet, sky blue,
+      // cyan, butter yellow, peach and round to pink - no muddy green)
+      vec3 filmColor(float t) {
+        float u = fract(t) * 6.0;
+        vec3 c0 = vec3(1.0, 0.32, 0.8), c1 = vec3(0.72, 0.34, 1.0), c2 = vec3(0.36, 0.6, 1.0);
+        vec3 c3 = vec3(0.32, 0.94, 1.0), c4 = vec3(1.0, 0.93, 0.45), c5 = vec3(1.0, 0.58, 0.42);
+        float f = smoothstep(0.0, 1.0, fract(u));
+        if (u < 1.0) return mix(c0, c1, f);
+        if (u < 2.0) return mix(c1, c2, f);
+        if (u < 3.0) return mix(c2, c3, f);
+        if (u < 4.0) return mix(c3, c4, f);
+        if (u < 5.0) return mix(c4, c5, f);
+        return mix(c5, c0, f);
+      }
       // A NaN or infinity here would be smeared over the whole screen by the
       // bloom (a white or black flash): replace it, and keep within range.
       vec3 finite(vec3 c) {
@@ -522,7 +549,79 @@ export function createJellyMaterial(env, layerUniforms) {
         // (capped: a glassy highlight seen dead on can top half-float range)
         vec3 spec = min(uLightColor * D_GGX(NdH, a) * V_Smith(nl, NdV, a) * nl * Fh, vec3(48.0));
 
+        // Thin-film iridescence (a soap bubble, holographic foil, pearl): a
+        // film on the surface reflects a rainbow whose colours slide with the
+        // angle you look from; its thickness wanders over the surface, so the
+        // colours swirl. The film reflects more than bare jelly, all over the
+        // face, and the light through it picks up its colours too.
+        vec3 iriSpec = vec3(1.0), iriGlow = vec3(1.0);
+        if (uIrid > 0.0) {
+          // (the colour mostly by the angle - each face its own, the bevels
+          // running through the rainbow - the film's thickness wandering a
+          // little; on milky stuff a paler, pearly sheen)
+          // (pink square on, sliding to purple and cyan across a face as the
+          // film thickens, the rims running through the rainbow; foil busier)
+          // (foil: busier, and banded by where its reflection points - the
+          // bands sweep across it as it turns)
+          vec3 Rf = reflect(-V, N);
+          float film = 0.3 * vnoise(Rp * 1.1) + 0.06 * vnoise(Rp * 3.3 + 3.0) + 0.05 * (N.x - N.z)
+            + uMetal * (0.3 * vnoise(Rp * 2.6 + 9.0) + 0.6 * (Rf.x * 0.7 + Rf.y * 0.5 + Rf.z * 0.3));
+          float graze = 1.0 - NdV;
+          vec3 iri = filmColor(film - 0.08 + 0.85 * graze);
+          iri = mix(vec3(dot(iri, vec3(0.3333))), iri, 1.0 - 0.55 * uMilk);
+          F = mix(F, max(F, 0.12 + 0.7 * sq(1.0 - NdV)), uIrid);
+          refl *= mix(vec3(1.0), iri * 2.0, uIrid);
+          iriSpec = mix(vec3(1.0), mix(vec3(1.0), iri, 0.7) * 1.3, uIrid);
+          spec *= iriSpec;
+          vec3 iri2 = filmColor(film - 0.07 + 0.62 * graze);
+          iri2 = mix(vec3(dot(iri2, vec3(0.3333))), iri2, 1.0 - 0.6 * uMilk);
+          // (deeper through the body than on the skin: the light crosses it)
+          // (deeper still where more of it is crossed)
+          // (a tint has to take its other colours away, like tinted glass, to
+          // stay vivid: a pale one only went pastel under the tone mapping)
+          vec3 deep2 = pow(iri2, vec3(3.0)) * 1.15 * mix(1.0, exp(-pathLen * 0.45), 0.7);
+          iriGlow = mix(vec3(1.0), pow(iri2, vec3(1.6)) * 1.5, uIrid * 0.85);
+          body = mix(body, body * mix(vec3(1.0), deep2, 0.95) + iri2 * irr * 0.06, uIrid * (1.0 - 0.6 * uMilk));
+        }
+
         vec3 col = body * (1.0 - F) + refl * F + spec;
+
+        // Metal: a mirror tinted by its own colour (cherry: red chrome; lemon:
+        // gold), no light through it, its edges going white (Schlick, with
+        // the colour as F0) - iridescent too, for holographic foil
+        if (uMetal > 0.0) {
+          vec3 F0m = mix(baseSc * 0.92, vec3(0.94), 0.14);
+          vec3 Fm = F0m + (vec3(1.0) - F0m) * pow(clamp(1.0 - NdV, 0.0, 1.0), 5.0);
+          vec3 FmH = F0m + (vec3(1.0) - F0m) * pow(clamp(1.0 - dot(H, V), 0.0, 1.0), 5.0);
+          vec3 specM = min(uLightColor * D_GGX(NdH, a) * V_Smith(nl, NdV, a) * nl * FmH, vec3(48.0)) * iriSpec;
+          // (chrome reads by its contrast: the studio's bright boxes against a
+          // darker room, the floor and the horizon below - a mirror in an
+          // evenly lit room just looks white)
+          float lumR = dot(refl, vec3(0.2126, 0.7152, 0.0722));
+          vec3 reflC = mix(refl, refl * (0.2 + 1.4 * smoothstep(0.35, 1.6, lumR)) * (0.45 + 0.55 * smoothstep(-0.06, 0.3, Rv.y)), 1.0 - 0.75 * uIrid);
+          vec3 colM = reflC * Fm * 1.1 + specM + irr * baseSc * 0.05 * rough;
+          col = mix(col, colM, uMetal);
+        }
+
+        // Opal: in its milky body, little patches that flash pure spectral
+        // colour as you move - each a tiny grating turned its own way
+        if (uOpal > 0.0) {
+          // (a mosaic of patches at two sizes, a little way inside, each lit
+          // up by how square to you it's turned)
+          // (small, saturated flecks - opal's pinfire - each winking on only
+          // while it's turned square to you, so they come and go as it turns)
+          vec3 qo = Rp * 6.0 + refract(-V, N, 1.0 / uIor) * min(thick, 0.5) * 2.0;
+          qo += (vec3(vnoise(qo * 0.8), vnoise(qo * 0.8 + 5.0), vnoise(qo * 0.8 + 9.0)) - 0.5) * 0.9; // (ragged, not round)
+          vec3 fire = vec3(0.0);
+          for (int s = 0; s < 2; s++) {
+            vec2 wo = worley(s == 0 ? qo : qo * 2.3 + 11.0);
+            vec3 gd = normalize(vec3(hash13(vec3(wo.y * 91.0 + float(s) * 7.0)), hash13(vec3(wo.y * 37.0 + 5.0)), hash13(vec3(wo.y * 13.0 + 9.0))) - 0.5);
+            float face = abs(dot(V, gd));
+            float on = smoothstep(0.72, 0.98, face) * (1.0 - smoothstep(0.32, 0.5, wo.x));
+            fire += spectrum(fract(wo.y * 5.3 + face * 1.3)) * on * (s == 0 ? 1.0 : 0.7);
+          }
+          col += fire * (irr * 0.8 + uLightColor * (0.18 + 0.3 * nl) + uGlowColor * uEmit * 1.6) * uOpal * (1.0 - F) * 1.5;
+        }
 
         // Glow mode: it gives off its own light, from all of its body -
         // brighter through more of it, towards a hotter, paler core. A knock
@@ -558,7 +657,10 @@ export function createJellyMaterial(env, layerUniforms) {
             ring += uPulseAmp[i] * exp(-x * x) * exp(-age * 2.4);
           }
           em += mix(scE, vec3(1.0), 0.22) * min(ring, 3.0) * 2.6;
-          emLit = em * uEmit;
+          // (a rainbow film colours its glow; metal barely glows - it's a
+          // mirror in the dark, lit at its edges; opal's flecks stay seen)
+          em *= iriGlow;
+          emLit = em * uEmit * (1.0 - 0.7 * uMetal) * (1.0 - 0.35 * uOpal);
           col += emLit * (1.0 - 0.85 * F);
         }
 
@@ -671,6 +773,8 @@ export function createJellyMaterial(env, layerUniforms) {
         else if (uDebug == 4) col = scatterLight * haze;
         else if (uDebug == 5) col = refl;
         else if (uDebug == 6) col = N * 0.5 + 0.5;
+        else if (uDebug == 7) col = body;
+        else if (uDebug == 8) col = vec3(F);
 
         gl_FragColor = vec4(finite(col), 1.0);
       }

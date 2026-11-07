@@ -455,6 +455,9 @@ export class JellyView {
     F.uRoughness.value = m.rough;
     F.uSugar.value = m.sugar;
     F.uMilk.value = m.milk;
+    F.uIrid.value = m.irid || 0;
+    F.uMetal.value = m.metal || 0;
+    F.uOpal.value = m.opal || 0;
     F.uIor.value = m.ior;
     F.uDispersion.value = 0.018 * Math.max(0, m.ior - 1) / 0.36;
     C.uIor.value = Math.max(1.0001, m.ior);

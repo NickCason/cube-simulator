@@ -32,6 +32,11 @@ const BY_MATERIAL = {
   candy: ['Rock Candy', 'Hard Cube to Crack', 'Jawbreaker', 'Sweet Nothing'],
   sugar: ['Sugar Rush', 'Sugar Cube-d', 'Pour Some Sugar on Me', 'Sweet Cube-ns'],
   ice: ['Ice Ice Cubey', 'Ice to Meet You', 'Cool Cube', 'Chill Out'],
+  prism: ['Prism Break', 'Light Show', 'Rainbow Road', 'Bend It Like Light'],
+  holo: ['Holo-gramps', 'Holo There', 'Foil Me Once', 'Shiny Edition'],
+  pearl: ['Pearly Whites', 'Pearl Jam', 'Mother of Pearl', 'Oyster Cube'],
+  opal: ['Opal-ooza', 'Fire Opal', 'Opalescent', 'Galaxy Brain'],
+  chrome: ['Chrome Dome', 'Liquid Metal', 'Heavy Metal', 'Shiny Happy Cube'],
 };
 
 const ANY = [

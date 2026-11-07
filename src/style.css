@@ -2716,3 +2716,18 @@ html.dark .card-healed {
 .fighter.show {
   animation: fighter-in 0.65s ease both;
 }
+
+/* (22 materials: on a short laptop screen the style panel scrolls rather than
+   running off the top; the glitter options take two rows) */
+@media (min-width: 721px) {
+  .palette.style-panel {
+    max-height: calc(100vh - 160px);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    scrollbar-width: thin;
+  }
+  .palette .seg.glit {
+    grid-auto-flow: row;
+    grid-template-columns: repeat(3, 1fr);
+  }
+}
