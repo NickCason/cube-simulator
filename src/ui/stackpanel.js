@@ -1,7 +1,8 @@
 // The stack: the cubes in the room as bars, bottom to top - the order they
 // stack in. Drag a bar up or down to move that cube in the stack (the way the
 // layers of a flavour stack), tap one to pick it (the panels edit it), x to
-// take it out. Add a plain jelly cube or a saved one (the Cubby, where each
+// take it out, the sparkle to re-cube just that one (the rest stay as they
+// are). Add a plain jelly cube or a saved one (the Cubby, where each
 // card's + drops it in), and stack them: a tower of up to four, a 2x2 base
 // with the rest on top, eight make one big cube.
 
@@ -9,6 +10,8 @@ import { resolveFlavor, flavorSwatchCSS, TEXTURES, FLAVORS } from '../styles.js'
 
 const svg = (inner) =>
   `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${inner}</svg>`;
+
+const RECUBE_ICON = svg('<path d="M11 3.5 12.7 8l4.6 1.7-4.6 1.7L11 16l-1.7-4.6-4.6-1.7L9.3 8z"/><path d="m18.5 14.5.8 2.1 2.2.8-2.2.8-.8 2.3-.8-2.3-2.2-.8 2.2-.8z"/>');
 
 export const STACK_ICON = svg('<rect x="7" y="3.6" width="10" height="5.2" rx="1.4"/><rect x="4" y="9.4" width="16" height="5.2" rx="1.4"/><rect x="5.5" y="15.2" width="13" height="5.2" rx="1.4"/>');
 
@@ -112,7 +115,7 @@ export class StackPanel {
       row.className = cb === app.cube ? 'stack-row on' : 'stack-row';
       row.setAttribute('role', 'listitem');
       row.dataset.slot = slot;
-      row.innerHTML = `<span class="grip" aria-hidden="true">⋮⋮</span><span class="bar"></span><span class="lab"><b></b><i></i></span><button class="out" aria-label="Take it out">×</button>`;
+      row.innerHTML = `<span class="grip" aria-hidden="true">⋮⋮</span><span class="bar"></span><span class="lab"><b></b><i></i></span><button class="redo" title="Re-cube just this one">${RECUBE_ICON}</button><button class="out" aria-label="Take it out">×</button>`;
       row.querySelector('.bar').style.background = flavorSwatchCSS(resolveFlavor(cb.style));
       row.querySelector('.lab b').textContent = cubeLabel(cb);
       const lvl = i === 0 ? 'bottom' : i === order.length - 1 ? 'top' : `level ${i + 1}`;
@@ -124,6 +127,15 @@ export class StackPanel {
         app.audio.ui();
         app.removeCube(slot);
       });
+      const redo = row.querySelector('.redo');
+      redo.setAttribute('aria-label', `Re-cube just ${cubeLabel(cb)}`);
+      redo.addEventListener('click', (e) => {
+        e.stopPropagation();
+        app.audio.ui();
+        if (!app.recubeOne(slot)) return;
+        if (slot === app.cube?.slot) this.ui.cubby?.tally('healed');
+        this.ui.hint(`Re-cubing ${cubeLabel(cb)}`, 1500);
+      });
       this._drag(row, slot);
       this.list.appendChild(row);
     }
@@ -133,7 +145,7 @@ export class StackPanel {
   _drag(row, slot) {
     const app = this.app;
     row.addEventListener('pointerdown', (e) => {
-      if (e.target.closest('.out')) return;
+      if (e.target.closest('.out, .redo')) return;
       const startY = e.clientY, rows = [...this.list.children], h = row.getBoundingClientRect().height + 6;
       const from = rows.indexOf(row);
       let moved = false, to = from;

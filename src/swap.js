@@ -33,14 +33,7 @@ export class Swapper {
     if (this.active && this.phase === 'exit') return; // (already on its way out: the new pick drops instead)
     // whatever was going on stops: a heal, a grab, a shape change
     const H = app.healer;
-    if (H.active || H.settling) {
-      H.active = false;
-      H.settling = false;
-      H.weldJob = H.fillJob = H.weldField = H.fillField = null;
-      H.weldT = undefined;
-      app.jelly.frontMat.uniforms.uWeldT.value = 99;
-      app.healZoom = 0;
-    }
+    if (H.active || H.settling) H.cancel();
     sb.attract = null;
     sb.fill = null;
     sb.collisionsEnabled = true;

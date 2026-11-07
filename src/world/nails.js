@@ -117,10 +117,13 @@ export class NailSystem {
     if (i >= 0) sb.embeds.splice(i, 1);
   }
 
-  // Called by the heal sequence: slide nails out and pop them free.
-  ejectAll() {
+  // Called by the heal sequence: slide nails out and pop them free. (cube:
+  // just the ones in that cube - it re-cubes alone; the rest stay put)
+  ejectAll(cube = -1) {
     let k = 0;
+    const sb = this.app.sb;
     for (const n of this.nails) {
+      if (cube >= 0 && !(n.state === 'embedded' && n.embed && sb.tCube[n.embed.a.tet] === cube)) continue;
       if (n.state === 'embedded') {
         this.removeEmbedConstraint(n);
         n.state = 'ejecting';

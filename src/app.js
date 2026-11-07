@@ -1285,6 +1285,14 @@ export class App {
     return out;
   }
 
+  // Re-cube just this one: it re-forms where it is, clear of the others,
+  // and they stay just as they are (a careful stack too).
+  recubeOne(slot) {
+    if (this.cubes.length < 2) return this.heal();
+    if (this.healer.active || this.swapper?.active || !this.cubes.some((c) => c.slot === slot)) return false;
+    return this.heal({ only: slot });
+  }
+
   // Stack them (each re-forms in its place: see Healer._startMulti).
   stack() {
     if (this.cubes.length < 2) return false;
@@ -1351,13 +1359,16 @@ export class App {
   // at] - on the floor (0) out from the middle, or, with no room left on the
   // floor, on top of what's there (a cube set down inside another stayed
   // stuck in it, and the two drew as a mosaic)
-  _clearSpot() {
+  // (exclude: a cube not to keep clear of - it's the one going there; near:
+  // [x, z] to try first and work out from; gap: how far apart their middles
+  // must be, in cube sides - two turned cubes' corners reach ~1.41 apart)
+  _clearSpot({ exclude = -1, near = null, gap = 1.25 } = {}) {
     const sb = this.sb, size = sb.p.size, R = Math.max(0, sb.p.arenaRadius - size * 0.75);
     // (each cube's box from its vertices: a piece's own centre and box are
     // only filled in by the next step, and a rebuild has just made them new)
     const boxes = new Map();
     for (let i = 0; i < sb.nV; i++) {
-      if (!sb.alive[i]) continue;
+      if (!sb.alive[i] || sb.vCube[i] === exclude) continue;
       let b = boxes.get(sb.vCube[i]);
       if (!b) boxes.set(sb.vCube[i], (b = [Infinity, Infinity, Infinity, -Infinity, -Infinity, -Infinity]));
       for (let k = 0; k < 3; k++) {
@@ -1368,12 +1379,19 @@ export class App {
     }
     const centres = [...boxes.values()].map((b) => [(b[0] + b[3]) / 2, (b[2] + b[5]) / 2]);
     let best = [0, 0], bestD = -1;
+    const [nx, nz] = near || [0, 0];
     for (let k = 0; k < 96; k++) {
-      const r = k === 0 ? 0 : Math.min(R, size * (0.6 + 0.25 * Math.floor(k / 8)) + Math.random() * 0.3);
-      const a = Math.random() * Math.PI * 2, x = Math.cos(a) * r, z = Math.sin(a) * r;
+      const r = k === 0 ? 0 : near ? size * 0.12 * Math.ceil(k / 6) : Math.min(R, size * (0.6 + 0.25 * Math.floor(k / 8)) + Math.random() * 0.3);
+      const a = Math.random() * Math.PI * 2;
+      let x = nx + Math.cos(a) * r, z = nz + Math.sin(a) * r;
+      const rr = Math.hypot(x, z);
+      if (rr > R) {
+        x *= R / rr;
+        z *= R / rr;
+      }
       let d = Infinity;
       for (const [cx, cz] of centres) d = Math.min(d, Math.hypot(x - cx, z - cz));
-      if (d > size * 1.25) return [x, z, 0];
+      if (d > size * gap) return [x, z, 0];
       if (d > bestD) {
         bestD = d;
         best = [x, z];

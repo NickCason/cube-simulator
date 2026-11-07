@@ -141,6 +141,11 @@ export class SoftBody {
     this.cAir = new Float64Array(MAX_CUBES);
     this.cBevel = new Float64Array(MAX_CUBES).fill(this.p.bevel); // (each its own edges)
     this.cN = new Int32Array(MAX_CUBES); // (each one's vertices, built whole)
+    // one cube re-cubing on its own (see Healer.start's only): its gravity
+    // and damping its own, and it passes through everything meanwhile
+    this.cGrav = new Float64Array(MAX_CUBES).fill(1);
+    this.cBoost = new Float64Array(MAX_CUBES).fill(1);
+    this.ghostCube = -1;
     for (let k = 0; k < MAX_CUBES; k++) this.setCube(k, this.p, true);
     this.heatActive = false;
     this._heatResidual = 0;
@@ -385,9 +390,11 @@ export class SoftBody {
       map[i] = n++;
     }
     let m = 0;
+    const tmap = new Int32Array(nT).fill(-1);
     for (let t = 0; t < nT; t++) {
       const a = map[this.T[t * 4]];
       if (a < 0) continue;
+      tmap[t] = m;
       this.T[m * 4] = a;
       this.T[m * 4 + 1] = map[this.T[t * 4 + 1]];
       this.T[m * 4 + 2] = map[this.T[t * 4 + 2]];
@@ -398,7 +405,15 @@ export class SoftBody {
     }
     this.nV = n;
     this.nT = m;
-    this.embeds.length = 0;
+    // (the nails in the others stay in: their tets renumbered)
+    for (let e = this.embeds.length - 1; e >= 0; e--) {
+      const E = this.embeds[e], ta = E.a.tet >= 0 && E.a.tet < nT ? tmap[E.a.tet] : -1, tb = E.b.tet >= 0 && E.b.tet < nT ? tmap[E.b.tet] : -1;
+      if (ta < 0 || tb < 0) this.embeds.splice(e, 1);
+      else {
+        E.a.tet = ta;
+        E.b.tet = tb;
+      }
+    }
     this.grabs.length = 0;
     this._bpNV = 0;
   }
@@ -412,7 +427,7 @@ export class SoftBody {
       this.vCube[i] = j;
       this.X[i * 3] += d;
     }
-    for (const a of [this.cMu, this.cLam, this.cDens, this.cDamp, this.cFric, this.cBounce, this.cRigid, this.cAir, this.cBevel, this.cN]) a[j] = a[k];
+    for (const a of [this.cMu, this.cLam, this.cDens, this.cDamp, this.cFric, this.cBounce, this.cRigid, this.cAir, this.cBevel, this.cN, this.cGrav, this.cBoost]) a[j] = a[k];
     this.embeds.length = 0;
     this.grabs.length = 0;
     this._bpNV = 0;
@@ -1368,13 +1383,13 @@ export class SoftBody {
     const g = this.p.gravity * this.gravityScale * h;
     const gx = this.tilt[0] * this.gravityScale * h, gz = this.tilt[1] * this.gravityScale * h;
     const n = this.nV;
-    const aw = this._awake, vp = this.vPiece;
+    const aw = this._awake, vp = this.vPiece, cg = this.cGrav, vc = this.vCube;
     for (let i = 0; i < n; i++) {
       if (w[i] === 0 || !aw[vp[i]]) continue;
-      const o = i * 3;
-      v[o] += gx;
-      v[o + 1] += g;
-      v[o + 2] += gz;
+      const o = i * 3, k = cg[vc[i]];
+      v[o] += gx * k;
+      v[o + 1] += g * k;
+      v[o + 2] += gz * k;
       px[o] = x[o]; px[o + 1] = x[o + 1]; px[o + 2] = x[o + 2];
       x[o] += v[o] * h; x[o + 1] += v[o + 1] * h; x[o + 2] += v[o + 2] * h;
     }
@@ -1552,10 +1567,10 @@ export class SoftBody {
     const at = this.attract;
     const { x, w } = this;
     const k = 1 - Math.exp(-at.rate * h);
-    const tg = at.targets;
+    const tg = at.targets, only = at.cube ?? -1, vc = this.vCube;
     const n = Math.min(this.nV, at.n);
     for (let i = 0; i < n; i++) {
-      if (w[i] === 0) continue;
+      if (w[i] === 0 || (only >= 0 && vc[i] !== only)) continue;
       const o = i * 3;
       x[o] += (tg[o] - x[o]) * k;
       x[o + 1] += (tg[o + 1] - x[o + 1]) * k;
@@ -1695,7 +1710,7 @@ export class SoftBody {
     for (const pc of this.pieces) {
       const vs = pc.verts;
       // (its cube's own damping and drag)
-      const kd = 1 - Math.exp(-this.cDamp[pc.cube] * dk), air = Math.exp(-this.cAir[pc.cube] * dt);
+      const kd = 1 - Math.exp(-this.cDamp[pc.cube] * dk * this.cBoost[pc.cube]), air = Math.exp(-this.cAir[pc.cube] * dt);
       let M = 0, cx = 0, cy = 0, cz = 0, vx = 0, vy = 0, vz = 0;
       let x0 = Infinity, y0 = Infinity, z0 = Infinity, x1 = -Infinity, y1 = -Infinity, z1 = -Infinity;
       for (let k = 0; k < vs.length; k++) {
@@ -2024,9 +2039,12 @@ export class SoftBody {
     const ptS = this._ptS && this._ptS.length >= NP + 1 ? this._ptS : (this._ptS = new Int32Array(NP64 + 1));
     const pairs = [];
     const m = 0.006;
+    const ghost = this.ghostCube;
     for (let a = 0; a < NP; a++)
       for (let b = a + 1; b < NP; b++) {
         if (P[a].asleep && P[b].asleep) continue;
+        // (a cube re-cubing on its own passes through everything)
+        if (ghost >= 0 && (P[a].cube === ghost || P[b].cube === ghost)) continue;
         const A = a * 6, B = b * 6;
         // a's box swept by how it moves relative to b this frame
         const rx = (pV[a * 3] - pV[b * 3]) * fdt, ry = (pV[a * 3 + 1] - pV[b * 3 + 1]) * fdt, rz = (pV[a * 3 + 2] - pV[b * 3 + 2]) * fdt;
@@ -2049,7 +2067,7 @@ export class SoftBody {
       // (or anything with a fold in it to pop out - all its tets, as the
       // fold can reach past the layer at the surface)
       const folded = P[a].foldUntil > this.time;
-      const can = this.p.selfCollide && !quiet && !P[a].asleep && !(P[a].untangle > 0) && (P[a].hinge || soft || folded), ac = act[a];
+      const can = this.p.selfCollide && !quiet && !P[a].asleep && !(P[a].untangle > 0) && P[a].cube !== ghost && (P[a].hinge || soft || folded), ac = act[a];
       selfOK[a] = can ? (ac || folded ? 1 : 2) : 0;
       anySelf = anySelf || selfOK[a] > 0;
     }

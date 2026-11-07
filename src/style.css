@@ -2814,9 +2814,9 @@ html.dark .card-healed {
 .stack-row {
   position: relative;
   display: grid;
-  grid-template-columns: 16px 64px 1fr 28px;
+  grid-template-columns: 16px 56px 1fr 28px 28px;
   align-items: center;
-  gap: 9px;
+  gap: 7px;
   height: 46px;
   padding: 0 6px 0 4px;
   border-radius: 12px;
@@ -2883,6 +2883,24 @@ html.dark .card-healed {
   font-size: 18px;
   line-height: 1;
   color: rgba(28, 28, 31, 0.5);
+}
+
+.stack-row .redo {
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  color: #19a463;
+}
+
+.stack-row .redo svg {
+  width: 16px;
+  height: 16px;
+}
+
+.stack-row .redo:hover {
+  background: rgba(25, 164, 99, 0.12);
 }
 
 .palette .stack-row .out:hover {

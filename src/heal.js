@@ -330,18 +330,23 @@ export class Healer {
     this.fillJob = null; // what's gone, and where to fill it from (see fillFieldJob)
     this.fillField = null;
     this.fillTemplate = null;
+    this.only = -1; // (one cube re-cubing on its own: its slot - see start)
   }
 
+  // opts: scale (a new size), layout (a stack), only (just that cube: the
+  // rest stay as they are and keep their physics)
   start(opts = {}) {
     if (this.active) return;
     const app = this.app;
     const sb = app.sb;
+    this._unsolo();
     this.active = true;
     this.settling = false;
     this.t = 0;
     this.fused = false;
     this.gathered = false;
-    this.ejected = app.nails.ejectAll();
+    this.only = opts.only ?? -1;
+    this.ejected = app.nails.ejectAll(this.only);
     for (const f of app.onHealStart) f();
     sb.endGrab();
     this.scaleK = opts.scale || 1;
@@ -410,8 +415,8 @@ export class Healer {
   // a layout (a stack), in its place in that. No seams to weld or holes to
   // fill here: the cubes come back fresh.
   _startMulti(opts) {
-    const app = this.app, sb = app.sb;
-    this.homes = this._homes(opts.layout);
+    const app = this.app, sb = app.sb, only = this.only;
+    this.homes = only >= 0 ? this._homeOne(only) : this._homes(opts.layout);
     this.plan = [];
     this.weldJob = this.fillJob = this.weldField = this.fillField = null;
     const h0 = this.homes.values().next().value;
@@ -421,14 +426,60 @@ export class Healer {
       return;
     }
     this._plan();
-    sb.attract = { targets: this.targets, n: sb.nV, rate: 0 };
-    sb.collisionsEnabled = false;
+    sb.attract = { targets: this.targets, n: sb.nV, rate: 0, cube: only };
+    // (alone: it passes through the others, which carry on as they are)
+    if (only >= 0) sb.ghostCube = only;
+    else sb.collisionsEnabled = false;
     for (let r = 0; r < sb.rCount; r++) {
       const i = sb.rSim[r];
+      if (only >= 0 && sb.vCube[i] !== only) continue;
       sb.glow[i] = Math.max(sb.glow[i], sb.rTag[r] === 0 ? 0.45 : 0.22);
     }
     app.droplets.heal(this.cW.clone(), TL.flyStart - 0.35, 1.15);
     app.audio?.healStart();
+  }
+
+  // (one cube's own gravity, damping and passing-through: back to normal)
+  _unsolo() {
+    const sb = this.app.sb;
+    sb.ghostCube = -1;
+    sb.cGrav.fill(1);
+    sb.cBoost.fill(1);
+    this.only = -1;
+  }
+
+  // Stopped part way (a swap): everything as it was before it started.
+  cancel() {
+    const app = this.app, sb = app.sb;
+    this.active = false;
+    this.settling = false;
+    this.weldJob = this.fillJob = this.weldField = this.fillField = null;
+    this.weldT = undefined;
+    app.jelly.frontMat.uniforms.uWeldT.value = 99;
+    app.healZoom = 0;
+    sb.attract = null;
+    sb.fill = null;
+    sb.collisionsEnabled = true;
+    sb.dampBoost = 1;
+    sb.gravityScale = 1;
+    this._unsolo();
+  }
+
+  // Just cube slot: home where its biggest piece is, turned as that is -
+  // clear of the others where they are now (on the floor if there's room,
+  // else on top of what's under it).
+  _homeOne(slot) {
+    const app = this.app, sb = app.sb, size = sb.p.size, half = size / 2;
+    let main = null;
+    for (const pc of sb.pieces) if (pc.cube === slot && (!main || pc.verts.length > main.verts.length)) main = pc;
+    let cx = 0, cz = 0, n = 0;
+    if (main) for (const i of main.verts) { cx += sb.x[i * 3]; cz += sb.x[i * 3 + 2]; n++; }
+    if (n) { cx /= n; cz /= n; }
+    const [x, z, top] = app._clearSpot({ exclude: slot, near: [cx, cz], gap: 1.5 });
+    const h = { cx: x, cy: top, cz: z, yaw: main ? this._yawOf(main) : 0 };
+    h.cW = new THREE.Vector3(h.cx, h.cy + half + LIFT_FUSE, h.cz);
+    h.qF = new THREE.Quaternion().setFromAxisAngle(UP, h.yaw);
+    return new Map([[slot, h]]);
   }
 
   // the yaw of a piece (its rest shape fitted to how it lies, about up)
@@ -628,24 +679,27 @@ export class Healer {
       if (sb.fill.t > sb.fill.dur || sb.fill.topo !== sb.topoVersion) sb.fill = null;
     }
     if (this.settling) {
-      // lower the reformed cube gently onto the table
+      // lower the reformed cube gently onto the table (alone: just it)
       this.settleT += dt;
       const u = smooth(0, TL.settle, this.settleT);
-      sb.gravityScale = u * u;
+      if (this.only >= 0) sb.cGrav[this.only] = u * u;
+      else sb.gravityScale = u * u;
       app.healZoom = 0.1 * (1 - u);
       if (this.settleT >= TL.settle) {
         this.settling = false;
         sb.gravityScale = 1;
+        sb.cGrav.fill(1);
         app.healZoom = 0;
+        this.only = -1;
       }
     }
     if (!this.active) return;
     this.t += dt;
     const t = this.t;
-    // thaw / cool / deflate
-    const kk = Math.exp(-dt * 2.4);
-    for (let i = 0; i < sb.nV; i++) sb.temp[i] *= kk;
-    for (let t2 = 0; t2 < sb.nT; t2++) sb.tVS[t2] = 1 + (sb.tVS[t2] - 1) * kk;
+    // thaw / cool / deflate (alone: just it)
+    const kk = Math.exp(-dt * 2.4), only = this.only;
+    for (let i = 0; i < sb.nV; i++) if (only < 0 || sb.vCube[i] === only) sb.temp[i] *= kk;
+    for (let t2 = 0; t2 < sb.nT; t2++) if (only < 0 || sb.tCube[t2] === only) sb.tVS[t2] = 1 + (sb.tVS[t2] - 1) * kk;
     sb.heatActive = true;
     sb._heatResidual = 1;
     if (this.fused) return;
@@ -654,7 +708,7 @@ export class Healer {
     if (sb.topoVersion !== this.planTopo) {
       this._plan();
       this._startWeld();
-      sb.attract = { targets: this.targets, n: sb.nV, rate: sb.attract ? sb.attract.rate : 0 };
+      sb.attract = { targets: this.targets, n: sb.nV, rate: sb.attract ? sb.attract.rate : 0, cube: this.only };
     }
     // what's missing is worked out first (the droplets need it before they
     // set off), then the weld's light field, a little at a time
@@ -681,8 +735,13 @@ export class Healer {
     this._updateTargets(t);
     sb.attract.n = sb.nV;
     sb.attract.rate = 16 * smooth(0, 0.5, t);
-    sb.gravityScale = 1 - smooth(0, 0.4, t);
-    sb.dampBoost = 1 + 1.6 * smooth(0, 0.5, t);
+    if (only >= 0) {
+      sb.cGrav[only] = 1 - smooth(0, 0.4, t);
+      sb.cBoost[only] = 1 + 1.6 * smooth(0, 0.5, t);
+    } else {
+      sb.gravityScale = 1 - smooth(0, 0.4, t);
+      sb.dampBoost = 1 + 1.6 * smooth(0, 0.5, t);
+    }
     app.healZoom = 0.1 * smooth(0.1, 0.9, t);
     // seams light up as the pieces close in
     const g = smooth(TL.flyStart - 0.2, TL.flyStart + TL.flyDur, t);
@@ -690,6 +749,7 @@ export class Healer {
       for (let r = 0; r < sb.rCount; r++) {
         if (sb.rTag[r] === 0) {
           const i = sb.rSim[r];
+          if (only >= 0 && sb.vCube[i] !== only) continue;
           sb.glow[i] = Math.max(sb.glow[i], 0.15 + 0.85 * g);
         }
       }
@@ -767,11 +827,16 @@ export class Healer {
 
   // every cube fresh at its home (its bottom LIFT_FUSE up), let down gently
   _fuseMulti() {
-    const app = this.app, sb = app.sb, size = sb.p.size;
+    const app = this.app, sb = app.sb, size = sb.p.size, only = this.only;
     sb.attract = null;
-    sb.nV = 0;
-    sb.nT = 0;
-    sb.embeds.length = 0;
+    if (only >= 0) {
+      // (just it, afresh: the others as they are, their nails still in)
+      sb.removeCube(only);
+    } else {
+      sb.nV = 0;
+      sb.nT = 0;
+      sb.embeds.length = 0;
+    }
     sb.grabs.length = 0;
     for (const [slot, h] of this.homes) {
       const cb = app.cubes.find((c) => c.slot === slot);
@@ -781,9 +846,12 @@ export class Healer {
     sb.fill = null;
     sb.weld = null;
     sb.collisionsEnabled = true;
+    sb.ghostCube = -1;
     sb.dampBoost = 1;
-    sb.gravityScale = 0;
-    sb.glow.fill(0.25, 0, sb.nV);
+    sb.cBoost.fill(1);
+    if (only >= 0) sb.cGrav[only] = 0;
+    else sb.gravityScale = 0;
+    for (let i = 0; i < sb.nV; i++) if (only < 0 || sb.vCube[i] === only) sb.glow[i] = 0.25;
     this.weldT = undefined;
     app.jelly.frontMat.uniforms.uWeldT.value = 99;
     this.fused = true;
@@ -792,7 +860,8 @@ export class Healer {
     this.settleT = 0;
     for (const f of app.onHealEnd) f();
     app.onTopologyChanged();
-    app.markHealed();
+    // (alone: still battered if another one is)
+    if (only < 0 || app.cubes.every((cb) => cb.slot === only || app._whole(cb.slot))) app.markHealed();
     app.audio?.healFuse();
     for (const h of this.homes.values()) {
       app.particles?.flash(h.cW, 0.9 * size, [2.4, 2.1, 1.7]);
@@ -805,7 +874,7 @@ export class Healer {
     const tg = this.targets;
     let m = 0;
     for (let i = 0; i < sb.nV; i++) {
-      if (!sb.alive[i]) continue;
+      if (!sb.alive[i] || (this.only >= 0 && sb.vCube[i] !== this.only)) continue;
       const dx = sb.x[i * 3] - tg[i * 3], dy = sb.x[i * 3 + 1] - tg[i * 3 + 1], dz = sb.x[i * 3 + 2] - tg[i * 3 + 2];
       const d = dx * dx + dy * dy + dz * dz;
       if (d > m) m = d;
