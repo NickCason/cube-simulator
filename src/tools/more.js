@@ -826,9 +826,22 @@ TorchTool.prototype._liquefy = function (set) {
       vx += v[i] / 4; vy += v[i + 1] / 4; vz += v[i + 2] / 4;
     }
     col.set(app.flavorColorAtRestY(ry));
-    // (as much liquid as the space it leaves: slumped, it's shrunk)
-    const vol = sb.vol0[t] * Math.min(1, sb.tVS[t]);
+    // (the space it leaves - slumped, it's shrunk - and half of that boils
+    // off in the flame)
+    const vol = sb.vol0[t] * Math.min(1, sb.tVS[t]) * 0.5;
     app.fluid.add(cx, cy, cz, vol, vx, vy - 0.3, vz, col.r, col.g, col.b, Math.cbrt(sb.vol0[t]) * 1.5);
+  }
+  // (steam off the boil)
+  {
+    let sx = 0, sy = 0, sz = 0, m = 0;
+    for (const t of set) {
+      for (let k = 0; k < 4; k++) {
+        const i = T[t * 4 + k] * 3;
+        sx += x[i]; sy += x[i + 1]; sz += x[i + 2];
+      }
+      m += 4;
+    }
+    if (m) app.particles.smoke({ x: sx / m, y: sy / m + 0.05, z: sz / m }, Math.min(6, 1 + (set.size >> 3)), 0.25, 0.92, 0.9, 0.3);
   }
   // (what's left round the hole is a melted surface - see TAG_MELT - and
   // it slumps smooth: each of its corners eased toward its neighbours on it)

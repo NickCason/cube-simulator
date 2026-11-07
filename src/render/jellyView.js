@@ -255,6 +255,10 @@ export class JellyView {
     this.layerUniforms = createLayerUniforms();
     this.backMat = createBackMaterial();
     this.frontMat = createJellyMaterial(env, this.layerUniforms);
+    // (depth first, so the front shader - the heavy one - runs once a pixel:
+    // a stepped, folded or many-sided piece seen low drew over itself 2-4x)
+    this.depthMat = new THREE.ShaderMaterial({ vertexShader: this.frontMat.vertexShader, fragmentShader: 'void main() { gl_FragColor = vec4(0.0); }', colorWrite: false });
+    this.prepass = true;
     this.causticMat = createCausticMaterial(this.layerUniforms);
     // the caustics' view from the key light (entry, normal, exit) and their
     // grid of rays (see createCausticMaterial); the grid's density
@@ -610,15 +614,39 @@ export class JellyView {
     return true;
   }
 
+  // The pieces' render vertices (positions, normals, temperature and glow),
+  // subdivided twice, up to the GPU - only when they've changed: a jelly at
+  // rest sent every frame was ~2 MB a frame, a flood set into a sheet 6 MB
+  // (the GPU choked on it). Thawing alone - temperatures creeping, nothing
+  // moving - goes 5 times a second, and only its temperatures.
   update(sb) {
-    this.syncTopology(sb);
+    const topo = this.syncTopology(sb);
+    const n = sb.nV, x = sb.x, temp = sb.temp, glow = sb.glow;
+    let ps = 0, ts = 0, gs = 0;
+    for (let i = 0; i < n; i++) {
+      const w = 1 + (i & 7) * 0.37, o = i * 3;
+      ps += (x[o] + x[o + 1] * 1.3 + x[o + 2] * 1.7) * w;
+      ts += temp[i] * w;
+      gs += glow[i];
+    }
+    const fill = sb.fill && sb.fill.topo === sb.topoVersion;
+    const moved = topo || fill || ps !== this._ps;
+    const now = performance.now();
+    const warmed = ts !== this._ts && now - (this._dataAt || 0) > 200;
+    if (!moved && !warmed && !(gs > 0 || this._gs > 0)) return;
+    this._ps = ps;
+    this._ts = ts;
+    this._gs = gs;
+    this._dataAt = now;
     const pos = this.pos, nrm = this.nrm, data = this.data;
     sb.writeRender(pos, nrm, data);
-    if (sb.fill && sb.fill.topo === sb.topoVersion) this._fill(sb, sb.fill);
+    if (fill) this._fill(sb, sb.fill);
     tessellate(pos, nrm, data, this.mids1, this.nBase, this.disp1);
     tessellate(pos, nrm, data, this.mids2, this.nL1, this.disp2);
-    this.aPos.needsUpdate = true;
-    this.aNrm.needsUpdate = true;
+    if (moved) {
+      this.aPos.needsUpdate = true;
+      this.aNrm.needsUpdate = true;
+    }
     this.aData.needsUpdate = true;
   }
 
@@ -914,6 +942,9 @@ export class JellyView {
         g.setDrawRange(0, n);
       }
     }
+    const perLayer = this._perLayer || (this._perLayer = new Int32Array(16));
+    perLayer.fill(0);
+    for (const it of items) perLayer[it.layer]++;
     const auto = r.autoClear;
     const prevClear = r.getClearColor(new THREE.Color());
     const prevAlpha = r.getClearAlpha();
@@ -929,8 +960,13 @@ export class JellyView {
       r.clear(true, true, false);
       this.scene.overrideMaterial = this.backMat;
       r.render(this.scene, camera);
-      this.scene.overrideMaterial = null;
       r.setRenderTarget(rtScene);
+      // (a big mesh, or several pieces sharing the layer: depth first)
+      if (this.prepass && (this.layerCount[L] > 60000 || perLayer[L] > 1)) {
+        this.scene.overrideMaterial = this.depthMat;
+        r.render(this.scene, camera);
+      }
+      this.scene.overrideMaterial = null;
       r.render(this.scene, camera);
       if (L < nLayers - 1) copyFn();
     }
