@@ -44,4 +44,3 @@ export function maxStretch(sb, mask, filter = null) {
   const l = Math.hypot(bx, by, bz) || 1;
   return { s: best, t: bt, dir: [bx / l, by / l, bz / l] };
 }
-
