@@ -21,9 +21,10 @@ export function createFloor(env, fx) {
     shader.uniforms.uBg = fx.bg;
     shader.uniforms.uTexel = fx.texel;
     shader.uniforms.uTint = fx.tint;
-    shader.uniforms.uCTexel = fx.ctexel;
     shader.uniforms.uCausRect = fx.causRect;
     shader.uniforms.uCausGain = fx.causGain;
+    shader.uniforms.uPenumbra = fx.penumbra;
+    shader.uniforms.uFxLodBias = fx.fxLodBias;
     shader.uniforms.tRefl = fx.refl;
     shader.uniforms.uRes = fx.res;
     shader.uniforms.uReflAmount = fx.reflAmount;
@@ -60,9 +61,10 @@ export function createFloor(env, fx) {
         uniform vec3 uBg;
         uniform vec2 uTexel;
         uniform vec3 uTint;
-        uniform vec2 uCTexel;
         uniform vec4 uCausRect;
         uniform float uCausGain;
+        uniform float uPenumbra;
+        uniform float uFxLodBias;
         uniform sampler2D tRefl;
         uniform vec2 uRes;
         uniform float uReflAmount;
@@ -111,24 +113,43 @@ export function createFloor(env, fx) {
           tint = t0.a > 0.02 ? t0.rgb / t0.a : t1.a > 0.002 ? t1.rgb / t1.a : t2.a > 1e-4 ? t2.rgb / t2.a : uTint;
         }
         if (all(greaterThan(fuv, vec2(0.0))) && all(lessThan(fuv, vec2(1.0)))) {
-          // soft taps (the key light is an area light: its caustics have a
-          // penumbra, and the mesh's facets shouldn't show as lines)
-          vec2 o = uCTexel * 3.2, od = uCTexel * 3.6;
-          // (the caustics have their own texture, fitted round the jelly)
+          // The key light's a soft light: its shadow's edge blurs with how
+          // far from the floor the jelly casting it is - sharp where the
+          // jelly meets the floor, softer up the shadow, softest under a
+          // cube in the air. That distance, round about here (the mask's b:
+          // see createMaskMaterial), and the edge's width from it.
+          vec4 bk = textureLod(tFloorFx, fuv, 3.0 + uFxLodBias);
+          float dBlk = bk.r > 1e-3 ? (1.0 - clamp(bk.b / bk.r, 0.0, 1.0)) * 4.0 : 0.0;
+          float pen = 0.014 + dBlk * uPenumbra;
+          // the shadow: 9 taps a third of that apart, each as wide (by mip level)
+          vec2 o2 = uTexel * (pen / 0.0375);
+          float lm = max(0.0, log2(pen / 0.0375) + uFxLodBias);
+          mask = textureLod(tFloorFx, fuv, lm).r * 0.25
+            + (textureLod(tFloorFx, fuv + vec2(o2.x, 0.0), lm).r + textureLod(tFloorFx, fuv - vec2(o2.x, 0.0), lm).r
+            + textureLod(tFloorFx, fuv + vec2(0.0, o2.y), lm).r + textureLod(tFloorFx, fuv - vec2(0.0, o2.y), lm).r) * 0.125
+            + (textureLod(tFloorFx, fuv + o2, lm).r + textureLod(tFloorFx, fuv - o2, lm).r
+            + textureLod(tFloorFx, fuv + vec2(o2.x, -o2.y), lm).r + textureLod(tFloorFx, fuv + vec2(-o2.x, o2.y), lm).r) * 0.0625;
+          // ...and the light that came through it (its own texture, fitted
+          // round the jelly and blurred a little): crisp, with echoes - a
+          // few copies a centimetre or two off, round in two triangles
+          // turned to the light, each dimmer - its borders stepped and
+          // many-edged, as through a crystal's facets. (Not a square grid:
+          // that wove every line inside into a plaid.) Further from the
+          // floor the light's softness spreads and blurs them.
           vec2 cuv = (vFloorPos.xz - uCausRect.xy) * uCausRect.zw;
-          if (all(greaterThan(cuv, vec2(0.0))) && all(lessThan(cuv, vec2(1.0))))
-            caus = textureLod(tCaustic, cuv, 0.0).rgb * 0.2
-              + (textureLod(tCaustic, cuv + vec2(o.x, 0.0), 0.0).rgb + textureLod(tCaustic, cuv - vec2(o.x, 0.0), 0.0).rgb
-              + textureLod(tCaustic, cuv + vec2(0.0, o.y), 0.0).rgb + textureLod(tCaustic, cuv - vec2(0.0, o.y), 0.0).rgb) * 0.12
-              + (textureLod(tCaustic, cuv + od, 0.0).rgb + textureLod(tCaustic, cuv - od, 0.0).rgb
-              + textureLod(tCaustic, cuv + vec2(od.x, -od.y), 0.0).rgb + textureLod(tCaustic, cuv + vec2(-od.x, od.y), 0.0).rgb) * 0.08;
-          vec2 o2 = uTexel * 3.0;
+          if (all(greaterThan(cuv, vec2(0.0))) && all(lessThan(cuv, vec2(1.0)))) {
+            float sp = max(1.0, pen / 0.03), lc = log2(sp);
+            vec2 a0 = dot(uPatSun, uPatSun) > 1e-6 ? normalize(uPatSun) : vec2(1.0, 0.0);
+            vec2 a1 = vec2(-0.5 * a0.x - 0.866 * a0.y, 0.866 * a0.x - 0.5 * a0.y);
+            vec2 a2 = vec2(-0.5 * a0.x + 0.866 * a0.y, -0.866 * a0.x - 0.5 * a0.y);
+            vec2 k1 = vec2(0.012 * sp) * uCausRect.zw, k2 = vec2(-0.022 * sp) * uCausRect.zw;
+            caus = textureLod(tCaustic, cuv, lc + 1.0).rgb * 0.3
+              + (textureLod(tCaustic, cuv + a0 * k1, lc).rgb + textureLod(tCaustic, cuv + a1 * k1, lc).rgb
+              + textureLod(tCaustic, cuv + a2 * k1, lc).rgb) * 0.14
+              + (textureLod(tCaustic, cuv + a0 * k2, lc).rgb + textureLod(tCaustic, cuv + a1 * k2, lc).rgb
+              + textureLod(tCaustic, cuv + a2 * k2, lc).rgb) * 0.0933;
+          }
           vec4 fx0 = textureLod(tFloorFx, fuv, 0.0);
-          vec4 fx1 = textureLod(tFloorFx, fuv + vec2(o2.x, o2.y), 0.0);
-          vec4 fx2 = textureLod(tFloorFx, fuv + vec2(-o2.x, o2.y), 0.0);
-          vec4 fx3 = textureLod(tFloorFx, fuv + vec2(o2.x, -o2.y), 0.0);
-          vec4 fx4 = textureLod(tFloorFx, fuv + vec2(-o2.x, -o2.y), 0.0);
-          mask = fx0.r * 0.4 + (fx1.r + fx2.r + fx3.r + fx4.r) * 0.15;
           vec2 o3 = uTexel * 7.0;
           float c0 = fx0.g;
           float c1 = textureLod(tFloorFx, fuv + vec2(o3.x, 0.0), 0.0).g + textureLod(tFloorFx, fuv - vec2(o3.x, 0.0), 0.0).g
@@ -157,7 +178,7 @@ export function createFloor(env, fx) {
         // caustics' alpha says where the light came through layers)
         if (uTintLocal > 0.0 && mask > 0.0) {
           vec2 cuv = (vFloorPos.xz - uCausRect.xy) * uCausRect.zw;
-          vec4 c3 = textureLod(tCaustic, cuv, 3.5), c5 = textureLod(tCaustic, cuv, 5.0);
+          vec4 c3 = textureLod(tCaustic, cuv, 2.9), c5 = textureLod(tCaustic, cuv, 4.4);
           vec3 cb = c3.rgb + c5.rgb * 0.5;
           float cm = max(cb.r, max(cb.g, cb.b));
           float lay = smoothstep(0.05, 0.4, c3.a + c5.a * 0.5);

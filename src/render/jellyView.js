@@ -310,7 +310,7 @@ export class JellyView {
     // (entry and exit: a second target each, the rest point there - for
     // gradients out from the middle, the way through)
     this.lightView = [0, 1, 2].map((kind) => ({
-      rt: new THREE.WebGLRenderTarget(lvRes, lvRes, kind === 1 ? { ...lvOpts, type: THREE.HalfFloatType } : { ...lvOpts, count: 2 }),
+      rt: new THREE.WebGLRenderTarget(lvRes, lvRes, kind === 1 ? { ...lvOpts, type: THREE.HalfFloatType } : { ...lvOpts, count: kind === 2 ? 3 : 2 }),
       mat: createLightViewMaterial(kind),
     }));
     this.causticMat.uniforms.tEntry.value = this.lightView[0].rt.texture;
@@ -318,6 +318,12 @@ export class JellyView {
     this.causticMat.uniforms.tExit.value = this.lightView[2].rt.texture;
     this.causticMat.uniforms.tEntryRest.value = this.lightView[0].rt.textures[1];
     this.causticMat.uniforms.tExitRest.value = this.lightView[2].rt.textures[1];
+    // (and the exit's a third: its normal, for the light bent again going out)
+    this.causticMat.uniforms.tExitN.value = this.lightView[2].rt.textures[2];
+    // (on a desktop, the caustics drawn a colour at a time, each bent its own
+    // amount: their edges split into rainbows)
+    this.disperse = !coarse;
+    this.causticMat.uniforms.uDisperse.value = 1.5;
     // (and the jelly, for one cube's shadow on another - see cubeShadowAt)
     this.frontMat.uniforms.tLightEntry.value = this.lightView[0].rt.texture;
     this.frontMat.uniforms.tLightExit.value = this.lightView[2].rt.texture;
@@ -357,11 +363,20 @@ export class JellyView {
     }
     for (const m of [this.maskMat, this.heightMat, this.tintMat]) m.uniforms.uFloorRect.value = this.fxRect;
     this.setLightDir(lightDir);
-    // (mipmapped: the shadow's fill takes its colour from it, blurred)
     this.rtCaustic = new THREE.WebGLRenderTarget(768, 768, {
       type: THREE.HalfFloatType,
       depthBuffer: false,
       samples: 4,
+    });
+    // ...blurred, as the shadow's map is (a Gaussian ~3 mm, both ways), for
+    // the floor and the jelly's view of it to read: read sharp with taps
+    // centimetres apart, every caustic line was stamped over in copies - a
+    // plaid. Mipmapped: blurred wider by mip level (the shadow's fill takes
+    // its colour from it, wide; light through jelly up in the air lands soft)
+    this.rtCausticT = new THREE.WebGLRenderTarget(512, 512, { type: THREE.HalfFloatType, depthBuffer: false });
+    this.rtCausticB = new THREE.WebGLRenderTarget(512, 512, {
+      type: THREE.HalfFloatType,
+      depthBuffer: false,
       generateMipmaps: true,
       minFilter: THREE.LinearMipmapLinearFilter,
     });
@@ -423,7 +438,7 @@ export class JellyView {
       minFilter: THREE.LinearMipmapLinearFilter,
     });
     this.fxUniforms = {
-      caustic: { value: this.rtCaustic.texture },
+      caustic: { value: this.rtCausticB.texture },
       floorFx: { value: this.rtFloorFxB.texture },
       floorTint: { value: this.rtFloorTint.texture },
       floorRect: { value: this.fxRect }, // (shadow and contact: fitted, see _fitFloorFx)
@@ -431,9 +446,9 @@ export class JellyView {
       fxLodBias: { value: 0 }, // (log2 of how much finer than the whole span: keeps blurs by mip level the same size)
       bg: { value: new THREE.Color(0.86, 0.85, 0.83) },
       texel: { value: new THREE.Vector2(1 / 512, 1 / 512) },
-      ctexel: { value: new THREE.Vector2(1 / 768, 1 / 768) },
       causRect: { value: new THREE.Vector4(-3.2, -3.2, 1 / 6.4, 1 / 6.4) }, // (the caustics' texture: fitted round the jelly)
       causGain: { value: 1.5 }, // (how bright the caustic light lands)
+      penumbra: { value: 0.06 }, // (the key light's softness: its shadow's edge widens this much a metre from what casts it)
       tint: { value: new THREE.Color(1, 0.2, 0.2) },
       refl: { value: null }, // the jelly mirrored in the floor (App's rtRefl)
       res: { value: new THREE.Vector2(1, 1) },
@@ -920,7 +935,8 @@ export class JellyView {
     cam.left = u0 - m; cam.right = u1 + m; cam.bottom = v0 - m; cam.top = v1 + m;
     cam.near = Math.max(0.01, -w1 - 0.5); cam.far = -w0 + 0.5;
     cam.updateProjectionMatrix();
-    this.causticMat.uniforms.uLightInvVP.value.multiplyMatrices(cam.projectionMatrix, cam.matrixWorldInverse).invert();
+    this.causticMat.uniforms.uLightVP.value.multiplyMatrices(cam.projectionMatrix, cam.matrixWorldInverse);
+    this.causticMat.uniforms.uLightInvVP.value.copy(this.causticMat.uniforms.uLightVP.value).invert();
     this.causticMat.uniforms.uOrigin.value.copy(c);
     // the caustics' texture: the pieces' footprint and their straight
     // shadow, squared up (where light bent through them can land) - ~3 mm a
@@ -936,9 +952,6 @@ export class JellyView {
     const CR = this.fxUniforms.causRect.value;
     CR.set(cx - size / 2, cz - size / 2, 1 / size, 1 / size);
     this.causticMat.uniforms.uCausRect.value.copy(CR);
-    // (the floor's soft taps stay ~2 cm in the world, the key light's penumbra)
-    const k = 0.022 / 3.2 / size;
-    this.fxUniforms.ctexel.value.set(k, k);
     return true;
   }
 
@@ -1002,7 +1015,33 @@ export class JellyView {
     }
     r.setRenderTarget(this.rtCaustic);
     r.clear(true, false, false);
-    if (lit) r.render(this.gridScene, this.fxCam);
+    if (lit) {
+      const ch = this.causticMat.uniforms.uChannel;
+      if (this.disperse) {
+        const auto = r.autoClear;
+        r.autoClear = false;
+        for (let c = 0; c < 3; c++) {
+          ch.value = c;
+          r.render(this.gridScene, this.fxCam);
+        }
+        r.autoClear = auto;
+      } else {
+        ch.value = -1;
+        r.render(this.gridScene, this.fxCam);
+      }
+    }
+    // (blurred: ~3 mm sigma in the world, 2 steps of 1.5 mm; nothing there, nothing to blur)
+    const cst = 0.0015 * this.fxUniforms.causRect.value.z;
+    this.blurMat.uniforms.tSrc.value = this.rtCaustic.texture;
+    this.blurMat.uniforms.uStep.value.set(cst, 0);
+    r.setRenderTarget(this.rtCausticT);
+    if (lit) r.render(this.blurScene, this.fxCam);
+    else r.clear(true, false, false);
+    this.blurMat.uniforms.tSrc.value = this.rtCausticT.texture;
+    this.blurMat.uniforms.uStep.value.set(0, cst);
+    r.setRenderTarget(this.rtCausticB);
+    if (lit) r.render(this.blurScene, this.fxCam);
+    else r.clear(true, false, false);
     this._fitFloorFx(sb);
     r.setRenderTarget(this.rtFloorFx);
     r.clear(true, false, false);
