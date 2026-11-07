@@ -292,6 +292,49 @@ export function makeHoleGun(M) {
   return shadowed(g);
 }
 
+// Full auto: a little rotary gun - six barrels round its axis (they spin:
+// the group named 'spin'), pointing -Z, a drum and a grip under it.
+export function makeAutoGun(M) {
+  const g = new THREE.Group();
+  const spin = new THREE.Group();
+  spin.name = 'spin';
+  for (let k = 0; k < 6; k++) {
+    const a = (k / 6) * Math.PI * 2;
+    const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.008, 0.008, 0.3, 10), M.darkSteel);
+    barrel.rotation.x = Math.PI / 2;
+    barrel.position.set(Math.cos(a) * 0.022, Math.sin(a) * 0.022, -0.17);
+    spin.add(barrel);
+  }
+  for (const z of [-0.29, -0.12]) {
+    const clamp = new THREE.Mesh(new THREE.CylinderGeometry(0.034, 0.034, 0.016, 20), M.steel);
+    clamp.rotation.x = Math.PI / 2;
+    clamp.position.z = z;
+    spin.add(clamp);
+  }
+  g.add(spin);
+  const body = new THREE.Mesh(new THREE.CylinderGeometry(0.046, 0.05, 0.16, 24), M.darkSteel);
+  body.rotation.x = Math.PI / 2;
+  body.position.z = 0.04;
+  g.add(body);
+  const cap = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.046, 0.04, 24), M.orange);
+  cap.rotation.x = Math.PI / 2;
+  cap.position.z = 0.14;
+  g.add(cap);
+  const drum = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 0.05, 24), M.brass);
+  drum.rotation.z = Math.PI / 2;
+  drum.position.set(0.075, -0.03, 0.03);
+  g.add(drum);
+  const grip = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.12, 0.05), M.rubber);
+  grip.position.set(0, -0.09, 0.09);
+  grip.rotation.x = 0.3;
+  g.add(grip);
+  const handle = new THREE.Mesh(new THREE.TorusGeometry(0.05, 0.007, 8, 20, Math.PI), M.steel);
+  handle.rotation.set(Math.PI / 2, 0, 0);
+  handle.position.set(0, 0.05, 0.02);
+  g.add(handle);
+  return shadowed(g);
+}
+
 // Horseshoe magnet: poles pointing -Y at origin.
 export function makeMagnet(M) {
   const g = new THREE.Group();

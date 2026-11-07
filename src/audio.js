@@ -307,6 +307,49 @@ export class AudioEngine {
 
   // The hole gun: a sharp crack with a low punch under it and a short tail;
   // into jelly, a wet thwup on top (hit 0..1: how much it went through).
+  // full auto: one round - short and punchy (fourteen a second mustn't
+  // turn to mush), a smack if it hits jelly
+  autoshot(hit = 0, pan = 0) {
+    if (!this._ok('autoshot', 0.045)) return;
+    const t = this.ctx.currentTime, out = this._panned(pan);
+    this._noise(t, 0.028, 'highpass', 2200, 1200, 0.7, 0.5, 0.0004, out);
+    this._tone(t, 'sine', 140, 48, 0.07, 0.5, 0.001, out);
+    this._noise(t + 0.008, 0.07, 'bandpass', 900, 300, 1, 0.12, 0.004, out);
+    if (hit > 0) this._noise(t + 0.01, 0.05, 'bandpass', 1300, 420, 2.4, 0.22 * hit, 0.003, out);
+  }
+
+  // its barrels' motor: a whine that follows how fast they spin (0..1)
+  spin(speed) {
+    if (!this.ctx) return;
+    const ctx = this.ctx;
+    if (!this._spin) {
+      if (speed <= 0.01) return;
+      const o = ctx.createOscillator(), f = ctx.createBiquadFilter(), g = ctx.createGain();
+      o.type = 'sawtooth';
+      f.type = 'lowpass';
+      f.frequency.value = 900;
+      g.gain.value = 0.0001;
+      o.connect(f).connect(g).connect(this.bus);
+      o.start();
+      this._spin = { o, f, g };
+    }
+    const S = this._spin, t = ctx.currentTime;
+    S.o.frequency.setTargetAtTime(55 + 240 * speed, t, 0.03);
+    S.f.frequency.setTargetAtTime(500 + 1600 * speed, t, 0.03);
+    S.g.gain.setTargetAtTime(this.muted ? 0 : 0.045 * speed, t, 0.04);
+    if (speed <= 0.01) {
+      S.g.gain.setTargetAtTime(0.0001, t, 0.05);
+      setTimeout(() => {
+        try {
+          S.o.stop();
+        } catch (e) {
+          /* already stopped */
+        }
+      }, 300);
+      this._spin = null;
+    }
+  }
+
   gunshot(hit = 0) {
     if (!this._ok('gunshot', 0.08)) return;
     const t = this.ctx.currentTime;

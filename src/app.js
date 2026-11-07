@@ -15,6 +15,7 @@ import { HandTool, KnifeTool, NailGunTool, HoleGunTool } from './tools/basic.js'
 import { MalletTool, TorchTool, FreezeTool, BallerTool, BombTool, SyringeTool, MagnetTool } from './tools/more.js';
 import { CuberTool, DicerTool } from './tools/cubey.js';
 import { FeedTool } from './tools/feed.js';
+import { AutoGunTool } from './tools/autogun.js';
 import { Cubiplication } from './cubiplication.js';
 import { makeMaterials, makeBomb } from './world/models.js';
 import { physicsWarmJob } from './sim/warm.js';
@@ -217,6 +218,7 @@ export class App {
       dicer: new DicerTool(this),
       nailgun: new NailGunTool(this),
       holegun: new HoleGunTool(this),
+      autogun: new AutoGunTool(this),
       mallet: new MalletTool(this),
       torch: new TorchTool(this),
       freeze: new FreezeTool(this),

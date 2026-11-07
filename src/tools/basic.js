@@ -686,7 +686,7 @@ export class HoleGunTool extends NailGunTool {
   }
 
   fire() {
-    const app = this.app, sb = app.sb, p = sb.p, size = p.size;
+    const app = this.app;
     this.cool = 0.45;
     app.tally?.('shots');
     const muzzle = this.model.localToWorld(new THREE.Vector3(0, 0.05, -0.09));
@@ -694,11 +694,18 @@ export class HoleGunTool extends NailGunTool {
     app.particles.flash(muzzle, 0.09, [9, 7, 4]);
     app.particles.smoke(muzzle, 3, 0.15, 0.6, 0.4, 0.15);
     app.shake(0.012);
-    const o = this.ray.origin, d = this.ray.direction;
+    this.bore(this.ray.origin, this.ray.direction);
+  }
+
+  // A round along o + t d (d unit): its tunnel, spray and cavity. (light: a
+  // full-auto round - a narrower tunnel, a smaller kick, no pause, no bang:
+  // the gun makes its own.) True if it hit jelly.
+  bore(o, d, light = false) {
+    const app = this.app, sb = app.sb, p = sb.p, size = p.size;
     const segs = jellyAlong(sb, o, d);
     if (!segs.length || sb.nT > 30000) {
-      app.audio?.gunshot(0);
-      return;
+      if (!light) app.audio?.gunshot(0);
+      return false;
     }
     const power = app.st?.gunPower ?? 1;
     const at = (t) => new THREE.Vector3(o.x + d.x * t, o.y + d.y * t, o.z + d.z * t);
@@ -715,8 +722,8 @@ export class HoleGunTool extends NailGunTool {
     }
     if (n && cold / n < -0.4 && app.tools.mallet?.shatter) {
       app.tools.mallet.shatter({ tg: { point: entry, hit: { piece: segs[0][2] } }, d: d.clone() });
-      app.audio?.gunshot(0.5);
-      return;
+      if (!light) app.audio?.gunshot(0.5);
+      return true;
     }
     // how far it gets: through soft jelly easily, firm much less, rigid hardly
     const firm = Math.min(1, Math.max(0, Math.log(p.mu / 45) / Math.log(1000 / 45)));
@@ -732,7 +739,7 @@ export class HoleGunTool extends NailGunTool {
     const tA = segs[0][0] - 0.06, tB = through ? segs[segs.length - 1][1] + 0.06 : tEnd;
     // (at least ~3/4 of a cell across: the cut's inside and outside are told at
     // the mesh's vertices, and a thinner tunnel can slip between them all)
-    const A = at(tA), B = at(tB), r = Math.max(0.045 * size * Math.pow(power, 0.35), 0.75 * sb.hCell);
+    const A = at(tA), B = at(tB), r = Math.max(0.045 * size * Math.pow(power, 0.35) * (light ? 0.75 : 1), 0.75 * sb.hCell);
     // the channel: a ragged tunnel, its plug crushed out
     const anchors = app.allAnchors();
     const res = cutBody(sb, ragged(capsuleField(A, B, r), 0.22 * r), { separate: 0, snap: 0.15, anchors });
@@ -774,15 +781,17 @@ export class HoleGunTool extends NailGunTool {
     }
     // the temporary cavity: soft jelly balloons more and further; stiff
     // stuff hardly (it can't open far before it stops the round), rigid less
-    const kick = (3 + 13 * (1 - firm) ** 1.5) * (1 - 0.7 * p.rigidity) * power;
+    const kick = (3 + 13 * (1 - firm) ** 1.5) * (1 - 0.7 * p.rigidity) * power * (light ? 0.45 : 1);
     // (not right at the tunnel's ends: kicked there, its mouth's thin wall
     // folds through itself)
     const t0 = segs[0][0], t1 = through ? segs[segs.length - 1][1] : tEnd, inset = 0.12 * (t1 - t0);
     const CA = at(t0 + inset), CB = at(t1 - inset);
     sb.cavity(CA.x, CA.y, CA.z, CB.x, CB.y, CB.z, (0.24 + 0.18 * (1 - firm)) * size * Math.pow(power, 0.4), kick, through ? 0.55 : 0.2, 1.8 * power * (1 - firm) * (1 - 0.7 * p.rigidity));
-    app.glowPulse?.(entry.x, entry.y, entry.z, 1);
+    app.glowPulse?.(entry.x, entry.y, entry.z, light ? 0.6 : 1);
+    if (light) return true;
     app.hitStop?.(0.05);
     app.audio?.gunshot(through ? 1 : 0.7);
+    return true;
   }
 }
 
