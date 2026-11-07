@@ -29,6 +29,9 @@ export class AutoGunTool extends HoleGunTool {
     this.angle = 0;
     this.round = 0;
     this.boreEvery = 4;
+    this.boreMs = 0; // (how long a tunnel takes here, smoothed)
+    this.lastBore = 0;
+    this.coarse = !!window.matchMedia?.('(pointer: coarse)').matches; // (a phone: lighter on the spray)
     // the brass
     this.casings = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.0055, 0.0055, 0.022, 8), app.M.brass, MAX_CASINGS);
     this.casings.count = 0;
@@ -76,9 +79,12 @@ export class AutoGunTool extends HoleGunTool {
     if (this.spinner) this.spinner.rotation.z = this.angle;
     this.app.audio?.spin(this.spin);
     if (this.firing && this.spin > 0.85) {
-      this.cool -= dt;
-      // (at most two a frame: a slow frame doesn't fire a burst all at once)
-      for (let n = 0; n < 2 && this.cool <= 0; n++) {
+      // (by the wall clock: not the simulation's time - a busy phone slows
+      // the jelly's time to keep up, and on that clock it fired a round a
+      // second - nor the frame's, which stops at 1/30 s)
+      this.cool -= Math.min(this.app._rawDt ?? t, 0.25);
+      // (up to four a frame, so a slow phone still gets its fourteen a second)
+      for (let n = 0; n < 4 && this.cool <= 0; n++) {
         this.fire();
         this.cool += 1 / RATE;
       }
@@ -118,16 +124,20 @@ export class AutoGunTool extends HoleGunTool {
       app.audio?.autoshot(0, pan);
       return;
     }
-    // every few rounds one bores right through; between, a smack and a spit
-    if (this.round % this.boreEvery === 0) {
-      const t0 = performance.now();
+    // every few rounds one bores right through - as often as this device
+    // can take it (the boring at most ~15% of the time); between, a smack
+    // and a spit
+    const now = performance.now();
+    if (this.round % this.boreEvery === 0 && now - this.lastBore > Math.max(220, this.boreMs / 0.15)) {
       this.bore(o, d, true);
-      const ms = performance.now() - t0;
+      const ms = performance.now() - now;
+      this.boreMs = this.boreMs ? this.boreMs * 0.6 + ms * 0.4 : ms;
+      this.lastBore = performance.now();
       this.boreEvery = ms > 30 ? 7 : ms > 18 ? 5 : 4;
     } else {
       sb.impulse(end.x, end.y, end.z, d.x, d.y, d.z, 0.16 * sb.p.size, 2.2, hit.piece);
       const col = app.flavorColorAt(end.x, end.y, end.z);
-      for (let k = 0; k < 2; k++) {
+      for (let k = 0; k < (this.coarse ? (this.round & 1) : 2); k++) {
         const dir = d.clone().negate().add(new THREE.Vector3(Math.random() - 0.5, Math.random() * 0.6, Math.random() - 0.5).multiplyScalar(0.9)).normalize();
         app.droplets.spawn(end.clone().addScaledVector(dir, 0.02), dir.multiplyScalar(1.5 + Math.random() * 2.5), 0.008 + Math.random() * 0.01, col);
       }
