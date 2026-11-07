@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { FLOOR_PATTERN_GLSL } from './floorpattern.js';
 
 const NOISE = /* glsl */ `
   float hash13(vec3 p) {
@@ -383,6 +384,7 @@ export function createJellyMaterial(env, layerUniforms) {
       ${LAYER_GLSL}
 
       ${CUBE_GLSL}
+      ${FLOOR_PATTERN_GLSL}
       varying float vCube;
       uniform sampler2D tLightEntry;
       uniform sampler2D tLightExit;
@@ -506,7 +508,10 @@ export function createJellyMaterial(env, layerUniforms) {
         vec3 direct = uLightColor * max(normalize(uLightDir).y, 0.0) * 0.3183 * transfer * (1.0 - contact * 0.2);
         vec3 sky = textureLod(envMap, vec3(0.0, 1.0, 0.0), envMaxLod).rgb * uFloorEnv
           * mix(vec3(1.0), tint * 1.1, mask * 0.68) * (1.0 - contact * 0.35);
-        vec3 c = uFloorAlbedo * (direct + sky) + glowF * uGlowFloor;
+        // (the place's floor: its pattern, and the grid's own light)
+        vec3 patG;
+        vec3 alb = floorPattern(xz, uFloorAlbedo, patG);
+        vec3 c = alb * (direct + sky) + glowF * uGlowFloor + patG * uPatGlow;
         return mix(c, uBg, smoothstep(3.2, 11.0, length(xz)));
       }
 

@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { MAX_PULSES } from './jellyMaterials.js';
+import { FLOOR_PATTERN_GLSL } from './floorpattern.js';
 
 // Studio floor that receives jelly caustics, the jelly's coloured light
 // footprint and a soft contact shadow, and fades into the backdrop.
@@ -37,6 +38,12 @@ export function createFloor(env, fx) {
     shader.uniforms.uSel = fx.sel;
     shader.uniforms.uSelCol = fx.selCol;
     shader.uniforms.uSelPing = fx.selPing;
+    shader.uniforms.uPat = fx.pat;
+    shader.uniforms.uPatA = fx.patA;
+    shader.uniforms.uPatB = fx.patB;
+    shader.uniforms.uPatScale = fx.patScale;
+    shader.uniforms.uPatGlow = fx.patGlow;
+    shader.uniforms.uPatSun = fx.patSun;
     shader.vertexShader = shader.vertexShader
       .replace('#include <common>', '#include <common>\nvarying vec3 vFloorPos;')
       .replace('#include <worldpos_vertex>', '#include <worldpos_vertex>\nvFloorPos = (modelMatrix * vec4(transformed, 1.0)).xyz;');
@@ -70,11 +77,19 @@ export function createFloor(env, fx) {
         uniform vec4 uSel;
         uniform vec4 uSelCol;
         uniform float uSelPing;
+        ${FLOOR_PATTERN_GLSL}
         // a rounded square's signed distance (half side h, corner radius r)
         float sdRoundSq(vec2 p, float h, float r) {
           vec2 q = abs(p) - vec2(h - r);
           return length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - r;
         }`,
+      )
+      .replace(
+        '#include <roughnessmap_fragment>',
+        `#include <roughnessmap_fragment>
+        // (a place's floor: its pattern)
+        vec3 patGlow;
+        diffuseColor.rgb = floorPattern(vFloorPos.xz, diffuseColor.rgb, patGlow);`,
       )
       .replace(
         '#include <lights_fragment_begin>',
@@ -211,6 +226,7 @@ export function createFloor(env, fx) {
             gl_FragColor.rgb = mix(gl_FragColor.rgb, rc, clamp(k * 0.8, 0.0, 0.92));
           }
         }
+        gl_FragColor.rgb += patGlow * uPatGlow;
         float fdist = length(vFloorPos.xz);
         float fade = smoothstep(3.2, 11.0, fdist);
         gl_FragColor.rgb = mix(gl_FragColor.rgb, uBg, fade);`,

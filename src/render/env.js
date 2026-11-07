@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { makeSkyMaterial, skyUniforms, setSky } from './sky.js';
 
 // Glow mode's studio is dark: a black sweep, a dim key, and coloured strip
 // lights that draw neon lines along the jelly's edges and the glossy floor.
@@ -32,33 +33,32 @@ const LOOKS = {
   },
 };
 
+// (neon strips: a diner after dark)
+const NEON = (k) => [
+  [4, 3, 2.6, [k.x, k.y, k.z], [0, 0, 0], 0xffd0f0],
+  [1, 12, 9, [12, 4, 2], [0, 2, 0], 0x3ff0ff],
+  [0.9, 9, 8, [-10, 3.5, 5], [0, 2, 0], 0xff3fb4],
+  [10, 0.8, 5, [-3, 5, -12], [0, 1, 0], 0xff5fd0],
+  [12, 1.2, 0.4, [0, 1.2, 12], [0, 1, 0], 0x8fe8ff],
+];
+const BOXES = { studio: LOOKS.light.boxes, 'studio-dark': LOOKS.dark.boxes, neon: NEON };
+
+// the studio's own look, as a place's
+export function studioLook(name) {
+  const L = LOOKS[name] || LOOKS.light;
+  return { sky: { zen: L.top, hor: L.hor, gnd: L.flo }, boxes: L.boxes };
+}
+
 function buildScene(lightDir, look) {
   const scene = new THREE.Scene();
-  const [t, h, f] = [look.top, look.hor, look.flo].map((c) => `vec3(${c.map((x) => x.toFixed(4)).join(', ')})`);
-  scene.add(
-    new THREE.Mesh(
-      new THREE.SphereGeometry(30, 48, 24),
-      new THREE.ShaderMaterial({
-        side: THREE.BackSide,
-        depthWrite: false,
-        vertexShader: /* glsl */ `
-          varying vec3 vDir;
-          void main() {
-            vDir = normalize(position);
-            gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-          }`,
-        fragmentShader: /* glsl */ `
-          varying vec3 vDir;
-          void main() {
-            float y = vDir.y;
-            vec3 c = y > 0.0 ? mix(${h}, ${t}, pow(y, 0.55)) : mix(${h}, ${f}, pow(-y, 0.35));
-            gl_FragColor = vec4(c, 1.0);
-          }`,
-      }),
-    ),
-  );
+  const u = skyUniforms();
+  setSky(u, look.sky, lightDir || new THREE.Vector3(-0.45, 0.8, 0.4));
+  const mat = makeSkyMaterial(u);
+  mat.depthTest = true;
+  scene.add(new THREE.Mesh(new THREE.SphereGeometry(30, 48, 24), mat));
   const k = lightDir ? lightDir.clone().multiplyScalar(14) : { x: -7, y: 11, z: 7 };
-  for (const [w, hh, intensity, pos, at, color] of look.boxes(k)) {
+  const boxes = typeof look.boxes === 'function' ? look.boxes : BOXES[look.boxes];
+  for (const [w, hh, intensity, pos, at, color] of boxes ? boxes(k) : []) {
     const m = new THREE.Mesh(
       new THREE.PlaneGeometry(w, hh),
       new THREE.MeshBasicMaterial({ color: new THREE.Color(color).multiplyScalar(intensity), side: THREE.DoubleSide }),
@@ -82,8 +82,10 @@ function disposeScene(scene) {
 // setLook() recaptures into the same texture, so everything that reflects
 // it follows without being told.
 export function createStudioEnvironment(renderer, lightDir, look = 'light') {
-  const capture = (name, target) => {
-    const scene = buildScene(lightDir, LOOKS[name]);
+  // (look: 'light' or 'dark' - the studio's - or { key, sky, boxes }: a place's)
+  const resolve = (L) => (typeof L === 'string' ? { key: 'studio:' + L, ...studioLook(L) } : L);
+  const capture = (L, target) => {
+    const scene = buildScene(lightDir, L);
     const cube = new THREE.WebGLCubeRenderTarget(256, { type: THREE.HalfFloatType, generateMipmaps: false });
     new THREE.CubeCamera(0.1, 100, cube).update(renderer, scene);
     const pmrem = new THREE.PMREMGenerator(renderer);
@@ -93,18 +95,20 @@ export function createStudioEnvironment(renderer, lightDir, look = 'light') {
     disposeScene(scene);
     return out;
   };
-  const target = capture(look, null);
+  const first = resolve(look);
+  const target = capture(first, null);
   const tex = target.texture;
   const maxLod = tex.mipmaps && tex.mipmaps.length ? tex.mipmaps.length - 1 : Math.log2(256) - 3;
   return {
     texture: tex,
     maxLod,
     target,
-    look,
-    setLook(name) {
-      if (name === this.look) return;
-      this.look = name;
-      capture(name, target);
+    look: first.key,
+    setLook(L) {
+      const R = resolve(L);
+      if (R.key === this.look) return;
+      this.look = R.key;
+      capture(R, target);
     },
   };
 }

@@ -416,6 +416,13 @@ export class JellyView {
       // (several cubes) the one the panels edit, ringed on the floor: centre
       // x, z, half its side, its turn; its colour and how much the ring
       // shows; seconds since it was picked (a ping goes out)
+      // the place's floor pattern (see floorpattern.js)
+      pat: { value: 0 },
+      patA: { value: new THREE.Vector3(0.1, 0.1, 0.1) },
+      patB: { value: new THREE.Vector3(0.9, 0.9, 0.9) },
+      patScale: { value: 1 },
+      patGlow: { value: 0 },
+      patSun: { value: new THREE.Vector2(lightDir.x, lightDir.z).normalize() }, // (toward the key light)
       sel: { value: new THREE.Vector4(0, 0, 0.5, 0) },
       selCol: { value: new THREE.Vector4(1, 1, 1, 0) },
       selPing: { value: 9 },
@@ -425,6 +432,7 @@ export class JellyView {
     Object.assign(this.frontMat.uniforms, {
       tCaustic: fx.caustic, tFloorFx: fx.floorFx, tFloorTint: fx.floorTint, tGlowMap: fx.glowTex, uFloorRect: fx.floorRect, uGlowRect: fx.glowRect, uFxLodBias: fx.fxLodBias, uCausRect: fx.causRect, uCausGain: fx.causGain, uTint: fx.tint,
       uGlowFloor: fx.glowFloor, uBg: fx.bg, uFloorAlbedo: fx.floorAlbedo, uFloorEnv: fx.floorEnv,
+      uPat: fx.pat, uPatA: fx.patA, uPatB: fx.patB, uPatScale: fx.patScale, uPatGlow: fx.patGlow, uPatSun: fx.patSun,
     });
     this.rtBack = null;
     this._v = new THREE.Vector3();

@@ -2,6 +2,7 @@ import { FLAVORS, TEXTURES, EDGES, GLITTERS, LAYER_PRESETS, MIN_LAYERS, MAX_LAYE
 import { SETTINGS, settingWord, settingNum } from '../settings.js';
 import { Cubby } from './cubby.js';
 import { StackPanel, STACK_ICON } from './stackpanel.js';
+import { PlacesPanel, PLACE_ICON } from './places.js';
 
 const svg = (inner) =>
   `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${inner}</svg>`;
@@ -102,6 +103,7 @@ export class UI {
         </svg>
       </header>
       <button class="theme-btn" aria-label="Glow mode" title="Glow mode (L)"></button>
+      <button class="place-btn" aria-label="Places" title="Places (P)">${PLACE_ICON}</button>
       <div class="hint" aria-live="polite"></div>
       <nav class="dock" role="toolbar" aria-label="Tools">
         <div class="tools"></div>
@@ -450,6 +452,19 @@ export class UI {
     // the stack (several cubes): its button by Re-cube, its panel
     this.stackBtn = root.querySelector('.stack-btn');
     this.stack = new StackPanel(this, app, root);
+    // places: where the cube is
+    this.placeBtn = root.querySelector('.place-btn');
+    this.places = new PlacesPanel(this, app, root);
+    this.placeBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      app.audio.init();
+      app.audio.ui();
+      this.places.toggle();
+    });
+    window.addEventListener('keydown', (e) => {
+      if (e.target instanceof HTMLInputElement || e.metaKey || e.ctrlKey || e.altKey) return;
+      if ((e.key === 'p' || e.key === 'P') && !e.repeat) this.places.toggle();
+    });
     this.stackBtn.addEventListener('click', (e) => {
       e.stopPropagation();
       app.audio.init();
@@ -536,8 +551,14 @@ export class UI {
   }
 
   // (the button offers the other look)
+  // (the place cards show each place in the look you're in)
+  placeChanged() {
+    this.places?.render();
+  }
+
   setTheme(name) {
     const dark = name === 'dark';
+    this.places?.render();
     this.themeEl.innerHTML = dark ? ICONS.sun : ICONS.moon;
     this.themeEl.title = dark ? 'Lights on (L)' : 'Glow mode (L)';
     this.themeEl.setAttribute('aria-label', dark ? 'Lights on' : 'Glow mode');

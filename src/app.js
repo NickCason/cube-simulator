@@ -1,6 +1,8 @@
 import * as THREE from 'three';
 import { SoftBody, MAX_CUBES, REST_STEP } from './sim/softbody.js';
 import { createStudioEnvironment } from './render/env.js';
+import { createSkyDome, setSky } from './render/sky.js';
+import { PLACES, PLACE_BY_ID } from './places.js';
 import { createFloor } from './render/floor.js';
 import { Post } from './render/post.js';
 import { JellyView } from './render/jellyView.js';
@@ -107,6 +109,7 @@ export class App {
     this.lightDir = new THREE.Vector3(...(LIGHTS[opts.light] || LIGHTS.side)).normalize();
 
     this.theme = this._loadTheme(opts);
+    this.place = this._loadPlace(opts); // (where the cube is: see places.js)
     this.bg = new THREE.Color();
     this._pulseC = new THREE.Color();
     this.env = createStudioEnvironment(renderer, this.lightDir, this.theme);
@@ -139,6 +142,10 @@ export class App {
     this.fireGoal = 0;
     this.floor = createFloor(this.env, this.jelly.fxUniforms);
     this.scene.add(this.floor);
+    // the sky (a place's: the studio has its sweep, the backdrop colour)
+    this.sky = createSkyDome();
+    this.sky.visible = false;
+    this.scene.add(this.sky);
 
     this.post = new Post(renderer);
     this.style = this._loadStyle(opts);
@@ -1100,6 +1107,7 @@ export class App {
       this._impactGlow();
     }
     this._themeTick(dt);
+    this._placeTick(dt);
     this._updateCamera(dt);
     this.overlay.draw(dt);
     const r0 = performance.now();
@@ -1742,6 +1750,60 @@ export class App {
   }
 
   // ------------------------------------------------------------ looks
+  _loadPlace(opts) {
+    if (PLACE_BY_ID[opts.place]) return opts.place;
+    try {
+      const p = localStorage.getItem('cube-sim-place');
+      if (PLACE_BY_ID[p]) return p;
+    } catch (e) {}
+    return 'studio';
+  }
+
+  // Where the cube is (a place: its sky, its floor, its light - in this look).
+  // The picture dips, the place swaps in while it's dark and it comes back
+  // up; and somewhere with a sky the camera tips down a little to show it.
+  setPlace(id, animate = true) {
+    if (!PLACE_BY_ID[id] || id === this.place) return;
+    this.place = id;
+    try {
+      localStorage.setItem('cube-sim-place', id);
+    } catch (e) {}
+    // (mid-switch of the looks, before its swap: that brings the place in)
+    const TA = this._themeAnim;
+    if (!TA || TA.swapped) {
+      if (animate && !TA && !this.reducedMotion) this._placeAnim = { t: 0, swapped: false };
+      else this._applyTheme(this.theme, this.theme === 'dark' ? 1 : 0, true);
+    }
+    if (animate && PLACE_BY_ID[id][this.theme]?.sky && this.orbitGoal.phi > 0.27) this.orbitGoal.phi = 0.26;
+    this.ui?.placeChanged?.(id);
+  }
+
+  _placeTick(dt) {
+    const A = this._placeAnim;
+    if (!A) return;
+    A.t += dt;
+    const C = this.post.compositeMat.uniforms, OUT = 0.14, IN = 0.32;
+    if (A.t < OUT) {
+      C.uDim.value = 1 - 0.85 * (A.t / OUT);
+      return;
+    }
+    if (!A.swapped) {
+      A.swapped = true;
+      this._applyTheme(this.theme, this.theme === 'dark' ? 1 : 0, true);
+    }
+    const k = Math.min(1, (A.t - OUT) / IN);
+    C.uDim.value = 0.15 + 0.85 * k * (2 - k);
+    if (k >= 1) this._placeAnim = null;
+  }
+
+  // the look for this theme here: the studio's, with the place's on top
+  _look(name) {
+    const P = PLACE_BY_ID[this.place] || PLACES[0], V = P[name] || {};
+    // (its sky, floor pattern and light boxes are its own; the rest are the look's numbers)
+    const { sky, floor, boxes, ink, ...rest } = V;
+    return { T: { ...THEMES[name], ...rest }, V, P };
+  }
+
   _loadTheme(opts) {
     if (THEMES[opts.theme]) return opts.theme;
     try {
@@ -1756,6 +1818,10 @@ export class App {
   setTheme(name, animate = true) {
     if (!THEMES[name] || name === this.theme) return;
     this.theme = name;
+    if (this._placeAnim) {
+      this._placeAnim = null;
+      this.post.compositeMat.uniforms.uDim.value = 1;
+    }
     try {
       localStorage.setItem('cube-sim-theme', name);
     } catch (e) {}
@@ -1769,9 +1835,28 @@ export class App {
   // everything that differs between the looks (glow: how far the jelly's
   // light is up, 0..1 - the switch brings it up itself)
   _applyTheme(name, glow = 1, ease = false) {
-    const T = THEMES[name];
-    this.env.setLook(name);
-    this.bg.setRGB(...T.bg);
+    const { T, V, P } = this._look(name);
+    // the place: its sky (seen, and reflected), its horizon the backdrop
+    // the floor fades into, its floor's pattern
+    if (V.sky) {
+      this.env.setLook({ key: P.id + ':' + name, sky: V.sky, boxes: V.boxes || null });
+      setSky(this.sky.userData.u, V.sky, this.lightDir);
+      this.sky.userData.u.uGnd.value.copy(this.sky.userData.u.uHor.value); // (no seam where the floor ends)
+      this.sky.visible = true;
+      this.bg.setRGB(...V.sky.hor);
+    } else {
+      this.env.setLook(name);
+      this.sky.visible = false;
+      this.bg.setRGB(...T.bg);
+    }
+    const F = V.floor, fx = this.jelly.fxUniforms;
+    fx.pat.value = F ? F.pat : 0;
+    if (F) {
+      fx.patA.value.set(...F.A);
+      fx.patB.value.set(...F.B);
+      fx.patScale.value = F.scale || 1;
+    }
+    fx.patGlow.value = F?.glow || 0;
     this.jelly.fxUniforms.bg.value.copy(this.bg);
     const fm = this.floor.material;
     fm.color.setRGB(...T.floor);
@@ -1798,6 +1883,8 @@ export class App {
       this._themingT = setTimeout(() => html.classList.remove('theming'), 700);
     }
     html.classList.toggle('dark', name === 'dark');
+    html.dataset.place = this.place;
+    html.classList.toggle('sky-dark', V.ink === 'light'); // (the wordmark, over a black sky)
     document.querySelector('meta[name="theme-color"]')?.setAttribute('content', T.css);
     this.ui?.setTheme?.(name);
   }
@@ -1961,6 +2048,7 @@ export class App {
     const r = this.renderer;
     this.jelly.update(this.sb);
     this.jelly.frontMat.uniforms.uTime.value = this.clock.t;
+    this.sky.userData.u.uTime.value = this.clock.t;
     // fire light: torch sets fireGoal each frame, bombs spike it
     this.fireLevel += (this.fireGoal - this.fireLevel) * 0.35;
     this.fireGoal *= 0.6;
