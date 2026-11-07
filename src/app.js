@@ -7,6 +7,7 @@ import { JellyView } from './render/jellyView.js';
 import { NailSystem } from './world/nails.js';
 import { Particles } from './world/particles.js';
 import { Healer } from './heal.js';
+import { Swapper } from './swap.js';
 import { AudioEngine } from './audio.js';
 import { Overlay } from './ui/overlay.js';
 import { UI } from './ui/ui.js';
@@ -142,6 +143,7 @@ export class App {
     this.particles = new Particles(this);
     this.fxScene = this.particles.scene;
     this.healer = new Healer(this);
+    this.swapper = new Swapper(this); // (putting on a saved cube, with ceremony)
     this.onHealStart = [];
     this.onHealEnd = [];
     this.onColor = [];
@@ -608,9 +610,15 @@ export class App {
   }
 
   heal(opts) {
-    if (this.healer.active) return;
+    if (this.healer.active || this.swapper?.active) return false;
     this.tool?.up?.();
     this.healer.start(opts);
+    return true;
+  }
+
+  // a deed for the record of the cube on show (see Cubby: healed, cuts, ...)
+  tally(kind) {
+    this.ui?.cubby?.tally(kind);
   }
 
   fireAt(p, level) {
@@ -848,7 +856,7 @@ export class App {
         return;
       }
       if (pointers.size > 2) return;
-      if (this.healer.active) {
+      if (this.healer.active || this.swapper.active) {
         mode = 'orbit';
         last = { x: e.clientX, y: e.clientY };
         return;
@@ -945,6 +953,7 @@ export class App {
       for (const f of this.onFrame) f(sdt, dt);
       this.tool?.update?.(sdt, dt);
       this.healer.update(sdt);
+      this.swapper.update(sdt);
       this.tilt.update(dt);
       this._edgeMorphTick(dt);
       const nS = Math.max(4, Math.min(24, Math.round(this.substepRate * sdt)));
@@ -1045,10 +1054,10 @@ export class App {
   }
 
   // ------------------------------------------------------------ whole cubes
-  // Put on a saved or shared cube (a CubeR code, see cubecode.js): flavour,
-  // material, edges, glitter, every tuned slider, tearing and the look. Your
-  // sound levels stay yours. A battered jelly re-forms as the new cube.
-  loadCube(c) {
+  // A saved or shared cube (a CubeR code, see cubecode.js): its flavour,
+  // material, glitter, every tuned slider, tearing and the look, onto the
+  // jelly as it is. Your sound levels stay yours. (Size and edges: the callers.)
+  _wearStyle(c) {
     const s = this.style;
     s.flavor = c.flavor;
     s.layers = { colors: [...c.layers.colors], blur: c.layers.blur, repeat: c.layers.repeat, bias: c.layers.bias };
@@ -1058,6 +1067,18 @@ export class App {
     for (const k of ['volume', 'impacts', 'wobble']) if (this.tune[k] !== undefined) tune[k] = this.tune[k];
     if (c.tear === false) tune.tear = false;
     this.tune = tune;
+    if (c.theme && c.theme !== this.theme) {
+      this.setTheme(c.theme);
+      this.ui?.setTheme(c.theme);
+    }
+    this.ui?.syncSwitches?.();
+  }
+
+  // Put a cube on right here (Undo uses this): a battered jelly re-forms as it.
+  loadCube(c) {
+    const s = this.style;
+    this.swapper.stop();
+    this._wearStyle(c);
     const size = this.settings.size;
     if (Math.abs(size - this.sb.p.size) > 1e-6) {
       // (re-formed at the new size, with the new edges too)
@@ -1069,11 +1090,17 @@ export class App {
     else this.applyStyle();
     if (this.damaged && !this.healer.active) this.heal();
     else if (!this.healer.active) this.sb.impulse(0, 0.6, 0, 0, -1, 0, 3, 1.2); // (a jiggle: here it is)
-    if (c.theme && c.theme !== this.theme) {
-      this.setTheme(c.theme);
-      this.ui?.setTheme(c.theme);
+  }
+
+  // Put a cube on like picking a fighter: the one on show is pulled up out of
+  // sight and the new one drops in (see Swapper). onLand(c) once it's down.
+  swapCube(c, onLand = null) {
+    if (this.reducedMotion || !this.intro.done) {
+      this.loadCube(c);
+      onLand?.(c);
+      return;
     }
-    this.ui?.syncSwitches?.();
+    this.swapper.start(c, onLand);
   }
 
   // A small square picture of the jelly as it is now (a JPEG data URL), for

@@ -99,3 +99,18 @@ test('QR capacities match the standard', () => {
   const q = qrEncode(cubeLink(full));
   assert.equal(q.size, q.version * 4 + 17);
 });
+
+test('fighter stats: six, 0..100, and they read like the material', async () => {
+  const { cubeStats } = await import('../src/cubecode.js');
+  const { TEXTURES } = await import('../src/styles.js');
+  for (const t of Object.keys(TEXTURES)) {
+    const s = cubeStats({ texture: t, tune: {} });
+    assert.equal(s.length, 6);
+    for (const [, v] of s) assert.ok(Number.isInteger(v) && v >= 0 && v <= 100, `${t}: ${v}`);
+  }
+  const stat = (t, name, tune = {}) => cubeStats({ texture: t, tune }).find(([n]) => n === name)[1];
+  assert.ok(stat('rubber', 'Bounce') > 90 && stat('slime', 'Bounce') < 15);
+  assert.ok(stat('water', 'Wobble') > 90 && stat('glass', 'Wobble') < 10);
+  assert.ok(stat('candy', 'Tough') > 85 && stat('glass', 'Squish') === 0);
+  assert.ok(stat('jello', 'Goo', { goo: 1 }) === 100); // (tuned sliders count)
+});

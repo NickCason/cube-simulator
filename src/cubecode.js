@@ -16,7 +16,7 @@
 // newer app still opens in an older one (without what's new), and old codes
 // open forever. Never change what a letter or a slider code means: add new ones.
 
-import { SETTINGS } from './settings.js';
+import { SETTINGS, resolveSettings } from './settings.js';
 import { FLAVORS, TEXTURES, EDGES, GLITTERS, MIN_LAYERS, MAX_LAYERS, MAX_REPEAT, DEFAULT_STYLE } from './styles.js';
 
 export const CODE_VERSION = 1;
@@ -194,4 +194,21 @@ export function cubeSummary(c, withLook = false) {
   if (c.glitter && c.glitter !== 'off') bits.push(`${GLITTERS.find((g) => g.id === c.glitter)?.name || c.glitter} glitter`);
   if (withLook && c.theme === 'dark') bits.push('Glow mode');
   return bits.join(' · ');
+}
+
+// A cube's fighter stats, 0..100 each: how it plays, from its settings (its
+// material's, where they aren't tuned).
+export function cubeStats(c) {
+  const st = resolveSettings(c.tune || {}, TEXTURES[c.texture] || TEXTURES.jello);
+  const pos = (key) => Math.min(1, Math.max(0, SETTING[key].from(st[key])));
+  const pct = (x) => Math.round(100 * Math.min(1, Math.max(0, x)));
+  const rigid = Math.min(1, Math.max(0, st.rigidity || 0));
+  return [
+    ['Squish', pct((0.75 * (1 - pos('mu')) + 0.25 * pos('lambda')) * (1 - rigid))],
+    ['Bounce', pct(pos('bounce'))],
+    ['Wobble', pct((1 - pos('damping')) * (1 - rigid) * (1 - 0.5 * pos('mu')))],
+    ['Goo', pct(pos('goo'))],
+    ['Tough', pct(Math.max(pos('tough'), rigid))],
+    ['Heft', pct(0.65 * pos('weight') + 0.35 * pos('size'))],
+  ];
 }

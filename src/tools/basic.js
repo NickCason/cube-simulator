@@ -309,6 +309,7 @@ export class HandTool {
     app.onTopologyChanged();
     const seam = res.seam.filter((i) => sb.alive[i]);
     if (!seam.length) return null;
+    app.tally?.('tears');
     const k = sb.vPiece[seam[0]], pc = sb.pieces[k];
     const half = 1.5 * sb.hCell, band = [], prof = [];
     const plus = new Uint8Array(sb.nT);
@@ -553,6 +554,7 @@ export class KnifeTool {
     app.onTopologyChanged();
     app.audio?.slice(app.sb.pieces.length > before ? 1 : 0.6);
     app.markDamaged();
+    app.tally?.('cuts');
     return true;
   }
 }
@@ -634,6 +636,7 @@ export class NailGunTool {
   fire() {
     const app = this.app;
     this.cool = 0.16;
+    app.tally?.('shots');
     const cam = app.camera;
     // muzzle sits just off-screen bottom-right, aimed at what's under the cursor
     const r = this.ray;
@@ -685,6 +688,7 @@ export class HoleGunTool extends NailGunTool {
   fire() {
     const app = this.app, sb = app.sb, p = sb.p, size = p.size;
     this.cool = 0.45;
+    app.tally?.('shots');
     const muzzle = this.model.localToWorld(new THREE.Vector3(0, 0.05, -0.09));
     this.recoil = 1.6;
     app.particles.flash(muzzle, 0.09, [9, 7, 4]);

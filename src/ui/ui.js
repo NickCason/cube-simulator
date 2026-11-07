@@ -382,7 +382,7 @@ export class UI {
     });
     this.healEl.addEventListener('click', () => {
       app.audio.init();
-      app.heal();
+      if (app.heal()) this.cubby?.tally('healed');
     });
     this.muteEl.addEventListener('click', () => {
       app.audio.init();
@@ -400,7 +400,9 @@ export class UI {
       }
       const d = TOOL_DEFS.find((t) => t.key === e.key);
       if (d) app.setTool(d.id);
-      else if (e.key === 'h' || e.key === 'H') app.heal();
+      else if (e.key === 'h' || e.key === 'H') {
+        if (app.heal()) this.cubby?.tally('healed');
+      }
       else if (e.key === 'm' || e.key === 'M') this.setMuted(!app.audio.muted);
       else if ((e.key === 'l' || e.key === 'L') && !e.repeat) this.toggleTheme();
     });

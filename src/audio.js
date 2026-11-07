@@ -547,6 +547,43 @@ export class AudioEngine {
     this.squish(0.7, 0.85);
   }
 
+  // Character select: the cube on show slurped up and away...
+  swapOut() {
+    if (!this._ok('swapOut', 0.2)) return;
+    const t = this.ctx.currentTime;
+    this._noise(t, 0.5, 'bandpass', 300, 3200, 2.2, 0.2, 0.12);
+    this._tone(t, 'sine', 160, 980, 0.42, 0.15, 0.05);
+    this._tone(t + 0.05, 'triangle', 320, 1960, 0.36, 0.035, 0.05);
+    this.squish(0.6, 1.3);
+  }
+
+  // ...the new one whistling down...
+  swapIn() {
+    if (!this._ok('swapIn', 0.2)) return;
+    const t = this.ctx.currentTime;
+    this._tone(t, 'sine', 1500, 420, 0.5, 0.055, 0.08);
+    this._noise(t, 0.45, 'bandpass', 2600, 700, 3, 0.06, 0.2);
+  }
+
+  // ...and up goes its card: a quick fanfare
+  stinger() {
+    if (!this._ok('stinger', 0.5)) return;
+    const t = this.ctx.currentTime;
+    [523.25, 659.25, 783.99, 1046.5].forEach((f, i) => {
+      this._tone(t + i * 0.07, 'square', f, f, 0.12, 0.03, 0.004);
+      this._tone(t + i * 0.07, 'triangle', f / 2, f / 2, 0.14, 0.05, 0.004);
+    });
+    [1046.5, 1318.5, 1568].forEach((f) => this._tone(t + 0.3, 'triangle', f, f, 0.7, 0.035, 0.01));
+    this._tone(t + 0.3, 'sine', 130.8, 65.4, 0.4, 0.18, 0.005);
+  }
+
+  // a stat bar filling, a step up the scale each
+  tick(step = 0) {
+    if (!this.ctx || this.muted) return;
+    const t = this.ctx.currentTime, f = 880 * Math.pow(2, step / 12);
+    this._tone(t, 'square', f, f, 0.035, 0.016, 0.001);
+  }
+
   ui() {
     if (!this._ok('ui', 0.03)) return;
     const t = this.ctx.currentTime;

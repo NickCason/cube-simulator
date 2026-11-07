@@ -6,9 +6,11 @@
 import { captureCube, encodeCube, decodeCube, cubeLink, cubeSummary, cleanName } from '../cubecode.js';
 import { cubeName } from '../puns.js';
 import { qrEncode, qrSVG } from './qr.js';
+import { FighterCard } from './fighter.js';
 import { resolveFlavor, layerBands, TEXTURES } from '../styles.js';
 
 const KEY = 'cube-sim-cubby';
+const ON_KEY = 'cube-sim-cubby-on'; // which saved cube is on show, and the record of one that isn't saved
 
 const svg = (inner, extra = '') =>
   `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"${extra}>${inner}</svg>`;
@@ -20,6 +22,8 @@ const ICON = {
   more: svg('<circle cx="6" cy="12" r="1.3" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.3" fill="currentColor" stroke="none"/><circle cx="18" cy="12" r="1.3" fill="currentColor" stroke="none"/>'),
   share: svg('<path d="M12 15V4"/><path d="m7.5 8 4.5-4.5L16.5 8"/><path d="M6 11.5H5a1.5 1.5 0 0 0-1.5 1.5v5.5A1.5 1.5 0 0 0 5 20h14a1.5 1.5 0 0 0 1.5-1.5V13a1.5 1.5 0 0 0-1.5-1.5h-1"/>'),
   rename: svg('<path d="M4 20h4L19 9a2.1 2.1 0 0 0-3-3L5 17z"/><path d="m14.5 7.5 3 3"/>'),
+  update: svg('<path d="M5 12.5 9.5 17 19 7.5"/>'),
+  heal: svg('<path d="M12 6v12M6 12h12"/>', ' stroke-width="3.2"'),
   qr: svg('<rect x="4" y="4" width="6" height="6" rx="1"/><rect x="14" y="4" width="6" height="6" rx="1"/><rect x="4" y="14" width="6" height="6" rx="1"/><path d="M14 14h2v2h-2zM18 14h2M14 18v2M18 18h2v2"/>'),
 };
 
@@ -85,6 +89,16 @@ export class Cubby {
     this.ui = ui;
     this.app = app;
     this.items = this._load();
+    // the cube on show: a saved one (its id), or a loose one with its own record
+    this.activeId = null;
+    this.loose = {};
+    try {
+      const on = JSON.parse(localStorage.getItem(ON_KEY) || '{}');
+      if (this.items.some((it) => it.id === on.id)) this.activeId = on.id;
+      if (on.loose && typeof on.loose === 'object') this.loose = on.loose;
+    } catch (e) {
+      /* (fresh) */
+    }
     const root = ui.root;
     root.insertAdjacentHTML(
       'beforeend',
@@ -92,7 +106,10 @@ export class Cubby {
       <div class="palette cubby" hidden role="dialog" aria-label="Cubby">
         <div class="cubby-head">
           <div class="cubby-title"><b>Cubby</b><span class="cubby-count"></span></div>
-          <button class="cubby-save">${ICON.plus}<span>Save this cube</span></button>
+          <div class="cubby-head-acts">
+            <button class="cubby-random" aria-label="Random cube" title="Random cube">${ICON.die}</button>
+            <button class="cubby-save">${ICON.plus}<span>Save this cube</span></button>
+          </div>
         </div>
         <form class="cubby-new" hidden>
           <div class="new-thumb"></div>
@@ -119,6 +136,7 @@ export class Cubby {
         </form>
       </div>
       <div class="card-menu" hidden role="menu">
+        <button data-act="update" role="menuitem">${ICON.update}<span>Save changes</span></button>
         <button data-act="share" role="menuitem">${ICON.qr}<span>Share as CubeR code</span></button>
         <button data-act="rename" role="menuitem">${ICON.rename}<span>Rename</span></button>
         <button data-act="dice" role="menuitem" class="danger">${ICON.die}<span>Dice it</span></button>
@@ -165,6 +183,8 @@ export class Cubby {
     this.toastEl = $('.toast');
     this.cubedEl = $('.modal.cubed');
     this.shareEl = $('.modal.share');
+    this.randomBtn = $('.cubby-random');
+    this.fighter = new FighterCard(root, app);
     this.emptyEl.querySelector('.empty-art').innerHTML = cubeArt({ flavor: 'layers', layers: { colors: ['#b39ddb', '#90caf9', '#a5d6a7', '#fff59d', '#ffcc80', '#f48fb1'], blur: 0.45, repeat: 1, bias: 0 }, texture: 'gummy', glitter: 'holo' });
 
     this.btn.addEventListener('click', (e) => {
@@ -176,6 +196,14 @@ export class Cubby {
     $('.cubby-save').addEventListener('click', () => {
       app.audio.ui();
       this.startSave();
+    });
+    this.randomBtn.addEventListener('click', () => {
+      app.audio.ui();
+      this.randomBtn.classList.remove('roll');
+      void this.randomBtn.offsetWidth;
+      this.randomBtn.classList.add('roll');
+      const pool = this.items.filter((it) => it.id !== this.activeId);
+      if (pool.length) this.wear(pool[Math.floor(Math.random() * pool.length)], 'Random select!');
     });
     this.newForm.querySelector('.dice').addEventListener('click', (e) => {
       app.audio.ui();
@@ -212,7 +240,8 @@ export class Cubby {
       this.closeMenu();
       if (!item) return;
       app.audio.ui();
-      if (b.dataset.act === 'share') this.share(item);
+      if (b.dataset.act === 'update') this.update(item);
+      else if (b.dataset.act === 'share') this.share(item);
       else if (b.dataset.act === 'rename') this.rename(item);
       else if (b.dataset.act === 'dice') this.remove(item);
     });
@@ -223,11 +252,11 @@ export class Cubby {
       const c = this._offered;
       this.closeModal(this.cubedEl);
       if (!c) return;
-      const prev = captureCube(app);
-      app.loadCube(c);
-      this.toast(`You're cubed: “${c.name || 'a new cube'}”`, [
+      const back = this._state();
+      this._setOn(null, {});
+      this._swapTo(c, 'A new challenger approaches!', null, [
         { label: 'Save', run: () => this.add(c, true) },
-        { label: 'Undo', run: () => app.loadCube(prev) },
+        { label: 'Undo', run: () => this._restore(back) },
       ]);
     });
     this.cubedEl.querySelector('.keep').addEventListener('click', () => {
@@ -281,6 +310,9 @@ export class Cubby {
         else this.close();
       }
     });
+    // (records are written a moment after they change, and as the page goes)
+    window.addEventListener('pagehide', () => this._flush());
+    document.addEventListener('visibilitychange', () => document.visibilityState === 'hidden' && this._flush());
     this.render();
     // a link with a code in it (now, or pasted into the address bar later)
     this._incoming();
@@ -291,19 +323,70 @@ export class Cubby {
   _load() {
     try {
       const a = JSON.parse(localStorage.getItem(KEY) || '[]');
-      return Array.isArray(a) ? a.filter((it) => it && typeof it.code === 'string' && decodeCube(it.code)) : [];
+      if (!Array.isArray(a)) return [];
+      const ok = a.filter((it) => it && typeof it.code === 'string' && decodeCube(it.code));
+      for (const it of ok) if (!it.rec || typeof it.rec !== 'object') it.rec = {};
+      return ok;
     } catch (e) {
       return [];
     }
   }
 
   _store() {
+    clearTimeout(this._st);
+    this._st = null;
     try {
-      localStorage.setItem(KEY, JSON.stringify(this.items.map(({ id, code, thumb, at }) => ({ id, code, thumb, at }))));
+      localStorage.setItem(KEY, JSON.stringify(this.items.map(({ id, code, thumb, at, rec }) => ({ id, code, thumb, at, rec }))));
+      localStorage.setItem(ON_KEY, JSON.stringify({ id: this.activeId, loose: this.loose }));
       return true;
     } catch (e) {
       return false;
     }
+  }
+
+  // (a burst of nail shots writes once)
+  _soon() {
+    if (!this._st) this._st = setTimeout(() => this._store(), 1500);
+  }
+
+  _flush() {
+    if (this._st) this._store();
+  }
+
+  get active() {
+    return this.items.find((it) => it.id === this.activeId) || null;
+  }
+
+  _setOn(id, loose) {
+    this.activeId = id;
+    this.loose = loose;
+  }
+
+  // what Undo puts back: the cube, which one it was, its loose record
+  _state() {
+    return { cube: captureCube(this.app, this.active ? decodeCube(this.active.code)?.name : ''), id: this.activeId, loose: { ...this.loose } };
+  }
+
+  _restore(st) {
+    this.app.loadCube(st.cube);
+    this._setOn(this.items.some((it) => it.id === st.id) ? st.id : null, st.loose);
+    this._store();
+    this.render();
+  }
+
+  // A deed for the record of the cube on show.
+  tally(kind) {
+    const it = this.active;
+    const rec = it ? it.rec : this.loose;
+    rec[kind] = (rec[kind] || 0) + 1;
+    this._soon();
+    if (kind === 'healed' && it && !this.el.hidden) this.render();
+  }
+
+  // the cube on show differs from its saved self (a slider moved, ...)
+  _edited(it) {
+    const c = decodeCube(it.code);
+    return encodeCube(captureCube(this.app, c.name)) !== encodeCube({ ...c, version: undefined });
   }
 
   get names() {
@@ -319,6 +402,7 @@ export class Cubby {
   open() {
     this.ui.closePalette();
     this.ui.closeTune();
+    this.fighter.hide();
     this.el.hidden = false;
     this.btn.classList.add('open');
     this.render();
@@ -338,14 +422,17 @@ export class Cubby {
     this.gridEl.hidden = n === 0;
     this.gridEl.textContent = '';
     for (const it of this.items) this.gridEl.appendChild(this._card(it));
+    this.randomBtn.hidden = this.items.filter((it) => it.id !== this.activeId).length < 2;
   }
 
   _card(it) {
     const c = decodeCube(it.code);
     const card = document.createElement('div');
-    card.className = 'cube-card';
+    card.className = it.id === this.activeId ? 'cube-card on' : 'cube-card';
     card.dataset.id = it.id;
     card.innerHTML = `<button class="card-main"><span class="card-thumb"></span><span class="card-name"></span><span class="card-sub"></span></button><button class="card-more">${ICON.more}</button>`;
+    if (it.id === this.activeId) card.insertAdjacentHTML('beforeend', '<span class="card-on">On</span>');
+    if (it.rec.healed) card.insertAdjacentHTML('beforeend', `<span class="card-healed" title="Times healed">${ICON.heal}${it.rec.healed}</span>`);
     const main = card.querySelector('.card-main'), thumb = card.querySelector('.card-thumb');
     if (it.thumb) {
       const img = new Image();
@@ -406,23 +493,28 @@ export class Cubby {
     const c = captureCube(this.app, name);
     const thumb = this._shot;
     this.endSave();
-    this._put({ id: this._id(), code: encodeCube(c), thumb, at: Date.now() }, `Cubed! “${name}” is in your Cubby`);
+    // (the cube on show is this one now; an unsaved cube's record comes with it)
+    this._put({ id: this._id(), code: encodeCube(c), thumb, at: Date.now(), rec: { ...this.loose } }, `Cubed! “${name}” is in your Cubby`, null, true);
   }
 
-  // keep a cube that came in a code (a picture of it now if it's on show)
+  // keep a cube that came in a code (a picture of it now, and the record of
+  // its time on show so far, if it's the one on show)
   add(c, onShow) {
     const name = cleanName(c.name) || this._suggest();
-    const item = { id: this._id(), code: encodeCube({ ...c, name }), thumb: onShow ? this.app.snapshot() : null, at: Date.now() };
-    this._put(item, `Saved “${name}” to your Cubby`, onShow ? null : [{ label: 'Open', run: () => this.open() }]);
+    const item = { id: this._id(), code: encodeCube({ ...c, name }), thumb: onShow ? this.app.snapshot() : null, at: Date.now(), rec: onShow ? { ...this.loose } : {} };
+    this._put(item, `Saved “${name}” to your Cubby`, onShow ? null : [{ label: 'Open', run: () => this.open() }], onShow);
   }
 
-  _put(item, msg, actions = null) {
+  _put(item, msg, actions = null, onShow = false) {
+    const was = { id: this.activeId, loose: this.loose };
     this.items.unshift(item);
+    if (onShow) this._setOn(item.id, {});
     if (!this._store()) {
       // (storage full: try without the picture, else give up)
       item.thumb = null;
       if (!this._store()) {
         this.items.shift();
+        this._setOn(was.id, was.loose);
         this.toast('Your Cubby is full - dice a few cubes to make room');
         return;
       }
@@ -440,24 +532,54 @@ export class Cubby {
   }
 
   // ---- a card's actions
-  wear(it) {
+  // Pick a cube like a fighter: the one on show leaves, this one drops in,
+  // and its card goes up. (The one already on show: just its card.)
+  wear(it, kicker = 'Cube select') {
     const c = decodeCube(it.code);
     if (!c) return;
-    const prev = captureCube(this.app);
-    this.app.loadCube(c);
-    this.toast(`Unboxed “${c.name || 'Untitled cube'}”`, [{ label: 'Undo', run: () => this.app.loadCube(prev) }]);
-    // (a cube kept from a code gets its picture once it's been worn)
-    if (!it.thumb) {
-      setTimeout(() => {
-        if (!this.items.includes(it) || it.thumb) return;
-        it.thumb = this.app.snapshot();
-        if (it.thumb && this._store()) this.render();
-      }, 1500);
+    if (it.id === this.activeId && !this.app.swapper.active && !this._edited(it)) {
+      this.fighter.show(c, { kicker: 'On show', rec: it.rec });
+      return;
     }
+    const back = this._state();
+    it.rec.picked = (it.rec.picked || 0) + 1;
+    this._setOn(it.id, {});
+    this._store();
+    this.render();
+    this._swapTo(c, kicker, it.rec, [{ label: 'Undo', run: () => this._restore(back) }], it);
+  }
+
+  // the swap itself, then the card (on a phone, the shelf steps aside for it)
+  _swapTo(c, kicker, rec, actions, it = null) {
+    if (window.innerWidth <= 720) this.close();
+    this.fighter.hide();
+    this._hideToast();
+    this.app.swapCube(c, () => {
+      this.fighter.show(c, { kicker, rec, actions });
+      // (a cube kept from a code gets its picture once it's been on show)
+      if (it && !it.thumb) {
+        setTimeout(() => {
+          if (!this.items.includes(it) || it.thumb || this.app.swapper.active) return;
+          it.thumb = this.app.snapshot();
+          if (it.thumb && this._store()) this.render();
+        }, 1300);
+      }
+    });
+  }
+
+  // the cube on show, as it is now, into its saved slot (record kept)
+  update(it) {
+    const c = decodeCube(it.code);
+    it.code = encodeCube(captureCube(this.app, c.name));
+    it.thumb = this.app.snapshot() || it.thumb;
+    this._store();
+    this.render();
+    this.toast(`Saved changes to “${c.name || 'this cube'}”`);
   }
 
   openMenu(it, anchor) {
     this._menuFor = it.id;
+    this.menuEl.querySelector('[data-act="update"]').hidden = !(it.id === this.activeId && this._edited(it));
     this.menuEl.hidden = false;
     const r = anchor.getBoundingClientRect(), m = this.menuEl.getBoundingClientRect();
     const x = Math.min(window.innerWidth - m.width - 8, Math.max(8, r.right - m.width));
@@ -509,7 +631,10 @@ export class Cubby {
   remove(it) {
     const i = this.items.indexOf(it);
     if (i < 0) return;
+    const was = { id: this.activeId, loose: this.loose };
     this.items.splice(i, 1);
+    // (diced while on show: it stays on, unsaved, with its record)
+    if (it.id === this.activeId) this._setOn(null, { ...it.rec });
     this._store();
     this.render();
     const name = decodeCube(it.code)?.name || 'that cube';
@@ -518,6 +643,7 @@ export class Cubby {
         label: 'Undo',
         run: () => {
           this.items.splice(Math.min(i, this.items.length), 0, it);
+          this._setOn(was.id, was.loose);
           this._store();
           this.render();
         },

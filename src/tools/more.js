@@ -1113,6 +1113,7 @@ export class BombTool {
     app.particles.sparks(p, 50, 5);
     app.particles.smoke(p, 18, 0.9, 0.22, 0.6, 0.5);
     app.audio.boom(1);
+    app.tally?.('booms');
     app.glowPulse?.(p.x, p.y, p.z, 1.5);
     app.shake(0.05);
     app.flash = 0.6;
