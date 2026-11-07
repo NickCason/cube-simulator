@@ -12,6 +12,7 @@ const BY_FLAVOR = {
   cola: ['Cube-a Libre', 'Cube-a-Cola', 'Fizz Ed', 'Pop Art'],
   layers: ['Layer Cake', 'Stack Attack', 'Rainbow Connection', 'Strata-sphere', 'Layer It On', 'Many Moods'],
   custom: ['Custom Cube', 'One of a Kind', 'My Own Shade', 'Colour Me Cubed'],
+  rubik: ['Twist and Shout', 'Scrambled Legs', 'Puzzle Me This', 'Speed Cuber', 'Solve Me Maybe', 'Six Sides of Chaos', 'Turn It Up', 'God’s Number'],
 };
 
 const BY_MATERIAL = {

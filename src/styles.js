@@ -12,7 +12,40 @@ export const FLAVORS = [
   { id: 'cola', name: 'Cola', hex: '#7a2e0e' },
   // layered: colours come from the user's layer stack (style.layers)
   { id: 'layers', name: 'Layers', layered: true },
+  // a 3x3 of stickers on every face, scrambled (style.rubik: its scramble)
+  { id: 'rubik', name: 'Rubik', rubik: true },
 ];
+
+// Rubik: six colours, and the stickers - each face a 3x3, run in to the
+// middle (a point is in the face it's nearest), the centres their face's
+// own colour, the rest scrambled by a seed (0: solved). The same hash runs in
+// the shaders (CUBE_GLSL's rubikAt): they must agree, so never change it.
+export const RUBIK_COLORS = ['#f4f2ec', '#ffcc12', '#e0102a', '#ff6a0d', '#1262ff', '#1cb84a']; // white yellow red orange blue green
+export const RUBIK_FACE = [2, 3, 0, 1, 5, 4]; // the centre colour of +x, -x, +y, -y, +z, -z
+export function rubikIndex(seed, face, cell) {
+  if (!seed || cell === 4) return RUBIK_FACE[face];
+  let h = (Math.imul(seed >>> 0, 747796405) + Math.imul(face * 9 + cell, 2891336453 | 0)) >>> 0;
+  h = (h ^ (h >>> 16)) >>> 0;
+  h = Math.imul(h, 2246822519 | 0) >>> 0;
+  h = (h ^ (h >>> 13)) >>> 0;
+  h = Math.imul(h, 3266489917 | 0) >>> 0;
+  h = (h ^ (h >>> 16)) >>> 0;
+  return h % 6;
+}
+// the sticker a rest point (cube of side `size`, centred) is in: [face, cell]
+export function rubikCellAt(x, y, z, size) {
+  const ax = Math.abs(x), ay = Math.abs(y), az = Math.abs(z);
+  let face, u, v;
+  if (ax >= ay && ax >= az) [face, u, v] = [x > 0 ? 0 : 1, z, y];
+  else if (ay >= az) [face, u, v] = [y > 0 ? 2 : 3, x, z];
+  else [face, u, v] = [z > 0 ? 4 : 5, x, y];
+  const g = (w) => Math.min(2, Math.max(0, Math.floor(((w + size / 2) / size) * 3)));
+  return [face, g(u) * 3 + g(v)];
+}
+export const RUBIK_SWATCH =
+  'linear-gradient(90deg, transparent 31%, #1b1b1f 31% 36%, transparent 36% 64%, #1b1b1f 64% 69%, transparent 69%), ' +
+  'linear-gradient(180deg, transparent 31%, #1b1b1f 31% 36%, transparent 36% 64%, #1b1b1f 64% 69%, transparent 69%), ' +
+  'conic-gradient(from 20deg, #e0102a 0 17%, #1262ff 0 34%, #ffcc12 0 50%, #1cb84a 0 67%, #ff6a0d 0 84%, #f4f2ec 0)';
 
 // Starting palettes for layered jelly, listed bottom → top. Optional: blur
 // (blend between layers), repeat (the colours cycle this many times up the
@@ -109,11 +142,12 @@ export const DEFAULT_STYLE = {
   edges: 'round',
   glitter: 'off',
   layers: { colors: [...LAYER_PRESETS[0].colors], blur: 0, repeat: 1, bias: 0 },
+  rubik: 0, // (0: solved - picking Rubik scrambles it)
 };
 
 export function flavorById(id) {
   if (typeof id === 'string' && id.startsWith('#')) return { id, name: 'Custom', hex: id };
-  return FLAVORS.find((f) => f.id === id && !f.layered) || FLAVORS[0];
+  return FLAVORS.find((f) => f.id === id && !f.layered && !f.rubik) || FLAVORS[0];
 }
 
 // Resolve the style's flavour into { hex } or { layers, blur }.
@@ -122,10 +156,13 @@ export function resolveFlavor(style) {
     const L = style.layers || DEFAULT_STYLE.layers;
     return { id: 'layers', name: 'Layers', layers: L.colors, blur: L.blur || 0, repeat: L.repeat || 1, bias: L.bias || 0 };
   }
+  // (Rubik: its scramble, and red for where one colour has to stand for it)
+  if (style.flavor === 'rubik') return { id: 'rubik', name: 'Rubik', rubik: Number.isFinite(style.rubik) ? style.rubik : 1, hex: RUBIK_COLORS[2] };
   return flavorById(style.flavor);
 }
 
 export function flavorSwatchCSS(f) {
+  if (f.id === 'rubik') return RUBIK_SWATCH;
   if (f.layers) {
     // top first (the gradient runs down)
     const bands = layerBands(f.layers, f.repeat, f.bias).reverse();

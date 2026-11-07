@@ -110,15 +110,40 @@ export const LAYER_GLSL = /* glsl */ `
 export const CUBE_GLSL = /* glsl */ `
   uniform highp sampler2D uCubeTex;
   int gK = 0;
-  int cLayers = 0;
-  float cLY0 = 0.0, cLSpan = 1.0, cLRep = 1.0, cLExp = 1.0, cLBlur = 0.0;
+  int cLayers = 0; // (-1: Rubik)
+  float cLY0 = 0.0, cLSpan = 1.0, cLRep = 1.0, cLExp = 1.0, cLBlur = 0.0, cRubikSeed = 0.0;
   vec4 cubeT(int x) { return texelFetch(uCubeTex, ivec2(x, gK), 0); }
   void useCube(float k) {
     gK = int(k + 0.5);
     vec4 q4 = cubeT(4), q5 = cubeT(5);
-    cLayers = int(q4.y + 0.5);
-    cLY0 = q4.z; cLSpan = q4.w; cLRep = q5.x; cLExp = q5.y; cLBlur = q5.z;
+    cLayers = int(floor(q4.y + 0.5));
+    cLY0 = q4.z; cLSpan = q4.w; cLRep = q5.x; cLExp = q5.y; cLBlur = q5.z; cRubikSeed = q5.w;
   }
+  // Rubik: the colour (0..5) at rest point p - each face a 3x3 of stickers
+  // run in to the middle, centres their own face's colour, the rest
+  // scrambled by the seed (the same hash as styles.js rubikIndex);
+  // cRubikSeam: how near a seam between stickers, 0..1
+  const int RUBIK_FACE[6] = int[6](2, 3, 0, 1, 5, 4);
+  float cRubikSeam = 0.0;
+  int rubikAt(vec3 p) {
+    vec3 a = abs(p);
+    int face; vec2 uv;
+    if (a.x >= a.y && a.x >= a.z) { face = p.x > 0.0 ? 0 : 1; uv = p.zy; }
+    else if (a.y >= a.z) { face = p.y > 0.0 ? 2 : 3; uv = p.xz; }
+    else { face = p.z > 0.0 ? 4 : 5; uv = p.xy; }
+    vec2 g = (uv / cLSpan + 0.5) * 3.0;
+    vec2 d = min(abs(g - 1.0), abs(g - 2.0));
+    cRubikSeam = 1.0 - smoothstep(0.035, 0.075, min(d.x, d.y));
+    ivec2 ij = ivec2(clamp(floor(g), 0.0, 2.0));
+    int cell = ij.x * 3 + ij.y;
+    if (cRubikSeed < 0.5 || cell == 4) return RUBIK_FACE[face];
+    uint h = uint(cRubikSeed + 0.5) * 747796405u + uint(face * 9 + cell) * 2891336453u;
+    h ^= h >> 16u; h *= 2246822519u; h ^= h >> 13u; h *= 3266489917u; h ^= h >> 16u;
+    return int(h % 6u);
+  }
+  // the colour of its light scattered inside, at rest point p (layers by
+  // height, Rubik by sticker)
+  vec3 cScatterAt(vec3 p, vec3 base);
   void cLayerPair(float y, out int a, out int b, out float s) {
     float n = float(cLayers), m = n * cLRep;
     float h = pow(max(clamp((y - cLY0) / cLSpan, 0.0, 1.0), 1e-6), cLExp);
@@ -135,17 +160,21 @@ export const CUBE_GLSL = /* glsl */ `
     return mix(cubeT(7 + a).rgb, cubeT(7 + b).rgb, s);
   }
   vec3 cLayerSigma(float ya, float yb, vec3 base) {
-    if (cLayers == 0) return base;
+    if (cLayers <= 0) return base;
     if (abs(yb - ya) < 1e-3) return cSigmaAt(ya);
     vec3 acc = vec3(0.0);
     for (int k = 0; k < 16; k++) acc += cSigmaAt(mix(ya, yb, (float(k) + 0.5) / 16.0));
     return acc * 0.0625;
   }
   vec3 cLayerScatter(float y, vec3 base) {
-    if (cLayers == 0) return base;
+    if (cLayers <= 0) return base;
     int a, b; float s;
     cLayerPair(y, a, b, s);
     return mix(cubeT(17 + a).rgb, cubeT(17 + b).rgb, s);
+  }
+  vec3 cScatterAt(vec3 p, vec3 base) {
+    if (cLayers < 0) return cubeT(17 + rubikAt(p)).rgb;
+    return cLayerScatter(p.y, base);
   }
 `;
 
@@ -478,8 +507,8 @@ export function createJellyMaterial(env, layerUniforms) {
         vec3 cAbsorb = cq0.rgb, cScatterColor = cq1.rgb, cGlowColor = cq6.rgb;
         float cScatter = cq0.a, cHazeMin = cq1.a, cGlow = cq2.x, cRough = cq2.y, cIor = cq2.z, cDisp = cq2.w;
         float cSugar = cq3.x, cMilk = cq3.y, cIrid = cq3.z, cMetal = cq3.w, cOpal = cq4.x;
-        cLayers = int(cq4.y + 0.5);
-        cLY0 = cq4.z; cLSpan = cq4.w; cLRep = cq5.x; cLExp = cq5.y; cLBlur = cq5.z;
+        cLayers = int(floor(cq4.y + 0.5));
+        cLY0 = cq4.z; cLSpan = cq4.w; cLRep = cq5.x; cLExp = cq5.y; cLBlur = cq5.z; cRubikSeed = cq5.w;
         float temp = vData.x;
         float glow = vData.y;
         float fresh = vData.z;
@@ -571,18 +600,21 @@ export function createJellyMaterial(env, layerUniforms) {
         trans.b = sampleThrough(Pw, V, N, Nb, thick, cIor + disp, lod, rough, 2).b;
 
         float pathLen = thick + 0.2 * rim * rim;
+        // Rubik: the sticker you look into (its seams dark, its white milky)
+        int rk = cLayers < 0 ? rubikAt(Rp) : 0;
+        float rkSeam = cLayers < 0 ? cRubikSeam : 0.0, rkMilk = cLayers < 0 ? cubeT(7 + rk).a : 0.0;
         // layered: lean toward the layer you look into, so bands stay crisp
-        vec3 sigma = cLayers > 0 ? mix(cLayerSigma(Rp.y, Rp.y, cAbsorb), cLayerSigma(Rp.y, exitY, cAbsorb), 0.22) : cAbsorb;
+        vec3 sigma = cLayers > 0 ? mix(cLayerSigma(Rp.y, Rp.y, cAbsorb), cLayerSigma(Rp.y, exitY, cAbsorb), 0.22) : cLayers < 0 ? cubeT(7 + rk).rgb : cAbsorb;
         vec3 Tr = exp(-sigma * pathLen * (1.0 + melt * 0.35));
-        float haze = 1.0 - exp(-(cScatter + cMilk * 7.0 + frost * 2.5) * pathLen);
-        haze = max(haze, max(cMilk * 0.72, cHazeMin));
+        float haze = 1.0 - exp(-(cScatter + (cMilk + rkMilk) * 7.0 + frost * 2.5) * pathLen);
+        haze = max(haze, max((cMilk + rkMilk) * 0.72, cHazeMin));
 
         vec3 L = normalize(uLightDir);
         float NdL = dot(N, L);
         float wrap = max((NdL + 0.7) / 1.7, 0.0);
         vec3 irr = envLookup(N, 1.0);
         float backlit = pow(clamp(dot(V, -L), 0.0, 1.0), 3.0);
-        vec3 baseSc = cLayers > 0 ? mix(cLayerScatter(Rp.y, cScatterColor), cLayerScatter(exitY, cScatterColor), 0.25) : cScatterColor;
+        vec3 baseSc = cLayers > 0 ? mix(cLayerScatter(Rp.y, cScatterColor), cLayerScatter(exitY, cScatterColor), 0.25) : cLayers < 0 ? cubeT(17 + rk).rgb : cScatterColor;
         // creamy jelly: pastel, milky body colour
         baseSc = mix(baseSc, mix(baseSc, vec3(1.0), 0.45) * 1.05, cMilk);
         vec3 sc = mix(baseSc, vec3(0.92, 0.96, 1.0), frost * 0.85);
@@ -592,6 +624,8 @@ export function createJellyMaterial(env, layerUniforms) {
           * (0.2 + 1.6 * cGlow) * (0.55 + 0.45 * exp(-pathLen * mix(3.0, 0.45, cGlow)));
 
         vec3 body = trans * Tr * (1.0 - haze) + scatterLight * haze;
+        // (the seams between stickers: dark, like the plastic between them)
+        body = mix(body, body * 0.1, rkSeam * 0.9);
 
         float F0 = pow((cIor - 1.0) / (cIor + 1.0), 2.0);
         float F = min(F0 + (1.0 - F0) * pow(clamp(1.0 - NdV, 0.0, 1.0), 5.0), 1.0 - 0.5 * rim);
@@ -1098,7 +1132,7 @@ export function createReflectMaterial() {
         float fade = exp(-h * uFade);
         useCube(vCube);
         vec4 q1 = cubeT(1);
-        vec3 sc = cLayerScatter(vRest.y, q1.rgb);
+        vec3 sc = cScatterAt(vRest, q1.rgb);
         sc = mix(sc, mix(sc, vec3(1.0), 0.45), max(cubeT(3).y, q1.a));
         vec3 V = safeNormalize(cameraPosition - vW);
         float rim = pow(clamp(1.0 - abs(dot(safeNormalize(vN), V)), 0.0, 1.0), 2.0);
@@ -1150,7 +1184,7 @@ export function createGlowMaterial() {
         float w = exp(-max(vH, 0.0) * 5.0);
         useCube(vCube);
         vec4 q1 = cubeT(1);
-        vec3 sc = cLayerScatter(vRest.y, q1.rgb);
+        vec3 sc = cScatterAt(vRest, q1.rgb);
         sc = mix(sc, mix(sc, vec3(1.0), 0.45), max(cubeT(3).y, q1.a));
         gl_FragColor = finite4(vec4(sc * w, w));
       }`,
@@ -1211,21 +1245,36 @@ export function createTintMaterial() {
     },
     vertexShader: /* glsl */ `
       attribute float aCube;
+      attribute vec3 aRest;
       uniform vec3 uLightDir;
       uniform vec4 uFloorRect;
       varying float vCube;
+      varying vec3 vRest;
       void main() {
         vec3 Ld = -normalize(uLightDir);
         vec3 P = position;
         vec3 oldP = P + Ld * (-P.y / Ld.y);
         vCube = aCube;
+        vRest = aRest;
         vec2 uv = (oldP.xz - uFloorRect.xy) * uFloorRect.zw;
         gl_Position = vec4(uv * 2.0 - 1.0, 0.0, 1.0);
       }`,
     fragmentShader: /* glsl */ `
-      uniform highp sampler2D uCubeTex;
       varying float vCube;
-      void main() { gl_FragColor = vec4(texelFetch(uCubeTex, ivec2(27, int(vCube + 0.5)), 0).rgb, 1.0); }`,
+      varying vec3 vRest;
+      ${CUBE_GLSL}
+      void main() {
+        useCube(vCube);
+        vec3 t = cubeT(27).rgb;
+        // (Rubik: each sticker's own colour - a mosaic of a shadow)
+        if (cLayers < 0) {
+          int k = rubikAt(vRest);
+          vec4 a = cubeT(7 + k);
+          float cloud = max(cubeT(3).y + a.a, cubeT(1).a);
+          t = mix(exp(-a.rgb * 0.35), vec3(1.0), 0.35 * cloud) * (1.0 - 0.35 * cloud);
+        }
+        gl_FragColor = vec4(t, 1.0);
+      }`,
   });
 }
 

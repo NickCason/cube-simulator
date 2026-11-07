@@ -58,7 +58,7 @@ export function cubeOfTheDay(d = new Date()) {
     const t0 = Number.isFinite(base) ? Math.min(1, Math.max(0, S.from(base))) : 0.5;
     tune[key] = S.to(Math.min(0.95, Math.max(0.05, t0 + (rnd() - 0.5) * 0.6)));
   }
-  const c = { name: '', flavor, layers, texture, edges, glitter, tune, tear: true };
+  const c = { name: '', flavor, layers, texture, edges, glitter, tune, tear: true, rubik: flavor === 'rubik' ? 1 + Math.floor(rnd() * 65535) : 1 };
   c.name = nameCube(c, { rnd });
   // (through its code and back: exactly what a link to it would open)
   const out = decodeCube(encodeCube(c)) || c;

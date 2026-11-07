@@ -22,6 +22,7 @@ import { Strands } from './world/strands.js';
 import { Bubbles } from './world/bubbles.js';
 import { Glitter, GLITTER_MODES } from './world/glitter.js';
 import { bevelPoint, unbevelPoint } from './sim/mesh.js';
+import { RUBIK_COLORS, rubikIndex, rubikCellAt } from './styles.js';
 import { DEFAULT_STYLE, TEXTURES, EDGES, LAYER_PRESETS, MIN_LAYERS, MAX_LAYERS, MAX_REPEAT, biasExp, resolveFlavor, flavorMainHex, nextLayerColor } from './styles.js';
 import { SETTINGS, resolveSettings } from './settings.js';
 
@@ -412,6 +413,8 @@ export class App {
   }
 
   setFlavor(id) {
+    // (Rubik, picked again: scrambled anew)
+    if (id === 'rubik' && (this.style.flavor === 'rubik' || !(this.style.rubik >= 1))) this.style.rubik = 1 + Math.floor(Math.random() * 65535);
     this.style.flavor = id;
     this.applyStyle();
   }
@@ -618,9 +621,17 @@ export class App {
   // Jelly colour at a world point (layered flavours vary with rest height).
   flavorColorAt(x, y, z) {
     const f = this.flavor;
-    if (!f || !f.layers) return this.color;
+    if (!f || (!f.layers && f.id !== 'rubik')) return this.color;
     const r = this.sb.locate(x, y, z);
     if (!r) return this.color;
+    // (Rubik: the sticker it came out of)
+    if (f.id === 'rubik') {
+      const p = [0, 0, 0], sb = this.sb, T = sb.T;
+      for (let k = 0; k < 4; k++) for (let c = 0; c < 3; c++) p[c] += sb.X[T[r.tet * 4 + k] * 3 + c] * r.bary[k];
+      p[0] -= sb.vCube[T[r.tet * 4]] * REST_STEP;
+      const [face, cell] = rubikCellAt(p[0], p[1], p[2], sb.p.size);
+      return RUBIK_COLORS[rubikIndex(f.rubik, face, cell)];
+    }
     let ry = 0;
     for (let k = 0; k < 4; k++) ry += this.sb.X[this.sb.T[r.tet * 4 + k] * 3 + 1] * r.bary[k];
     return this.flavorColorAtRestY(ry);
@@ -1199,7 +1210,7 @@ export class App {
     while (used.has(slot)) slot++;
     const flavors = ['cherry', 'lime', 'blue', 'grape', 'orange', 'lemon', 'watermelon', 'cola'];
     const style = c
-      ? { flavor: c.flavor, layers: { colors: [...c.layers.colors], blur: c.layers.blur, repeat: c.layers.repeat, bias: c.layers.bias }, texture: c.texture, edges: EDGES[c.edges] ? c.edges : DEFAULT_STYLE.edges, glitter: c.glitter }
+      ? { flavor: c.flavor, layers: { colors: [...c.layers.colors], blur: c.layers.blur, repeat: c.layers.repeat, bias: c.layers.bias }, texture: c.texture, edges: EDGES[c.edges] ? c.edges : DEFAULT_STYLE.edges, glitter: c.glitter, rubik: Number.isFinite(c.rubik) ? c.rubik : 1 }
       : { flavor: flavors[Math.floor(Math.random() * flavors.length)], layers: { ...DEFAULT_STYLE.layers, colors: [...DEFAULT_STYLE.layers.colors] }, texture: 'jello', edges: DEFAULT_STYLE.edges, glitter: 'off' };
     // (its own material sliders; the world's as everyone's)
     const tune = {};
@@ -1450,6 +1461,7 @@ export class App {
     s.layers = { colors: [...c.layers.colors], blur: c.layers.blur, repeat: c.layers.repeat, bias: c.layers.bias };
     s.texture = c.texture;
     s.glitter = c.glitter;
+    if (Number.isFinite(c.rubik)) s.rubik = c.rubik;
     const tune = { ...c.tune };
     for (const k of ['volume', 'impacts', 'wobble']) if (this.tune[k] !== undefined) tune[k] = this.tune[k];
     if (c.tear === false) tune.tear = false;

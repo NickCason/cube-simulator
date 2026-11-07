@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { biasExp } from '../styles.js';
+import { biasExp, RUBIK_COLORS } from '../styles.js';
 import { MAX_CUBES, REST_STEP } from '../sim/softbody.js';
 import {
   createBackMaterial,
@@ -494,12 +494,15 @@ export class JellyView {
   // cube-look texture, as setStyle works it out for the whole jelly.
   setCubeLook(k, flavor, m, size = 1) {
     const ref = 0.55 / m.depth;
-    const colors = (flavor.layers || [flavor.hex]).map((h) => new THREE.Color(h));
+    // (Rubik: its six colours where layers keep theirs, and a flag)
+    const rubik = flavor.id === 'rubik';
+    const colors = (rubik ? RUBIK_COLORS : flavor.layers || [flavor.hex]).map((h) => new THREE.Color(h));
     const abs = colors.map((c) => absorptionFromColor(c, ref));
     const scs = colors.map((c) => c.clone().multiplyScalar(1 / Math.max(c.r, c.g, c.b, 1e-3)));
     const avgAbs = abs.reduce((a, b) => a.add(b), new THREE.Vector3()).multiplyScalar(1 / abs.length);
     const avgSc = scs.reduce((a, b) => a.add(b), new THREE.Color(0, 0, 0)).multiplyScalar(1 / scs.length);
-    const sc = flavor.layers ? avgSc : scs[0];
+    const many = rubik || !!flavor.layers;
+    const sc = many ? avgSc : scs[0];
     const o = Math.min(1, Math.max(0, m.opacity));
     const glowC = avgSc.clone().lerp(new THREE.Color(1, 1, 1), 0.55).multiplyScalar(0.9);
     const D = this.cubeData, r = k * CUBE_TEX_W * 4;
@@ -507,16 +510,17 @@ export class JellyView {
       const i = r + x * 4;
       D[i] = a; D[i + 1] = b; D[i + 2] = c; D[i + 3] = d;
     };
-    put(0, avgAbs.x, avgAbs.y, avgAbs.z, 9 * o * o + (flavor.layers ? 1.6 * (1 - o) : 0));
+    put(0, avgAbs.x, avgAbs.y, avgAbs.z, 9 * o * o + (many ? 1.6 * (1 - o) : 0));
     put(1, sc.r, sc.g, sc.b, hazeMinOf(o));
     put(2, m.glow, m.rough, m.ior, (0.018 * Math.max(0, m.ior - 1)) / 0.36);
     put(3, m.sugar || 0, m.milk || 0, m.irid || 0, m.metal || 0);
-    put(4, m.opal || 0, flavor.layers ? flavor.layers.length : 0, -size / 2, size);
-    put(5, Math.max(1, Math.round(flavor.repeat || 1)), biasExp(flavor.bias), flavor.blur || 0, 0);
+    put(4, m.opal || 0, rubik ? -1 : flavor.layers ? flavor.layers.length : 0, -size / 2, size);
+    put(5, Math.max(1, Math.round(flavor.repeat || 1)), biasExp(flavor.bias), flavor.blur || 0, rubik ? flavor.rubik : 0);
     put(6, glowC.r, glowC.g, glowC.b, 0);
     for (let j = 0; j < 10; j++) {
       const a = abs[Math.min(j, abs.length - 1)], c = scs[Math.min(j, scs.length - 1)];
-      put(7 + j, a.x, a.y, a.z, 0);
+      // (alpha: a Rubik's white sticker is milky, not clear)
+      put(7 + j, a.x, a.y, a.z, rubik && j === 0 ? 0.7 : 0);
       put(17 + j, c.r, c.g, c.b, 0);
     }
     // the colour of light that's crossed ~0.35 units of it (its shadow's -

@@ -10,6 +10,7 @@
 //   b  layer blend 0..100     r  layer repeat 1..6     i  layer bias -100..100
 //   m  material     e  edges     g  glitter     d  look (light, dark)
 //   w  tearing: 0 when it's switched off
+//   k  Rubik's scramble (with f rubik): 0 solved, 1..65535
 //   t  tuned sliders, <code><value> joined by commas: the codes are in
 //      TUNE_CODES, the values in each slider's own units
 // A reader skips letters and slider codes it doesn't know, so a code made by a
@@ -79,6 +80,7 @@ export function captureCube(app, name = '') {
     texture: s.texture,
     edges: s.edges,
     glitter: s.glitter || 'off',
+    rubik: Number.isFinite(s.rubik) ? s.rubik : 1,
     tune,
     tear: app.tune.tear !== false,
     theme: app.theme,
@@ -98,6 +100,7 @@ export function encodeCube(c) {
     if (L.repeat > 1) f.push('r' + L.repeat);
     if (Math.round(L.bias * 100)) f.push('i' + Math.round(L.bias * 100));
   }
+  if (c.flavor === 'rubik') f.push('k' + Math.max(0, Math.min(65535, Math.round(c.rubik ?? 1))));
   f.push('m' + c.texture, 'e' + c.edges);
   if (c.glitter && c.glitter !== 'off') f.push('g' + c.glitter);
   if (c.theme) f.push('d' + c.theme);
@@ -144,6 +147,7 @@ export function decodeCube(text) {
     tune: {},
     tear: true,
     theme: null,
+    rubik: 1,
   };
   let flavor = null, custom = null;
   for (const p of parts.slice(1)) {
@@ -163,6 +167,7 @@ export function decodeCube(text) {
     else if (k === 'g') c.glitter = GLITTERS.some((g) => g.id === v) ? v : 'off';
     else if (k === 'd') c.theme = THEMES.includes(v) ? v : null;
     else if (k === 'w') c.tear = v !== '0';
+    else if (k === 'k') c.rubik = Math.round(clamp(parseInt(v, 10), 0, 65535, 1));
     else if (k === 't') {
       for (const pair of v.split(',')) {
         const m = pair.match(/^([a-z]{2})(-?(?:\d+\.?\d*|\.\d+)(?:e-?\d+)?)$/);

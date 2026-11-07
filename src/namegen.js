@@ -138,6 +138,7 @@ const FLAVOR_WORDS = {
   lemon: ['Lemon', 'Golden', 'Sunny', 'Citron', 'Yellow'],
   watermelon: ['Watermelon', 'Pink', 'Rosy', 'Melon', 'Flamingo'],
   cola: ['Cola', 'Bronze', 'Caramel', 'Root Beer', 'Mahogany'],
+  rubik: ['Rubik', 'Scrambled', 'Puzzling', 'Twisty', 'Speedcubed', 'Six-Colour'],
 };
 const HUE_WORDS = [
   [0, ['Red', 'Scarlet', 'Ruby', 'Crimson']],
