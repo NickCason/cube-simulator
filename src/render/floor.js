@@ -34,6 +34,9 @@ export function createFloor(env, fx) {
     shader.uniforms.uPulse = fx.pulse;
     shader.uniforms.uPulseAmp = fx.pulseAmp;
     shader.uniforms.uTime = fx.time;
+    shader.uniforms.uSel = fx.sel;
+    shader.uniforms.uSelCol = fx.selCol;
+    shader.uniforms.uSelPing = fx.selPing;
     shader.vertexShader = shader.vertexShader
       .replace('#include <common>', '#include <common>\nvarying vec3 vFloorPos;')
       .replace('#include <worldpos_vertex>', '#include <worldpos_vertex>\nvFloorPos = (modelMatrix * vec4(transformed, 1.0)).xyz;');
@@ -63,7 +66,15 @@ export function createFloor(env, fx) {
         uniform vec3 uPulseCol[${MAX_PULSES}];
         uniform vec4 uPulse[${MAX_PULSES}];
         uniform float uPulseAmp[${MAX_PULSES}];
-        uniform float uTime;`,
+        uniform float uTime;
+        uniform vec4 uSel;
+        uniform vec4 uSelCol;
+        uniform float uSelPing;
+        // a rounded square's signed distance (half side h, corner radius r)
+        float sdRoundSq(vec2 p, float h, float r) {
+          vec2 q = abs(p) - vec2(h - r);
+          return length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - r;
+        }`,
       )
       .replace(
         '#include <lights_fragment_begin>',
@@ -178,6 +189,27 @@ export function createFloor(env, fx) {
             ring += uPulseCol[i] * uPulseAmp[i] * exp(-x * x) * exp(-age * 2.6) / (1.0 + d * 1.5);
           }
           gl_FragColor.rgb += uGlowFloor * (glowNear * 0.7 + pool + ring * 2.6);
+        }
+        // (several cubes) the one the panels edit: a square ring round its
+        // foot, turned as it is - a line of its colour on the light floor,
+        // a glowing one on the dark - and a ping going out when it's picked
+        if (uSelCol.a > 0.0) {
+          vec2 p = vFloorPos.xz - uSel.xy;
+          float c = cos(uSel.w), s = sin(uSel.w);
+          p = vec2(c * p.x - s * p.y, s * p.x + c * p.y);
+          float d = sdRoundSq(p, uSel.z + 0.075, min(0.12, uSel.z * 0.4));
+          float line = exp(-pow(d / 0.014, 2.0)) + exp(-pow(d / 0.05, 2.0)) * 0.25;
+          float pa = clamp(1.0 - uSelPing / 0.55, 0.0, 1.0);
+          float ping = pa > 0.0 ? exp(-pow((d - uSelPing * 0.55) / 0.022, 2.0)) * pa * pa : 0.0;
+          float k = (line + ping * 0.8) * uSelCol.a;
+          if (uGlowFloor > 0.0) gl_FragColor.rgb += uSelCol.rgb * k * 1.3;
+          else {
+            // (its colour as dark as it takes to show on the pale floor - a
+            // lemon ring was all but invisible)
+            float lum = dot(uSelCol.rgb, vec3(0.2126, 0.7152, 0.0722));
+            vec3 rc = min(uSelCol.rgb * (0.28 / max(lum, 0.05)), vec3(1.0));
+            gl_FragColor.rgb = mix(gl_FragColor.rgb, rc, clamp(k * 0.8, 0.0, 0.92));
+          }
         }
         float fdist = length(vFloorPos.xz);
         float fade = smoothstep(3.2, 11.0, fdist);

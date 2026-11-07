@@ -1025,6 +1025,7 @@ export class App {
       this.swapper.update(sdt);
       this.tilt.update(dt);
       this._edgeMorphTick(dt);
+      this._selRing(dt);
       const nS = Math.max(4, Math.min(24, Math.round(this.substepRate * sdt)));
       this.sb.p.substeps = nS;
       const p0 = performance.now();
@@ -1141,10 +1142,42 @@ export class App {
     this.tune = this.cubes[i].tune;
     this.sb.p.bevel = this.sb.cBevel[slot];
     this.applyStyle();
-    // (a glimmer through it, so you see which)
+    // (a glimmer through it, and a ping round it on the floor, so you see which)
     const sb = this.sb;
     for (let v = 0; v < sb.nV; v++) if (sb.vCube[v] === slot) sb.glow[v] = Math.max(sb.glow[v], 0.6);
+    this.jelly.fxUniforms.selPing.value = 0;
     this.ui?.cubeSelected?.(slot);
+  }
+
+  // The ring on the floor round the selected cube (several of them): round
+  // its biggest piece, turned as that is; it eases in and out.
+  _selRing(dt) {
+    const fx = this.jelly.fxUniforms, sb = this.sb, on = this.cubes.length > 1 && this.intro.done;
+    const a = fx.selCol.value;
+    a.w += ((on ? 1 : 0) - a.w) * Math.min(1, dt * 8);
+    fx.selPing.value += dt;
+    if (!on || !this.cube) return;
+    const slot = this.cube.slot;
+    let main = null;
+    for (const pc of sb.pieces) if (pc.cube === slot && (!main || pc.verts.length > main.verts.length)) main = pc;
+    if (!main) return;
+    let M = 0, cx = 0, cz = 0;
+    for (const i of main.verts) {
+      const m = sb.m[i];
+      M += m;
+      cx += sb.x[i * 3] * m;
+      cz += sb.x[i * 3 + 2] * m;
+    }
+    if (!(M > 0)) return;
+    const S = fx.sel.value;
+    S.set(cx / M, cz / M, sb.p.size / 2, this.healer._yawOf(main));
+    if (this._selHex !== this.color) {
+      this._selHex = this.color;
+      const col = new THREE.Color(this.color);
+      a.x = col.r;
+      a.y = col.g;
+      a.z = col.b;
+    }
   }
 
   // Another cube (c: a decoded CubeR cube, or none for a plain jelly in a

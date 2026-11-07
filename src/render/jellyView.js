@@ -409,6 +409,12 @@ export class JellyView {
       floorAlbedo: { value: new THREE.Color(0.8, 0.79, 0.77) }, // (set with the look)
       floorEnv: { value: 0.75 },
       tintLocal: { value: 0 }, // layered jelly: the shadow's fill takes each band's colour
+      // (several cubes) the one the panels edit, ringed on the floor: centre
+      // x, z, half its side, its turn; its colour and how much the ring
+      // shows; seconds since it was picked (a ping goes out)
+      sel: { value: new THREE.Vector4(0, 0, 0.5, 0) },
+      selCol: { value: new THREE.Vector4(1, 1, 1, 0) },
+      selPing: { value: 9 },
     };
     // (the jelly mirrors the floor: it reads the same textures)
     const fx = this.fxUniforms;
