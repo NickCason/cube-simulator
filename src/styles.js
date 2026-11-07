@@ -54,24 +54,24 @@ export const MAX_LAYERS = 10;
 // keeping), bounce, grip. (Stored as style.texture: the first five were the
 // original "textures", and saved styles and ?texture= links still name them.)
 export const TEXTURES = {
-  jello: { name: 'Jello', depth: 1.25, opacity: 0.25, glow: 0.5, rough: 0.035, ior: 1.36, sugar: 0, milk: 0, mu: 170, damping: 1.7, weight: 1, lambda: 24, bounce: 0.55, grip: 0.85 },
-  gummy: { name: 'Gummy', depth: 1.5, opacity: 0.52, glow: 0.45, rough: 0.1, ior: 1.38, sugar: 0, milk: 0.12, mu: 430, damping: 3.4, weight: 1.15, lambda: 24, bounce: 0.55, grip: 0.85 },
-  sour: { name: 'Sour', depth: 1.5, opacity: 0.5, glow: 0.45, rough: 0.1, ior: 1.38, sugar: 1, milk: 0.08, mu: 430, damping: 3.4, weight: 1.15, lambda: 24, bounce: 0.55, grip: 0.85 },
-  crystal: { name: 'Crystal', depth: 0.42, opacity: 0.1, glow: 0.5, rough: 0.018, ior: 1.4, sugar: 0, milk: 0, mu: 140, damping: 1.2, weight: 0.95, lambda: 30, bounce: 0.55, grip: 0.85 },
-  creamy: { name: 'Creamy', depth: 1.0, opacity: 0.82, glow: 0.62, rough: 0.05, ior: 1.36, sugar: 0, milk: 1, mu: 115, damping: 2.2, weight: 1, lambda: 24, bounce: 0.55, grip: 0.85 },
-  slime: { name: 'Slime', depth: 0.8, opacity: 0.5, glow: 0.95, rough: 0.01, ior: 1.35, sugar: 0, milk: 0.2, mu: 52, damping: 5.5, weight: 1.05, lambda: 24, bounce: 0.08, grip: 1.4 },
-  water: { name: 'Water balloon', depth: 0.45, opacity: 0.04, glow: 0.55, rough: 0.014, ior: 1.333, sugar: 0, milk: 0, mu: 46, damping: 0.32, weight: 1.5, lambda: 40, bounce: 0.3, grip: 0.8 },
-  syrup: { name: 'Syrup', depth: 1.9, opacity: 0, glow: 0.72, rough: 0.013, ior: 1.49, sugar: 0, milk: 0, mu: 50, damping: 12, weight: 1.4, lambda: 30, bounce: 0.02, grip: 1.45 },
-  mochi: { name: 'Mochi', depth: 0.45, opacity: 0.86, glow: 0.62, rough: 0.3, ior: 1.32, sugar: 0, milk: 0.9, mu: 70, damping: 9, weight: 1.1, lambda: 18, bounce: 0.04, grip: 1.45 },
-  marshmallow: { name: 'Marshmallow', label: 'Marsh\u00admallow', depth: 0.22, opacity: 0.95, glow: 0.85, rough: 0.45, ior: 1.3, sugar: 0, milk: 1, mu: 80, damping: 7, weight: 0.35, lambda: 1.8, bounce: 0.25, grip: 1 },
-  rubber: { name: 'Rubber', depth: 1.25, opacity: 0.97, glow: 0.15, rough: 0.26, ior: 1.5, sugar: 0, milk: 0.4, mu: 900, damping: 1, weight: 1.2, lambda: 30, bounce: 0.9, grip: 1.3 },
-  glass: { name: 'Glass', depth: 0.14, opacity: 0, glow: 0.22, rough: 0.008, ior: 1.52, sugar: 0, milk: 0, mu: 1000, damping: 2.5, weight: 1.6, lambda: 40, bounce: 0.25, grip: 0.4, rigidity: 0.85 },
+  jello: { name: 'Jello', depth: 1.25, opacity: 0.25, glow: 0.5, rough: 0.035, ior: 1.36, sugar: 0, milk: 0, mu: 170, damping: 1.7, weight: 1, lambda: 24, bounce: 0.55, grip: 0.85, goo: 0.35 },
+  gummy: { name: 'Gummy', depth: 1.5, opacity: 0.52, glow: 0.45, rough: 0.1, ior: 1.38, sugar: 0, milk: 0.12, mu: 430, damping: 3.4, weight: 1.15, lambda: 24, bounce: 0.55, grip: 0.85, goo: 0.45 },
+  sour: { name: 'Sour', depth: 1.5, opacity: 0.5, glow: 0.45, rough: 0.1, ior: 1.38, sugar: 1, milk: 0.08, mu: 430, damping: 3.4, weight: 1.15, lambda: 24, bounce: 0.55, grip: 0.85, goo: 0.4 },
+  crystal: { name: 'Crystal', depth: 0.42, opacity: 0.1, glow: 0.5, rough: 0.018, ior: 1.4, sugar: 0, milk: 0, mu: 140, damping: 1.2, weight: 0.95, lambda: 30, bounce: 0.55, grip: 0.85, goo: 0.25 },
+  creamy: { name: 'Creamy', depth: 1.0, opacity: 0.82, glow: 0.62, rough: 0.05, ior: 1.36, sugar: 0, milk: 1, mu: 115, damping: 2.2, weight: 1, lambda: 24, bounce: 0.55, grip: 0.85, goo: 0.5 },
+  slime: { name: 'Slime', depth: 0.8, opacity: 0.5, glow: 0.95, rough: 0.01, ior: 1.35, sugar: 0, milk: 0.2, mu: 52, damping: 5.5, weight: 1.05, lambda: 24, bounce: 0.08, grip: 1.4, goo: 1 },
+  water: { name: 'Water balloon', depth: 0.45, opacity: 0.04, glow: 0.55, rough: 0.014, ior: 1.333, sugar: 0, milk: 0, mu: 46, damping: 0.32, weight: 1.5, lambda: 40, bounce: 0.3, grip: 0.8, goo: 0.15 },
+  syrup: { name: 'Syrup', depth: 1.9, opacity: 0, glow: 0.72, rough: 0.013, ior: 1.49, sugar: 0, milk: 0, mu: 50, damping: 12, weight: 1.4, lambda: 30, bounce: 0.02, grip: 1.45, goo: 1 },
+  mochi: { name: 'Mochi', depth: 0.45, opacity: 0.86, glow: 0.62, rough: 0.3, ior: 1.32, sugar: 0, milk: 0.9, mu: 70, damping: 9, weight: 1.1, lambda: 18, bounce: 0.04, grip: 1.45, goo: 0.9 },
+  marshmallow: { name: 'Marshmallow', label: 'Marsh\u00admallow', depth: 0.22, opacity: 0.95, glow: 0.85, rough: 0.45, ior: 1.3, sugar: 0, milk: 1, mu: 80, damping: 7, weight: 0.35, lambda: 1.8, bounce: 0.25, grip: 1, goo: 0.7 },
+  rubber: { name: 'Rubber', depth: 1.25, opacity: 0.97, glow: 0.15, rough: 0.26, ior: 1.5, sugar: 0, milk: 0.4, mu: 900, damping: 1, weight: 1.2, lambda: 30, bounce: 0.9, grip: 1.3, goo: 0.15 },
+  glass: { name: 'Glass', depth: 0.14, opacity: 0, glow: 0.22, rough: 0.008, ior: 1.52, sugar: 0, milk: 0, mu: 1000, damping: 2.5, weight: 1.6, lambda: 40, bounce: 0.25, grip: 0.4, rigidity: 0.85, goo: 0 },
   // firm and dead: barely gives, doesn't bounce, crumbles more than it stretches
-  tofu: { name: 'Tofu', depth: 0.5, opacity: 0.94, glow: 0.4, rough: 0.38, ior: 1.33, sugar: 0, milk: 0.95, mu: 600, damping: 6, weight: 1.05, lambda: 12, bounce: 0.04, grip: 1.1, rigidity: 0.45 },
+  tofu: { name: 'Tofu', depth: 0.5, opacity: 0.94, glow: 0.4, rough: 0.38, ior: 1.33, sugar: 0, milk: 0.95, mu: 600, damping: 6, weight: 1.05, lambda: 12, bounce: 0.04, grip: 1.1, rigidity: 0.45, goo: 0.05 },
   // soft and dead: heavy, sticky, slumps and stays
-  putty: { name: 'Putty', depth: 0.55, opacity: 0.97, glow: 0.3, rough: 0.5, ior: 1.3, sugar: 0, milk: 0.75, mu: 240, damping: 14, weight: 1.35, lambda: 20, bounce: 0, grip: 1.5, rigidity: 0.2 },
+  putty: { name: 'Putty', depth: 0.55, opacity: 0.97, glow: 0.3, rough: 0.5, ior: 1.3, sugar: 0, milk: 0.75, mu: 240, damping: 14, weight: 1.35, lambda: 20, bounce: 0, grip: 1.5, rigidity: 0.2, goo: 0.75 },
   // rigid: a boiled sweet - knocks about like a solid, won't tear in your hands
-  candy: { name: 'Hard candy', label: 'Hard candy', depth: 1.1, opacity: 0.1, glow: 0.4, rough: 0.012, ior: 1.5, sugar: 0, milk: 0, mu: 1000, damping: 3, weight: 1.4, lambda: 40, bounce: 0.35, grip: 0.6, rigidity: 0.92 },
+  candy: { name: 'Hard candy', label: 'Hard candy', depth: 1.1, opacity: 0.1, glow: 0.4, rough: 0.012, ior: 1.5, sugar: 0, milk: 0, mu: 1000, damping: 3, weight: 1.4, lambda: 40, bounce: 0.35, grip: 0.6, rigidity: 0.92, goo: 0 },
 };
 
 export const EDGES = {

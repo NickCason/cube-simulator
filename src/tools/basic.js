@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { cutBody, planeField, unglue } from '../sim/cutting.js';
+import { cutBody, planeField, unglue, removeSmallPieces } from '../sim/cutting.js';
 import { maxStretch } from '../sim/strain.js';
 import { polarRot } from '../sim/softbody.js';
 import { makeNailGun } from '../world/models.js';
@@ -208,14 +208,16 @@ export class HandTool {
     }
     const t = cur || this._startTear(best);
     if (!t) return;
-    t.p += (step * (1 + 1.5 * Math.max(0, best.over - 1))) / this._tearTime();
+    t.p += (step * (1 + 1.5 * Math.min(0.5, Math.max(0, best.over - 1)))) / this._tearTime();
     t.n = best.n;
     // the rip runs along the seam as it gives: after the first sixth of the
     // way, so much of the seam open as it is through - a stage at a time
     // (each a rebuild), the last when it's all the way
     const N = t.seam.length, want = t.p >= 1 ? N : Math.floor(Math.max(0, (t.p - 0.15) / 0.85) * N);
     if (want > t.done && (want === N || want - t.done >= Math.max(4, Math.ceil(N * 0.12)))) {
-      const n = unglue(sb, t.seam.subarray(t.done, want), t.plus);
+      const pairs = [];
+      const n = unglue(sb, t.seam.subarray(t.done, want), t.plus, pairs);
+      if (n) this._strands(pairs);
       t.done = want;
       t.ver = sb.topoVersion;
       // (pieces are renumbered by the rebuild: it's the one its unopened seam is in)
@@ -271,6 +273,8 @@ export class HandTool {
     this._yield(o, t.n, h2, this._plastic(), halves);
     sb.calmT = 0.3;
     sb.rebuild();
+    // (a crumb the seam cut off on its own: gone)
+    removeSmallPieces(sb, 0.002 * size ** 3, app.allAnchors());
     // (the torn ends were drawn out soft: they stay soft and firm up over a
     // moment - given their full stiffness back at once, stretched as they
     // are, the halves sprang apart at 30+ m/s)
@@ -374,6 +378,25 @@ export class HandTool {
         const gx = Cx + R[0] * ux + R[3] * uy + R[6] * uz, gy = Cy + R[1] * ux + R[4] * uy + R[7] * uz, gz = Cz + R[2] * ux + R[5] * uy + R[8] * uz;
         X[o3] += w * (gx - X[o3]); X[o3 + 1] += w * (gy - X[o3 + 1]); X[o3 + 2] += w * (gz - X[o3 + 2]);
       }
+    }
+  }
+
+  // Gummy jelly comes apart in strings: across the stretch of slit just
+  // opened (pairs: [vertex, its copy, ...]), a few strands of goo, spaced
+  // out - more, thicker and longer-drawn the gooier it is (see Strands).
+  _strands(pairs) {
+    const app = this.app, sb = app.sb, g = app.st?.goo ?? 0.35;
+    if (!(g > 0.02) || !app.strands || !pairs.length) return;
+    const want = Math.round(g * (1 + 2 * Math.random())), min2 = (0.1 * sb.p.size) ** 2, x = sb.x;
+    const order = Array.from({ length: pairs.length / 2 }, (_, k) => k).sort(() => Math.random() - 0.5);
+    const picked = [], col = new THREE.Color();
+    for (const k of order) {
+      if (picked.length >= want) break;
+      const i = pairs[k * 2], j = pairs[k * 2 + 1];
+      if (picked.some((p) => (x[i * 3] - x[p * 3]) ** 2 + (x[i * 3 + 1] - x[p * 3 + 1]) ** 2 + (x[i * 3 + 2] - x[p * 3 + 2]) ** 2 < min2)) continue;
+      picked.push(i);
+      col.set(app.flavorColorAtRestY(sb.X[i * 3 + 1]));
+      app.strands.add(i, j, g, [col.r, col.g, col.b]);
     }
   }
 

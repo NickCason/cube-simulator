@@ -551,7 +551,7 @@ function tidyLabels(sb, labels) {
 // few vertices at a time, the slit opening as it goes (cutting one plane over
 // and over re-split its tets each time: millions). A vertex with no plus tet,
 // or no other, isn't on the seam: left be. Returns how many were split.
-export function unglue(sb, verts, plus) {
+export function unglue(sb, verts, plus, pairs = null) {
   const T = sb.T, vtS = sb.vtStart, vtL = sb.vtList;
   let n = 0;
   for (const i of verts) {
@@ -572,6 +572,7 @@ export function unglue(sb, verts, plus) {
       if (!plus[t]) continue;
       for (let k = 0; k < 4; k++) if (T[t * 4 + k] === i) T[t * 4 + k] = j;
     }
+    if (pairs) pairs.push(i, j);
     n++;
   }
   if (n) sb.rebuild();

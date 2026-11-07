@@ -22,6 +22,8 @@ export const SETTINGS = [
   { id: 'rigidity', group: 'Feel', label: 'Rigidity', key: 'rigidity', mat: true, def: 0, ...linMap(0, 1), words: ['Jelly', 'Firm', 'Stiff', 'Solid', 'Rigid'] },
   // how much stretch and how long a pull it takes to tear (scales both; see HandTool)
   { id: 'tough', group: 'Feel', label: 'Toughness', key: 'tough', mat: true, def: 1, ...logMap(0.4, 2.5), words: ['Brittle', 'Tender', 'Normal', 'Tough', 'Taffy'] },
+  // how stringy it is torn or melted: strands of goo across a tear, drips on a string (see Strands)
+  { id: 'goo', group: 'Feel', label: 'Goo', key: 'goo', mat: true, def: 0.35, ...linMap(0, 1), words: ['Clean', 'Tacky', 'Gooey', 'Stringy', 'Slimy'] },
   { id: 'opacity', group: 'Look', label: 'Opacity', key: 'opacity', mat: true, ...linMap(0, 1), words: ['Clear', 'Hazy', 'Cloudy', 'Milky', 'Solid'] },
   { id: 'translucency', group: 'Look', label: 'Translucency', key: 'glow', mat: true, ...linMap(0, 1), words: ['Dull', 'Soft', 'Glowing', 'Radiant'] },
   { id: 'depth', group: 'Look', label: 'Colour depth', key: 'depth', mat: true, ...logMap(0.15, 4), words: ['Pale', 'Light', 'Rich', 'Deep', 'Inky'] },

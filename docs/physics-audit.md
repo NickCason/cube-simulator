@@ -104,6 +104,32 @@ strength, Poke.
   loosely.
 - Poke is a velocity add: marshmallow and lead jump the same.
 
+## Strands of goo (tears and drips)
+
+**Model.** `src/world/strands.js`. Each strand is a rope of 9 points:
+- **Ends:** held to a jelly vertex at each end; a drip's far end is instead a
+  heavy blob, free to fall.
+- **Middle:** sags under gravity.
+- **Viscous:** the rest lengths creep toward the stretch, so it stays drawn
+  out rather than springing back, more so the gooier it is.
+- **Volume-conserving:** it thins as it lengthens, most at the middle.
+- **Pinch-off:** past its length (or when a drip's blob lands) it pinches.
+  The stubs shrink back into the jelly, and a drip's blob joins the molten
+  pool.
+- **Drawn as** smooth tubes with fillets where they meet the jelly.
+
+**Where they come from.**
+- **Tears:** a few across each stretch of seam as it opens.
+- **The torch:** drips on a string from the melted surface, taking a share
+  of the melt.
+
+**Controls.** Feel: Goo (per material: slime and syrup 1, mochi 0.9, putty
+0.75, jello 0.35, glass and candy 0).
+
+**Open.**
+- Strands don't collide with jelly; only the floor.
+- They don't pull back on the jelly.
+
 ## Knife
 **Model.**
 - **Cut:** a plane through the eye and the stroke, limited to the part of

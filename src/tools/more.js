@@ -773,6 +773,9 @@ function smoothMelted(sb, gone) {
 TorchTool.prototype._liquefy = function (set) {
   const app = this.app, sb = app.sb, T = sb.T, x = sb.x, X = sb.X, v = sb.v;
   const col = new THREE.Color();
+  // (how much of what melts drips off on strings: the gooier, the more)
+  const dripShare = app.strands ? 0.3 * Math.min(1, (app.st?.goo ?? 0.35) * 1.5) : 0;
+  let liquid = 0;
   // (a spike left standing - a hot tet with three of its faces bare, or
   // two where it's hottest - goes with them, twice over: the crater melts
   // round, not to shards)
@@ -836,12 +839,15 @@ TorchTool.prototype._liquefy = function (set) {
     col.set(app.flavorColorAtRestY(ry));
     // (the space it leaves - slumped, it's shrunk - and half of that boils
     // off in the flame)
-    const vol = sb.vol0[t] * Math.min(1, sb.tVS[t]) * (1 - (app.st?.boilOff ?? 0.5));
+    // (and a share of it drips off on a string instead - see below)
+    const vol = sb.vol0[t] * Math.min(1, sb.tVS[t]) * (1 - (app.st?.boilOff ?? 0.5)) * (1 - dripShare);
+    liquid += vol / (1 - dripShare) - vol;
     app.fluid.add(cx, cy, cz, vol, vx, vy - 0.3, vz, col.r, col.g, col.b, Math.cbrt(sb.vol0[t]) * 1.5);
   }
   // (steam off the boil)
+  let sx = 0, sy = 0, sz = 0;
   {
-    let sx = 0, sy = 0, sz = 0, m = 0;
+    let m = 0;
     for (const t of set) {
       for (let k = 0; k < 4; k++) {
         const i = T[t * 4 + k] * 3;
@@ -850,6 +856,7 @@ TorchTool.prototype._liquefy = function (set) {
       m += 4;
     }
     if (m) app.particles.smoke({ x: sx / m, y: sy / m + 0.05, z: sz / m }, Math.min(6, 1 + (set.size >> 3)), 0.25, 0.92, 0.9, 0.3);
+    if (m) { sx /= m; sy /= m; sz /= m; }
   }
   // (what's left round the hole is a melted surface - see TAG_MELT - and
   // it slumps smooth: each of its corners eased toward its neighbours on it)
@@ -857,6 +864,35 @@ TorchTool.prototype._liquefy = function (set) {
   smoothMelted(sb, set);
   removeTets(sb, (t) => set.has(t), app.allAnchors());
   app.onTopologyChanged();
+  // Gooey jelly drips as it melts: from the melted surface round the hole,
+  // a few drips of it hang on strings, swell, stretch and pinch off into
+  // the molten pool (see Strands) - the lowest spots first, spaced out.
+  const g = app.st?.goo ?? 0.35;
+  if (dripShare > 0 && liquid > 0 && app.strands) {
+    const onS = new Uint8Array(sb.nV);
+    for (let k = 0; k < sb.nF * 3; k++) onS[sb.sTri[k]] = 1;
+    const cand = [];
+    for (let i = 0; i < sb.nV; i++) {
+      if (!onS[i] || !sb.melt[i] || !sb.alive[i]) continue;
+      const d2 = (sb.x[i * 3] - sx) ** 2 + (sb.x[i * 3 + 1] - sy) ** 2 + (sb.x[i * 3 + 2] - sz) ** 2;
+      if (d2 < 0.3 * 0.3) cand.push(i);
+    }
+    cand.sort((a, b) => sb.x[a * 3 + 1] - sb.x[b * 3 + 1] + (Math.random() - 0.5) * 0.08);
+    // (not every batch: about two a second for the stringiest stuff)
+    const nd = Math.random() < 0.45 * g ? 1 + (Math.random() < 0.3 * g ? 1 : 0) : 0, picked = [], min2 = (0.06 * sb.p.size) ** 2;
+    for (const i of cand) {
+      if (picked.length >= nd) break;
+      if (picked.some((j) => (sb.x[i * 3] - sb.x[j * 3]) ** 2 + (sb.x[i * 3 + 1] - sb.x[j * 3 + 1]) ** 2 + (sb.x[i * 3 + 2] - sb.x[j * 3 + 2]) ** 2 < min2)) continue;
+      picked.push(i);
+      col.set(app.flavorColorAtRestY(sb.X[i * 3 + 1]));
+      app.strands.add(i, -1, g, [col.r, col.g, col.b], liquid / nd);
+    }
+    // (no drip this time: its share runs off with the rest)
+    if (!picked.length) {
+      col.set(app.flavorColorAtRestY(sy));
+      app.fluid.add(sx, sy, sz, liquid, 0, -0.3, 0, col.r, col.g, col.b, 0.05);
+    }
+  }
 };
 
 export class FreezeTool extends NozzleTool {

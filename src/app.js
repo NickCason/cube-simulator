@@ -16,6 +16,7 @@ import { makeMaterials, makeBomb } from './world/models.js';
 import { physicsWarmJob } from './sim/warm.js';
 import { Droplets } from './world/droplets.js';
 import { Fluid } from './world/fluid.js';
+import { Strands } from './world/strands.js';
 import { Bubbles } from './world/bubbles.js';
 import { Glitter, GLITTER_MODES } from './world/glitter.js';
 import { bevelPoint, unbevelPoint } from './sim/mesh.js';
@@ -146,6 +147,7 @@ export class App {
     this.onColor = [];
     this.droplets = new Droplets(this);
     this.fluid = new Fluid(this); // (molten jelly: see TorchTool, FreezeTool)
+    this.strands = new Strands(this); // (strings of goo: torn, dripping)
     this.healZoom = 0;
     this.flash = 0;
     this.anchorProviders = [() => this.nails.anchors()];
@@ -964,6 +966,7 @@ export class App {
       this.nails.update(sdt);
       this.droplets.update(sdt);
       this.fluid.update(sdt);
+      this.strands.update(sdt);
       this.bubbles.update();
       for (const k in this.tools) if (this.tools[k] !== this.tool && this.tools[k].background) this.tools[k].update(sdt, dt);
       this.particles.update(sdt);
@@ -1106,6 +1109,7 @@ export class App {
     this.jelly.fxUniforms.glowFloor.value = e * THEMES.dark.glowFloor;
     this.droplets.setGlow(e);
     this.fluid.setGlow(e);
+    this.strands.setGlow(e);
   }
 
   _themeTick(dt) {
