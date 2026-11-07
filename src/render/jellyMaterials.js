@@ -277,6 +277,7 @@ export function createJellyMaterial(env, layerUniforms) {
       uCubeTex: { value: emptyFloatTexture() },
       uMetal: { value: 0 },
       uOpal: { value: 0 },
+      uMetalCeil: { value: new THREE.Color(0, 0, 0) }, // (the studio's overhead softbox, for metal to mirror: see the metal shading)
       uGlow: { value: 0.5 },
       uHazeMin: { value: 0 },
       tScene: { value: null },
@@ -355,6 +356,7 @@ export function createJellyMaterial(env, layerUniforms) {
       uniform float uMilk;
       uniform float uIrid;
       uniform float uMetal;
+      uniform vec3 uMetalCeil;
       uniform float uOpal;
       uniform float uGlow;
       uniform float uHazeMin;
@@ -765,16 +767,35 @@ export function createJellyMaterial(env, layerUniforms) {
         // gold), no light through it, its edges going white (Schlick, with
         // the colour as F0) - iridescent too, for holographic foil
         if (cMetal > 0.0) {
-          vec3 F0m = mix(baseSc * 0.92, vec3(0.94), 0.14);
+          // (its colour right at the surface: a mirror shows nothing of what's
+          // inside it - layered, the bands it's cut through where you look,
+          // not the ones a line of sight through it would cross)
+          vec3 skin = cScatterColor;
+          if (cLayers > 0) skin = cGradAt(Rp, 1);
+          else if (cLayers < 0) skin = cubeT(17 + rk).rgb;
+          vec3 F0m = mix(skin * 0.92, vec3(0.94), 0.14);
           vec3 Fm = F0m + (vec3(1.0) - F0m) * pow(clamp(1.0 - NdV, 0.0, 1.0), 5.0);
           vec3 FmH = F0m + (vec3(1.0) - F0m) * pow(clamp(1.0 - dot(H, V), 0.0, 1.0), 5.0);
           vec3 specM = min(keyLight * D_GGX(NdH, a) * V_Smith(nl, NdV, a) * nl * FmH, vec3(48.0)) * iriSpec;
+          // (and the studio's big softbox overhead, as only a mirror sees it:
+          // the room's map is dim straight up, so a chrome top - which looks
+          // up - showed a dark, flat face that read as tinted glass. Seen in a
+          // mirror it's a bright panel with a crisp edge, sliding over the
+          // face as it turns. A place has its own sky up there instead.)
+          vec3 reflM = refl;
+          if (Rv.y > 0.02 && uMetalCeil.r + uMetalCeil.g + uMetalCeil.b > 0.0) {
+            vec2 q = Rv.xz / Rv.y;
+            vec2 aa = fwidth(q) + 0.015;
+            float box = (1.0 - smoothstep(1.5 - aa.x, 1.5 + aa.x, abs(q.x))) * (1.0 - smoothstep(1.2 - aa.y, 1.2 + aa.y, abs(q.y)));
+            reflM = mix(reflM, uMetalCeil * (0.9 + 0.1 * smoothstep(1.6, 0.0, length(q))), box);
+          }
           // (chrome reads by its contrast: the studio's bright boxes against a
           // darker room, the floor and the horizon below - a mirror in an
-          // evenly lit room just looks white)
-          float lumR = dot(refl, vec3(0.2126, 0.7152, 0.0722));
-          vec3 reflC = mix(refl, refl * (0.2 + 1.4 * smoothstep(0.35, 1.6, lumR)) * (0.45 + 0.55 * smoothstep(-0.06, 0.3, Rv.y)), 1.0 - 0.75 * cIrid);
-          vec3 colM = reflC * Fm * 1.1 + specM + irr * baseSc * 0.05 * rough;
+          // evenly lit room just looks white - but not so much that what's
+          // only dim goes black)
+          float lumR = dot(reflM, vec3(0.2126, 0.7152, 0.0722));
+          vec3 reflC = mix(reflM, reflM * (0.42 + 1.05 * smoothstep(0.3, 1.8, lumR)) * (0.5 + 0.5 * smoothstep(-0.06, 0.3, Rv.y)), 1.0 - 0.75 * cIrid);
+          vec3 colM = reflC * Fm * 1.1 + specM + irr * skin * 0.05 * rough;
           col = mix(col, colM, cMetal);
         }
 

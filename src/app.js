@@ -49,11 +49,13 @@ const THEMES = {
     bg: [0.86, 0.85, 0.83], floor: [0.8, 0.79, 0.77], rough: 0.82, envI: 0.75,
     key: 3.2, keyHex: 0xfff6ec, keyCol: [1, 0.97, 0.92], envJelly: 1,
     glow: 0, glowFloor: 0, refl: 0.22, reflLod: 1, bloom: 0.045, threshold: 1.1, knee: 0.6, vignette: 0.22, css: '#dcd9d5',
+    metalCeil: [1.3, 1.32, 1.38],
   },
   dark: {
     bg: [0.0045, 0.0045, 0.007], floor: [0.022, 0.022, 0.027], rough: 0.34, envI: 1,
     key: 0.85, keyHex: 0xdde6ff, keyCol: [0.76, 0.82, 1], envJelly: 1.6,
     glow: 1, glowFloor: 0.35, refl: 0.4, reflLod: 1.6, bloom: 0.38, threshold: 0.6, knee: 0.5, vignette: 0.42, css: '#050507',
+    metalCeil: [0.05, 0.05, 0.07],
   },
 };
 const median = (arr) => {
@@ -1947,6 +1949,8 @@ export class App {
     this.keyLight.color.set(T.keyHex);
     this.jelly.frontMat.uniforms.uLightColor.value.setRGB(...T.keyCol).multiplyScalar(T.key);
     this.jelly.frontMat.uniforms.envIntensity.value = T.envJelly;
+    // (the studio's overhead softbox, as metal mirrors it - a place has its sky)
+    this.jelly.frontMat.uniforms.uMetalCeil.value.setRGB(...(V.sky ? [0, 0, 0] : T.metalCeil || [0, 0, 0]));
     this.jelly.fxUniforms.reflAmount.value = T.refl;
     this.jelly.fxUniforms.reflLod.value = T.reflLod;
     const C = this.post.compositeMat.uniforms;
