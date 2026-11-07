@@ -122,6 +122,7 @@ export const CUBE_GLSL = /* glsl */ `
   int cLayers = 0; // (-1: Rubik)
   int cShape = 0; // (its gradient's: up, across, corner, core, shell, rings, free - styles.js GRAD_SHAPES)
   float cFreeK = 1.0; // (free: its colours' depth - absorption = -log(colour) x this)
+  float cTiles = 1.0; // (subdivided: little cubes a side, each with the whole gradient)
   float cLY0 = 0.0, cLSpan = 1.0, cLRep = 1.0, cLExp = 1.0, cLBlur = 0.0, cRubikSeed = 0.0;
   vec4 cubeT(int x) { return texelFetch(uCubeTex, ivec2(x, gK), 0); }
   void useCube(float k) {
@@ -130,7 +131,9 @@ export const CUBE_GLSL = /* glsl */ `
     cLayers = int(floor(q4.y + 0.5));
     cLY0 = q4.z; cLSpan = q4.w; cLRep = q5.x; cLExp = q5.y; cLBlur = q5.z; cRubikSeed = q5.w;
     cShape = int(cubeT(6).w + 0.5);
-    cFreeK = cShape == 6 ? cubeT(28).x : 1.0;
+    vec4 q28 = cLayers > 0 ? cubeT(28) : vec4(1.0);
+    cFreeK = q28.x;
+    cTiles = max(q28.y, 1.0);
   }
   // Rubik: the colour (0..5) at rest point p - each face a 3x3 of stickers
   // run in to the middle, centres their own face's colour, the rest
@@ -178,7 +181,16 @@ export const CUBE_GLSL = /* glsl */ `
     vec3 q = clamp(p / cLSpan + 0.5, ${0.5 / FREE_N}, ${1 - 0.5 / FREE_N});
     return textureLod(uFreeTex, vec3(q.xy, (float(gK) + q.z) / ${FREE_SLABS}.0), 0.0).rgb;
   }
+  // (subdivided: the little cube it's in, as though it were the whole one -
+  // held off the very skin, or the skin's own little cube flips to its far
+  // side)
+  vec3 cTile(vec3 p) {
+    if (cTiles < 1.5) return p;
+    vec3 q = clamp(p / cLSpan + 0.5, 0.0005, 0.9995);
+    return (fract(q * cTiles) - 0.5) * cLSpan;
+  }
   vec3 cGradAt(vec3 p, int row) {
+    p = cTile(p);
     if (cShape == 6) {
       vec3 c = cFreeAt(p);
       return row == 0 ? -log(clamp(c, 0.004, 0.995)) * cFreeK : c / max(max(c.r, c.g), max(c.b, 1e-3));
@@ -597,7 +609,9 @@ export function createJellyMaterial(env, layerUniforms) {
         cLayers = int(floor(cq4.y + 0.5));
         cLY0 = cq4.z; cLSpan = cq4.w; cLRep = cq5.x; cLExp = cq5.y; cLBlur = cq5.z; cRubikSeed = cq5.w;
         cShape = int(cq6.w + 0.5);
-        cFreeK = cShape == 6 ? cubeT(28).x : 1.0;
+        vec4 cq28 = cLayers > 0 ? cubeT(28) : vec4(1.0);
+        cFreeK = cq28.x;
+        cTiles = max(cq28.y, 1.0);
         float temp = vData.x;
         float glow = vData.y;
         float fresh = vData.z;

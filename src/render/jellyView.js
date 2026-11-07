@@ -579,7 +579,7 @@ export class JellyView {
     const cloud = Math.max(m.milk || 0, hazeMinOf(o));
     if (cloud) tint.lerp(new THREE.Color(1, 1, 1), 0.35 * cloud).multiplyScalar(1 - 0.35 * cloud);
     put(27, tint.r, tint.g, tint.b, 9 * o * o + (m.milk || 0) * 3);
-    put(28, 1 / ref, 0, 0, 0);
+    put(28, 1 / ref, Math.max(1, Math.round(flavor.tiles || 1)), 0, 0);
     this.cubeTex.needsUpdate = true;
     if (flavor.layers && flavor.shape === 'free') {
       bakeFree(flavor, this.freeData.subarray(k * this.freeSlab, (k + 1) * this.freeSlab));

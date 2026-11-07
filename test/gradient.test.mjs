@@ -96,3 +96,18 @@ test('freeform points survive a CubeR code', async () => {
     assert.ok(Math.abs(Math.log(q.k / layers.nodes[i].k)) < 0.02, `k ${q.k}`);
   });
 });
+
+test('subdivided: each little cube carries the whole gradient; codes keep it', async () => {
+  const { tileLocal } = await import('../src/styles.js');
+  const { encodeCube, decodeCube } = await import('../src/cubecode.js');
+  // (the middle of each of the 3 little cubes along x maps to the middle; the skin stays on its own side)
+  for (const x of [-1 / 3, 0, 1 / 3]) assert.ok(Math.abs(tileLocal(x, 0, 0, 1, 3)[0]) < 1e-9);
+  assert.ok(tileLocal(0.5, 0, 0, 1, 3)[0] > 0.49);
+  assert.ok(tileLocal(-0.5, 0, 0, 1, 3)[0] < -0.49);
+  assert.deepEqual(tileLocal(0.2, -0.1, 0.3, 1, 1), [0.2, -0.1, 0.3]);
+  const layers = { colors: ['#ff0000', '#00ff00'], blur: 0, repeat: 1, bias: 0, shape: 'core', tiles: 3 };
+  const code = encodeCube({ name: 'T', flavor: 'layers', layers, texture: 'jello', edges: 'round', glitter: 'off', tune: {} });
+  assert.match(code, /~u3~/);
+  assert.equal(decodeCube(code).layers.tiles, 3);
+  assert.equal(decodeCube('1~flayers~l7b22d61572ff~mjello~eround').layers.tiles, undefined);
+});

@@ -174,6 +174,11 @@ export function mutate(style, tune, { rnd = Math.random, gen = 0 } = {}) {
       add({ tier: 1, label: to > was ? 'More bands' : 'Fewer bands', kind: 'gradient' });
     }
   }
+  if (L && chance(0.06)) {
+    const was = L.tiles || 1, to = was > 1 && rnd() < 0.35 ? 1 : Math.min(5, was + 1);
+    L.tiles = to;
+    add(to > 1 ? { tier: was > 1 ? 1 : 2, label: `Subdivided ${to}×${to}`, kind: 'gradient' } : { tier: 1, label: 'Whole again', kind: 'gradient' });
+  }
   if (chance(0.1)) {
     const now = style.glitter || 'off';
     const to = now === 'off' ? pick(rnd, GLITTERS.filter((g) => g.id !== 'off')).id : rnd() < 0.3 ? 'off' : pick(rnd, GLITTERS.filter((g) => g.id !== now && g.id !== 'off')).id;
@@ -275,11 +280,12 @@ export function randomGradient(shape, rnd = Math.random) {
       }
       nodes.push({ x: best[0], y: best[1], z: best[2], k: Math.round(0.5 * Math.pow(5, rnd()) * 100) / 100 });
     }
-    return { colors: randomPalette(n, rnd), blur: Math.round((0.25 + rnd() * 0.6) * 100) / 100, repeat: 1, bias: 0, stops: null, nodes, shape };
+    return { colors: randomPalette(n, rnd), blur: Math.round((0.25 + rnd() * 0.6) * 100) / 100, repeat: 1, bias: 0, stops: null, nodes, shape, tiles: rnd() < 0.2 ? 2 + Math.floor(rnd() * 2) : 1 };
   }
   const n = 2 + Math.floor(rnd() * 5);
   const stops = rnd() < 0.5 ? null : Array.from({ length: n }, () => rnd()).sort((a, b) => a - b);
   const repeat = rnd() < 0.6 ? 1 : rnd() < 0.7 ? 2 : 3;
   const bias = rnd() < 0.5 ? 0 : Math.round((rnd() - 0.5) * 1.2 * 100) / 100;
-  return { colors: randomPalette(n, rnd), blur: Math.round(rnd() * 100) / 100, repeat, bias, stops, nodes: null, shape };
+  const tiles = (shape === 'core' || shape === 'shell') && rnd() < 0.35 ? 2 + Math.floor(rnd() * 2) : 1;
+  return { colors: randomPalette(n, rnd), blur: Math.round(rnd() * 100) / 100, repeat, bias, stops, nodes: null, shape, tiles };
 }

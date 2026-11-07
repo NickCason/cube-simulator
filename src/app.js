@@ -32,7 +32,7 @@ import { captureCube } from './cubecode.js';
 import { bevelPoint, unbevelPoint } from './sim/mesh.js';
 import { RUBIK_COLORS, rubikIndex, rubikCellAt } from './styles.js';
 import { DEFAULT_STYLE, TEXTURES, EDGES, LAYER_PRESETS, MIN_LAYERS, MAX_LAYERS, MAX_REPEAT, resolveFlavor, flavorMainHex, nextLayerColor } from './styles.js';
-import { GRAD_SHAPE_INDEX, gradStops, gradT, gradColorAt, copyLayers } from './styles.js';
+import { GRAD_SHAPE_INDEX, gradStops, gradT, gradColorAt, copyLayers, tileLocal, MAX_TILES } from './styles.js';
 import { freeNodes, freeNodesDefault, freeColorAt, FREE_K_MIN, FREE_K_MAX } from './freeform.js';
 import { randomGradient } from './genetics.js';
 import { SETTINGS, resolveSettings } from './settings.js';
@@ -563,6 +563,13 @@ export class App {
     return at;
   }
 
+  // subdivided: the cube as little cubes, n a side, each with the whole gradient
+  setLayerTiles(n) {
+    this.style.layers.tiles = Math.min(MAX_TILES, Math.max(1, Math.round(n)));
+    this.style.flavor = 'layers';
+    this.applyStyle();
+  }
+
   // the die: a gradient no one's seen before, in the shape it has (see
   // genetics.js randomGradient)
   rollGradient() {
@@ -838,8 +845,9 @@ export class App {
       return RUBIK_COLORS[rubikIndex(f.rubik, face, cell)];
     }
     if (!f.layers) return flavorMainHex(f);
-    if (f.shape === 'free') return freeColorAt(f, x, ry, rz, sb.cSize[k]);
-    return gradColorAt(f, gradT(f.shape, x, ry, rz, sb.cSize[k]));
+    const s = sb.cSize[k], [tx, ty, tz] = tileLocal(x, ry, rz, s, f.tiles);
+    if (f.shape === 'free') return freeColorAt(f, tx, ty, tz, s);
+    return gradColorAt(f, gradT(f.shape, tx, ty, tz, s));
   }
 
   // ...where vertex i, or tet t (its middle), sits

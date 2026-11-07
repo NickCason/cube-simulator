@@ -206,7 +206,20 @@ export function copyLayers(L) {
   const stops = Array.isArray(L.stops) && L.stops.length === colors.length && L.stops.every(Number.isFinite) ? L.stops.map(clamp01) : null;
   const okN = (q) => q && ['x', 'y', 'z', 'k'].every((c) => Number.isFinite(q[c]));
   const nodes = Array.isArray(L.nodes) && L.nodes.length === colors.length && L.nodes.every(okN) ? L.nodes.map((q) => ({ x: q.x, y: q.y, z: q.z, k: q.k })) : null;
-  return { colors, blur: L.blur || 0, repeat: L.repeat || 1, bias: L.bias || 0, stops, nodes, shape: GRAD_SHAPE_INDEX[L.shape] !== undefined ? L.shape : 'up' };
+  const tiles = Math.min(MAX_TILES, Math.max(1, Math.round(L.tiles || 1)));
+  return { colors, blur: L.blur || 0, repeat: L.repeat || 1, bias: L.bias || 0, stops, nodes, tiles, shape: GRAD_SHAPE_INDEX[L.shape] !== undefined ? L.shape : 'up' };
+}
+
+// (subdivided: the little cube a rest point's in, as though it were the
+// whole one - see CUBE_GLSL cTile)
+export const MAX_TILES = 5;
+export function tileLocal(x, y, z, size, tiles) {
+  if (!(tiles > 1)) return [x, y, z];
+  const f = (v) => {
+    const q = Math.min(0.9995, Math.max(0.0005, v / size + 0.5)) * tiles;
+    return (q - Math.floor(q) - 0.5) * size;
+  };
+  return [f(x), f(y), f(z)];
 }
 
 // Material presets. Look: depth (colour), opacity, glow (translucency),
@@ -285,7 +298,7 @@ export function resolveFlavor(style) {
     const L = style.layers || DEFAULT_STYLE.layers;
     const stops = Array.isArray(L.stops) && L.stops.length === L.colors.length ? L.stops : null;
     const nodes = Array.isArray(L.nodes) && L.nodes.length === L.colors.length ? L.nodes : null;
-    return { id: 'layers', name: 'Layers', layers: L.colors, blur: L.blur ?? 0, repeat: L.repeat || 1, bias: L.bias || 0, stops, nodes, shape: GRAD_SHAPE_INDEX[L.shape] !== undefined ? L.shape : 'up' };
+    return { id: 'layers', name: 'Layers', layers: L.colors, blur: L.blur ?? 0, repeat: L.repeat || 1, bias: L.bias || 0, stops, nodes, tiles: Math.max(1, Math.round(L.tiles || 1)), shape: GRAD_SHAPE_INDEX[L.shape] !== undefined ? L.shape : 'up' };
   }
   // (Rubik: its scramble, and red for where one colour has to stand for it)
   if (style.flavor === 'rubik') return { id: 'rubik', name: 'Rubik', rubik: Number.isFinite(style.rubik) ? style.rubik : 1, hex: RUBIK_COLORS[2] };

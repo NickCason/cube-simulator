@@ -28,6 +28,7 @@ export class FreeEditor {
     this.kWord = this.el.querySelector('.free-k .word');
     this.delBtn = this.el.querySelector('.free-del');
     this.nameEl = this.el.querySelector('.free-name');
+    this.tileNote = this.el.querySelector('.free-note');
     this.sel = 0;
     this.drag = null;
     this._tap = -1;
@@ -253,6 +254,10 @@ export class FreeEditor {
     this.kWord.innerHTML = `${strengthWord(k)}<i class="num">${k.toFixed(k < 1 ? 2 : 1)}×</i>`;
     this.delBtn.disabled = n <= MIN_LAYERS;
     if (q) this.nameEl.textContent = `Colour ${this.sel + 1} of ${n} · ${NET[netOf(q.x, q.y, q.z).f].name.toLowerCase()}`;
+    // (subdivided: what's here is each little cube)
+    const t = L.tiles || 1;
+    this.tileNote.hidden = t < 2;
+    this.tileNote.textContent = `Subdivided: each of its ${t}×${t}×${t} little cubes looks like this`;
     this._mark();
   }
 }

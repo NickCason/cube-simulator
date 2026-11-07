@@ -1,4 +1,4 @@
-import { FLAVORS, TEXTURES, EDGES, GLITTERS, LAYER_PRESETS, MIN_LAYERS, MAX_LAYERS, MAX_REPEAT, flavorSwatchCSS, flavorMainHex, materialSwatchCSS } from '../styles.js';
+import { FLAVORS, TEXTURES, EDGES, GLITTERS, LAYER_PRESETS, MIN_LAYERS, MAX_LAYERS, MAX_REPEAT, MAX_TILES, flavorSwatchCSS, flavorMainHex, materialSwatchCSS } from '../styles.js';
 import { SETTINGS, settingWord, settingNum } from '../settings.js';
 import { Cubby } from './cubby.js';
 import { StackPanel, STACK_ICON } from './stackpanel.js';
@@ -136,6 +136,7 @@ export class UI {
           <div class="grad-ends"><span class="a"></span><button class="even" hidden>Even out</button><span class="b"></span></div>
           <div class="free" hidden>
             <div class="free-net" role="group" aria-label="The cube unfolded: its colours"><canvas></canvas><div class="free-nodes"></div></div>
+            <div class="free-note" hidden></div>
             <div class="free-tool">
               <label class="free-col" title="Its colour"><i></i><input type="color" aria-label="The picked point's colour"></label>
               <span class="free-name"></span>
@@ -147,6 +148,7 @@ export class UI {
           <label class="row blend"><span class="name">Blend</span><input type="range" min="0" max="1" step="0.01" aria-label="Blend between layers"><span class="word"></span></label>
           <label class="row repeat"><span class="name">Repeat</span><input type="range" min="1" max="${MAX_REPEAT}" step="1" aria-label="How many times the colours repeat up the cube"><span class="word"></span></label>
           <label class="row bias"><span class="name">Bias</span><input type="range" min="-1" max="1" step="0.01" aria-label="Bands crowd toward the bottom or the top"><span class="word"></span></label>
+          <label class="row tiles"><span class="name">Subdivide</span><input type="range" min="1" max="${MAX_TILES}" step="1" aria-label="The cube as little cubes, each with the whole gradient"><span class="word"></span></label>
         </div>
         <div class="sec"><span class="lbl">Material</span><div class="mats" role="group" aria-label="Material"></div></div>
         <div class="sec"><span class="lbl">Glitter</span><div class="seg glit"></div></div>
@@ -232,6 +234,9 @@ export class UI {
     });
     this.repeatEl.addEventListener('input', () => app.setLayerRepeat(+this.repeatEl.value));
     this.biasEl.addEventListener('input', () => app.setLayerBias(+this.biasEl.value));
+    this.tilesEl = this.layersSec.querySelector('.tiles input');
+    this.tilesWord = this.layersSec.querySelector('.tiles .word');
+    this.tilesEl.addEventListener('input', () => app.setLayerTiles(+this.tilesEl.value));
     const presets = this.layersSec.querySelector('.presets');
     for (const p of LAYER_PRESETS) {
       const b = document.createElement('button');
@@ -632,6 +637,10 @@ export class UI {
     if (document.activeElement !== this.biasEl) this.biasEl.value = bias;
     this.biasEl.style.setProperty('--p', `${((bias + 1) / 2) * 100}%`);
     readout(this.biasWord, biasWord(bias), signed(Math.round(bias * 100)));
+    const tiles = L.tiles || 1;
+    if (document.activeElement !== this.tilesEl) this.tilesEl.value = tiles;
+    this.tilesEl.style.setProperty('--p', `${((tiles - 1) / (MAX_TILES - 1)) * 100}%`);
+    readout(this.tilesWord, tiles > 1 ? `${tiles} × ${tiles}` : 'Whole', null);
     const key = cols.join(',').toLowerCase();
     for (const b of this.layersSec.querySelectorAll('.preset')) {
       const p = LAYER_PRESETS.find((q) => q.id === b.dataset.preset);

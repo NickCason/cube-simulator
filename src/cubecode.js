@@ -11,6 +11,7 @@
 //   p  the layers' stops - where each colour sits, 0..255 along one round,
 //      2 hex digits each, run together (missing: evenly spaced)
 //   h  the layers' shape: across, corner, core, shell, rings, free (missing: up)
+//   u  the layers subdivided: little cubes a side, 2..5, each with the whole gradient (missing: 1)
 //   q  a freeform gradient's points, one a colour: x, y, z (0..255 across
 //      the cube) and strength (0..255, 1/4 to 4 on a log scale), 2 hex
 //      digits each, run together (missing: spread evenly)
@@ -113,6 +114,7 @@ export function encodeCube(c) {
     if (Math.round(L.bias * 100)) f.push('i' + Math.round(L.bias * 100));
     if (Array.isArray(L.stops) && L.stops.length === L.colors.length) f.push('p' + L.stops.map((v) => Math.round(Math.min(1, Math.max(0, v)) * 255).toString(16).padStart(2, '0')).join(''));
     if (L.shape && L.shape !== 'up' && GRAD_SHAPE_INDEX[L.shape] !== undefined) f.push('h' + L.shape);
+    if (L.tiles > 1) f.push('u' + Math.min(5, Math.round(L.tiles)));
     if (L.shape === 'free' && Array.isArray(L.nodes) && L.nodes.length === L.colors.length) f.push('q' + L.nodes.map((q) => hex2((q.x + 0.5) * 255) + hex2((q.y + 0.5) * 255) + hex2((q.z + 0.5) * 255) + hex2(kToByte(q.k))).join(''));
   }
   if (c.flavor === 'rubik') f.push('k' + Math.max(0, Math.min(65535, Math.round(c.rubik ?? 1))));
@@ -179,6 +181,7 @@ export function decodeCube(text) {
     else if (k === 'i') c.layers.bias = clamp(+v / 100, -1, 1, 0);
     else if (k === 'p') stops = (v.match(/[0-9a-f]{2}/gi) || []).map((h) => parseInt(h, 16) / 255);
     else if (k === 'h' && GRAD_SHAPE_INDEX[v] !== undefined) c.layers.shape = v;
+    else if (k === 'u') c.layers.tiles = Math.round(clamp(+v, 1, 5, 1));
     else if (k === 'q') nodes = (v.match(/[0-9a-f]{8}/gi) || []).map((h) => ({ x: parseInt(h.slice(0, 2), 16) / 255 - 0.5, y: parseInt(h.slice(2, 4), 16) / 255 - 0.5, z: parseInt(h.slice(4, 6), 16) / 255 - 0.5, k: byteToK(parseInt(h.slice(6, 8), 16)) }));
     else if (k === 'm') c.texture = TEXTURES[v] ? v : c.texture;
     else if (k === 'e') c.edges = EDGES[v] ? v : c.edges;
