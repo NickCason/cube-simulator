@@ -413,6 +413,23 @@ export class AudioEngine {
     this._noise(t, 0.4, 'highpass', 3000, 9000, 0.5, 0.15 * amount, 0.002);
   }
 
+  // glass (and hard candy) breaking: a bright crash, then the shards
+  // tinkling down - little glass bells, each a few partials, falling
+  // later and later (delay: when the tinkling starts)
+  shatterGlass(amount = 1, delay = 0, key = 'glass') {
+    if (!this._ok(key, 0.08)) return;
+    const t = this.ctx.currentTime + delay;
+    this._noise(t, 0.3, 'highpass', 2600, 7400, 0.6, 0.34 * amount, 0.0008);
+    this._noise(t, 0.06, 'bandpass', 4300, 2900, 1.3, 0.3 * amount, 0.0005);
+    this._tone(t, 'triangle', 1400, 520, 0.08, 0.12 * amount, 0.001);
+    const nyq = this.ctx.sampleRate * 0.45;
+    for (let i = 0; i < 18; i++) {
+      const f = rnd(2300, 7800), at = t + 0.025 + Math.pow(Math.random(), 1.7) * 0.6, dur = rnd(0.05, 0.18);
+      const g = (0.055 * amount) * (1 - 0.5 * ((at - t) / 0.65));
+      for (const [r, k] of [[1, 1], [2.76, 0.38], [5.4, 0.16]]) if (f * r < nyq) this._tone(at, 'sine', f * r, f * r * 0.996, dur / Math.sqrt(r), g * k, 0.0006);
+    }
+  }
+
   boom(amount = 1) {
     if (!this._ok('boom', 0.1)) return;
     const ctx = this.ctx;

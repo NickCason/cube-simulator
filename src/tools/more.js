@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { cutBody, sphereField, planeField, removeTets, removeSmallPieces } from '../sim/cutting.js';
 import { makeMallet, makeTorch, makeSpray, makeBaller, makeBomb, makeSyringe, makeMagnet, orient } from '../world/models.js';
 import { fitRotation } from '../heal.js';
-import { TEXTURES } from '../styles.js';
+import { TEXTURES, resolveFlavor, flavorMainHex } from '../styles.js';
 
 const V = (a) => new THREE.Vector3(a[0], a[1], a[2]);
 const _a = new THREE.Vector3();
@@ -232,10 +232,14 @@ export class MalletTool {
     const p = a.tg.point, d = a.d;
     app.shake(0.035);
     if (a.tg.jelly) {
-      // frozen jelly shatters - and so do brittle things (sugar, ice) as they are
-      const brittle = !!TEXTURES[app.style.texture]?.brittle;
+      // frozen jelly shatters - and so do brittle things (sugar, ice, glass,
+      // hard candy) as they are: the one hit's stuff, with several cubes
+      const hp = sb.pieces[a.tg.hit.piece];
+      const cb = (hp && app.cubes.find((c) => c.slot === hp.cube)) || app.cube;
+      const tex = TEXTURES[cb.style.texture];
+      const brittle = !!tex?.brittle;
       if (brittle || avgTemp(sb, p, 0.3) < -0.4) {
-        this.shatter(a, brittle);
+        this.shatter(a, brittle ? { tex, chip: tex.chip === 'flavor' ? flavorMainHex(resolveFlavor(cb.style)) : tex.chip } : null);
         return;
       }
       const piece = a.tg.hit.piece;
@@ -435,7 +439,8 @@ export class MalletTool {
   // part breaks. They open one a frame through the hit-stop, so they're seen
   // to run, then the shards fly. (It used to break along the mesh's own
   // tets round nine random points - the same jagged staircase every time.)
-  shatter(a, brittle = false) {
+  // (brittle: { tex, chip } - a brittle thing, as it is, not frozen jelly)
+  shatter(a, brittle = null) {
     const app = this.app;
     const sb = app.sb;
     const p = a.tg.point.clone();
@@ -507,12 +512,17 @@ export class MalletTool {
     }
     // (the shards are the pieces holding the frozen piece's vertices; the
     // star breaks the first frame, the rest the next)
-    this.shards = { cracks, batches: [N, cracks.length], verts: pc.verts.slice(), p, d, n: 0, chip: (brittle && TEXTURES[app.style.texture].chip) || '#dcefff' };
+    const chip = (brittle && brittle.chip) || '#dcefff', glassy = !!brittle?.tex.glassy;
+    this.shards = { cracks, batches: [N, cracks.length], verts: pc.verts.slice(), p, d, n: 0, chip, glassy };
     sb.selfQuietUntil = sb.time + 0.5;
-    app.hitStop(0.1);
-    app.audio.crack(1);
+    app.hitStop(glassy ? 0.13 : 0.1);
+    if (glassy) app.audio.shatterGlass(1);
+    else app.audio.crack(1);
     app.audio.thud(0.6);
-    for (let k = 0; k < 40; k++) app.particles.glitter(p, 1, [0.85, 0.95, 1.0], 1.4);
+    // (a burst of glints in its own colour - glass and candy throw more)
+    const cc = new THREE.Color(chip), gc = [0.55 + cc.r * 0.45, 0.55 + cc.g * 0.45, 0.55 + cc.b * 0.45];
+    for (let k = 0; k < (glassy ? 70 : 40); k++) app.particles.glitter(p, 1, gc, glassy ? 1.9 : 1.4);
+    if (glassy) app.flash = Math.max(app.flash || 0, 0.12);
     app.particles.mist(p, new THREE.Vector3(0, 0.6, 0), 8);
     app.markDamaged();
     this._crack();
@@ -539,7 +549,10 @@ export class MalletTool {
       // (a light rebuild left last: the next cut found nothing to break)
       if (sb.topoStale) sb.rebuild();
       app.onTopologyChanged();
-      if (!S.batches.length) app.audio.crack(0.45);
+      if (!S.batches.length) {
+        if (S.glassy) app.audio.shatterGlass(0.5, 0.18, 'glass2');
+        else app.audio.crack(0.45);
+      }
       return;
     }
     this.shards = null;
