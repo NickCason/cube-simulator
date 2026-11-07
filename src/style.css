@@ -1291,6 +1291,15 @@ html.dark .places-head span {
   .style-panel {
     width: calc(100vw - 24px);
   }
+  /* (a phone: the panel scrolls between the top's buttons and the dock,
+     not off the top - the freeform net made it tall) */
+  .palette.style-panel {
+    max-height: calc(100vh - 150px - env(safe-area-inset-top) - env(safe-area-inset-bottom));
+    max-height: calc(100dvh - 150px - env(safe-area-inset-top) - env(safe-area-inset-bottom));
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
+  }
   .presets {
     flex-wrap: nowrap;
     overflow-x: auto;
@@ -1491,6 +1500,7 @@ html.dark .tune .word {
 
 .free-net {
   position: relative;
+  margin: 0 auto;
   touch-action: none;
   cursor: copy;
 }
@@ -3167,6 +3177,7 @@ html.dark .card-healed {
 @media (min-width: 721px) {
   .palette.style-panel {
     max-height: calc(100vh - 160px);
+    max-height: calc(100dvh - 160px);
     overflow-y: auto;
     overscroll-behavior: contain;
     scrollbar-width: thin;

@@ -9,6 +9,7 @@ import { NET, netOf, netImages, freeNodes, freePower, FREE_K_MIN, FREE_K_MAX } f
 import { MIN_LAYERS, MAX_LAYERS } from '../styles.js';
 
 const GAP = 3; // (px between the faces)
+const FACE_MAX = 64; // (px a face, at most)
 const IMG = 44; // (each face's picture worked out this many px a side, then drawn smooth)
 const OFF = 40; // (px off the net a point must be dragged to come away)
 const kOf = (s) => FREE_K_MIN * Math.pow(FREE_K_MAX / FREE_K_MIN, s);
@@ -54,10 +55,11 @@ export class FreeEditor {
     });
   }
 
-  // the net's size: four faces across the space there is
+  // the net's size: four faces across the space there is (each no more than
+  // FACE_MAX: a bigger net made the panel taller than a phone)
   _layout() {
-    const W = Math.max(160, this.net.clientWidth || 300);
-    const F = Math.floor((W - 3 * GAP) / 4);
+    const W0 = Math.max(160, this.el.clientWidth || 300);
+    const F = Math.min(FACE_MAX, Math.floor((W0 - 3 * GAP) / 4));
     return { F, W: 4 * F + 3 * GAP, H: 3 * F + 2 * GAP };
   }
 
@@ -187,6 +189,7 @@ export class FreeEditor {
     }
     this.nodesEl.style.width = `${W}px`;
     this.nodesEl.style.height = `${H}px`;
+    this.net.style.width = `${W}px`;
     const g = c.getContext('2d');
     g.setTransform(dpr, 0, 0, dpr, 0, 0);
     g.clearRect(0, 0, W, H);
