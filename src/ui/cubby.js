@@ -13,6 +13,12 @@ import { resolveFlavor, layerBands, TEXTURES, RUBIK_COLORS, rubikIndex } from '.
 
 const KEY = 'cube-sim-cubby';
 const ON_KEY = 'cube-sim-cubby-on'; // which saved cube is on show, and the record of one that isn't saved
+const TODAY_KEY = 'cube-sim-today-pic'; // the cube of the day's portrait, once taken
+// (a card's picture is its portrait - see portrait.js - this big; PV marks
+// one as a portrait, not the crop of the screen kept before there were any)
+const THUMB_PX = 320;
+const CARD = { fill: 0.8, lean: 0.07 }; // (its framing: the cube big in a little card)
+const PV = 1;
 const DAY_KEY = 'cube-sim-day'; // the last day the cube of the day said hello
 
 const svg = (inner, extra = '') =>
@@ -324,9 +330,8 @@ export class Cubby {
       if (b.disabled) return;
       b.disabled = true;
       try {
-        // (the cube on show, alone: a fresh, sharp photo of it - the saved
-        // one is a little thumbnail)
-        const fresh = this._shareOnShow && this.app.cubes.length === 1 && !this.app.swapper.active ? this.app.snapshot(840) : null;
+        // (a big portrait of it - the saved one is a little thumbnail)
+        const fresh = this.app.portrait(this._shareCube, 840);
         const blob = await cubePicture(this._shareCube, { thumb: fresh || this._shareThumb, link: this._shareLink });
         if (!blob) throw new Error('no picture');
         const fname = `${(this._shareName || 'cube').replace(/[^\w\- ]+/g, '').trim() || 'cube'}.png`;
@@ -415,7 +420,7 @@ export class Cubby {
     clearTimeout(this._st);
     this._st = null;
     try {
-      localStorage.setItem(KEY, JSON.stringify(this.items.map(({ id, code, thumb, at, rec }) => ({ id, code, thumb, at, rec }))));
+      localStorage.setItem(KEY, JSON.stringify(this.items.map(({ id, code, thumb, pv, at, rec }) => ({ id, code, thumb, pv, at, rec }))));
       localStorage.setItem(ON_KEY, JSON.stringify({ id: this.activeId, loose: this.loose }));
       return true;
     } catch (e) {
@@ -487,6 +492,7 @@ export class Cubby {
     this.el.hidden = false;
     this.btn.classList.add('open');
     this.render();
+    this._portraitsSoon(450);
   }
 
   close() {
@@ -494,6 +500,68 @@ export class Cubby {
     this.btn.classList.remove('open');
     this.endSave();
     this.closeMenu();
+    clearTimeout(this._pqT);
+  }
+
+  // ---- portraits (see portrait.js): a kept cube's is taken as it's kept;
+  // today's cube's, and those of cubes kept before there were portraits (a
+  // crop of the screen as it was), one at a time while the shelf is open
+  _portraitsSoon(ms = 350) {
+    clearTimeout(this._pqT);
+    this._pqT = setTimeout(() => this._nextPortrait(), ms);
+  }
+
+  _nextPortrait() {
+    if (this.el.hidden) return;
+    const app = this.app;
+    // (not while a cube's being swapped in or re-formed: in a moment)
+    if (app.swapper.active || app.healer.active || app._themeAnim || app._placeAnim) return this._portraitsSoon(700);
+    const today = cubeOfTheDay(), code = encodeCube(today);
+    if (this._todayPic()?.code !== code) {
+      const url = app.portrait(today, THUMB_PX, CARD);
+      if (url) {
+        this._today = { code, url };
+        try {
+          localStorage.setItem(TODAY_KEY, JSON.stringify(this._today));
+        } catch (e) {}
+        const box = this.gridEl.querySelector('.today-card .card-thumb');
+        if (box) this._thumbImg(box, url);
+      } else this._today = { code, url: null };
+      return this._portraitsSoon();
+    }
+    this._noPic = this._noPic || new Set();
+    const it = this.items.find((x) => x.pv !== PV && !this._noPic.has(x.id));
+    if (!it) return;
+    const c = decodeCube(it.code), url = c && app.portrait(c, THUMB_PX, CARD);
+    if (url) {
+      [it.thumb, it.pv] = [url, PV];
+      this._store();
+      const box = this.gridEl.querySelector(`.cube-card[data-id="${it.id}"] .card-thumb`);
+      if (box) this._thumbImg(box, url);
+    } else this._noPic.add(it.id);
+    this._portraitsSoon();
+  }
+
+  // today's cube's portrait, if it's been taken: { code, url }
+  _todayPic() {
+    if (this._today === undefined) {
+      try {
+        this._today = JSON.parse(localStorage.getItem(TODAY_KEY) || 'null');
+      } catch (e) {
+        this._today = null;
+      }
+    }
+    return this._today;
+  }
+
+  // a card's picture
+  _thumbImg(box, url) {
+    const img = new Image();
+    img.alt = '';
+    img.decoding = 'async';
+    img.src = url;
+    box.textContent = '';
+    box.appendChild(img);
   }
 
   render() {
@@ -523,7 +591,9 @@ export class Cubby {
     const card = document.createElement('div');
     card.className = 'cube-card today-card';
     card.innerHTML = `<button class="card-main"><span class="card-thumb"></span><span class="card-name"></span><span class="card-sub">Cube of the day</span></button><button class="card-drop" title="Drop it into the room too">${ICON.plus}</button><span class="today-tag">Today</span>`;
-    card.querySelector('.card-thumb').innerHTML = cubeArt(c);
+    const pic = this._todayPic();
+    if (pic?.url && pic.code === encodeCube(c)) this._thumbImg(card.querySelector('.card-thumb'), pic.url);
+    else card.querySelector('.card-thumb').innerHTML = cubeArt(c);
     card.querySelector('.card-name').textContent = c.name;
     const main = card.querySelector('.card-main');
     main.setAttribute('aria-label', `Put on today's cube, ${c.name}`);
@@ -597,13 +667,8 @@ export class Cubby {
     if (it.id === this.activeId) card.insertAdjacentHTML('beforeend', '<span class="card-on">On</span>');
     if (it.rec.healed) card.insertAdjacentHTML('beforeend', `<span class="card-healed" title="Times re-cubed">${ICON.heal}${it.rec.healed}</span>`);
     const main = card.querySelector('.card-main'), thumb = card.querySelector('.card-thumb');
-    if (it.thumb) {
-      const img = new Image();
-      img.alt = '';
-      img.decoding = 'async';
-      img.src = it.thumb;
-      thumb.appendChild(img);
-    } else thumb.innerHTML = cubeArt(c);
+    if (it.thumb) this._thumbImg(thumb, it.thumb);
+    else thumb.innerHTML = cubeArt(c);
     card.querySelector('.card-name').textContent = c.name || 'Untitled cube';
     card.querySelector('.card-sub').textContent = cubeSummary(c);
     main.setAttribute('aria-label', `Put on ${c.name || 'this cube'}`);
@@ -633,7 +698,7 @@ export class Cubby {
   // ---- saving
   startSave() {
     this.closeMenu();
-    const shot = this.app.snapshot();
+    const shot = this.app.portrait(null, THUMB_PX, CARD);
     const box = this.newForm.querySelector('.new-thumb');
     box.textContent = '';
     if (shot) {
@@ -665,14 +730,15 @@ export class Cubby {
     const thumb = this._shot;
     this.endSave();
     // (the cube on show is this one now; an unsaved cube's record comes with it)
-    this._put({ id: this._id(), code: encodeCube(c), thumb, at: Date.now(), rec: { ...this.loose } }, `Cubed! “${name}” is in your Cubby`, null, true);
+    this._put({ id: this._id(), code: encodeCube(c), thumb, pv: thumb ? PV : 0, at: Date.now(), rec: { ...this.loose } }, `Cubed! “${name}” is in your Cubby`, null, true);
   }
 
-  // keep a cube that came in a code (a picture of it now, and the record of
-  // its time on show so far, if it's the one on show)
+  // keep a cube that came in a code (its portrait, and the record of its
+  // time on show so far, if it's the one on show)
   add(c, onShow) {
     const name = cleanName(c.name) || this._suggest();
-    const item = { id: this._id(), code: encodeCube({ ...c, name }), thumb: onShow ? this.app.snapshot() : null, at: Date.now(), rec: onShow ? { ...this.loose } : {} };
+    const thumb = this.app.portrait(c, THUMB_PX, CARD);
+    const item = { id: this._id(), code: encodeCube({ ...c, name }), thumb, pv: thumb ? PV : 0, at: Date.now(), rec: onShow ? { ...this.loose } : {} };
     this._put(item, `Saved “${name}” to your Cubby`, onShow ? null : [{ label: 'Open', run: () => this.open() }], onShow);
   }
 
@@ -726,17 +792,7 @@ export class Cubby {
     if (window.innerWidth <= 720) this.close();
     this.fighter.hide();
     this._hideToast();
-    this.app.swapCube(c, () => {
-      this.fighter.show(c, { kicker, rec, actions });
-      // (a cube kept from a code gets its picture once it's been on show)
-      if (it && !it.thumb) {
-        setTimeout(() => {
-          if (!this.items.includes(it) || it.thumb || this.app.swapper.active) return;
-          it.thumb = this.app.snapshot();
-          if (it.thumb && this._store()) this.render();
-        }, 1300);
-      }
-    });
+    this.app.swapCube(c, () => this.fighter.show(c, { kicker, rec, actions }));
   }
 
   // another cube into the room: this one, dropped in beside the others
@@ -752,8 +808,9 @@ export class Cubby {
   // the cube on show, as it is now, into its saved slot (record kept)
   update(it) {
     const c = decodeCube(it.code);
-    it.code = encodeCube(captureCube(this.app, c.name));
-    it.thumb = this.app.snapshot() || it.thumb;
+    const now = captureCube(this.app, c.name), pic = this.app.portrait(now, THUMB_PX, CARD);
+    it.code = encodeCube(now);
+    if (pic) [it.thumb, it.pv] = [pic, PV];
     this._store();
     this.render();
     this.toast(`Saved changes to “${c.name || 'this cube'}”`);
@@ -839,7 +896,6 @@ export class Cubby {
     this._shareName = c.name || 'A cube';
     this._shareCube = c;
     this._shareThumb = it.thumb || null;
-    this._shareOnShow = it.id === this.activeId && !this._edited(it);
     this.shareEl.querySelector('#share-title').textContent = this._shareName;
     const art = this.shareEl.querySelector('.share-art');
     art.textContent = '';

@@ -19,7 +19,7 @@ import {
 const FLOOR_SPAN = 6.4;
 // (how milky jelly of that opacity looks: see setStyle)
 // a row of the cube-look texture: 7 texels of looks, 10 + 10 of layers
-const CUBE_TEX_W = 28;
+export const CUBE_TEX_W = 28;
 
 const hazeMinOf = (o) => 0.92 * Math.min(1, Math.max(0, (Math.min(1, Math.max(0, o)) - 0.45) / 0.55)) ** 2;
 

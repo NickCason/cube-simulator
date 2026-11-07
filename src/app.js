@@ -27,6 +27,8 @@ import { Strands } from './world/strands.js';
 import { Bubbles } from './world/bubbles.js';
 import { GlassRoom } from './world/glassroom.js';
 import { Glitter, GLITTER_MODES } from './world/glitter.js';
+import { Portraits } from './portrait.js';
+import { captureCube } from './cubecode.js';
 import { bevelPoint, unbevelPoint } from './sim/mesh.js';
 import { RUBIK_COLORS, rubikIndex, rubikCellAt } from './styles.js';
 import { DEFAULT_STYLE, TEXTURES, EDGES, LAYER_PRESETS, MIN_LAYERS, MAX_LAYERS, MAX_REPEAT, biasExp, resolveFlavor, flavorMainHex, nextLayerColor } from './styles.js';
@@ -181,6 +183,7 @@ export class App {
     this.anchorProviders = [() => this.nails.anchors()];
     this.bubbles = new Bubbles(this);
     this.glitter = new Glitter(this);
+    this.portraits = new Portraits(this); // (a cube's picture, taken properly: see portrait.js)
     this.cubiplication = new Cubiplication(this); // (fed jelly, a cube cubiplies - see tools/feed.js)
     // the glass room (Settings > World), as it was left
     this.room = new GlassRoom(this);
@@ -1703,50 +1706,11 @@ export class App {
     this.swapper.start(c, onLand);
   }
 
-  // A small square picture of the jelly as it is now (a JPEG data URL), for
-  // the Cubby: a frame drawn without the tool in hand, cropped to the cube.
-  snapshot(px = 168) {
-    const hidden = [];
-    for (const t of Object.values(this.tools)) {
-      if (t.model?.visible) {
-        t.model.visible = false;
-        hidden.push(t.model);
-      }
-    }
-    try {
-      this.render();
-      const c = this.renderer.domElement, sb = this.sb;
-      // the cube's box on screen
-      let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
-      const v = this._snapV || (this._snapV = new THREE.Vector3());
-      let lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
-      for (let i = 0; i < sb.nV; i++) {
-        for (let k = 0; k < 3; k++) {
-          const q = sb.x[i * 3 + k];
-          if (q < lo[k]) lo[k] = q;
-          if (q > hi[k]) hi[k] = q;
-        }
-      }
-      if (!(lo[0] <= hi[0])) lo = [-0.5, 0, -0.5], hi = [0.5, 1, 0.5];
-      for (let k = 0; k < 8; k++) {
-        v.set(k & 1 ? hi[0] : lo[0], k & 2 ? hi[1] : lo[1], k & 4 ? hi[2] : lo[2]).project(this.camera);
-        const sx = ((v.x + 1) / 2) * c.width, sy = ((1 - v.y) / 2) * c.height;
-        x0 = Math.min(x0, sx), x1 = Math.max(x1, sx), y0 = Math.min(y0, sy), y1 = Math.max(y1, sy);
-      }
-      // a square around it with some room (and a little floor below)
-      const side = Math.min(Math.max(x1 - x0, y1 - y0) * 1.45, c.width, c.height);
-      let sx = (x0 + x1) / 2 - side / 2, sy = (y0 + y1) / 2 - side * 0.47;
-      sx = Math.max(0, Math.min(c.width - side, sx));
-      sy = Math.max(0, Math.min(c.height - side, sy));
-      const out = document.createElement('canvas');
-      out.width = out.height = px;
-      out.getContext('2d').drawImage(c, sx, sy, side, side, 0, 0, px, px);
-      return out.toDataURL('image/jpeg', 0.84);
-    } catch (e) {
-      return null;
-    } finally {
-      for (const m of hidden) m.visible = true;
-    }
+  // A cube's portrait for the Cubby, the picture it's shared as (cube: as
+  // decodeCube gives it - by default the selected one, as it would be kept):
+  // a JPEG data URL, px square. See portrait.js.
+  portrait(c = null, px = 288, framing = {}) {
+    return this.portraits.take([c || captureCube(this)], px, framing)[0];
   }
 
   // ------------------------------------------------------------ looks
@@ -1796,12 +1760,13 @@ export class App {
     if (k >= 1) this._placeAnim = null;
   }
 
-  // the look for this theme here: the studio's, with the place's on top
-  _look(name) {
-    const P = PLACE_BY_ID[this.place] || PLACES[0], V = P[name] || {};
+  // the look for this theme somewhere (here, unless said): the studio's,
+  // with the place's on top
+  _look(name, place = this.place) {
+    const P = PLACE_BY_ID[place] || PLACES[0], V = P[name] || {};
     // (its sky, floor pattern and light boxes are its own; the rest are the look's numbers)
     const { sky, floor, boxes, ink, ...rest } = V;
-    return { T: { ...THEMES[name], ...rest }, V, P };
+    return { name, T: { ...THEMES[name], ...rest }, V, P };
   }
 
   _loadTheme(opts) {
@@ -1835,17 +1800,33 @@ export class App {
   // everything that differs between the looks (glow: how far the jelly's
   // light is up, 0..1 - the switch brings it up itself)
   _applyTheme(name, glow = 1, ease = false) {
-    const { T, V, P } = this._look(name);
-    // the place: its sky (seen, and reflected), its horizon the backdrop
-    // the floor fades into, its floor's pattern
+    const L = this._look(name), { T, V } = L;
+    this._applyLook(L, glow);
+    const html = document.documentElement;
+    if (ease) {
+      html.classList.add('theming'); // (the chrome eases over too)
+      clearTimeout(this._themingT);
+      this._themingT = setTimeout(() => html.classList.remove('theming'), 700);
+    }
+    html.classList.toggle('dark', name === 'dark');
+    html.dataset.place = this.place;
+    html.classList.toggle('sky-dark', V.ink === 'light'); // (the wordmark, over a black sky)
+    document.querySelector('meta[name="theme-color"]')?.setAttribute('content', T.css);
+    this.ui?.setTheme?.(name);
+  }
+
+  // A look into the renderer: the place's sky (seen, and - env - captured
+  // into what everything reflects), its horizon the backdrop the floor
+  // fades into, its floor's pattern, its light, the post's numbers.
+  _applyLook({ name, T, V, P }, glow = 1, env = true) {
     if (V.sky) {
-      this.env.setLook({ key: P.id + ':' + name, sky: V.sky, boxes: V.boxes || null });
+      if (env) this.env.setLook({ key: P.id + ':' + name, sky: V.sky, boxes: V.boxes || null });
       setSky(this.sky.userData.u, V.sky, this.lightDir);
       this.sky.userData.u.uGnd.value.copy(this.sky.userData.u.uHor.value); // (no seam where the floor ends)
       this.sky.visible = true;
       this.bg.setRGB(...V.sky.hor);
     } else {
-      this.env.setLook(name);
+      if (env) this.env.setLook(name);
       this.sky.visible = false;
       this.bg.setRGB(...T.bg);
     }
@@ -1876,17 +1857,6 @@ export class App {
     this.post.preMat.uniforms.uThreshold.value = T.threshold;
     this.post.preMat.uniforms.uKnee.value = T.knee;
     this._setGlow(T.glow * glow);
-    const html = document.documentElement;
-    if (ease) {
-      html.classList.add('theming'); // (the chrome eases over too)
-      clearTimeout(this._themingT);
-      this._themingT = setTimeout(() => html.classList.remove('theming'), 700);
-    }
-    html.classList.toggle('dark', name === 'dark');
-    html.dataset.place = this.place;
-    html.classList.toggle('sky-dark', V.ink === 'light'); // (the wordmark, over a black sky)
-    document.querySelector('meta[name="theme-color"]')?.setAttribute('content', T.css);
-    this.ui?.setTheme?.(name);
   }
 
   _setGlow(e) {
