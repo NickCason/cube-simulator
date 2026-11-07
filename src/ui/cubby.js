@@ -3,6 +3,8 @@
 // code (a link and a QR code), and open the codes other people send - from a
 // link, or pasted in (an installed iPhone app doesn't get links: Safari does).
 
+import { linOf } from '../family.js';
+import { FamilyView, TREE_ICON } from './family.js';
 import { captureCube, encodeCube, decodeCube, cubeLink, cubeSummary, cleanName } from '../cubecode.js';
 import { nameCube } from '../namegen.js';
 import { cubeOfTheDay, dayKey } from '../cotd.js';
@@ -150,6 +152,7 @@ export class Cubby {
         <div class="cubby-head">
           <div class="cubby-title"><b>Cubby</b><span class="cubby-count"></span></div>
           <div class="cubby-head-acts">
+            <button class="cubby-family" hidden aria-label="Family tree" title="Family tree">${TREE_ICON}</button>
             <button class="cubby-random" aria-label="Random cube" title="Random cube">${ICON.die}</button>
             <button class="cubby-save">${ICON.plus}<span>Save this cube</span></button>
           </div>
@@ -230,6 +233,12 @@ export class Cubby {
     this.shareEl = $('.modal.share');
     this.randomBtn = $('.cubby-random');
     this.fighter = new FighterCard(root, app);
+    this.family = new FamilyView(this, app, root);
+    this.familyBtn = $('.cubby-family');
+    this.familyBtn.addEventListener('click', () => {
+      app.audio.ui();
+      this.family.open();
+    });
     this.emptyEl.querySelector('.empty-art').innerHTML = cubeArt({ flavor: 'layers', layers: { colors: ['#b39ddb', '#90caf9', '#a5d6a7', '#fff59d', '#ffcc80', '#f48fb1'], blur: 0.45, repeat: 1, bias: 0 }, texture: 'gummy', glitter: 'holo' });
 
     this.btn.addEventListener('click', (e) => {
@@ -420,7 +429,7 @@ export class Cubby {
     clearTimeout(this._st);
     this._st = null;
     try {
-      localStorage.setItem(KEY, JSON.stringify(this.items.map(({ id, code, thumb, pv, at, rec }) => ({ id, code, thumb, pv, at, rec }))));
+      localStorage.setItem(KEY, JSON.stringify(this.items.map(({ id, code, thumb, pv, at, rec, lin }) => ({ id, code, thumb, pv, at, rec, lin }))));
       localStorage.setItem(ON_KEY, JSON.stringify({ id: this.activeId, loose: this.loose }));
       return true;
     } catch (e) {
@@ -583,6 +592,7 @@ export class Cubby {
     this.gridEl.appendChild(this._todayCard());
     for (const it of this.items) this.gridEl.appendChild(this._card(it));
     this.randomBtn.hidden = this.items.filter((it) => it.id !== this.activeId).length < 2;
+    this.familyBtn.hidden = !this.family.any;
   }
 
   // the cube of the day: tap to put it on, + to drop it in
@@ -610,6 +620,20 @@ export class Cubby {
       this.dropIn({ code: encodeCube(c) });
     });
     return card;
+  }
+
+  // put a family member on (from the family tree): a kept one as any kept
+  // one; else as it was, its family with it (Save keeps it; Undo)
+  tryMember(c, lin, it = null) {
+    if (it) return this.wear(it, 'From the family');
+    const back = this._state();
+    this._setOn(null, {});
+    this.app.cube.name = c.name || '';
+    this.app.cube.lin = { ...lin };
+    this._swapTo(c, 'From the family', null, [
+      { label: 'Save', run: () => this.add(c, true, { lin }) },
+      { label: 'Undo', run: () => this._restore(back) },
+    ]);
   }
 
   // put the cube of the day on (Save keeps it; Undo puts back what was on)
@@ -730,15 +754,18 @@ export class Cubby {
     const thumb = this._shot;
     this.endSave();
     // (the cube on show is this one now; an unsaved cube's record comes with it)
-    this._put({ id: this._id(), code: encodeCube(c), thumb, pv: thumb ? PV : 0, at: Date.now(), rec: { ...this.loose } }, `Cubed! “${name}” is in your Cubby`, null, true);
+    const lin = this.app.cube ? { ...linOf(this.app.cube) } : null;
+    this._put({ id: this._id(), code: encodeCube(c), thumb, pv: thumb ? PV : 0, at: Date.now(), rec: { ...this.loose }, lin }, `Cubed! “${name}” is in your Cubby`, null, true);
   }
 
   // keep a cube that came in a code (its portrait, and the record of its
   // time on show so far, if it's the one on show)
-  add(c, onShow) {
+  add(c, onShow, { lin = null } = {}) {
     const name = cleanName(c.name) || this._suggest();
     const thumb = this.app.portrait(c, THUMB_PX, CARD);
-    const item = { id: this._id(), code: encodeCube({ ...c, name }), thumb, pv: thumb ? PV : 0, at: Date.now(), rec: onShow ? { ...this.loose } : {} };
+    // (its family: given, or the room's cube it is)
+    lin = lin || (onShow && this.app.cube ? linOf(this.app.cube) : null);
+    const item = { id: this._id(), code: encodeCube({ ...c, name }), thumb, pv: thumb ? PV : 0, at: Date.now(), rec: onShow ? { ...this.loose } : {}, lin: lin ? { ...lin } : null };
     this._put(item, `Saved “${name}” to your Cubby`, onShow ? null : [{ label: 'Open', run: () => this.open() }], onShow);
   }
 
@@ -782,6 +809,7 @@ export class Cubby {
     it.rec.picked = (it.rec.picked || 0) + 1;
     this._setOn(it.id, {});
     this.app.cube.name = c.name || ''; // (its name in the stack)
+    this.app.cube.lin = it.lin ? { ...it.lin } : null; // (and its family)
     this._store();
     this.render();
     this._swapTo(c, kicker, it.rec, [{ label: 'Undo', run: () => this._restore(back) }], it);
@@ -801,6 +829,8 @@ export class Cubby {
     if (!c) return;
     const slot = this.app.addCube(c);
     if (slot < 0) return;
+    const cb = this.app.cubes.find((x) => x.slot === slot);
+    if (cb && it.lin) cb.lin = { ...it.lin };
     this.app.ui.cubesChanged();
     if (window.innerWidth <= 720) this.close();
   }

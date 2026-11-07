@@ -3,40 +3,31 @@
 // the jelly springs after it: grown, then stretched along its length into
 // two smaller cubes joined by a neck that pinches in and draws out - the
 // volume it was fed shared between them - until the neck snaps and two
-// cubes spring apart, each built afresh at its new size, each a little
-// different (a colour drift, a slider nudged) and named anew.
+// cubes spring apart, each built afresh at its new size, each different -
+// drifted, mutated, now and then something else altogether (genetics.js) -
+// named anew, and born into the family tree (family.js). A child that came
+// out as something new arrives with a fanfare and sparkles; the two of them
+// get a card side by side (ui/cubiplied.js).
 
 import * as THREE from 'three';
 import { REST_STEP, MAX_CUBES } from './sim/softbody.js';
-import { SETTINGS, resolveSettings } from './settings.js';
-import { TEXTURES, EDGES, resolveFlavor, flavorMainHex } from './styles.js';
+import { resolveFlavor, flavorMainHex } from './styles.js';
 import { nameCube } from './namegen.js';
+import { mutate, topTier, TIER } from './genetics.js';
+import { linOf, newId, recordBirth } from './family.js';
+import { encodeCube } from './cubecode.js';
 
 const SPLIT_AT = 1.5; // (fed to this much its volume, it divides)
 const DIVIDE_T = 1.7; // s: from the first stretch to the snap
 const MIN_CHILD = 0.38; // (smaller than this, a cube just grows)
 const MAX_SIZE = 1.6; // (and no bigger than this)
-const SETTING = Object.fromEntries(SETTINGS.map((s) => [s.key, s]));
 const smooth = (x) => x * x * (3 - 2 * x);
-
-// a colour turned a little round the hue wheel
-function hueShift(hex, deg) {
-  const n = parseInt(hex.slice(1), 16);
-  let r = ((n >> 16) & 255) / 255, g = ((n >> 8) & 255) / 255, b = (n & 255) / 255;
-  const mx = Math.max(r, g, b), mn = Math.min(r, g, b), d = mx - mn;
-  let h = 0;
-  if (d > 1e-6) h = mx === r ? ((g - b) / d) % 6 : mx === g ? (b - r) / d + 2 : (r - g) / d + 4;
-  h = (h * 60 + deg + 720) % 360;
-  const s = mx ? d / mx : 0, v = mx, c = v * s, x = c * (1 - Math.abs(((h / 60) % 2) - 1)), m = v - c;
-  [r, g, b] = h < 60 ? [c, x, 0] : h < 120 ? [x, c, 0] : h < 180 ? [0, c, x] : h < 240 ? [0, x, c] : h < 300 ? [x, 0, c] : [c, 0, x];
-  const to = (u) => Math.round((u + m) * 255).toString(16).padStart(2, '0');
-  return `#${to(r)}${to(g)}${to(b)}`;
-}
 
 export class Cubiplication {
   constructor(app) {
     this.app = app;
     this.m = null; // the cube being fed (one at a time)
+    this.fx = []; // (children arriving as something new: sparkling a while)
   }
 
   get active() {
@@ -108,6 +99,7 @@ export class Cubiplication {
 
   update(dt) {
     const m = this.m, app = this.app, sb = app.sb;
+    if (this.fx.length) this._sparkle(dt);
     if (!m) return;
     // (cut, rebuilt or swapped meanwhile: what it was given, kept, as it is)
     if (sb.topoVersion !== m.topo || app.healer.active || app.swapper.active) {
@@ -250,13 +242,17 @@ export class Cubiplication {
     const mid = side[0].c.clone().add(side[1].c).multiplyScalar(0.5);
     // (each half's turn: its rest shape, a cube by now, fitted to where it is)
     for (const S of side) S.yaw = app.healer._yawOf({ verts: S.verts });
-    // the twins: the parent's look and feel, each nudged a little, named anew
+    // the twins: the parent's look and feel, each drifted and mutated -
+    // wilder the further down its family it is - named anew
     const c = Math.min(MAX_SIZE, m.size0 * m.g * Math.cbrt(0.5));
-    const rnd = Math.random;
+    const rnd = Math.random, as = (x) => ({ name: x.name, flavor: x.style.flavor, layers: x.style.layers, texture: x.style.texture, edges: x.style.edges, glitter: x.style.glitter || 'off', rubik: x.style.rubik, tune: { ...x.tune }, tear: x.tune.tear !== false, theme: app.theme });
+    // (a cube with no name yet gets one now: it's going in the family tree)
+    if (!cb.name) cb.name = nameCube({ ...cb.style, tune: cb.tune }, { taken: app.cubes.map((x) => x.name || '') });
+    const pl = { ...linOf(cb) }, parent = as(cb);
     const kid = (base) => {
       const style = JSON.parse(JSON.stringify(base.style)), tune = { ...base.tune, size: c };
-      this._mutate(style, tune, rnd);
-      return { style, tune };
+      const changes = mutate(style, tune, { rnd, gen: pl.gen });
+      return { style, tune, changes };
     };
     const A = kid(cb), B = kid(cb);
     const used = new Set(app.cubes.map((x) => x.slot));
@@ -266,7 +262,8 @@ export class Cubiplication {
     cb.style = A.style;
     cb.tune = A.tune;
     cb.name = nameCube({ ...A.style, tune: A.tune }, { taken: taken() });
-    const cbB = { slot: slotB, style: B.style, tune: B.tune, name: '' };
+    cb.lin = { id: newId(), parent: pl.id, gen: pl.gen + 1 };
+    const cbB = { slot: slotB, style: B.style, tune: B.tune, name: '', lin: { id: newId(), parent: pl.id, gen: pl.gen + 1 } };
     cbB.name = nameCube({ ...B.style, tune: B.tune }, { taken: [...taken(), cb.name] });
     if (app.cube === cb) {
       app.style = cb.style;
@@ -315,26 +312,56 @@ export class Cubiplication {
       const v = new THREE.Vector3((Math.random() - 0.5) * 2.2, 1.2 + Math.random() * 2, (Math.random() - 0.5) * 2.2);
       app.droplets.spawn(mid.clone(), v, 0.012 + Math.random() * 0.02, flavorMainHex(resolveFlavor(Math.random() < 0.5 ? cb.style : cbB.style)));
     }
-    app.ui?.hint(`Cubiplied! ${cb.name} & ${cbB.name}`, 3200);
-    // the new one's card: who it is, and Save
-    const fc = app.ui?.cubby?.fighter;
-    if (fc) {
-      const as = (x) => ({ name: x.name, flavor: x.style.flavor, layers: x.style.layers, texture: x.style.texture, edges: x.style.edges, glitter: x.style.glitter || 'off', rubik: x.style.rubik, tune: { ...x.tune }, tear: x.tune.tear !== false });
-      fc.show(as(cbB), { kicker: 'Cubiplied!', actions: [{ label: 'Save both', run: () => { app.ui.cubby.add(as(cb), false); app.ui.cubby.add(as(cbB), false); } }] });
+    // into the family: the parent as it was, the two as they're born
+    const kids = [
+      { cb, changes: A.changes, at: side[0].c },
+      { cb: cbB, changes: B.changes, at: side[1].c },
+    ];
+    recordBirth(
+      { ...pl, name: parent.name || '', code: encodeCube(parent) },
+      kids.map((k) => ({ ...k.cb.lin, name: k.cb.name, code: encodeCube(as(k.cb)), changes: k.changes.filter((x) => x.tier > TIER.DRIFT).map(({ tier, label }) => ({ tier, label })) })),
+    );
+    // something new: a fanfare, and it sparkles a while
+    const top = Math.max(...kids.map((k) => topTier(k.changes)));
+    for (const k of kids) {
+      const tier = topTier(k.changes);
+      if (tier >= TIER.MAJOR) this.fx.push({ slot: k.cb.slot, t: 0, tier, col: flavorMainHex(resolveFlavor(k.cb.style)), life: () => (tier >= TIER.LEGENDARY ? 2.6 : 1.7) });
     }
+    if (top >= TIER.MAJOR) setTimeout(() => app.audio?.fanfare?.(top), 260);
+    const news = kids.flatMap((k) => k.changes.filter((x) => x.tier >= TIER.MAJOR).map((x) => `${k.cb.name}: ${x.label}`));
+    app.ui?.hint(news.length ? `Cubiplied! ${news[0]}` : `Cubiplied! ${cb.name} & ${cbB.name}`, 3200);
+    // the two of them, side by side (once they've landed)
+    setTimeout(() => {
+      app.ui?.cubiplied?.show({
+        parent: { ...parent, gen: pl.gen },
+        kids: kids.map((k) => ({ c: as(k.cb), changes: k.changes, lin: { ...k.cb.lin }, slot: k.cb.slot })),
+      });
+    }, 950);
     this.onSplit?.(cb, cbB);
   }
 
-  // a child: its colour drifted, a slider nudged (its material and edges as the parent's)
-  _mutate(style, tune, rnd) {
-    if (style.flavor === 'rubik') style.rubik = 1 + Math.floor(rnd() * 65535);
-    else if (style.flavor === 'layers') style.layers.colors = style.layers.colors.map((h) => hueShift(h, (rnd() - 0.5) * 30));
-    else style.flavor = hueShift(flavorMainHex(resolveFlavor(style)), (rnd() - 0.5) * 34);
-    const keys = ['mu', 'bounce', 'goo', 'damping', 'grip', 'glow'];
-    const key = keys[Math.floor(rnd() * keys.length)], S = SETTING[key];
-    if (!S) return;
-    const now = resolveSettings(tune, TEXTURES[style.texture] || TEXTURES.jello)[key];
-    const t = Math.min(0.97, Math.max(0.03, S.from(now) + (rnd() - 0.5) * 0.3));
-    tune[key] = S.to(t);
+  // a child that came out as something new sparkles a while: glints off
+  // it, in its colours (a legend's: every colour), and a glow through it
+  _sparkle(dt) {
+    const app = this.app, sb = app.sb;
+    for (const f of this.fx) {
+      f.t += dt;
+      let cx = 0, cy = 0, cz = 0, n = 0, top = -1e9;
+      for (let i = 0; i < sb.nV; i++) {
+        if (sb.vCube[i] !== f.slot) continue;
+        cx += sb.x[i * 3]; cy += sb.x[i * 3 + 1]; cz += sb.x[i * 3 + 2]; n++;
+        if (sb.x[i * 3 + 1] > top) top = sb.x[i * 3 + 1];
+        if (f.t < 1.2) sb.glow[i] = Math.max(sb.glow[i], 0.5 * (1 - f.t / 1.2));
+      }
+      if (!n) continue;
+      const at = new THREE.Vector3(cx / n, Math.max(cy / n, top - 0.05), cz / n);
+      const k = Math.max(0, Math.round((f.tier >= TIER.LEGENDARY ? 5 : 3) * (1 - f.t / f.life()) + 0.4));
+      for (let q = 0; q < k; q++) {
+        const c = f.tier >= TIER.LEGENDARY ? new THREE.Color().setHSL(Math.random(), 1, 0.6) : new THREE.Color(f.col).lerp(new THREE.Color(1, 1, 1), 0.35);
+        app.particles?.glitter(at, 1, [c.r, c.g, c.b], 1.2 + Math.random());
+      }
+      if (f.t < dt * 1.5) app.particles?.flash(at, 0.9, f.tier >= TIER.LEGENDARY ? [3, 2.6, 3.2] : [2.4, 2.2, 1.8]);
+    }
+    this.fx = this.fx.filter((f) => f.t < f.life());
   }
 }

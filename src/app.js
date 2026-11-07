@@ -450,7 +450,7 @@ export class App {
     try {
       localStorage.setItem('cube-sim-style', JSON.stringify(this.style));
       localStorage.setItem('cube-sim-tune', JSON.stringify(this.tune));
-      localStorage.setItem('cube-sim-scene', JSON.stringify({ sel: this.sel, order: this.stackOrder, cubes: this.cubes.map((c) => ({ slot: c.slot, style: c.style, tune: c.tune, name: c.name || '' })) }));
+      localStorage.setItem('cube-sim-scene', JSON.stringify({ sel: this.sel, order: this.stackOrder, cubes: this.cubes.map((c) => ({ slot: c.slot, style: c.style, tune: c.tune, name: c.name || '', lin: c.lin || null })) }));
     } catch (e) {
       /* private mode */
     }
@@ -1800,10 +1800,13 @@ export class App {
     } catch (e) {
       sc = null;
     }
+    const okLin = (l) => (l && typeof l.id === 'string' ? { id: l.id, parent: typeof l.parent === 'string' ? l.parent : null, gen: l.gen | 0 } : null);
+    // (one cube: just its family)
+    if (sc && Array.isArray(sc.cubes) && sc.cubes.length === 1 && this.cubes[0]) this.cubes[0].lin = okLin(sc.cubes[0]?.lin);
     if (!sc || !Array.isArray(sc.cubes) || sc.cubes.length < 2) return;
     const sb = this.sb, keepSel = Math.min(Math.max(0, sc.sel | 0), sc.cubes.length - 1);
     // the selected one is the cube already built (slot 0), the rest around it
-    this.cubes = [{ slot: 0, style: this.style, tune: this.tune, name: String(sc.cubes[keepSel]?.name || '') }];
+    this.cubes = [{ slot: 0, style: this.style, tune: this.tune, name: String(sc.cubes[keepSel]?.name || ''), lin: okLin(sc.cubes[keepSel]?.lin) }];
     // (old slot -> new, for the stack's order)
     const was = new Map([[sc.cubes[keepSel]?.slot, 0]]);
     // (the rest first: their sizes set the cells)
@@ -1815,12 +1818,12 @@ export class App {
       const tune = {};
       for (const k of Object.keys(this.tune)) if (!PER_CUBE(k)) tune[k] = this.tune[k];
       for (const k of Object.keys(c.tune || {})) if (PER_CUBE(k) && Number.isFinite(c.tune[k])) tune[k] = c.tune[k];
-      more.push({ style, tune, name: String(c.name || ''), was: c.slot });
+      more.push({ style, tune, name: String(c.name || ''), was: c.slot, lin: okLin(c.lin) });
     }
     this._resolution(more.map((m) => this.sizeOf(m)));
     this._arena(1 + more.length);
     for (const m of more) {
-      const slot = this.cubes.length, cb = { slot, style: m.style, tune: m.tune, name: m.name }, size = this.sizeOf(cb);
+      const slot = this.cubes.length, cb = { slot, style: m.style, tune: m.tune, name: m.name, lin: m.lin }, size = this.sizeOf(cb);
       const [x, z, top] = this._clearSpot({ size });
       sb.addCube(slot, x, top, z, (Math.random() - 0.5) * 0.8, this.bevelOf(cb), size, this.resOf(cb));
       sb.rebuild();

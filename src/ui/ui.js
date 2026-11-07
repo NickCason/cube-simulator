@@ -5,6 +5,7 @@ import { StackPanel, STACK_ICON } from './stackpanel.js';
 import { PlacesPanel, PLACE_ICON } from './places.js';
 import { GradEditor } from './gradedit.js';
 import { FreeEditor } from './freeedit.js';
+import { CubipliedCard } from './cubiplied.js';
 
 const svg = (inner) =>
   `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${inner}</svg>`;
@@ -486,6 +487,7 @@ export class UI {
     this.stack = new StackPanel(this, app, root);
     // places: where the cube is
     this.placeBtn = root.querySelector('.place-btn');
+    this.cubiplied = new CubipliedCard(root, app); // (a cubiplication's two, side by side)
     this.places = new PlacesPanel(this, app, root);
     this.placeBtn.addEventListener('click', (e) => {
       e.stopPropagation();

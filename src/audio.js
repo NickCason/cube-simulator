@@ -712,6 +712,23 @@ export class AudioEngine {
     this._tone(t + 0.3, 'sine', 130.8, 65.4, 0.4, 0.18, 0.005);
   }
 
+  // a cubiplied child that came out as something new: a fanfare - a run up
+  // the scale, little bells over it; a legend's longer, ending on a chord
+  fanfare(tier = 2) {
+    if (!this._ok('fanfare', 0.6)) return;
+    const t = this.ctx.currentTime;
+    const notes = tier >= 3 ? [523.25, 659.25, 783.99, 1046.5, 1318.5, 1568, 2093] : [587.33, 739.99, 880, 1174.66];
+    notes.forEach((f, i) => {
+      this._tone(t + i * 0.06, 'triangle', f, f, 0.5, 0.045, 0.004);
+      this._tone(t + i * 0.06, 'sine', f * 2, f * 2, 0.35, 0.018, 0.002);
+    });
+    for (let k = 0; k < (tier >= 3 ? 14 : 8); k++) {
+      const f = 2000 + Math.random() * 3000;
+      this._tone(t + 0.15 + k * 0.045, 'sine', f, f * 1.01, 0.18, 0.012, 0.002);
+    }
+    if (tier >= 3) [261.63, 329.63, 392, 523.25].forEach((f) => this._tone(t + notes.length * 0.06, 'triangle', f, f, 1.3, 0.035, 0.02));
+  }
+
   // a stat bar filling, a step up the scale each
   tick(step = 0) {
     if (!this.ctx || this.muted) return;
