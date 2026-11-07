@@ -6,6 +6,7 @@
 import { captureCube, encodeCube, decodeCube, cubeLink, cubeSummary, cleanName } from '../cubecode.js';
 import { nameCube } from '../namegen.js';
 import { cubeOfTheDay, dayKey } from '../cotd.js';
+import { cubePicture } from './sharecard.js';
 import { qrEncode, qrSVG } from './qr.js';
 import { FighterCard } from './fighter.js';
 import { resolveFlavor, layerBands, TEXTURES } from '../styles.js';
@@ -27,6 +28,7 @@ const ICON = {
   update: svg('<path d="M5 12.5 9.5 17 19 7.5"/>'),
   // (Re-cube's sparkle: a plus here read as one more "+ add")
   heal: svg('<path d="M11 3.5 12.7 8l4.6 1.7-4.6 1.7L11 16l-1.7-4.6-4.6-1.7L9.3 8z"/><path d="m18.5 14.5.8 2.1 2.2.8-2.2.8-.8 2.3-.8-2.3-2.2-.8 2.2-.8z"/>', ' fill="currentColor" stroke-width="1.2"'),
+  picture: svg('<rect x="3.5" y="4.5" width="17" height="15" rx="2.6"/><circle cx="9" cy="10" r="1.8"/><path d="m20.5 16-4.8-4.6-8.7 8.1"/>'),
   qr: svg('<rect x="4" y="4" width="6" height="6" rx="1"/><rect x="14" y="4" width="6" height="6" rx="1"/><rect x="4" y="14" width="6" height="6" rx="1"/><path d="M14 14h2v2h-2zM18 14h2M14 18v2M18 18h2v2"/>'),
 };
 
@@ -168,6 +170,7 @@ export class Cubby {
           <p class="share-tip">Point a phone camera at it, or send the link.</p>
           <div class="modal-actions">
             <button class="soft copy">Copy link</button>
+            <button class="soft picture">${ICON.picture}<span>Picture</span></button>
             <button class="primary send">${ICON.share}<span>Send…</span></button>
           </div>
         </div>
@@ -280,6 +283,44 @@ export class Cubby {
       app.audio.ui();
       const ok = await copyText(this._shareLink);
       this.toast(ok ? 'Link copied - send it to someone who needs a cube' : "Couldn't copy the link here");
+    });
+    // the picture: the photo, the name, the stats and the QR in one image -
+    // into the share sheet where phones take files, else downloaded
+    this.shareEl.querySelector('.picture').addEventListener('click', async (e) => {
+      app.audio.ui();
+      const b = e.currentTarget;
+      if (b.disabled) return;
+      b.disabled = true;
+      try {
+        // (the cube on show, alone: a fresh, sharp photo of it - the saved
+        // one is a little thumbnail)
+        const fresh = this._shareOnShow && this.app.cubes.length === 1 && !this.app.swapper.active ? this.app.snapshot(840) : null;
+        const blob = await cubePicture(this._shareCube, { thumb: fresh || this._shareThumb, link: this._shareLink });
+        if (!blob) throw new Error('no picture');
+        const fname = `${(this._shareName || 'cube').replace(/[^\w\- ]+/g, '').trim() || 'cube'}.png`;
+        const file = new File([blob], fname, { type: 'image/png' });
+        if (navigator.canShare?.({ files: [file] })) {
+          try {
+            await navigator.share({ files: [file], title: `${this._shareName} · Cube Simulator`, text: this._shareLink });
+          } catch (err) {
+            /* (dismissed) */
+          }
+        } else {
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = fname;
+          document.body.appendChild(a);
+          a.click();
+          a.remove();
+          setTimeout(() => URL.revokeObjectURL(url), 4000);
+          this.toast('Picture saved - the QR in it opens this cube');
+        }
+      } catch (err) {
+        this.toast("Couldn't make the picture here");
+      } finally {
+        b.disabled = false;
+      }
     });
     this.shareEl.querySelector('.send').addEventListener('click', async () => {
       app.audio.ui();
@@ -764,6 +805,9 @@ export class Cubby {
     const c = decodeCube(it.code);
     this._shareLink = cubeLink(c);
     this._shareName = c.name || 'A cube';
+    this._shareCube = c;
+    this._shareThumb = it.thumb || null;
+    this._shareOnShow = it.id === this.activeId && !this._edited(it);
     this.shareEl.querySelector('#share-title').textContent = this._shareName;
     const art = this.shareEl.querySelector('.share-art');
     art.textContent = '';
