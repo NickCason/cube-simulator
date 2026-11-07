@@ -166,6 +166,36 @@ slow motion. They now start at their intended speed.
 - Any embedded nail keeps every piece awake, so nothing sleeps while one is
   in.
 
+## Hole gun
+
+**Model.** Ballistic gel, more or less. The shot follows the line of sight;
+the pistol on screen is for show.
+1. **Path:** found by clipping the line against the tets (`jellyAlong`).
+2. **How far it gets:** soft jelly is shot clean through (about 1.7 m of
+   jello); firm or rigid stuff stops it inside, a blind hole (rubber about
+   0.7 m, hard candy about 0.3 m).
+3. **Permanent channel:** a ragged capsule cut along the path. Its plug is
+   removed and sprayed out of the exit, or back out of a blind hole.
+4. **Temporary cavity** (`SoftBody.cavity`): the jelly round the path is
+   flung outward, strongest at the path and fading as the round slows, then
+   collapses into a wobble. Soft jelly balloons more; stiff and rigid stuff
+   hardly.
+5. **Frozen jelly** shatters, as under the mallet.
+
+**Controls.** Lab: Gun power (reach, hole size, cavity).
+
+**Fixed while building it.**
+- The tangle check counted edges that merely touch a triangle, which a cut's
+  snapped vertices do, as passing through it.
+- A fold that untangling can't undo kept a piece awake forever. Untangling
+  now gives up after 3 tries until the piece is next touched.
+
+**Open.**
+- The tunnel can't be narrower than about 3/4 of a cell (≈6.5 cm at the
+  default size): inside and outside are decided at the mesh's vertices.
+- The kick ignores mass, like the other blasts.
+- Bullets don't ricochet.
+
 ## Mallet
 
 **Model.**

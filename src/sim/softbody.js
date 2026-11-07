@@ -85,9 +85,9 @@ export function polarRot(q, A, R, iters) {
   }
 }
 
-const PIECE_FLOATS = ['sleepT', 'rebT', 'impY', 'rebR', 'impR', 'impUx', 'impUz', 'impT', 'impDv', 'foldUntil', 'buzzT', 'buzzA', 'buzzB', 'untangle', 'touchT', 'vib'];
+const PIECE_FLOATS = ['sleepT', 'rebT', 'impY', 'rebR', 'impR', 'impUx', 'impUz', 'impT', 'impDv', 'foldUntil', 'buzzT', 'buzzA', 'buzzB', 'untangle', 'tangleTouch', 'touchT', 'vib'];
 // (piece state a rebuild carries over to an untouched piece: see _buildPieces)
-const CARRY = ['sleepT', 'asleep', 'rebT', 'impY', 'boosted', 'rebR', 'impR', 'impUx', 'impUz', 'boostedR', 'impPend', 'impT', 'impDv', 'sleepLogMu', 'foldUntil', 'foldAsk', 'buzzT', 'buzzA', 'buzzB', 'tangleN', 'untangle', 'touchT', 'hinge'];
+const CARRY = ['sleepT', 'asleep', 'rebT', 'impY', 'boosted', 'rebR', 'impR', 'impUx', 'impUz', 'boostedR', 'impPend', 'impT', 'impDv', 'sleepLogMu', 'foldUntil', 'foldAsk', 'buzzT', 'buzzA', 'buzzB', 'tangleN', 'untangle', 'tangleTries', 'tangleTouch', 'touchT', 'hinge'];
 
 export class SoftBody {
   constructor(opts = {}) {
@@ -785,6 +785,8 @@ export class SoftBody {
         touchT: -1e9, // (sim time) last held or blasted - what tangles a piece
         vib: 0, // (m/s) how fast it jiggles: its vertices' rms speed apart from moving as a whole (the jelly's voice follows it)
         untangle: 0, // (s) left of springing back out of that
+        tangleTries: 0, // springings back since it was last touched (see _tangleCheck)
+        tangleTouch: -1e9, // (that touch)
         fitQ: new Float64Array([0, 0, 0, 1]), // its last fitted rotation (rest -> now)
         rigQ: new Float64Array([0, 0, 0, 1]), // (the same, for _solveRigidity: warm from the last substep)
       }, PIECE_FLOATS);
@@ -2088,6 +2090,14 @@ export class SoftBody {
     for (let n = 0; n < NP && budget > 0; n++) {
       const k = (this._tangleNext + n) % NP, pc = P[k];
       if (pc.asleep || (GP && GP[k]) || pc.untangle > 0 || pc.verts.length < 30 || this.time - pc.touchT > 4) continue;
+      // (a tangle three springings back haven't undone - a fold stuck fast -
+      // is left be till the piece is next touched: trying for ever kept it
+      // awake, pulled about, for ever)
+      if (pc.tangleTouch !== pc.touchT) {
+        pc.tangleTouch = pc.touchT;
+        pc.tangleTries = 0;
+      }
+      if (pc.tangleTries >= 3) continue;
       look[k] = 1;
       any = true;
       budget -= pc.tets.length;
@@ -2102,16 +2112,11 @@ export class SoftBody {
       else if (++pc.tangleN >= 2) {
         pc.tangleN = 0;
         pc.untangle = 0.7;
+        pc.tangleTries++;
       }
     }
   }
 
-  // A piece passed through itself springs back to its rest shape - turned
-  // and sized to fit how it lies now, on the floor - a share each frame for
-  // 0.7 s, its self-contact off meanwhile so the surfaces can slip back
-  // through each other. (Its rest shape has nothing passed through; self-
-  // contact would only hold the tangle in place, and pulling it apart from
-  // the inside made it worse.)
   // Rigidity (p.rigidity, 0..1): each moving piece pulled toward its rest
   // shape, turned and placed as the piece is now (shape matching, Muller et
   // al. 2005; the turn by polarRot, warm from the last substep). What the
@@ -2166,6 +2171,12 @@ export class SoftBody {
     }
   }
 
+  // A piece passed through itself springs back to its rest shape - turned
+  // and sized to fit how it lies now, on the floor - a share each frame for
+  // 0.7 s, its self-contact off meanwhile so the surfaces can slip back
+  // through each other. (Its rest shape has nothing passed through; self-
+  // contact would only hold the tangle in place, and pulling it apart from
+  // the inside made it worse.)
   _untangle(dt) {
     const P = this.pieces, x = this.x, X = this.X, v = this.v, m = this.m;
     for (let k = 0; k < P.length; k++) {
@@ -2319,13 +2330,18 @@ export class SoftBody {
               const qx = dy * e2z - dz * e2y, qy = dz * e2x - dx * e2z, qz = dx * e2y - dy * e2x, det = e1x * qx + e1y * qy + e1z * qz;
               if (Math.abs(det) < 1e-12) continue;
               const inv = 1 / det, tx = ax - x[p0], ty = ay - x[p0 + 1], tz = az - x[p0 + 2];
+              // (clean through only, by a margin: an edge whose end just
+              // touches a triangle, or that grazes its rim - as a cut's
+              // snapped vertices lying on their neighbours' faces do - isn't
+              // a tangle; counting those kept a tunnelled piece "untangling"
+              // and awake for ever)
               const u = (tx * qx + ty * qy + tz * qz) * inv;
-              if (u < 0 || u > 1) continue;
+              if (u < 0.01 || u > 0.99) continue;
               const rx = ty * e1z - tz * e1y, ry = tz * e1x - tx * e1z, rz = tx * e1y - ty * e1x;
               const v = (dx * rx + dy * ry + dz * rz) * inv;
-              if (v < 0 || u + v > 1) continue;
+              if (v < 0.01 || u + v > 0.99) continue;
               const t = (e2x * rx + e2y * ry + e2z * rz) * inv;
-              if (t < 0 || t > 1) continue;
+              if (t < 0.01 || t > 0.99) continue;
               out[k]++;
             }
           }
@@ -3347,6 +3363,37 @@ export class SoftBody {
         const o = i * 3;
         v[o] += rigid * (mx - dv[o]); v[o + 1] += rigid * (my - dv[o + 1]); v[o + 2] += rigid * (mz - dv[o + 2]);
       }
+    }
+  }
+
+  // A bullet's temporary cavity (ballistic gel): along the segment a -> b,
+  // the jelly round the path flung outward from it - strongest at the path,
+  // gone at radius, fading along it as the bullet slows (strength at a, fade
+  // x that at b) - and dragged a little along with it (along, m/s). The
+  // jelly balloons round the wound and, its elasticity pulling it back,
+  // collapses and wobbles.
+  cavity(ax, ay, az, bx, by, bz, radius, strength, fade = 0.4, along = 0) {
+    const { x, v, w } = this;
+    this._hashDirty = true;
+    this.selfQuietUntil = Math.max(this.selfQuietUntil, this.time + 0.4);
+    const dx = bx - ax, dy = by - ay, dz = bz - az, L2 = dx * dx + dy * dy + dz * dz;
+    if (L2 < 1e-12) return;
+    const L = Math.sqrt(L2), ux = dx / L, uy = dy / L, uz = dz / L;
+    for (let i = 0; i < this.nV; i++) {
+      if (w[i] === 0) continue;
+      const o = i * 3;
+      const rx = x[o] - ax, ry = x[o + 1] - ay, rz = x[o + 2] - az;
+      const s = Math.max(0, Math.min(1, (rx * dx + ry * dy + rz * dz) / L2));
+      const px = rx - dx * s, py = ry - dy * s, pz = rz - dz * s;
+      const d = Math.sqrt(px * px + py * py + pz * pz);
+      if (d > radius) continue;
+      const f = 1 - d / radius, k = strength * (1 - (1 - fade) * s) * f * f;
+      const q = d > 1e-6 ? k / d : 0;
+      v[o] += px * q + ux * along * f; v[o + 1] += py * q + uy * along * f; v[o + 2] += pz * q + uz * along * f;
+      const pc = this.pieces[this.vPiece[i]];
+      if (!pc) continue;
+      if (pc.asleep) this.wake(this.vPiece[i]);
+      pc.touchT = this.time;
     }
   }
 

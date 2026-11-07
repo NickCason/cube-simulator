@@ -10,7 +10,7 @@ import { Healer } from './heal.js';
 import { AudioEngine } from './audio.js';
 import { Overlay } from './ui/overlay.js';
 import { UI } from './ui/ui.js';
-import { HandTool, KnifeTool, NailGunTool } from './tools/basic.js';
+import { HandTool, KnifeTool, NailGunTool, HoleGunTool } from './tools/basic.js';
 import { MalletTool, TorchTool, FreezeTool, BallerTool, BombTool, SyringeTool, MagnetTool } from './tools/more.js';
 import { makeMaterials, makeBomb } from './world/models.js';
 import { physicsWarmJob } from './sim/warm.js';
@@ -187,6 +187,7 @@ export class App {
       hand: new HandTool(this),
       knife: new KnifeTool(this),
       nailgun: new NailGunTool(this),
+      holegun: new HoleGunTool(this),
       mallet: new MalletTool(this),
       torch: new TorchTool(this),
       freeze: new FreezeTool(this),

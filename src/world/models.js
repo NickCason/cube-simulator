@@ -184,6 +184,33 @@ export function makeNailGun(M) {
   return shadowed(g);
 }
 
+// A pistol (the hole gun): muzzle toward -Z, like the nail gun.
+export function makeHoleGun(M) {
+  const g = new THREE.Group();
+  const slide = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.06, 0.26), M.darkSteel);
+  slide.position.set(0, 0.05, 0.11);
+  g.add(slide);
+  const frame = new THREE.Mesh(new THREE.BoxGeometry(0.055, 0.04, 0.22), M.rubber);
+  frame.position.set(0, 0.005, 0.13);
+  g.add(frame);
+  const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.016, 0.016, 0.07, 18), M.steel);
+  barrel.rotation.x = Math.PI / 2;
+  barrel.position.set(0, 0.05, -0.04);
+  g.add(barrel);
+  const stripe = new THREE.Mesh(new THREE.BoxGeometry(0.062, 0.012, 0.2), M.blue);
+  stripe.position.set(0, 0.065, 0.12);
+  g.add(stripe);
+  const grip = new THREE.Mesh(new THREE.BoxGeometry(0.052, 0.16, 0.07), M.rubber);
+  grip.position.set(0, -0.07, 0.21);
+  grip.rotation.x = 0.28;
+  g.add(grip);
+  const guard = new THREE.Mesh(new THREE.TorusGeometry(0.03, 0.006, 8, 20, Math.PI), M.darkSteel);
+  guard.rotation.set(0, Math.PI / 2, Math.PI);
+  guard.position.set(0, -0.02, 0.13);
+  g.add(guard);
+  return shadowed(g);
+}
+
 // Horseshoe magnet: poles pointing -Y at origin.
 export function makeMagnet(M) {
   const g = new THREE.Group();

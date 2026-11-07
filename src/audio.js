@@ -305,6 +305,21 @@ export class AudioEngine {
     this._noise(t + 0.01, 0.09, 'bandpass', 500, 300, 2, 0.18);
   }
 
+  // The hole gun: a sharp crack with a low punch under it and a short tail;
+  // into jelly, a wet thwup on top (hit 0..1: how much it went through).
+  gunshot(hit = 0) {
+    if (!this._ok('gunshot', 0.08)) return;
+    const t = this.ctx.currentTime;
+    this._noise(t, 0.045, 'highpass', 2600, 1400, 0.7, 0.75, 0.0005);
+    this._tone(t, 'square', 2400, 900, 0.01, 0.12, 0.0003);
+    this._tone(t, 'sine', 120, 42, 0.12, 0.7, 0.001);
+    this._noise(t + 0.02, 0.22, 'bandpass', 700, 260, 1.2, 0.16, 0.01);
+    if (hit > 0) {
+      this._tone(t + 0.012, 'sine', 210, 85, 0.13, 0.4 * hit, 0.003);
+      this._noise(t + 0.012, 0.09, 'bandpass', 1200, 380, 2.2, 0.32 * hit, 0.004);
+    }
+  }
+
   nailHit(amount = 1) {
     if (!this._ok('nailhit', 0.03)) return;
     const t = this.ctx.currentTime;

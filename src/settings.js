@@ -67,6 +67,7 @@ export const SETTINGS = [
   { id: 'poke', group: 'Hand', lab: true, label: 'Poke', key: 'poke', def: 1, ...logMap(0.25, 4), words: ['Tap', 'Nudge', 'Poke', 'Jab', 'Punch'] },
   { id: 'knifePush', group: 'Tools', lab: true, label: 'Knife push', key: 'knifePush', def: 1, ...linMap(0, 2), words: ['None', 'Slight', 'Normal', 'Firm', 'Shove'] },
   { id: 'nailPower', group: 'Tools', lab: true, label: 'Nail power', key: 'nailPower', def: 1, ...logMap(0.4, 2.5), words: ['Tack', 'Light', 'Normal', 'Heavy', 'Rivet'] },
+  { id: 'gunPower', group: 'Tools', lab: true, label: 'Gun power', key: 'gunPower', def: 1, ...logMap(0.4, 2.5), words: ['Pea', 'Light', 'Normal', 'Heavy', 'Cannon'] },
   { id: 'malletForce', group: 'Tools', lab: true, label: 'Mallet force', key: 'malletForce', def: 1, ...logMap(0.4, 2), words: ['Tap', 'Light', 'Normal', 'Hard', 'Sledge'] },
   { id: 'torchHeat', group: 'Tools', lab: true, label: 'Torch heat', key: 'torchHeat', def: 1, ...logMap(0.3, 3.3), words: ['Warm', 'Hot', 'Normal', 'Fierce', 'Inferno'] },
   { id: 'boilOff', group: 'Tools', lab: true, label: 'Boil-off', key: 'boilOff', def: 0.5, ...linMap(0, 0.9), word: (v) => `${Math.round(v * 100)}%` },

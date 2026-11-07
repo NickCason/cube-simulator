@@ -1,8 +1,8 @@
 import * as THREE from 'three';
-import { cutBody, planeField, unglue, removeSmallPieces } from '../sim/cutting.js';
+import { cutBody, planeField, unglue, removeSmallPieces, removeTets } from '../sim/cutting.js';
 import { maxStretch } from '../sim/strain.js';
 import { polarRot } from '../sim/softbody.js';
-import { makeNailGun } from '../world/models.js';
+import { makeNailGun, makeHoleGun } from '../world/models.js';
 
 const _v = new THREE.Vector3();
 const _w = new THREE.Vector3();
@@ -657,4 +657,188 @@ export class NailGunTool {
     app.audio?.nailgun();
     app.shake(0.004);
   }
+}
+
+// ------------------------------------------------------------------ hole gun
+// A pistol that punches a hole through the jelly - ballistic gel, more or
+// less. Along the line of sight (from the eye, through what's under the
+// cursor; the pistol on screen is for show):
+// - the round bores a ragged tunnel - the permanent channel: the jelly in it
+//   is crushed and sprayed out of the far side;
+// - it throws the jelly round the path outward - the temporary cavity: it
+//   balloons, and collapses into a wobble (SoftBody.cavity);
+// - it slows as it goes: soft jelly it goes clean through, firm or rigid stuff
+//   stops it inside (a blind hole);
+// - frozen jelly shatters instead.
+// Hold for a shot every 0.45 s.
+export class HoleGunTool extends NailGunTool {
+  constructor(app) {
+    super(app);
+    this.id = 'holegun';
+    app.scene.remove(this.model);
+    this.model = makeHoleGun(app.M);
+    this.model.visible = false;
+    this.model.traverse((o) => (o.castShadow = false));
+    app.scene.add(this.model);
+  }
+
+  fire() {
+    const app = this.app, sb = app.sb, p = sb.p, size = p.size;
+    this.cool = 0.45;
+    const muzzle = this.model.localToWorld(new THREE.Vector3(0, 0.05, -0.09));
+    this.recoil = 1.6;
+    app.particles.flash(muzzle, 0.09, [9, 7, 4]);
+    app.particles.smoke(muzzle, 3, 0.15, 0.6, 0.4, 0.15);
+    app.shake(0.012);
+    const o = this.ray.origin, d = this.ray.direction;
+    const segs = jellyAlong(sb, o, d);
+    if (!segs.length || sb.nT > 30000) {
+      app.audio?.gunshot(0);
+      return;
+    }
+    const power = app.st?.gunPower ?? 1;
+    const at = (t) => new THREE.Vector3(o.x + d.x * t, o.y + d.y * t, o.z + d.z * t);
+    const entry = at(segs[0][0]);
+    // frozen there: it shatters (as under the mallet)
+    let cold = 0, n = 0;
+    for (let i = 0; i < sb.nV; i++) {
+      if (!sb.alive[i]) continue;
+      const dx = sb.x[i * 3] - entry.x, dy = sb.x[i * 3 + 1] - entry.y, dz = sb.x[i * 3 + 2] - entry.z;
+      if (dx * dx + dy * dy + dz * dz < 0.09) {
+        cold += sb.temp[i];
+        n++;
+      }
+    }
+    if (n && cold / n < -0.4 && app.tools.mallet?.shatter) {
+      app.tools.mallet.shatter({ tg: { point: entry, hit: { piece: segs[0][2] } }, d: d.clone() });
+      app.audio?.gunshot(0.5);
+      return;
+    }
+    // how far it gets: through soft jelly easily, firm much less, rigid hardly
+    const firm = Math.min(1, Math.max(0, Math.log(p.mu / 45) / Math.log(1000 / 45)));
+    let left = (2.4 - 1.7 * firm) * size * (1 - 0.6 * p.rigidity) * power / Math.sqrt(p.density), tEnd = null;
+    for (const [t0, t1] of segs) {
+      if (t1 - t0 >= left) {
+        tEnd = t0 + left;
+        break;
+      }
+      left -= t1 - t0;
+    }
+    const through = tEnd === null;
+    const tA = segs[0][0] - 0.06, tB = through ? segs[segs.length - 1][1] + 0.06 : tEnd;
+    // (at least ~3/4 of a cell across: the cut's inside and outside are told at
+    // the mesh's vertices, and a thinner tunnel can slip between them all)
+    const A = at(tA), B = at(tB), r = Math.max(0.045 * size * Math.pow(power, 0.35), 0.75 * sb.hCell);
+    // the channel: a ragged tunnel, its plug crushed out
+    const anchors = app.allAnchors();
+    const res = cutBody(sb, ragged(capsuleField(A, B, r), 0.22 * r), { separate: 0, snap: 0.15, anchors });
+    let vol = 0;
+    if (res.changed) {
+      const L = A.distanceTo(B), plug = new Set();
+      for (const pc of sb.pieces) {
+        if (pc.volume > Math.PI * r * r * L * 2.5) continue;
+        let cx = 0, cy = 0, cz = 0, m = 0;
+        for (const i of pc.verts) {
+          cx += sb.x[i * 3] * sb.m[i]; cy += sb.x[i * 3 + 1] * sb.m[i]; cz += sb.x[i * 3 + 2] * sb.m[i];
+          m += sb.m[i];
+        }
+        if (m > 0 && segDist(cx / m, cy / m, cz / m, A, B) < 1.6 * r) plug.add(pc.id);
+      }
+      if (plug.size)
+        removeTets(sb, (t) => {
+          if (!plug.has(sb.tPiece[t])) return false;
+          vol += sb.vol0[t];
+          return true;
+        }, anchors);
+      removeSmallPieces(sb, 0.0015 * size ** 3, anchors);
+      app.onTopologyChanged();
+      app.markDamaged();
+    }
+    // spray: what was crushed out flies on out of the far side (or back out
+    // of a blind hole), a splash back out of the entry
+    const out = through ? B : A, outDir = through ? d : d.clone().negate();
+    let k = 0;
+    for (let v = vol * 0.8; v > 0 && k < 26; k++) {
+      const rr = 0.012 + Math.random() * 0.022;
+      v -= (4 / 3) * Math.PI * rr ** 3;
+      const dir = outDir.clone().add(new THREE.Vector3(Math.random() - 0.5, Math.random() - 0.3, Math.random() - 0.5).multiplyScalar(0.7)).normalize();
+      app.droplets.spawn(out.clone().addScaledVector(dir, 0.03), dir.multiplyScalar((through ? 5 : 2.5) + Math.random() * 4), rr);
+    }
+    for (let j = 0; j < 3; j++) {
+      const dir = d.clone().negate().add(new THREE.Vector3(Math.random() - 0.5, Math.random() * 0.6, Math.random() - 0.5).multiplyScalar(0.8)).normalize();
+      app.droplets.spawn(entry.clone().addScaledVector(dir, 0.03), dir.multiplyScalar(1.5 + Math.random() * 2), 0.01 + Math.random() * 0.01);
+    }
+    // the temporary cavity: soft jelly balloons more and further; stiff
+    // stuff hardly (it can't open far before it stops the round), rigid less
+    const kick = (3 + 13 * (1 - firm) ** 1.5) * (1 - 0.7 * p.rigidity) * power;
+    // (not right at the tunnel's ends: kicked there, its mouth's thin wall
+    // folds through itself)
+    const t0 = segs[0][0], t1 = through ? segs[segs.length - 1][1] : tEnd, inset = 0.12 * (t1 - t0);
+    const CA = at(t0 + inset), CB = at(t1 - inset);
+    sb.cavity(CA.x, CA.y, CA.z, CB.x, CB.y, CB.z, (0.24 + 0.18 * (1 - firm)) * size * Math.pow(power, 0.4), kick, through ? 0.55 : 0.2, 1.8 * power * (1 - firm) * (1 - 0.7 * p.rigidity));
+    app.glowPulse?.(entry.x, entry.y, entry.z, 1);
+    app.hitStop?.(0.05);
+    app.audio?.gunshot(through ? 1 : 0.7);
+  }
+}
+
+// Where a line (o + t d, d unit) runs through the jelly: [t0, t1, piece]
+// runs, merged where they touch (within a cm). Each tet near the line is
+// clipped against its four faces.
+export function jellyAlong(sb, o, d) {
+  const T = sb.T, x = sb.x, runs = [];
+  const ox = o.x, oy = o.y, oz = o.z, dx = d.x, dy = d.y, dz = d.z;
+  for (let t = 0; t < sb.nT; t++) {
+    if (sb.vol0[t] <= 0) continue;
+    const t4 = t * 4, v = [T[t4] * 3, T[t4 + 1] * 3, T[t4 + 2] * 3, T[t4 + 3] * 3];
+    let cx = 0, cy = 0, cz = 0;
+    for (const i of v) {
+      cx += x[i] / 4; cy += x[i + 1] / 4; cz += x[i + 2] / 4;
+    }
+    let R2 = 0;
+    for (const i of v) R2 = Math.max(R2, (x[i] - cx) ** 2 + (x[i + 1] - cy) ** 2 + (x[i + 2] - cz) ** 2);
+    const qx = cx - ox, qy = cy - oy, qz = cz - oz, tq = qx * dx + qy * dy + qz * dz;
+    if (qx * qx + qy * qy + qz * qz - tq * tq > R2 || tq < -Math.sqrt(R2)) continue;
+    let t0 = -Infinity, t1 = Infinity;
+    for (let f = 0; f < 4 && t0 < t1; f++) {
+      const a = v[(f + 1) % 4], b = v[(f + 2) % 4], c = v[(f + 3) % 4], k = v[f];
+      let nx = (x[b + 1] - x[a + 1]) * (x[c + 2] - x[a + 2]) - (x[b + 2] - x[a + 2]) * (x[c + 1] - x[a + 1]);
+      let ny = (x[b + 2] - x[a + 2]) * (x[c] - x[a]) - (x[b] - x[a]) * (x[c + 2] - x[a + 2]);
+      let nz = (x[b] - x[a]) * (x[c + 1] - x[a + 1]) - (x[b + 1] - x[a + 1]) * (x[c] - x[a]);
+      // (outward: away from the corner it's opposite)
+      if (nx * (x[k] - x[a]) + ny * (x[k + 1] - x[a + 1]) + nz * (x[k + 2] - x[a + 2]) > 0) {
+        nx = -nx; ny = -ny; nz = -nz;
+      }
+      const num = nx * (x[a] - ox) + ny * (x[a + 1] - oy) + nz * (x[a + 2] - oz), den = nx * dx + ny * dy + nz * dz;
+      if (Math.abs(den) < 1e-12) {
+        if (num < 0) t0 = Infinity;
+      } else if (den > 0) t1 = Math.min(t1, num / den);
+      else t0 = Math.max(t0, num / den);
+    }
+    if (t0 < t1 && t1 > 0) runs.push([Math.max(0, t0), t1, sb.tPiece[t]]);
+  }
+  runs.sort((p, q) => p[0] - q[0]);
+  const out = [];
+  for (const r of runs) {
+    const last = out[out.length - 1];
+    if (last && r[0] <= last[1] + 0.01) last[1] = Math.max(last[1], r[1]);
+    else out.push([r[0], r[1], r[2]]);
+  }
+  return out;
+}
+
+// A capsule round the segment a-b, radius r: distance to the segment, less r.
+export function capsuleField(a, b, r) {
+  return {
+    value: (x, y, z) => segDist(x, y, z, a, b) - r,
+    normal: (x, y, z, out) => out,
+    inRegion: null,
+  };
+}
+
+function segDist(x, y, z, a, b) {
+  const dx = b.x - a.x, dy = b.y - a.y, dz = b.z - a.z, L2 = dx * dx + dy * dy + dz * dz;
+  const s = L2 > 0 ? Math.max(0, Math.min(1, ((x - a.x) * dx + (y - a.y) * dy + (z - a.z) * dz) / L2)) : 0;
+  const px = x - a.x - dx * s, py = y - a.y - dy * s, pz = z - a.z - dz * s;
+  return Math.sqrt(px * px + py * py + pz * pz);
 }

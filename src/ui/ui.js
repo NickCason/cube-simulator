@@ -12,6 +12,9 @@ export const ICONS = {
   nailgun: svg(
     '<path d="M2.5 7.5h13a2 2 0 0 1 2 2V11a1 1 0 0 1-1 1H9l-1.4 7a1.2 1.2 0 0 1-1.2 1H4.6a1 1 0 0 1-1-1.2L5 12H2.5z"/><path d="M19.2 9.8h3.3"/><path d="M19.2 8.4v2.8"/><path d="M9.6 12v1.4a1 1 0 0 1-1 1"/>',
   ),
+  holegun: svg(
+    '<path d="M2.5 8h14.5a1.5 1.5 0 0 1 1.5 1.5V11H10l-1.6 7.6a1 1 0 0 1-1 .8H5a1 1 0 0 1-1-1.2L5.5 11h-3z"/><circle cx="21" cy="9.5" r="1.4"/>',
+  ),
   mallet: svg('<g transform="rotate(-32 12 12)"><rect x="4.5" y="2.5" width="15" height="6.5" rx="1.8"/><rect x="10.8" y="9" width="2.4" height="13" rx="1.2"/></g>'),
   torch: svg(
     '<path d="M12 21.5c-3.6 0-6-2.4-6-5.7 0-3.6 2.8-5.4 3.6-8.9 1.6 1.2 2.4 3 2.3 4.6 1.4-.9 2.2-2.4 2.3-4.2 2.5 2 3.8 5.1 3.8 8.3 0 3.4-2.4 5.9-6 5.9z"/><path d="M12 21.5c-1.6 0-2.7-1.1-2.7-2.6 0-1.7 1.4-2.6 2.1-4.2 1.9 1.3 3.3 2.6 3.3 4.4 0 1.4-1.1 2.4-2.7 2.4z"/>',
@@ -45,6 +48,7 @@ export const TOOL_DEFS = [
   { id: 'hand', label: 'Hand', hint: 'Drag to grab & throw · tap to poke · two fingers: squish or pull it apart', key: '1' },
   { id: 'knife', label: 'Knife', hint: 'Swipe across the jelly to slice it', key: '2' },
   { id: 'nailgun', label: 'Nail gun', hint: 'Click to fire · hold for auto', key: '3' },
+  { id: 'holegun', label: 'Hole gun', hint: 'Click to shoot a hole through it', key: 'g' },
   { id: 'mallet', label: 'Mallet', hint: 'Click to smack · hit on its beat to build resonance · frozen jelly shatters', key: '4' },
   { id: 'torch', label: 'Torch', hint: 'Hold over the jelly to melt it · it runs off as liquid', key: '5' },
   { id: 'freeze', label: 'Cryo spray', hint: 'Hold to freeze it solid · spray a puddle to set it back into jelly', key: '6' },
