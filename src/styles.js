@@ -1,6 +1,8 @@
 // Jelly presets: flavours (colour or layered), textures (look + feel) and
 // edge rounding.
 
+import { freeCSS } from './freeform.js';
+
 export const FLAVORS = [
   { id: 'cherry', name: 'Cherry', hex: '#d4102a' },
   { id: 'lime', name: 'Lime', hex: '#5fce1e' },
@@ -103,6 +105,8 @@ export const GRAD_SHAPES = [
   { id: 'core', name: 'Core', ends: ['Middle', 'Outside'] },
   { id: 'shell', name: 'Shell', ends: ['Middle', 'Skin'] },
   { id: 'rings', name: 'Rings', ends: ['Middle', 'Outside'] },
+  // (freeform: its colours at points on the cube, each with a strength - see freeform.js)
+  { id: 'free', name: 'Free', ends: ['', ''] },
 ];
 export const GRAD_SHAPE_INDEX = Object.fromEntries(GRAD_SHAPES.map((g, i) => [g.id, i]));
 // (out from the middle: drawn round, not along)
@@ -181,20 +185,24 @@ export function gradCSSStops(f) {
 }
 
 // a CSS picture of it: along its line (angle: forced, for a strip), or
-// round, out from the middle
+// round, out from the middle (freeform: its points as soft blobs)
 export function gradientCSS(f, angle = null) {
+  if (f.shape === 'free' && angle === null) return freeCSS(f);
   const stops = gradCSSStops(f), shape = f.shape || 'up';
   if (angle === null && gradFromMiddle(shape)) return `radial-gradient(circle closest-side, ${stops})`;
   return `linear-gradient(${angle ?? (shape === 'across' ? 90 : shape === 'corner' ? 45 : 0)}deg, ${stops})`;
 }
 
-// a style's layers, copied whole (stops kept only if they match the colours)
+// a style's layers, copied whole (stops and freeform points kept only if
+// there's one a colour)
 export function copyLayers(L) {
   const D = DEFAULT_STYLE.layers;
   L = L || D;
   const colors = [...(Array.isArray(L.colors) && L.colors.length >= MIN_LAYERS ? L.colors : D.colors)];
   const stops = Array.isArray(L.stops) && L.stops.length === colors.length && L.stops.every(Number.isFinite) ? L.stops.map(clamp01) : null;
-  return { colors, blur: L.blur || 0, repeat: L.repeat || 1, bias: L.bias || 0, stops, shape: GRAD_SHAPE_INDEX[L.shape] !== undefined ? L.shape : 'up' };
+  const okN = (q) => q && ['x', 'y', 'z', 'k'].every((c) => Number.isFinite(q[c]));
+  const nodes = Array.isArray(L.nodes) && L.nodes.length === colors.length && L.nodes.every(okN) ? L.nodes.map((q) => ({ x: q.x, y: q.y, z: q.z, k: q.k })) : null;
+  return { colors, blur: L.blur || 0, repeat: L.repeat || 1, bias: L.bias || 0, stops, nodes, shape: GRAD_SHAPE_INDEX[L.shape] !== undefined ? L.shape : 'up' };
 }
 
 // Material presets. Look: depth (colour), opacity, glow (translucency),
@@ -272,7 +280,8 @@ export function resolveFlavor(style) {
   if (style.flavor === 'layers' || style.flavor === 'rainbow') {
     const L = style.layers || DEFAULT_STYLE.layers;
     const stops = Array.isArray(L.stops) && L.stops.length === L.colors.length ? L.stops : null;
-    return { id: 'layers', name: 'Layers', layers: L.colors, blur: L.blur || 0, repeat: L.repeat || 1, bias: L.bias || 0, stops, shape: GRAD_SHAPE_INDEX[L.shape] !== undefined ? L.shape : 'up' };
+    const nodes = Array.isArray(L.nodes) && L.nodes.length === L.colors.length ? L.nodes : null;
+    return { id: 'layers', name: 'Layers', layers: L.colors, blur: L.blur ?? 0, repeat: L.repeat || 1, bias: L.bias || 0, stops, nodes, shape: GRAD_SHAPE_INDEX[L.shape] !== undefined ? L.shape : 'up' };
   }
   // (Rubik: its scramble, and red for where one colour has to stand for it)
   if (style.flavor === 'rubik') return { id: 'rubik', name: 'Rubik', rubik: Number.isFinite(style.rubik) ? style.rubik : 1, hex: RUBIK_COLORS[2] };

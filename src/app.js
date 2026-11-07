@@ -33,6 +33,7 @@ import { bevelPoint, unbevelPoint } from './sim/mesh.js';
 import { RUBIK_COLORS, rubikIndex, rubikCellAt } from './styles.js';
 import { DEFAULT_STYLE, TEXTURES, EDGES, LAYER_PRESETS, MIN_LAYERS, MAX_LAYERS, MAX_REPEAT, resolveFlavor, flavorMainHex, nextLayerColor } from './styles.js';
 import { GRAD_SHAPE_INDEX, gradStops, gradT, gradColorAt, copyLayers } from './styles.js';
+import { freeNodes, freeNodesDefault, freeColorAt, FREE_K_MIN, FREE_K_MAX } from './freeform.js';
 import { SETTINGS, resolveSettings } from './settings.js';
 
 const SETTING_BY_KEY = Object.fromEntries(SETTINGS.map((s) => [s.key, s]));
@@ -479,8 +480,10 @@ export class App {
   setLayerCount(n) {
     const L = this.style.layers;
     n = Math.max(MIN_LAYERS, Math.min(MAX_LAYERS, n));
+    if (L.shape === 'free') this._freeNodes(); // (the points stay where they are)
     while (L.colors.length < n) {
       L.colors.push(nextLayerColor(L.colors[L.colors.length - 1]));
+      if (L.nodes) L.nodes.push(App._freeRoom(L.nodes));
       if (L.stops) {
         const last = L.stops[L.stops.length - 1];
         if (1 - last > 0.08) L.stops.push((last + 1) / 2);
@@ -489,6 +492,7 @@ export class App {
     }
     if (L.colors.length > n) L.colors.length = n;
     if (L.stops) L.stops.length = L.colors.length;
+    if (L.nodes) L.nodes.length = L.colors.length;
     this.style.flavor = 'layers';
     this.applyStyle();
   }
@@ -503,6 +507,7 @@ export class App {
     L.repeat = p.repeat || 1;
     L.bias = p.bias || 0;
     L.stops = null;
+    L.nodes = null;
     if (p.shape) L.shape = p.shape;
     this.style.flavor = 'layers';
     this.applyStyle();
@@ -532,6 +537,7 @@ export class App {
     const order = s.map((_, k) => k).sort((a, b) => s[a] - s[b] || a - b);
     L.colors = order.map((k) => L.colors[k]);
     L.stops = order.map((k) => s[k]);
+    if (L.nodes?.length === order.length) L.nodes = order.map((k) => L.nodes[k]);
     this.style.flavor = 'layers';
     this.applyStyle();
     return order.indexOf(i);
@@ -550,9 +556,70 @@ export class App {
     L.colors.splice(at, 0, col);
     s.splice(at, 0, p);
     L.stops = s;
+    if (L.nodes) L.nodes.splice(at, 0, App._freeRoom(L.nodes));
     this.style.flavor = 'layers';
     this.applyStyle();
     return at;
+  }
+
+  // ---- a freeform gradient's points (see freeform.js): each colour's place
+  // on (or in) the cube, as shares of its side, and its strength
+  _freeNodes() {
+    const L = this.style.layers;
+    if (!L.nodes || L.nodes.length !== L.colors.length) L.nodes = freeNodes({ layers: L.colors, nodes: L.nodes }).map((q) => ({ ...q }));
+    return L.nodes;
+  }
+
+  // (a place for a new point: of a spread of them, the one furthest from those there)
+  static _freeRoom(nodes) {
+    let best = null, bd = -1;
+    for (const c of freeNodesDefault(14)) {
+      const d = Math.min(...nodes.map((q) => Math.hypot(q.x - c.x, q.y - c.y, q.z - c.z)), 9);
+      if (d > bd) [best, bd] = [c, d];
+    }
+    return { ...best };
+  }
+
+  moveLayerNode(i, x, y, z) {
+    const N = this._freeNodes();
+    if (!N[i]) return;
+    Object.assign(N[i], { x, y, z });
+    this.style.flavor = 'layers';
+    this.applyStyle();
+  }
+
+  setLayerNodeStrength(i, k) {
+    const N = this._freeNodes();
+    if (!N[i]) return;
+    N[i].k = Math.min(FREE_K_MAX, Math.max(FREE_K_MIN, k));
+    this.style.flavor = 'layers';
+    this.applyStyle();
+  }
+
+  // a point more at (x, y, z), in the colour there unless given: its index,
+  // or -1 when there are all there can be
+  addLayerNode(x, y, z, hex = null) {
+    const L = this.style.layers;
+    if (L.colors.length >= MAX_LAYERS) return -1;
+    const N = this._freeNodes();
+    L.colors.push(hex || freeColorAt({ layers: L.colors, nodes: N, blur: L.blur }, x, y, z));
+    N.push({ x, y, z, k: 1 });
+    if (L.stops) L.stops.push(1);
+    this.style.flavor = 'layers';
+    this.applyStyle();
+    return L.colors.length - 1;
+  }
+
+  removeLayerNode(i) {
+    const L = this.style.layers;
+    if (L.colors.length <= MIN_LAYERS || i < 0 || i >= L.colors.length) return false;
+    const N = this._freeNodes();
+    L.colors.splice(i, 1);
+    N.splice(i, 1);
+    if (L.stops?.length > i) L.stops.splice(i, 1);
+    this.style.flavor = 'layers';
+    this.applyStyle();
+    return true;
   }
 
   removeLayerStop(i) {
@@ -562,6 +629,7 @@ export class App {
     L.colors.splice(i, 1);
     s.splice(i, 1);
     L.stops = s;
+    if (L.nodes?.length > i) L.nodes.splice(i, 1);
     this.style.flavor = 'layers';
     this.applyStyle();
     return true;
@@ -759,6 +827,7 @@ export class App {
       return RUBIK_COLORS[rubikIndex(f.rubik, face, cell)];
     }
     if (!f.layers) return flavorMainHex(f);
+    if (f.shape === 'free') return freeColorAt(f, x, ry, rz, sb.cSize[k]);
     return gradColorAt(f, gradT(f.shape, x, ry, rz, sb.cSize[k]));
   }
 

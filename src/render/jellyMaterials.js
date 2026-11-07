@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { FREE_N } from '../freeform.js';
 import { FLOOR_PATTERN_GLSL } from './floorpattern.js';
 
 const NOISE = /* glsl */ `
@@ -63,6 +64,8 @@ export const MAX_CAVITIES = 12;
 // each cube's gradient strip: this many steps along it, two rows a cube
 export const GRAD_N = 512;
 export const GRAD_ROWS = 16;
+// (and a freeform one's grid of colours: a slab of FREE_N a cube, this many)
+export const FREE_SLABS = GRAD_ROWS / 2;
 export const MAX_PULSES = 6;
 export const LAYER_GLSL = /* glsl */ `
   uniform int uLayers;
@@ -114,9 +117,11 @@ export const LAYER_GLSL = /* glsl */ `
 export const CUBE_GLSL = /* glsl */ `
   uniform highp sampler2D uCubeTex;
   uniform highp sampler2D uGradTex;
+  uniform highp sampler3D uFreeTex;
   int gK = 0;
   int cLayers = 0; // (-1: Rubik)
-  int cShape = 0; // (its gradient's: up, across, corner, core, shell, rings - styles.js GRAD_SHAPES)
+  int cShape = 0; // (its gradient's: up, across, corner, core, shell, rings, free - styles.js GRAD_SHAPES)
+  float cFreeK = 1.0; // (free: its colours' depth - absorption = -log(colour) x this)
   float cLY0 = 0.0, cLSpan = 1.0, cLRep = 1.0, cLExp = 1.0, cLBlur = 0.0, cRubikSeed = 0.0;
   vec4 cubeT(int x) { return texelFetch(uCubeTex, ivec2(x, gK), 0); }
   void useCube(float k) {
@@ -125,6 +130,7 @@ export const CUBE_GLSL = /* glsl */ `
     cLayers = int(floor(q4.y + 0.5));
     cLY0 = q4.z; cLSpan = q4.w; cLRep = q5.x; cLExp = q5.y; cLBlur = q5.z; cRubikSeed = q5.w;
     cShape = int(cubeT(6).w + 0.5);
+    cFreeK = cShape == 6 ? cubeT(28).x : 1.0;
   }
   // Rubik: the colour (0..5) at rest point p - each face a 3x3 of stickers
   // run in to the middle, centres their own face's colour, the rest
@@ -161,7 +167,17 @@ export const CUBE_GLSL = /* glsl */ `
     if (cShape == 5) return length(p.xz) / h;
     return (p.y - cLY0) / cLSpan;
   }
+  // (free: off its grid of colours - each cube a slab of the texture - into
+  // absorption or the colour inside, as setCubeLook works them from a colour)
+  vec3 cFreeAt(vec3 p) {
+    vec3 q = clamp(p / cLSpan + 0.5, ${0.5 / FREE_N}, ${1 - 0.5 / FREE_N});
+    return textureLod(uFreeTex, vec3(q.xy, (float(gK) + q.z) / ${FREE_SLABS}.0), 0.0).rgb;
+  }
   vec3 cGradAt(vec3 p, int row) {
+    if (cShape == 6) {
+      vec3 c = cFreeAt(p);
+      return row == 0 ? -log(clamp(c, 0.004, 0.995)) * cFreeK : c / max(max(c.r, c.g), max(c.b, 1e-3));
+    }
     float t = clamp(cGradT(p), 0.0, 1.0);
     return textureLod(uGradTex, vec2((t * ${GRAD_N - 1}.0 + 0.5) / ${GRAD_N}.0, (float(gK * 2 + row) + 0.5) / ${GRAD_ROWS}.0), 0.0).rgb;
   }
@@ -285,6 +301,7 @@ export function createJellyMaterial(env, layerUniforms) {
       tBackRest: { value: null }, // (where the line of sight leaves: its rest point - see createBackMaterial)
       uBackRest: { value: 0 }, // (whether that's there: else only its height is)
       uGradTex: { value: null },
+      uFreeTex: { value: null },
       envMap: { value: env.texture },
       envMaxLod: { value: env.maxLod },
       envIntensity: { value: 1.0 },
@@ -575,6 +592,7 @@ export function createJellyMaterial(env, layerUniforms) {
         cLayers = int(floor(cq4.y + 0.5));
         cLY0 = cq4.z; cLSpan = cq4.w; cLRep = cq5.x; cLExp = cq5.y; cLBlur = cq5.z; cRubikSeed = cq5.w;
         cShape = int(cq6.w + 0.5);
+        cFreeK = cShape == 6 ? cubeT(28).x : 1.0;
         float temp = vData.x;
         float glow = vData.y;
         float fresh = vData.z;
@@ -675,7 +693,7 @@ export function createJellyMaterial(env, layerUniforms) {
         // layered: lean toward the colour you look into, so bands stay crisp
         // - out from the middle, toward all that's along the way (the core
         // shows through what's round it)
-        bool deepGrad = cShape >= 3;
+        bool deepGrad = cShape >= 3 && cShape <= 5;
         vec3 sigma = cAbsorb;
         if (cLayers > 0) sigma = mix(cGradAt(Rp, 0), cGradPath(Rp, exitR, cAbsorb), deepGrad ? 0.8 : 0.22);
         else if (cLayers < 0) sigma = cubeT(7 + rk).rgb;
@@ -1062,6 +1080,7 @@ export function createCausticMaterial(layerUniforms) {
       tEntryRest: { value: null },
       tExitRest: { value: null },
       uGradTex: { value: null },
+      uFreeTex: { value: null },
       uOrigin: { value: new THREE.Vector3() },
       uLightInvVP: { value: new THREE.Matrix4() },
       uGridN: { value: 256 },
@@ -1204,6 +1223,7 @@ export function createReflectMaterial() {
     uniforms: {
       uCubeTex: { value: null },
       uGradTex: { value: null },
+      uFreeTex: { value: null },
       uEmit: { value: 0 },
       uFade: { value: 2.6 },
     },
@@ -1268,6 +1288,7 @@ export function createGlowMaterial() {
     uniforms: {
       uCubeTex: { value: null },
       uGradTex: { value: null },
+      uFreeTex: { value: null },
       uFloorRect: { value: new THREE.Vector4(-3, -3, 1 / 6, 1 / 6) },
     },
     vertexShader: /* glsl */ `
@@ -1351,6 +1372,7 @@ export function createTintMaterial() {
     uniforms: {
       uCubeTex: { value: null },
       uGradTex: { value: null },
+      uFreeTex: { value: null },
       uLightDir: { value: new THREE.Vector3(-0.45, 0.8, 0.4).normalize() },
       uFloorRect: { value: new THREE.Vector4(-3, -3, 1 / 6, 1 / 6) },
     },

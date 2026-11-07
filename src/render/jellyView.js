@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { biasExp, RUBIK_COLORS, gradAt, gradSequence, GRAD_SHAPE_INDEX } from '../styles.js';
+import { FREE_N, bakeFree } from '../freeform.js';
 import { MAX_CUBES, REST_STEP } from '../sim/softbody.js';
 import {
   createBackMaterial,
@@ -20,8 +21,9 @@ import {
 
 const FLOOR_SPAN = 6.4;
 // (how milky jelly of that opacity looks: see setStyle)
-// a row of the cube-look texture: 7 texels of looks, 10 + 10 of layers
-export const CUBE_TEX_W = 28;
+// a row of the cube-look texture: 7 texels of looks, 10 + 10 of layers, the
+// colour of its light, a freeform gradient's depth
+export const CUBE_TEX_W = 29;
 
 const hazeMinOf = (o) => 0.92 * Math.min(1, Math.max(0, (Math.min(1, Math.max(0, o)) - 0.45) / 0.55)) ** 2;
 
@@ -284,6 +286,16 @@ export class JellyView {
     this.gradTex.generateMipmaps = false;
     this.gradTex.needsUpdate = true;
     this.frontMat.uniforms.uGradTex.value = this.gradTex;
+    // ...and a freeform one's, as a grid of colours (sRGB): a slab FREE_N a
+    // side for each cube (see setCubeLook, freeform.js bakeFree)
+    this.freeSlab = FREE_N * FREE_N * FREE_N * 4;
+    this.freeData = new Uint8Array(this.freeSlab * MAX_CUBES);
+    this.freeTex = new THREE.Data3DTexture(this.freeData, FREE_N, FREE_N, FREE_N * MAX_CUBES);
+    this.freeTex.colorSpace = THREE.SRGBColorSpace;
+    this.freeTex.minFilter = this.freeTex.magFilter = THREE.LinearFilter;
+    this.freeTex.unpackAlignment = 1;
+    this.freeTex.needsUpdate = true;
+    this.frontMat.uniforms.uFreeTex.value = this.freeTex;
     // (depth first, so the front shader - the heavy one - runs once a pixel:
     // a stepped, folded or many-sided piece seen low drew over itself 2-4x)
     this.depthMat = new THREE.ShaderMaterial({ vertexShader: this.frontMat.vertexShader, fragmentShader: 'void main() { gl_FragColor = vec4(0.0); }', colorWrite: false });
@@ -328,6 +340,7 @@ export class JellyView {
     for (const m of [this.causticMat, this.tintMat, this.reflectMat, this.glowMat]) {
       m.uniforms.uCubeTex.value = this.cubeTex;
       m.uniforms.uGradTex.value = this.gradTex;
+      m.uniforms.uFreeTex.value = this.freeTex;
     }
     // the pieces again, upside down below the floor (its reflection)
     this.reflScene = new THREE.Scene();
@@ -566,8 +579,12 @@ export class JellyView {
     const cloud = Math.max(m.milk || 0, hazeMinOf(o));
     if (cloud) tint.lerp(new THREE.Color(1, 1, 1), 0.35 * cloud).multiplyScalar(1 - 0.35 * cloud);
     put(27, tint.r, tint.g, tint.b, 9 * o * o + (m.milk || 0) * 3);
+    put(28, 1 / ref, 0, 0, 0);
     this.cubeTex.needsUpdate = true;
-    if (flavor.layers) this._gradStrip(k, flavor, abs, scs);
+    if (flavor.layers && flavor.shape === 'free') {
+      bakeFree(flavor, this.freeData.subarray(k * this.freeSlab, (k + 1) * this.freeSlab));
+      this.freeTex.needsUpdate = true;
+    } else if (flavor.layers) this._gradStrip(k, flavor, abs, scs);
   }
 
   // A layered cube's gradient as its strip: absorption (its first row) and

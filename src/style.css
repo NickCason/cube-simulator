@@ -1442,6 +1442,140 @@ html.dark .tune .word {
   color: rgba(241, 239, 244, 0.5);
 }
 
+/* the freeform editor (see freeedit.js): the cube unfolded, its points on it */
+.free {
+  display: grid;
+  gap: 8px;
+}
+
+.free-net {
+  position: relative;
+  touch-action: none;
+  cursor: copy;
+}
+
+.free-net canvas {
+  display: block;
+}
+
+.free-nodes {
+  position: absolute;
+  left: 0;
+  top: 0;
+  pointer-events: none;
+}
+
+.fnode {
+  position: absolute;
+  width: 22px;
+  height: 22px;
+  margin: -11px 0 0 -11px;
+  border-radius: 50%;
+  pointer-events: auto;
+  cursor: grab;
+  touch-action: none;
+  transition: transform 0.12s, opacity 0.12s;
+}
+
+.fnode i {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  box-shadow: 0 0 0 2.5px #fff, 0 2px 6px rgba(0, 0, 0, 0.35);
+}
+
+/* (a bigger target for a finger) */
+.fnode::after {
+  content: '';
+  position: absolute;
+  inset: -9px;
+  border-radius: 50%;
+}
+
+.fnode.sel i {
+  box-shadow: 0 0 0 2.5px #fff, 0 0 0 4.5px rgba(28, 28, 31, 0.85), 0 2px 8px rgba(0, 0, 0, 0.4);
+}
+
+.fnode.held {
+  transform: scale(1.2);
+  cursor: grabbing;
+  z-index: 2;
+}
+
+.fnode.off {
+  opacity: 0.35;
+  transform: scale(0.8);
+}
+
+.free-tool {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.free-col {
+  position: relative;
+  flex: 0 0 auto;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  cursor: pointer;
+}
+
+.free-col i {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.12), 0 2px 6px rgba(0, 0, 0, 0.2);
+}
+
+.free-col input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.free-name {
+  flex: 1;
+  min-width: 0;
+  font-size: 12.5px;
+  font-weight: 560;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.palette .free-del {
+  height: 28px;
+  padding: 0 11px;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.06);
+  font-size: 12px;
+  font-weight: 620;
+}
+
+.palette .free-del:hover:not(:disabled) {
+  background: rgba(0, 0, 0, 0.1);
+}
+
+.palette .free-del:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+html.dark .palette .free-del {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+html.dark .fnode.sel i {
+  box-shadow: 0 0 0 2.5px #fff, 0 0 0 4.5px rgba(241, 239, 244, 0.85), 0 2px 8px rgba(0, 0, 0, 0.5);
+}
+
 html.dark .grad-ends {
   color: rgba(241, 239, 244, 0.5);
 }

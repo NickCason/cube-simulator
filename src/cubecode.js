@@ -10,7 +10,10 @@
 //   b  layer blend 0..100     r  layer repeat 1..6     i  layer bias -100..100
 //   p  the layers' stops - where each colour sits, 0..255 along one round,
 //      2 hex digits each, run together (missing: evenly spaced)
-//   h  the layers' shape: across, corner, core, shell, rings (missing: up)
+//   h  the layers' shape: across, corner, core, shell, rings, free (missing: up)
+//   q  a freeform gradient's points, one a colour: x, y, z (0..255 across
+//      the cube) and strength (0..255, 1/4 to 4 on a log scale), 2 hex
+//      digits each, run together (missing: spread evenly)
 //   m  material     e  edges     g  glitter     d  look (light, dark)
 //   w  tearing: 0 when it's switched off
 //   k  Rubik's scramble (with f rubik): 0 solved, 1..65535
@@ -22,6 +25,12 @@
 
 import { SETTINGS, resolveSettings } from './settings.js';
 import { FLAVORS, TEXTURES, EDGES, GLITTERS, MIN_LAYERS, MAX_LAYERS, MAX_REPEAT, DEFAULT_STYLE, GRAD_SHAPE_INDEX, copyLayers } from './styles.js';
+import { FREE_K_MIN, FREE_K_MAX } from './freeform.js';
+
+// (a freeform point's strength, 1/4..4, as 0..255 on a log scale)
+const kToByte = (k) => Math.round((Math.log(Math.min(FREE_K_MAX, Math.max(FREE_K_MIN, k)) / FREE_K_MIN) / Math.log(FREE_K_MAX / FREE_K_MIN)) * 255);
+const byteToK = (b) => FREE_K_MIN * Math.pow(FREE_K_MAX / FREE_K_MIN, b / 255);
+const hex2 = (v) => Math.round(Math.min(255, Math.max(0, v))).toString(16).padStart(2, '0');
 
 export const CODE_VERSION = 1;
 export const SITE_URL = 'https://nickcason.github.io/cube-simulator/';
@@ -104,6 +113,7 @@ export function encodeCube(c) {
     if (Math.round(L.bias * 100)) f.push('i' + Math.round(L.bias * 100));
     if (Array.isArray(L.stops) && L.stops.length === L.colors.length) f.push('p' + L.stops.map((v) => Math.round(Math.min(1, Math.max(0, v)) * 255).toString(16).padStart(2, '0')).join(''));
     if (L.shape && L.shape !== 'up' && GRAD_SHAPE_INDEX[L.shape] !== undefined) f.push('h' + L.shape);
+    if (L.shape === 'free' && Array.isArray(L.nodes) && L.nodes.length === L.colors.length) f.push('q' + L.nodes.map((q) => hex2((q.x + 0.5) * 255) + hex2((q.y + 0.5) * 255) + hex2((q.z + 0.5) * 255) + hex2(kToByte(q.k))).join(''));
   }
   if (c.flavor === 'rubik') f.push('k' + Math.max(0, Math.min(65535, Math.round(c.rubik ?? 1))));
   f.push('m' + c.texture, 'e' + c.edges);
@@ -154,7 +164,7 @@ export function decodeCube(text) {
     theme: null,
     rubik: 1,
   };
-  let flavor = null, custom = null, stops = null;
+  let flavor = null, custom = null, stops = null, nodes = null;
   for (const p of parts.slice(1)) {
     const k = p[0], v = p.slice(1);
     if (!k) continue;
@@ -169,6 +179,7 @@ export function decodeCube(text) {
     else if (k === 'i') c.layers.bias = clamp(+v / 100, -1, 1, 0);
     else if (k === 'p') stops = (v.match(/[0-9a-f]{2}/gi) || []).map((h) => parseInt(h, 16) / 255);
     else if (k === 'h' && GRAD_SHAPE_INDEX[v] !== undefined) c.layers.shape = v;
+    else if (k === 'q') nodes = (v.match(/[0-9a-f]{8}/gi) || []).map((h) => ({ x: parseInt(h.slice(0, 2), 16) / 255 - 0.5, y: parseInt(h.slice(2, 4), 16) / 255 - 0.5, z: parseInt(h.slice(4, 6), 16) / 255 - 0.5, k: byteToK(parseInt(h.slice(6, 8), 16)) }));
     else if (k === 'm') c.texture = TEXTURES[v] ? v : c.texture;
     else if (k === 'e') c.edges = EDGES[v] ? v : c.edges;
     else if (k === 'g') c.glitter = GLITTERS.some((g) => g.id === v) ? v : 'off';
@@ -195,6 +206,8 @@ export function decodeCube(text) {
   else if (flavor && FLAVORS.some((f) => f.id === flavor)) c.flavor = flavor;
   // (stops: one a colour, in order - else evenly spaced)
   if (stops && stops.length === c.layers.colors.length && stops.every((v, i) => !i || v >= stops[i - 1])) c.layers.stops = stops;
+  // (freeform points: one a colour)
+  if (nodes && nodes.length === c.layers.colors.length) c.layers.nodes = nodes;
   return c;
 }
 

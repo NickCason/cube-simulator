@@ -49,7 +49,7 @@ export class Portraits {
     const S = {
       sb: app.sb, cubes: app.cubes, camera: app.camera, sel: app.sel,
       multi: J.multiCube, needRest: J.needRest, tintLocal: fx.tintLocal.value, row: J.cubeData.slice(0, CUBE_TEX_W * 4),
-      grad: J.gradData.slice(0, GRAD_N * 2 * 4),
+      grad: J.gradData.slice(0, GRAD_N * 2 * 4), free: J.freeData.slice(0, J.freeSlab),
       emit: F.uEmit.value, pulse: F.uPulseAmp.value.slice(), cavN: F.uCavN.value, fire: [app.fireLevel, app.fireGoal], flash: app.flash,
       dim: C.uDim.value, wash: C.uWash.value, selA: fx.selCol.value.w,
       env: F.envMap.value, floorEnv: app.floor.material.envMap, glitterEnv: G?.uniforms.envMap.value,
@@ -91,6 +91,8 @@ export class Portraits {
       J.cubeTex.needsUpdate = true;
       J.gradData.set(S.grad, 0);
       J.gradTex.needsUpdate = true;
+      J.freeData.set(S.free, 0);
+      J.freeTex.needsUpdate = true;
       J.multiCube = S.multi;
       J.needRest = S.needRest;
       J.setStyle(resolveFlavor(app.style), { ...TEXTURES[app.style.texture], ...app.settings }, S.sb.p.size);

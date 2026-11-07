@@ -60,3 +60,36 @@ test('copies and resolving keep stops only when they fit; CSS is ordered', () =>
   const pcts = [...gradCSSStops({ ...f, blur: 0.3 }).matchAll(/ ([\d.]+)%/g)].map((m) => +m[1]);
   assert.ok(pcts.every((p, i) => !i || p >= pcts[i - 1] - 1e-9), pcts.join(' '));
 });
+
+test('freeform: a point is its own colour, between two they blend; the net maps both ways', async () => {
+  const { freeColorAt, netOf, NET, bakeFree, FREE_N, freeNodesDefault } = await import('../src/freeform.js');
+  const f = { layers: ['#ff0000', '#0000ff'], blur: 0.5, nodes: [{ x: 0, y: 0, z: 0.5, k: 1 }, { x: 0, y: 0, z: -0.5, k: 1 }] };
+  assert.equal(freeColorAt(f, 0, 0, 0.5), '#ff0000');
+  assert.equal(freeColorAt(f, 0, 0, -0.5), '#0000ff');
+  assert.equal(freeColorAt(f, 0, 0, 0), '#800080');
+  // (stronger: its colour reaches further)
+  const g = { ...f, nodes: [{ ...f.nodes[0], k: 4 }, f.nodes[1]] };
+  assert.ok(parseInt(freeColorAt(g, 0, 0, 0).slice(1, 3), 16) > 0xc0);
+  for (let fi = 0; fi < 6; fi++)
+    for (const [u, v] of [[0.2, 0.3], [0.5, 0.5], [0.9, 0.7]]) {
+      const [x, y, z] = NET[fi].p(u, v), r = netOf(x, y, z);
+      assert.deepEqual([r.f, +r.u.toFixed(9), +r.v.toFixed(9)], [fi, u, v]);
+    }
+  const grid = bakeFree(f);
+  assert.equal(grid.length, FREE_N ** 3 * 4);
+  assert.equal(freeNodesDefault(7).length, 7);
+  for (const q of freeNodesDefault(9)) assert.ok(Math.abs(Math.max(Math.abs(q.x), Math.abs(q.y), Math.abs(q.z)) - 0.5) < 1e-9);
+});
+
+test('freeform points survive a CubeR code', async () => {
+  const { encodeCube, decodeCube } = await import('../src/cubecode.js');
+  const layers = { colors: ['#ff0000', '#00ff00', '#0000ff'], blur: 0.4, repeat: 1, bias: 0, shape: 'free', nodes: [{ x: -0.5, y: 0.1, z: 0.3, k: 1 }, { x: 0.2, y: 0.5, z: -0.2, k: 3.2 }, { x: 0, y: 0, z: 0, k: 0.25 }] };
+  const code = encodeCube({ name: 'F', flavor: 'layers', layers, texture: 'jello', edges: 'round', glitter: 'off', tune: {} });
+  assert.match(code, /~hfree~q[0-9a-f]{24}~/);
+  const c = decodeCube(code);
+  assert.equal(c.layers.shape, 'free');
+  c.layers.nodes.forEach((q, i) => {
+    for (const k of ['x', 'y', 'z']) assert.ok(Math.abs(q[k] - layers.nodes[i][k]) <= 0.5 / 255 + 1e-9, `${k} ${q[k]}`);
+    assert.ok(Math.abs(Math.log(q.k / layers.nodes[i].k)) < 0.02, `k ${q.k}`);
+  });
+});

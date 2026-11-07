@@ -76,6 +76,7 @@ export class Glitter {
     this.uniforms = {
       uCubeTex: { value: app.jelly.cubeTex },
       uGradTex: { value: app.jelly.gradTex },
+      uFreeTex: { value: app.jelly.freeTex },
       uPos: { value: this.posTex },
       uPosW: { value: this.posW },
       uSize: { value: 0.0055 },

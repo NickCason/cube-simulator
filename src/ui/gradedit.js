@@ -15,7 +15,10 @@ const SHAPE_ICONS = {
   core: svg('<rect x="3" y="3" width="14" height="14" rx="2"/><circle cx="10" cy="10" r="4.2"/><circle cx="10" cy="10" r="1.3" fill="currentColor" stroke="none"/>'),
   shell: svg('<rect x="3" y="3" width="14" height="14" rx="2"/><rect x="6.5" y="6.5" width="7" height="7" rx="1"/><rect x="9" y="9" width="2" height="2" fill="currentColor" stroke="none"/>'),
   rings: svg('<ellipse cx="10" cy="5.5" rx="6.5" ry="2.5"/><ellipse cx="10" cy="5.5" rx="3.3" ry="1.2"/><path d="M3.5 5.5v9c0 1.4 2.9 2.5 6.5 2.5s6.5-1.1 6.5-2.5v-9"/>'),
+  free: svg('<rect x="3" y="3" width="14" height="14" rx="2"/><circle cx="7.3" cy="7.6" r="2" fill="currentColor" stroke="none"/><circle cx="13" cy="9" r="1.4" fill="currentColor" stroke="none"/><circle cx="9.4" cy="13.3" r="1.7" fill="currentColor" stroke="none"/>'),
 };
+// (freeform first: colours anywhere on it; then the lines through it)
+const SHAPE_ORDER = ['free', 'up', 'across', 'corner', 'core', 'shell', 'rings'];
 const OFF = 34; // (px off the strip a stop must be dragged to come away)
 
 export class GradEditor {
@@ -29,7 +32,7 @@ export class GradEditor {
     this.endA = sec.querySelector('.grad-ends .a');
     this.endB = sec.querySelector('.grad-ends .b');
     this.evenBtn = sec.querySelector('.grad-ends .even');
-    for (const g of GRAD_SHAPES) {
+    for (const g of SHAPE_ORDER.map((id) => GRAD_SHAPES.find((s) => s.id === id))) {
       const b = document.createElement('button');
       b.className = 'opt';
       b.dataset.shape = g.id;

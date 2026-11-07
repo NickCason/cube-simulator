@@ -4,6 +4,7 @@ import { Cubby } from './cubby.js';
 import { StackPanel, STACK_ICON } from './stackpanel.js';
 import { PlacesPanel, PLACE_ICON } from './places.js';
 import { GradEditor } from './gradedit.js';
+import { FreeEditor } from './freeedit.js';
 
 const svg = (inner) =>
   `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${inner}</svg>`;
@@ -130,6 +131,15 @@ export class UI {
           <div class="seg gshape" role="group" aria-label="The gradient's shape"></div>
           <div class="grad" role="group" aria-label="The gradient's colours"><div class="grad-strip"></div><div class="grad-stops"></div></div>
           <div class="grad-ends"><span class="a"></span><button class="even" hidden>Even out</button><span class="b"></span></div>
+          <div class="free" hidden>
+            <div class="free-net" role="group" aria-label="The cube unfolded: its colours"><canvas></canvas><div class="free-nodes"></div></div>
+            <div class="free-tool">
+              <label class="free-col" title="Its colour"><i></i><input type="color" aria-label="The picked point's colour"></label>
+              <span class="free-name"></span>
+              <button class="free-del">Remove</button>
+            </div>
+            <label class="row free-k"><span class="name">Strength</span><input type="range" min="0" max="1" step="0.01" aria-label="How far the picked point's colour reaches"><span class="word"></span></label>
+          </div>
           <div class="presets"></div>
           <label class="row blend"><span class="name">Blend</span><input type="range" min="0" max="1" step="0.01" aria-label="Blend between layers"><span class="word"></span></label>
           <label class="row repeat"><span class="name">Repeat</span><input type="range" min="1" max="${MAX_REPEAT}" step="1" aria-label="How many times the colours repeat up the cube"><span class="word"></span></label>
@@ -184,6 +194,8 @@ export class UI {
     // ---- layer editor
     this.layersSec = this.paletteEl.querySelector('.layers-sec');
     this.grad = new GradEditor(app, this.layersSec);
+    this.free = new FreeEditor(app, this.layersSec);
+    this.layersHint = this.layersSec.querySelector('.lbl em');
     this.nEl = this.layersSec.querySelector('.n');
     this.minusEl = this.layersSec.querySelector('.minus');
     this.plusEl = this.layersSec.querySelector('.plus');
@@ -591,6 +603,13 @@ export class UI {
     this.minusEl.disabled = n <= MIN_LAYERS;
     this.plusEl.disabled = n >= MAX_LAYERS;
     this.grad.render(L);
+    // (freeform: the cube unfolded, not the strip; no repeat or bias)
+    const free = L.shape === 'free';
+    this.layersSec.classList.toggle('is-free', free);
+    this.layersSec.querySelector('.free').hidden = !free;
+    for (const sel of ['.grad', '.grad-ends', '.row.repeat', '.row.bias']) this.layersSec.querySelector(sel).hidden = free;
+    this.layersHint.textContent = free ? 'tap the cube to add a colour' : 'drag, tap or add stops';
+    if (free) this.free.render(L);
     if (document.activeElement !== this.blendEl) this.blendEl.value = L.blur;
     this.blendEl.style.setProperty('--p', `${L.blur * 100}%`);
     readout(this.blendWord, blendWord(L.blur), Math.round(L.blur * 100));
