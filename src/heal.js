@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { buildCubeMesh } from './sim/mesh.js';
-import { TAG_EXTERIOR } from './sim/softbody.js';
+import { TAG_EXTERIOR, REST_STEP } from './sim/softbody.js';
 import { closestOnTriangle } from './sim/geom.js';
 
 const clamp01 = (x) => Math.min(1, Math.max(0, x));
@@ -345,6 +345,9 @@ export class Healer {
     for (const f of app.onHealStart) f();
     sb.endGrab();
     this.scaleK = opts.scale || 1;
+    // several cubes (or a stack): each its own home - see _startMulti
+    this.multi = app.cubes.length > 1 || !!opts.layout;
+    if (this.multi) return this._startMulti(opts);
     if (!sb.pieces.length || sb.nT === 0) {
       // everything was blasted away: grow a fresh cube
       this.cx = 0;
@@ -402,13 +405,130 @@ export class Healer {
     app.audio?.healStart();
   }
 
+  // Several cubes: each re-forms at its own home - where its pieces mostly
+  // are, turned as its biggest piece, kept apart from the others - or, given
+  // a layout (a stack), in its place in that. No seams to weld or holes to
+  // fill here: the cubes come back fresh.
+  _startMulti(opts) {
+    const app = this.app, sb = app.sb;
+    this.homes = this._homes(opts.layout);
+    this.plan = [];
+    this.weldJob = this.fillJob = this.weldField = this.fillField = null;
+    const h0 = this.homes.values().next().value;
+    this.cW = h0 ? h0.cW.clone() : new THREE.Vector3(0, sb.p.size / 2, 0);
+    if (!sb.pieces.length || sb.nT === 0) {
+      this._fuse();
+      return;
+    }
+    this._plan();
+    sb.attract = { targets: this.targets, n: sb.nV, rate: 0 };
+    sb.collisionsEnabled = false;
+    for (let r = 0; r < sb.rCount; r++) {
+      const i = sb.rSim[r];
+      sb.glow[i] = Math.max(sb.glow[i], sb.rTag[r] === 0 ? 0.45 : 0.22);
+    }
+    app.droplets.heal(this.cW.clone(), TL.flyStart - 0.35, 1.15);
+    app.audio?.healStart();
+  }
+
+  // the yaw of a piece (its rest shape fitted to how it lies, about up)
+  _yawOf(main) {
+    const sb = this.app.sb;
+    let sxx = 0, sxz = 0, rx = 0, rz = 0, mm = 0, cx = 0, cz = 0;
+    for (const i of main.verts) {
+      rx += sb.X[i * 3] * sb.m[i];
+      rz += sb.X[i * 3 + 2] * sb.m[i];
+      cx += sb.x[i * 3] * sb.m[i];
+      cz += sb.x[i * 3 + 2] * sb.m[i];
+      mm += sb.m[i];
+    }
+    rx /= mm;
+    rz /= mm;
+    cx /= mm;
+    cz /= mm;
+    for (const i of main.verts) {
+      const px = sb.x[i * 3] - cx, pz = sb.x[i * 3 + 2] - cz;
+      const X = sb.X[i * 3] - rx, Z = sb.X[i * 3 + 2] - rz;
+      sxx += sb.m[i] * (px * X + pz * Z);
+      sxz += sb.m[i] * (px * Z - pz * X);
+    }
+    return Math.atan2(sxz, sxx);
+  }
+
+  // slot -> { cx, cy (its bottom), cz, yaw, cW (centre, as it re-forms), qF }
+  _homes(layout) {
+    const app = this.app, sb = app.sb, size = sb.p.size, half = size / 2;
+    const homes = new Map();
+    if (layout) {
+      for (const L of layout) homes.set(L.slot, { cx: L.x, cy: L.y, cz: L.z, yaw: L.yaw || 0 });
+    } else {
+      for (const cb of app.cubes) {
+        let M = 0, cx = 0, cz = 0, main = null;
+        for (const pc of sb.pieces) {
+          if (pc.cube !== cb.slot) continue;
+          M += pc.mass;
+          cx += pc.com[0] * pc.mass;
+          cz += pc.com[2] * pc.mass;
+          if (!main || pc.mass > main.mass) main = pc;
+        }
+        if (M > 0) {
+          cx /= M;
+          cz /= M;
+        }
+        homes.set(cb.slot, { cx, cy: 0, cz, yaw: main ? this._yawOf(main) : 0 });
+      }
+      // apart from each other, and inside the wall
+      const H = [...homes.values()], R = Math.max(0, sb.p.arenaRadius - size * 0.8), gap = size * 1.18;
+      for (let it = 0; it < 60; it++) {
+        let moved = false;
+        for (let i = 0; i < H.length; i++) {
+          for (let j = i + 1; j < H.length; j++) {
+            const a = H[i], b = H[j];
+            let dx = b.cx - a.cx, dz = b.cz - a.cz;
+            const d = Math.hypot(dx, dz);
+            if (d >= gap) continue;
+            if (d < 1e-4) {
+              const an = Math.random() * Math.PI * 2;
+              dx = Math.cos(an);
+              dz = Math.sin(an);
+            } else {
+              dx /= d;
+              dz /= d;
+            }
+            const push = (gap - d) / 2 + 1e-3;
+            a.cx -= dx * push;
+            a.cz -= dz * push;
+            b.cx += dx * push;
+            b.cz += dz * push;
+            moved = true;
+          }
+        }
+        for (const h of H) {
+          const r = Math.hypot(h.cx, h.cz);
+          if (r > R) {
+            h.cx *= R / r;
+            h.cz *= R / r;
+          }
+        }
+        if (!moved) break;
+      }
+      // (too crowded for the floor: they stack instead)
+      for (let i = 0; i < H.length; i++) for (let j = i + 1; j < H.length; j++) if (Math.hypot(H[i].cx - H[j].cx, H[i].cz - H[j].cz) < size * 1.02) return this._homes(app.stackLayout());
+    }
+    for (const h of homes.values()) {
+      h.cW = new THREE.Vector3(h.cx, h.cy + half + LIFT_FUSE, h.cz);
+      h.qF = new THREE.Quaternion().setFromAxisAngle(UP, h.yaw);
+    }
+    return homes;
+  }
+
   // Per-piece keyframes: where it is now (fitted rigid transform), where it
   // hovers in the exploded view, where it belongs in the cube.
   _plan() {
     const sb = this.app.sb;
     const half = sb.p.size / 2;
     const k = this.scaleK;
-    this.cW = new THREE.Vector3(this.cx, half + LIFT_FUSE, this.cz);
+    if (!this.multi) this.cW = new THREE.Vector3(this.cx, half + LIFT_FUSE, this.cz);
     const plan = [];
     let seed = 99991;
     const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
@@ -435,10 +555,15 @@ export class Healer {
         a[1].x += dx * Y; a[1].y += dy * Y; a[1].z += dz * Y;
         a[2].x += dx * Z; a[2].y += dy * Z; a[2].z += dz * Z;
       }
-      const q0 = fitRotation(a[0], a[1], a[2], this.qF.clone());
+      // (its cube's home: several cubes, each its own)
+      const home = this.multi ? this.homes.get(pc.cube) : null;
+      if (this.multi && !home) continue;
+      const qF = home ? home.qF : this.qF, cW = home ? home.cW : this.cW;
+      const Cl = home ? new THREE.Vector3(C.x - pc.cube * REST_STEP, C.y, C.z) : C;
+      const q0 = fitRotation(a[0], a[1], a[2], qF.clone());
       // final place in the cube, and an exploded hover spot just outside it
-      const off = C.clone().multiplyScalar(k).applyQuaternion(this.qF);
-      const cF = this.cW.clone().add(off);
+      const off = Cl.clone().multiplyScalar(k).applyQuaternion(qF);
+      const cF = cW.clone().add(off);
       const dist = off.length();
       // spread mostly sideways so the exploded view stays in frame
       const dir = dist > 1e-4 ? new THREE.Vector3(off.x, off.y * 0.45, off.z).normalize() : new THREE.Vector3();
@@ -449,6 +574,7 @@ export class Healer {
         C,
         c0: c,
         q0,
+        qF,
         cE,
         cF,
         // a little ripple: pieces nearer the middle lead, the rest follow
@@ -474,7 +600,7 @@ export class Healer {
       // drift out on a gentle arc while turning to the final orientation
       ctr.lerpVectors(p.c0, p.cE, uB).addScaledVector(UP, 0.08 * Math.sin(Math.PI * uB));
       ctr.lerp(p.cF, uC);
-      q.slerpQuaternions(p.q0, this.qF, uB);
+      q.slerpQuaternions(p.q0, p.qF, uB);
       const s = 1 + (k - 1) * uB;
       for (const i of p.verts) {
         v.set((X[i * 3] - p.C.x) * s, (X[i * 3 + 1] - p.C.y) * s, (X[i * 3 + 2] - p.C.z) * s).applyQuaternion(q).add(ctr);
@@ -585,6 +711,10 @@ export class Healer {
   // new cube will have them) - and a job building the weld's distance field.
   _startWeld() {
     const sb = this.app.sb;
+    if (this.multi) {
+      this.weldJob = this.fillJob = null;
+      return;
+    }
     const k = this.scaleK, X = sb.X, sTri = sb.sTri, sTag = sb.sTag, nF = sb.nF, K = sb.nV + 1;
     const outer = new Set();
     for (let f = 0; f < nF; f++) {
@@ -635,6 +765,38 @@ export class Healer {
   }
 
 
+  // every cube fresh at its home (its bottom LIFT_FUSE up), let down gently
+  _fuseMulti() {
+    const app = this.app, sb = app.sb, size = sb.p.size;
+    sb.attract = null;
+    sb.nV = 0;
+    sb.nT = 0;
+    sb.embeds.length = 0;
+    sb.grabs.length = 0;
+    for (const [slot, h] of this.homes) sb.addCube(slot, h.cx, h.cy + LIFT_FUSE, h.cz, h.yaw);
+    sb.rebuild();
+    sb.fill = null;
+    sb.weld = null;
+    sb.collisionsEnabled = true;
+    sb.dampBoost = 1;
+    sb.gravityScale = 0;
+    sb.glow.fill(0.25, 0, sb.nV);
+    this.weldT = undefined;
+    app.jelly.frontMat.uniforms.uWeldT.value = 99;
+    this.fused = true;
+    this.active = false;
+    this.settling = true;
+    this.settleT = 0;
+    for (const f of app.onHealEnd) f();
+    app.onTopologyChanged();
+    app.markHealed();
+    app.audio?.healFuse();
+    for (const h of this.homes.values()) {
+      app.particles?.flash(h.cW, 0.9 * size, [2.4, 2.1, 1.7]);
+      for (let k = 0; k < 10; k++) app.particles?.glitter(h.cW, 1, [1, 0.92, 0.75], 1.2);
+    }
+  }
+
   _maxError() {
     const sb = this.app.sb;
     const tg = this.targets;
@@ -651,6 +813,7 @@ export class Healer {
   _fuse() {
     const app = this.app;
     const sb = app.sb;
+    if (this.multi) return this._fuseMulti();
     // the seams' light field (usually built during the flight already)
     if (!this.weldField && !this.weldJob && this.plan?.length) this._startWeld();
     const field = this.weldField || (this.weldJob ? finish(this.weldJob) : null);

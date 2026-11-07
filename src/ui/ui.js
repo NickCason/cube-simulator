@@ -1,6 +1,7 @@
 import { FLAVORS, TEXTURES, EDGES, GLITTERS, LAYER_PRESETS, MIN_LAYERS, MAX_LAYERS, MAX_REPEAT, flavorSwatchCSS, flavorMainHex, materialSwatchCSS } from '../styles.js';
 import { SETTINGS, settingWord, settingNum } from '../settings.js';
 import { Cubby } from './cubby.js';
+import { StackPanel, STACK_ICON } from './stackpanel.js';
 
 const svg = (inner) =>
   `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${inner}</svg>`;
@@ -106,6 +107,7 @@ export class UI {
 
         </div>
         <button class="tune-btn" aria-label="Settings" title="Settings">${ICONS.tune}</button>
+        <button class="stack-btn" hidden title="Stack the cubes (K)" aria-label="Stack the cubes">${STACK_ICON}</button>
         <button class="heal" title="Re-cube (H)" aria-label="Re-cube">${ICONS.heal}<span>Re-cube</span></button>
         <button class="mute" title="Sound (M)" aria-label="Toggle sound">${ICONS.sound}</button>
       </nav>
@@ -376,7 +378,10 @@ export class UI {
       app.audio.init();
       const open = this.tuneEl.hidden;
       this.closePalette();
-      if (open) this.cubby?.close();
+      if (open) {
+        this.cubby?.close();
+        this.stack?.close();
+      }
       this.tuneEl.hidden = !open;
       this.tuneBtn.classList.toggle('open', open);
     });
@@ -418,11 +423,39 @@ export class UI {
       else if ((e.key === 'l' || e.key === 'L') && !e.repeat) this.toggleTheme();
     });
     this.cubby = new Cubby(this, app);
+    // the stack (several cubes): its button by Re-cube, its panel
+    this.stackBtn = root.querySelector('.stack-btn');
+    this.stack = new StackPanel(this, app, root);
+    this.stackBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      app.audio.init();
+      this.stack.toggle();
+    });
+    window.addEventListener('keydown', (e) => {
+      if (e.target instanceof HTMLInputElement || e.metaKey || e.ctrlKey || e.altKey) return;
+      if ((e.key === 'k' || e.key === 'K') && !e.repeat && app.cubes.length > 1) this.stack.toggle();
+    });
+    this.cubesChanged();
+  }
+
+  // cubes came or went: the stack's button and panel, the Cubby's ON tag
+  cubesChanged() {
+    const many = this.app.cubes.length > 1;
+    this.stackBtn.hidden = !many;
+    if (!many) this.stack.close();
+    this.stack.render();
+    this.cubby?.render();
+  }
+
+  cubeSelected() {
+    this.stack.render();
+    this.cubby?.render();
   }
 
   openPalette() {
     this.closeTune();
     this.cubby?.close();
+    this.stack?.close();
     this.paletteEl.hidden = false;
     this.swatchBtn.classList.add('open');
     // (the chosen material and layer preset in view, where they scroll sideways)
@@ -441,7 +474,7 @@ export class UI {
   // Fraction of the screen height covered by an open panel (bottom sheet on phones).
   get panelCover() {
     if (window.innerWidth > 720) return 0;
-    const el = !this.tuneEl.hidden ? this.tuneEl : !this.paletteEl.hidden ? this.paletteEl : this.cubby && !this.cubby.el.hidden ? this.cubby.el : null;
+    const el = !this.tuneEl.hidden ? this.tuneEl : !this.paletteEl.hidden ? this.paletteEl : this.cubby && !this.cubby.el.hidden ? this.cubby.el : this.stack && !this.stack.el.hidden ? this.stack.el : null;
     if (!el) return 0;
     const r = el.getBoundingClientRect();
     return Math.max(0, (window.innerHeight - r.top) / window.innerHeight);

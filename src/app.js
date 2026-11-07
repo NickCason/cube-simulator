@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { SoftBody } from './sim/softbody.js';
+import { SoftBody, MAX_CUBES } from './sim/softbody.js';
 import { createStudioEnvironment } from './render/env.js';
 import { createFloor } from './render/floor.js';
 import { Post } from './render/post.js';
@@ -24,6 +24,8 @@ import { Glitter, GLITTER_MODES } from './world/glitter.js';
 import { bevelPoint, unbevelPoint } from './sim/mesh.js';
 import { DEFAULT_STYLE, TEXTURES, EDGES, LAYER_PRESETS, MIN_LAYERS, MAX_LAYERS, MAX_REPEAT, biasExp, resolveFlavor, flavorMainHex, nextLayerColor } from './styles.js';
 import { SETTINGS, resolveSettings } from './settings.js';
+
+const SETTING_BY_KEY = Object.fromEntries(SETTINGS.map((s) => [s.key, s]));
 import { Tilt } from './tilt.js';
 
 // The two looks: the photo studio, and glow mode - lights out, the jelly
@@ -132,6 +134,12 @@ export class App {
     this.post = new Post(renderer);
     this.style = this._loadStyle(opts);
     this.tune = this._loadTune();
+    // The cubes in the room, each its own style and tune (its material
+    // sliders; the world's, sound's and the Cubicle's are the same in all).
+    // The selected one is this.style / this.tune - what the panels edit.
+    this.cubes = [{ slot: 0, style: this.style, tune: this.tune }];
+    this.sel = 0;
+    this.stackOrder = [0]; // (bottom to top: see stack)
     this.st = null; // (resolved settings: see applyStyle)
     const t0 = resolveSettings(this.tune, TEXTURES[this.style.texture]);
     this.sb = new SoftBody({ ...(opts.sim || {}), size: t0.size, bevel: EDGES[this.style.edges].bevel * t0.size });
@@ -203,6 +211,7 @@ export class App {
     };
     this.tool = null;
     this.setTool('hand');
+    this._restoreScene();
     this.applyStyle();
     this._applyTheme(this.theme);
 
@@ -359,6 +368,16 @@ export class App {
     const st = this.settings;
     this.jelly.setStyle(f, { ...tex, ...st }, this.sb.p.size);
     const sb = this.sb;
+    // every cube its own material and look
+    for (const cb of this.cubes) {
+      const ct = TEXTURES[cb.style.texture], cs = resolveSettings(cb.tune, ct);
+      sb.setCube(cb.slot, {
+        mu: App.safeMu(cs.mu, cs.weight, sb.p.size, cs.lambda, cs.gravity),
+        damping: cs.damping, lambdaRatio: cs.lambda, bounce: cs.bounce, friction: cs.grip,
+        rigidity: cs.rigidity, density: cs.weight, airDrag: cs.airDrag,
+      });
+      this.jelly.setCubeLook(cb.slot, resolveFlavor(cb.style), { ...ct, ...cs }, sb.p.size);
+    }
     sb.p.mu = App.safeMu(st.mu, st.weight, sb.p.size, st.lambda, st.gravity);
     sb.p.damping = st.damping;
     sb.p.lambdaRatio = st.lambda;
@@ -370,7 +389,7 @@ export class App {
     sb.p.airDrag = st.airDrag;
     sb.p.gravity = -st.gravity;
     this.st = st; // (resolved settings, for tools that read them each use)
-    sb.setDensity(st.weight);
+    sb.p.density = st.weight; // (each cube's own mass: setCube)
     sb.wakeAll();
     this.audio.setLevels(st.volume, st.impacts, st.wobble);
     this.bubbles?.configure(st.bubbles, st.bubbleSize);
@@ -383,6 +402,7 @@ export class App {
     try {
       localStorage.setItem('cube-sim-style', JSON.stringify(this.style));
       localStorage.setItem('cube-sim-tune', JSON.stringify(this.tune));
+      localStorage.setItem('cube-sim-scene', JSON.stringify({ sel: this.sel, order: this.stackOrder, cubes: this.cubes.map((c) => ({ slot: c.slot, style: c.style, tune: c.tune })) }));
     } catch (e) {
       /* private mode */
     }
@@ -469,7 +489,7 @@ export class App {
   }
 
   setTearing(on) {
-    this.tune.tear = !!on;
+    for (const cb of this.cubes) cb.tune.tear = !!on;
     try {
       localStorage.setItem('cube-sim-tune', JSON.stringify(this.tune));
     } catch (e) {
@@ -480,6 +500,7 @@ export class App {
   // One fine-tuning slider changed (value in physical units).
   setSetting(key, value, final = true) {
     this.tune[key] = value;
+    if (!SETTING_BY_KEY[key]?.mat) for (const cb of this.cubes) cb.tune[key] = value; // (the same in every cube)
     if (key === 'size') {
       if (final) this.setCubeSize(value);
       return;
@@ -489,13 +510,12 @@ export class App {
 
   resetSettings() {
     const oldSize = this.sb.p.size;
-    // (the jelly resets; your sound levels and the tearing switch stay)
-    const { volume, impacts, wobble, tear } = this.tune;
-    this.tune = {};
-    if (volume !== undefined) this.tune.volume = volume;
-    if (impacts !== undefined) this.tune.impacts = impacts;
-    if (wobble !== undefined) this.tune.wobble = wobble;
-    if (tear !== undefined) this.tune.tear = tear;
+    // (the jelly resets - the selected cube's material and everyone's world;
+    // your sound levels and the tearing switch stay)
+    const keep = new Set(['volume', 'impacts', 'wobble', 'tear']);
+    for (const cb of this.cubes) {
+      for (const k of Object.keys(cb.tune)) if (!keep.has(k) && (cb === this.cube || !SETTING_BY_KEY[k]?.mat)) delete cb.tune[k];
+    }
     this.applyStyle();
     if (Math.abs(this.settings.size - oldSize) > 1e-6) this.setCubeSize(this.settings.size);
   }
@@ -710,7 +730,7 @@ export class App {
     const o = this.orbit;
     const c = this.camera;
     // pull back while a bottom sheet hides part of a small screen
-    const r = o.radius * (1 + (this._lift || 0) * 1.5) * (1 + (this.healZoom || 0));
+    const r = o.radius * (1 + (this._lift || 0) * 1.5) * (1 + (this.healZoom || 0)) * (this._frameR || 1);
     c.position.set(
       o.target.x + r * Math.cos(o.phi) * Math.sin(o.theta),
       o.target.y + r * Math.sin(o.phi),
@@ -733,6 +753,19 @@ export class App {
       const W = this.size.w, H = this.size.h;
       c.setViewOffset(W, H, 0, this._lift * H, W, H);
     } else if (c.view && c.view.enabled) c.clearViewOffset();
+    // (several cubes - a stack - the view rises and backs off to keep them in)
+    let fy = 0.44, fr = 1;
+    if (this.cubes.length > 1) {
+      let top = 0;
+      for (const pc of this.sb.pieces) top = Math.max(top, pc.bbox[4]);
+      top = Math.min(top, this.sb.p.ceiling);
+      fy = Math.max(0.44, top * 0.42);
+      fr = Math.max(1, top / 1.7, this.sb.p.arenaRadius / (this._viewArena || this.sb.p.arenaRadius));
+    }
+    const kf = 1 - Math.exp(-dt * 2.5);
+    this._frameY = (this._frameY ?? 0.44) + (fy - (this._frameY ?? 0.44)) * kf;
+    this._frameR = (this._frameR ?? 1) + (fr - (this._frameR ?? 1)) * kf;
+    this.orbit.target.y = this._frameY;
     const o = this.orbit, g = this.orbitGoal;
     const k = 1 - Math.exp(-dt * 12);
     o.theta += (g.theta - o.theta) * k;
@@ -754,6 +787,8 @@ export class App {
     const halfV = Math.tan((this.camera.fov * Math.PI) / 360) * this.orbitGoal.radius;
     const halfW = halfV * (w / h);
     this.sb.p.arenaRadius = Math.max(1.15, Math.min(2.3, halfW * 0.92 - 0.35));
+    this._viewArena = this.sb.p.arenaRadius;
+    if (this.cubes && this.cubes.length > 1) this._arena();
     // pixel budget: huge screens render at a lower ratio
     const budget = Math.sqrt(3.6e6 / Math.max(1, w * h));
     if (this.pixelRatio > budget) this.pixelRatio = Math.max(0.6, budget);
@@ -866,6 +901,8 @@ export class App {
       }
       const ray = this.rayFromClient(e.clientX, e.clientY);
       const hit = this.pickJelly(ray);
+      // (several cubes: the one you touch is the one the panels edit)
+      if (hit && this.cubes.length > 1) this.selectCube(this.sb.pieces[hit.piece]?.cube ?? this.cube.slot);
       const consumed = e.button === 0 && this.tool?.down?.(e, ray, hit);
       if (consumed) mode = 'tool';
       else {
@@ -1056,6 +1093,233 @@ export class App {
     }
   }
 
+  // ------------------------------------------------------------ many cubes
+  get cube() {
+    return this.cubes[this.sel];
+  }
+
+  // The cube in slot k is the one the panels edit now.
+  selectCube(slot) {
+    const i = this.cubes.findIndex((c) => c.slot === slot);
+    if (i < 0 || i === this.sel) return;
+    this.sel = i;
+    this.style = this.cubes[i].style;
+    this.tune = this.cubes[i].tune;
+    this.applyStyle();
+    // (a glimmer through it, so you see which)
+    const sb = this.sb;
+    for (let v = 0; v < sb.nV; v++) if (sb.vCube[v] === slot) sb.glow[v] = Math.max(sb.glow[v], 0.6);
+    this.ui?.cubeSelected?.(slot);
+  }
+
+  // Another cube (c: a decoded CubeR cube, or none for a plain jelly in a
+  // random flavour), dropped in from above on a clear spot. Its slot, or -1.
+  addCube(c = null, { drop = true } = {}) {
+    if (this.cubes.length >= MAX_CUBES) {
+      this.ui?.hint('That is a full house: eight cubes', 1800);
+      return -1;
+    }
+    const used = new Set(this.cubes.map((cb) => cb.slot));
+    let slot = 0;
+    while (used.has(slot)) slot++;
+    const flavors = ['cherry', 'lime', 'blue', 'grape', 'orange', 'lemon', 'watermelon', 'cola'];
+    const style = c
+      ? { flavor: c.flavor, layers: { colors: [...c.layers.colors], blur: c.layers.blur, repeat: c.layers.repeat, bias: c.layers.bias }, texture: c.texture, edges: this.style.edges, glitter: c.glitter }
+      : { flavor: flavors[Math.floor(Math.random() * flavors.length)], layers: { ...DEFAULT_STYLE.layers, colors: [...DEFAULT_STYLE.layers.colors] }, texture: 'jello', edges: this.style.edges, glitter: 'off' };
+    // (its own material sliders; the world's as everyone's)
+    const tune = {};
+    for (const k of Object.keys(this.tune)) if (!SETTING_BY_KEY[k]?.mat) tune[k] = this.tune[k];
+    if (c) for (const k of Object.keys(c.tune)) if (SETTING_BY_KEY[k]?.mat) tune[k] = c.tune[k];
+    const sb = this.sb, size = sb.p.size;
+    // (fewer cells a cube as they multiply; a bigger room)
+    this._resolution(this.cubes.length + 1);
+    this._arena(this.cubes.length + 1);
+    const [x, z, top] = this._clearSpot();
+    const y = drop ? Math.max(this.swapper._dropHeight(size), top + 0.3) : top;
+    sb.addCube(slot, x, y, z, (Math.random() - 0.5) * 0.8);
+    sb.rebuild();
+    if (drop) for (let v = 0; v < sb.nV; v++) if (sb.vCube[v] === slot) sb.v[v * 3 + 1] = -3;
+    this.cubes.push({ slot, style, tune });
+    this.stackOrder.push(slot);
+    // (the new one is the one the panels edit now)
+    this.sel = this.cubes.length - 1;
+    this.style = style;
+    this.tune = tune;
+    this.onTopologyChanged();
+    this.applyStyle();
+    if (drop) this.swapper.watchLanding(slot);
+    this.ui?.cubesChanged?.();
+    return slot;
+  }
+
+  // Cube k out of the room (the last one stays).
+  removeCube(slot) {
+    if (this.cubes.length <= 1) return false;
+    const i = this.cubes.findIndex((c) => c.slot === slot);
+    if (i < 0) return false;
+    this.tool?.up?.();
+    this.nails.clearAll();
+    this.sb.removeCube(slot);
+    this.sb.rebuild();
+    this.cubes.splice(i, 1);
+    this._resolution(this.cubes.length);
+    this._arena(this.cubes.length);
+    this.stackOrder = this.stackOrder.filter((s) => s !== slot);
+    if (this.sel >= this.cubes.length || i === this.sel) this.sel = Math.min(i, this.cubes.length - 1);
+    else if (i < this.sel) this.sel--;
+    this.style = this.cube.style;
+    this.tune = this.cube.tune;
+    this.onTopologyChanged();
+    this.applyStyle();
+    this.ui?.cubesChanged?.();
+    return true;
+  }
+
+  // Where each cube goes in a stack, in stackOrder from the bottom: a tower
+  // of up to four, then a 2x2 base with the rest on top (eight: one big cube).
+  stackLayout(order = this.stackOrder) {
+    const size = this.sb.p.size, g = 0.03, n = order.length, out = [];
+    order.forEach((slot, i) => {
+      if (n <= 4) out.push({ slot, x: 0, y: i * (size + g), z: 0, yaw: 0 });
+      else {
+        const lvl = Math.floor(i / 4), j = i % 4;
+        out.push({ slot, x: (j & 1 ? 0.5 : -0.5) * (size + g), y: lvl * (size + g), z: (j & 2 ? 0.5 : -0.5) * (size + g), yaw: 0 });
+      }
+    });
+    return out;
+  }
+
+  // Stack them (each re-forms in its place: see Healer._startMulti).
+  stack() {
+    if (this.cubes.length < 2) return false;
+    return this.heal({ layout: this.stackLayout() });
+  }
+
+  setStackOrder(order) {
+    const have = new Set(this.cubes.map((c) => c.slot));
+    if (order.length !== have.size || !order.every((s) => have.has(s))) return;
+    this.stackOrder = [...order];
+    this.applyStyle(); // (saved with the room)
+  }
+
+  // The mesh's resolution for n cubes: fewer cells a cube as they multiply
+  // (eight at full resolution took the physics 120 ms a frame). Changing it
+  // builds every cube afresh where it is, as it's turned.
+  static resFor(n) {
+    return n <= 1 ? 11 : n === 2 ? 9 : n <= 4 ? 8 : 7;
+  }
+
+  _resolution(n) {
+    const sb = this.sb, res = App.resFor(n);
+    if (res === sb.p.res) return;
+    // (from the vertices: a rebuild leaves the pieces' own centres blank
+    // till the next step)
+    const at = [];
+    for (const cb of this.cubes) {
+      let M = 0, x = 0, z = 0, y0 = Infinity, main = null;
+      for (const pc of sb.pieces) {
+        if (pc.cube !== cb.slot) continue;
+        if (!main || pc.mass > main.mass) main = pc;
+        for (const i of pc.verts) {
+          const m = sb.m[i];
+          M += m;
+          x += sb.x[i * 3] * m;
+          z += sb.x[i * 3 + 2] * m;
+          y0 = Math.min(y0, sb.x[i * 3 + 1]);
+        }
+      }
+      at.push({ slot: cb.slot, x: M > 0 ? x / M : 0, z: M > 0 ? z / M : 0, y: Number.isFinite(y0) ? Math.max(0, y0) : 0, yaw: main ? this.healer._yawOf(main) : 0 });
+    }
+    sb.p.res = res;
+    sb.nV = 0;
+    sb.nT = 0;
+    sb.embeds.length = 0;
+    sb.grabs.length = 0;
+    this.nails.clearAll();
+    for (const a of at) sb.addCube(a.slot, a.x, a.y, a.z, a.yaw);
+    sb.rebuild();
+    this.onTopologyChanged();
+    this.markHealed();
+  }
+
+  // the room's size for n cubes: room enough for them on the floor (the
+  // view backs off to see it all - see _updateCamera)
+  _arena(n = this.cubes.length) {
+    const sb = this.sb, view = this._viewArena || sb.p.arenaRadius;
+    this._viewArena = view;
+    sb.p.arenaRadius = n > 1 ? Math.max(view, sb.p.size * (0.9 + 0.62 * Math.sqrt(n - 1))) : view;
+  }
+
+  // A spot clear of the cubes there: [x, z, the height to set a cube down
+  // at] - on the floor (0) out from the middle, or, with no room left on the
+  // floor, on top of what's there (a cube set down inside another stayed
+  // stuck in it, and the two drew as a mosaic)
+  _clearSpot() {
+    const sb = this.sb, size = sb.p.size, R = Math.max(0, sb.p.arenaRadius - size * 0.75);
+    // (each cube's box from its vertices: a piece's own centre and box are
+    // only filled in by the next step, and a rebuild has just made them new)
+    const boxes = new Map();
+    for (let i = 0; i < sb.nV; i++) {
+      if (!sb.alive[i]) continue;
+      let b = boxes.get(sb.vCube[i]);
+      if (!b) boxes.set(sb.vCube[i], (b = [Infinity, Infinity, Infinity, -Infinity, -Infinity, -Infinity]));
+      for (let k = 0; k < 3; k++) {
+        const q = sb.x[i * 3 + k];
+        if (q < b[k]) b[k] = q;
+        if (q > b[k + 3]) b[k + 3] = q;
+      }
+    }
+    const centres = [...boxes.values()].map((b) => [(b[0] + b[3]) / 2, (b[2] + b[5]) / 2]);
+    let best = [0, 0], bestD = -1;
+    for (let k = 0; k < 96; k++) {
+      const r = k === 0 ? 0 : Math.min(R, size * (0.6 + 0.25 * Math.floor(k / 8)) + Math.random() * 0.3);
+      const a = Math.random() * Math.PI * 2, x = Math.cos(a) * r, z = Math.sin(a) * r;
+      let d = Infinity;
+      for (const [cx, cz] of centres) d = Math.min(d, Math.hypot(x - cx, z - cz));
+      if (d > size * 1.25) return [x, z, 0];
+      if (d > bestD) {
+        bestD = d;
+        best = [x, z];
+      }
+    }
+    // (no room on the floor: over the spot with the most, above whatever's under it)
+    const [x, z] = best, h = size * 0.55;
+    let top = 0;
+    for (const b of boxes.values()) if (b[0] < x + h && b[3] > x - h && b[2] < z + h && b[5] > z - h) top = Math.max(top, b[4]);
+    return [x, z, top + 0.04];
+  }
+
+  // The cubes saved with the room last time (the first one is built by now).
+  _restoreScene() {
+    let sc = null;
+    try {
+      sc = JSON.parse(localStorage.getItem('cube-sim-scene') || 'null');
+    } catch (e) {
+      sc = null;
+    }
+    if (!sc || !Array.isArray(sc.cubes) || sc.cubes.length < 2) return;
+    const sb = this.sb, keepSel = Math.min(Math.max(0, sc.sel | 0), sc.cubes.length - 1);
+    this._resolution(Math.min(MAX_CUBES, sc.cubes.length));
+    this._arena(Math.min(MAX_CUBES, sc.cubes.length));
+    // the selected one is the cube already built (slot 0), the rest around it
+    this.cubes = [{ slot: 0, style: this.style, tune: this.tune }];
+    this.stackOrder = [0];
+    for (const [j, c] of sc.cubes.entries()) {
+      if (j === keepSel || this.cubes.length >= MAX_CUBES || !c || !c.style || !TEXTURES[c.style.texture]) continue;
+      const slot = this.cubes.length;
+      const style = { ...DEFAULT_STYLE, ...c.style, edges: this.style.edges, layers: { ...DEFAULT_STYLE.layers, ...(c.style.layers || {}) } };
+      const tune = {};
+      for (const k of Object.keys(this.tune)) if (!SETTING_BY_KEY[k]?.mat) tune[k] = this.tune[k];
+      for (const k of Object.keys(c.tune || {})) if (SETTING_BY_KEY[k]?.mat && Number.isFinite(c.tune[k])) tune[k] = c.tune[k];
+      const [x, z, top] = this._clearSpot();
+      sb.addCube(slot, x, top, z, (Math.random() - 0.5) * 0.8);
+      sb.rebuild();
+      this.cubes.push({ slot, style, tune, name: c.name || '' });
+      this.stackOrder.push(slot);
+    }
+    this.ui?.cubesChanged?.();
+  }
+
   // ------------------------------------------------------------ whole cubes
   // A saved or shared cube (a CubeR code, see cubecode.js): its flavour,
   // material, glitter, every tuned slider, tearing and the look, onto the
@@ -1069,7 +1333,14 @@ export class App {
     const tune = { ...c.tune };
     for (const k of ['volume', 'impacts', 'wobble']) if (this.tune[k] !== undefined) tune[k] = this.tune[k];
     if (c.tear === false) tune.tear = false;
+    // (its world - gravity, size, the Cubicle - is everyone's)
+    for (const cb of this.cubes) {
+      if (cb === this.cube) continue;
+      for (const k of Object.keys(cb.tune)) if (!SETTING_BY_KEY[k]?.mat && !['volume', 'impacts', 'wobble'].includes(k)) delete cb.tune[k];
+      for (const k of Object.keys(tune)) if (!SETTING_BY_KEY[k]?.mat) cb.tune[k] = tune[k];
+    }
     this.tune = tune;
+    this.cube.tune = tune;
     if (c.theme && c.theme !== this.theme) {
       this.setTheme(c.theme);
       this.ui?.setTheme(c.theme);

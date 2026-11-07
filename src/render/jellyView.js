@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { biasExp } from '../styles.js';
+import { MAX_CUBES, REST_STEP } from '../sim/softbody.js';
 import {
   createBackMaterial,
   createJellyMaterial,
@@ -16,6 +17,9 @@ import {
 
 const FLOOR_SPAN = 6.4;
 // (how milky jelly of that opacity looks: see setStyle)
+// a row of the cube-look texture: 7 texels of looks, 10 + 10 of layers
+const CUBE_TEX_W = 27;
+
 const hazeMinOf = (o) => 0.92 * Math.min(1, Math.max(0, (Math.min(1, Math.max(0, o)) - 0.45) / 0.55)) ** 2;
 
 // One level of subdivision over an indexed triangle mesh: a midpoint per
@@ -255,6 +259,13 @@ export class JellyView {
     this.layerUniforms = createLayerUniforms();
     this.backMat = createBackMaterial();
     this.frontMat = createJellyMaterial(env, this.layerUniforms);
+    // each cube's look, a row each (see setCubeLook; the front shader reads it)
+    this.cubeData = new Float32Array(CUBE_TEX_W * MAX_CUBES * 4);
+    this.cubeTex = new THREE.DataTexture(this.cubeData, CUBE_TEX_W, MAX_CUBES, THREE.RGBAFormat, THREE.FloatType);
+    this.cubeTex.minFilter = this.cubeTex.magFilter = THREE.NearestFilter;
+    this.cubeTex.generateMipmaps = false;
+    this.cubeTex.needsUpdate = true;
+    this.frontMat.uniforms.uCubeTex.value = this.cubeTex;
     // (depth first, so the front shader - the heavy one - runs once a pixel:
     // a stepped, folded or many-sided piece seen low drew over itself 2-4x)
     this.depthMat = new THREE.ShaderMaterial({ vertexShader: this.frontMat.vertexShader, fragmentShader: 'void main() { gl_FragColor = vec4(0.0); }', colorWrite: false });
@@ -463,6 +474,38 @@ export class JellyView {
     C.uIor.value = Math.max(1.0001, m.ior);
   }
 
+  // One cube's look (its slot k: flavour, material m) into its row of the
+  // cube-look texture, as setStyle works it out for the whole jelly.
+  setCubeLook(k, flavor, m, size = 1) {
+    const ref = 0.55 / m.depth;
+    const colors = (flavor.layers || [flavor.hex]).map((h) => new THREE.Color(h));
+    const abs = colors.map((c) => absorptionFromColor(c, ref));
+    const scs = colors.map((c) => c.clone().multiplyScalar(1 / Math.max(c.r, c.g, c.b, 1e-3)));
+    const avgAbs = abs.reduce((a, b) => a.add(b), new THREE.Vector3()).multiplyScalar(1 / abs.length);
+    const avgSc = scs.reduce((a, b) => a.add(b), new THREE.Color(0, 0, 0)).multiplyScalar(1 / scs.length);
+    const sc = flavor.layers ? avgSc : scs[0];
+    const o = Math.min(1, Math.max(0, m.opacity));
+    const glowC = avgSc.clone().lerp(new THREE.Color(1, 1, 1), 0.55).multiplyScalar(0.9);
+    const D = this.cubeData, r = k * CUBE_TEX_W * 4;
+    const put = (x, a, b, c, d) => {
+      const i = r + x * 4;
+      D[i] = a; D[i + 1] = b; D[i + 2] = c; D[i + 3] = d;
+    };
+    put(0, avgAbs.x, avgAbs.y, avgAbs.z, 9 * o * o + (flavor.layers ? 1.6 * (1 - o) : 0));
+    put(1, sc.r, sc.g, sc.b, hazeMinOf(o));
+    put(2, m.glow, m.rough, m.ior, (0.018 * Math.max(0, m.ior - 1)) / 0.36);
+    put(3, m.sugar || 0, m.milk || 0, m.irid || 0, m.metal || 0);
+    put(4, m.opal || 0, flavor.layers ? flavor.layers.length : 0, -size / 2, size);
+    put(5, Math.max(1, Math.round(flavor.repeat || 1)), biasExp(flavor.bias), flavor.blur || 0, 0);
+    put(6, glowC.r, glowC.g, glowC.b, 0);
+    for (let j = 0; j < 10; j++) {
+      const a = abs[Math.min(j, abs.length - 1)], c = scs[Math.min(j, scs.length - 1)];
+      put(7 + j, a.x, a.y, a.z, 0);
+      put(17 + j, c.r, c.g, c.b, 0);
+    }
+    this.cubeTex.needsUpdate = true;
+  }
+
   _setWeldSeams(near) {
     const U = this.frontMat.uniforms;
     if (this._weldTex) for (const t of this._weldTex) t.dispose();
@@ -522,9 +565,11 @@ export class JellyView {
     const maxN = nL1 + L1.index.length; // (at most one more vertex per level-1 edge side)
     const rest = new Float32Array(maxN * 3);
     const restN = new Float32Array(maxN * 3);
+    // (each cube's rest shape in its own frame: the offset that keeps them
+    // apart in rest space taken off)
     for (let r = 0; r < nB; r++) {
       const i = rSim[r] * 3;
-      rest[r * 3] = sb.X[i]; rest[r * 3 + 1] = sb.X[i + 1]; rest[r * 3 + 2] = sb.X[i + 2];
+      rest[r * 3] = sb.X[i] - sb.vCube[rSim[r]] * REST_STEP; rest[r * 3 + 1] = sb.X[i + 1]; rest[r * 3 + 2] = sb.X[i + 2];
     }
     vertexNormals(rIndex, rest, restN, nB);
     const shape = { a: sb.p.size / 2 - sb.p.bevel, r: sb.p.bevel };
@@ -560,6 +605,11 @@ export class JellyView {
     this.aNrm = new THREE.BufferAttribute(this.nrm, 3).setUsage(THREE.DynamicDrawUsage);
     this.aData = new THREE.BufferAttribute(this.data, 4).setUsage(THREE.DynamicDrawUsage);
     this.aRest = new THREE.BufferAttribute(rest.slice(0, n * 3), 3);
+    // which cube each render vertex is of (the new points: their edge's)
+    const cube = new Float32Array(n);
+    for (let r = 0; r < nB; r++) cube[r] = sb.vCube[rSim[r]];
+    for (const [mids, first] of [[this.mids1, nB], [this.mids2, nL1]]) for (let m = 0, k = first; m < mids.length; m += 3, k++) cube[k] = cube[mids[m]];
+    this.aCube = new THREE.BufferAttribute(cube, 1);
     // distance from the just-healed seams (see Healer._fuse, weldFieldJob)
     const weld = new Float32Array(n).fill(99);
     if (sb.weld && sb.weld.topo === sb.topoVersion) {
@@ -584,6 +634,7 @@ export class JellyView {
       g.setAttribute('aData', this.aData);
       g.setAttribute('aRest', this.aRest);
       g.setAttribute('aWeld', this.aWeld);
+      g.setAttribute('aCube', this.aCube);
       g.setIndex(new THREE.BufferAttribute(idx, 1));
       return g;
     };

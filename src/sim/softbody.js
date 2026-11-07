@@ -33,6 +33,13 @@ const DEFAULTS = {
   contactGrip: 1, // friction between pieces, x the base 0.5 (Settings > Lab > Jelly on jelly)
 };
 
+// Several cubes of different stuff can share the body: every vertex and tet
+// knows its cube (vCube, tCube) and each cube has its own material (setCube).
+// Each cube's rest shape sits apart from the others' in rest space (REST_STEP
+// along x), so nothing that works in rest space mixes them up.
+export const MAX_CUBES = 8;
+export const REST_STEP = 10;
+
 function growArr(a, n, C) {
   const b = new C(n);
   if (a) b.set(a.length > n ? a.subarray(0, n) : a);
@@ -123,6 +130,16 @@ export class SoftBody {
     this.dampBoost = 1;
     this.dmgHeal = 0; // (s) left of torn ends firming up (tDmg decaying)
     this.calmT = 0; // (s) left of the jiggle damped hard (just torn: the halves settle, not flail)
+    // each cube's material (see setCube; cube 0 starts as p)
+    this.cMu = new Float64Array(MAX_CUBES);
+    this.cLam = new Float64Array(MAX_CUBES);
+    this.cDamp = new Float64Array(MAX_CUBES);
+    this.cFric = new Float64Array(MAX_CUBES);
+    this.cBounce = new Float64Array(MAX_CUBES);
+    this.cRigid = new Float64Array(MAX_CUBES);
+    this.cDens = new Float64Array(MAX_CUBES);
+    this.cAir = new Float64Array(MAX_CUBES);
+    for (let k = 0; k < MAX_CUBES; k++) this.setCube(k, this.p, true);
     this.heatActive = false;
     this._heatResidual = 0;
     this.weld = null; // set by the heal: distances to the healed seams
@@ -258,6 +275,7 @@ export class SoftBody {
     this.temp = growArr(this.temp, cap, Float32Array);
     this.glow = growArr(this.glow, cap, Float32Array);
     this.vPiece = growArr(this.vPiece, cap, Int32Array);
+    this.vCube = growArr(this.vCube, cap, Uint8Array);
     this.alive = growArr(this.alive, cap, Uint8Array);
     this.melt = growArr(this.melt, cap, Uint8Array); // (on a surface the torch melted)
     this.fpen = growArr(this.fpen, cap, Float32Array); // floor push-out this substep
@@ -270,6 +288,7 @@ export class SoftBody {
     this.B = growArr(this.B, cap * 9, Float64Array);
     this.vol0 = growArr(this.vol0, cap, Float64Array);
     this.tPiece = growArr(this.tPiece, cap, Int32Array);
+    this.tCube = growArr(this.tCube, cap, Uint8Array);
     this.tVS = growArr(this.tVS, cap, Float32Array);
     this.tMu = growArr(this.tMu, cap, Float32Array);
     this.tKs = growArr(this.tKs, cap, Float32Array);
@@ -285,9 +304,10 @@ export class SoftBody {
     if (n > this.tCap) this._allocT(Math.max(n, this.tCap * 2));
   }
 
-  addVertex(x, y, z, X, Y, Z, vx = 0, vy = 0, vz = 0, temp = 0) {
+  addVertex(x, y, z, X, Y, Z, vx = 0, vy = 0, vz = 0, temp = 0, cube = 0) {
     const i = this.nV++;
     this.ensureV(this.nV);
+    this.vCube[i] = cube;
     const o = i * 3;
     this.x[o] = x; this.x[o + 1] = y; this.x[o + 2] = z;
     this.px[o] = x; this.px[o + 1] = y; this.px[o + 2] = z;
@@ -323,11 +343,91 @@ export class SoftBody {
     this.rebuild();
   }
 
+  // Another cube (k: its slot), its bottom at oy, turned by yaw: added to
+  // what's there (rebuild() after). Its rest shape is offset k * REST_STEP.
+  addCube(k, ox = 0, oy = 0, oz = 0, yaw = 0) {
+    const mesh = buildCubeMesh(this.p.res, this.p.size, this.p.bevel);
+    this.hCell = mesh.h;
+    const base = this.nV, tBase = this.nT;
+    const c = Math.cos(yaw), s = Math.sin(yaw), half = this.p.size / 2, R = k * REST_STEP;
+    this.ensureV(base + mesh.nV);
+    for (let i = 0; i < mesh.nV; i++) {
+      const X = mesh.pos[i * 3], Y = mesh.pos[i * 3 + 1], Z = mesh.pos[i * 3 + 2];
+      this.addVertex(ox + c * X + s * Z, oy + Y + half, oz - s * X + c * Z, X + R, Y, Z, 0, 0, 0, 0, k);
+    }
+    this.nT = tBase + mesh.nT;
+    this.ensureT(this.nT);
+    for (let t = 0; t < mesh.nT * 4; t++) this.T[tBase * 4 + t] = mesh.tets[t] + base;
+    this.tVS.fill(1, tBase, this.nT);
+    this.tMu.fill(1, tBase, this.nT);
+    this._bpNV = 0;
+  }
+
+  // Take cube k out altogether (its vertices and tets; the rest closes up,
+  // keeping where it is and how it moves). rebuild() after.
+  removeCube(k) {
+    const nV = this.nV, nT = this.nT, map = new Int32Array(nV).fill(-1);
+    let n = 0;
+    const vArr3 = [this.x, this.px, this.v, this.X];
+    const vArr1 = [this.w, this.m, this.temp, this.glow, this.alive, this.melt, this.fpen, this.wpen, this.vCube];
+    for (let i = 0; i < nV; i++) {
+      if (this.vCube[i] === k) continue;
+      if (n !== i) {
+        for (const a of vArr3) { a[n * 3] = a[i * 3]; a[n * 3 + 1] = a[i * 3 + 1]; a[n * 3 + 2] = a[i * 3 + 2]; }
+        for (const a of vArr1) a[n] = a[i];
+      }
+      map[i] = n++;
+    }
+    let m = 0;
+    for (let t = 0; t < nT; t++) {
+      const a = map[this.T[t * 4]];
+      if (a < 0) continue;
+      this.T[m * 4] = a;
+      this.T[m * 4 + 1] = map[this.T[t * 4 + 1]];
+      this.T[m * 4 + 2] = map[this.T[t * 4 + 2]];
+      this.T[m * 4 + 3] = map[this.T[t * 4 + 3]];
+      this.tVS[m] = this.tVS[t];
+      this.tMu[m] = this.tMu[t];
+      m++;
+    }
+    this.nV = n;
+    this.nT = m;
+    this.embeds.length = 0;
+    this.grabs.length = 0;
+    this._bpNV = 0;
+  }
+
+  // Cube k's material: mu, lambdaRatio, damping, friction, bounce, rigidity,
+  // density, airDrag (any of them). (quiet: just the tables)
+  setCube(k, q, quiet = false) {
+    if (q.mu !== undefined) this.cMu[k] = q.mu;
+    if (q.lambdaRatio !== undefined) this.cLam[k] = q.lambdaRatio;
+    if (q.damping !== undefined) this.cDamp[k] = q.damping;
+    if (q.friction !== undefined) this.cFric[k] = q.friction;
+    if (q.bounce !== undefined) this.cBounce[k] = q.bounce;
+    if (q.rigidity !== undefined) this.cRigid[k] = q.rigidity;
+    if (q.airDrag !== undefined) this.cAir[k] = q.airDrag;
+    if (q.density !== undefined && q.density !== this.cDens[k]) {
+      this.cDens[k] = q.density;
+      if (!quiet && this.nT) {
+        this._computeMass();
+        for (const pc of this.pieces) {
+          let mm = 0;
+          for (const i of pc.verts) mm += this.m[i];
+          pc.mass = mm;
+        }
+      }
+    }
+    this._anyRigid = false;
+    for (let j = 0; j < MAX_CUBES; j++) if (this.cRigid[j] > 0) this._anyRigid = true;
+  }
+
   // Recompute everything derived from topology.
   // Change material density live (re-lumps vertex masses).
   setDensity(d) {
     if (d === this.p.density) return;
     this.p.density = d;
+    this.cDens[0] = d;
     this._computeMass();
     for (const pc of this.pieces) {
       let m = 0;
@@ -616,11 +716,11 @@ export class SoftBody {
   }
 
   _computeMass() {
-    const { m, w, T, vol0, tVS } = this;
-    const rho = this.p.density;
+    const { m, w, T, vol0, tVS, tCube, vCube, cDens } = this;
+    for (let t = 0; t < this.nT; t++) tCube[t] = vCube[T[t * 4]];
     m.fill(0, 0, this.nV);
     for (let t = 0; t < this.nT; t++) {
-      const q = (rho * vol0[t] * tVS[t]) / 4;
+      const q = (cDens[tCube[t]] * vol0[t] * tVS[t]) / 4;
       const o = t * 4;
       m[T[o]] += q; m[T[o + 1]] += q; m[T[o + 2]] += q; m[T[o + 3]] += q;
     }
@@ -658,7 +758,7 @@ export class SoftBody {
       const b2 = B[o + 3] * B[o + 3] + B[o + 4] * B[o + 4] + B[o + 5] * B[o + 5];
       const b3 = B[o + 6] * B[o + 6] + B[o + 7] * B[o + 7] + B[o + 8] * B[o + 8];
       const s0 = B[o] + B[o + 3] + B[o + 6], s1 = B[o + 1] + B[o + 4] + B[o + 7], s2 = B[o + 2] + B[o + 5] + B[o + 8];
-      const k = vol0[t] * Math.cbrt(tVS[t]) * rho * (w[T[q]] * (s0 * s0 + s1 * s1 + s2 * s2) + w[T[q + 1]] * b1 + w[T[q + 2]] * b2 + w[T[q + 3]] * b3);
+      const k = vol0[t] * Math.cbrt(tVS[t]) * cDens[tCube[t]] * (w[T[q]] * (s0 * s0 + s1 * s1 + s2 * s2) + w[T[q + 1]] * b1 + w[T[q + 2]] * b2 + w[T[q + 3]] * b3);
       tKs[t] = k;
     }
     const kRef = 4.5 / (this.hCell * this.hCell);
@@ -751,6 +851,7 @@ export class SoftBody {
       for (const t of pieceTets[k]) vol += this.vol0[t] * this.tVS[t];
       return asFloat({
         id: k,
+        cube: this.vCube[vs[0]], // (which cube it's of: its material)
         verts: Int32Array.from(vs),
         tets: Int32Array.from(pieceTets[k]),
         mass,
@@ -1164,7 +1265,7 @@ export class SoftBody {
       // the body, leaving it passed through itself)
       for (let n = 0; n < this.grabs.length; n++) this._solveGrab(this.grabs[n], h);
       this._solveTets(h);
-      if (this.p.rigidity > 0) this._solveRigidity(h);
+      if (this._anyRigid) this._solveRigidity(h);
       if (this.embeds.length) this._solveEmbeds(h);
       if (this.attract) this._solveAttract(h);
       if (this.pushers.length) this._solvePushers((s + 1) / nS);
@@ -1257,20 +1358,25 @@ export class SoftBody {
   }
 
   _solveTets(h) {
-    const { T, B, vol0, x, w, tMu, tVS, tKs, tDmg } = this;
-    const mu0 = this.p.mu;
-    const lam = mu0 * this.p.lambdaRatio;
-    // frozen tets stiffen, but only up to what these substeps can hold
-    // (beyond it jagged shards ring at the speed limit)
-    const sr = 1 / (h * 720), foam = Math.min(1, this.p.lambdaRatio / 6);
-    const muHi = Math.max(mu0, 850 * this.p.density * this.p.size * this.p.size * (0.35 + 0.65 * foam) * Math.min(1, sr * sr));
-    const boostHi = muHi / mu0;
+    const { T, B, vol0, x, w, tMu, tVS, tKs, tDmg, tCube } = this;
+    // (each cube its own stiffness) frozen tets stiffen, but only up to what
+    // these substeps can hold (beyond it jagged shards ring at the speed limit)
+    const sr = 1 / (h * 720);
+    const KM = this._kMu || (this._kMu = new Float64Array(MAX_CUBES)), KL = this._kLam || (this._kLam = new Float64Array(MAX_CUBES));
+    const KB = this._kBoost || (this._kBoost = new Float64Array(MAX_CUBES));
+    for (let k = 0; k < MAX_CUBES; k++) {
+      const m0 = this.cMu[k], foam = Math.min(1, this.cLam[k] / 6);
+      KM[k] = m0;
+      KL[k] = m0 * this.cLam[k];
+      KB[k] = Math.max(m0, 850 * this.cDens[k] * this.p.size * this.p.size * (0.35 + 0.65 * foam) * Math.min(1, sr * sr)) / m0;
+    }
     const ih2 = 1 / (h * h);
     const nT = this.nT;
     const aw = this._awake, tp = this.tPiece;
     for (let t = 0; t < nT; t++) {
       const V0 = vol0[t];
       if (V0 <= 0 || !aw[tp[t]]) continue;
+      const kc = tCube[t], mu0 = KM[kc], lam = KL[kc], boostHi = KB[kc];
       const t4 = t * 4;
       const a = T[t4], b = T[t4 + 1], c = T[t4 + 2], d = T[t4 + 3];
       const i0 = a * 3, i1 = b * 3, i2 = c * 3, i3 = d * 3;
@@ -1522,11 +1628,10 @@ export class SoftBody {
     const ih = 1 / h;
     const n = this.nV;
     const vmax = this.p.maxSpeed, vmax2 = vmax * vmax;
-    const mu = this.p.friction;
-    const aw = this._awake, vp = this.vPiece;
+    const aw = this._awake, vp = this.vPiece, vc = this.vCube, cf = this.cFric;
     for (let i = 0; i < n; i++) {
       if (w[i] === 0 || !aw[vp[i]]) continue;
-      const o = i * 3;
+      const o = i * 3, mu = cf[vc[i]];
       let vx = (x[o] - px[o]) * ih, vy = (x[o + 1] - px[o + 1]) * ih, vz = (x[o + 2] - px[o + 2]) * ih;
       // Coulomb friction: tangential speed drops by mu x the normal speed
       // the contact took away (sticks when that is enough to stop it)
@@ -1545,7 +1650,7 @@ export class SoftBody {
         const tx = vx - vn * nx, tz = vz - vn * nz;
         const tl = Math.sqrt(tx * tx + vy * vy + tz * tz);
         if (tl > 0) {
-          const k = Math.max(0, 1 - (0.47 * this.p.friction * wpen[i] * ih) / tl); // (the wall grips as the floor does: 0.4 at the default Grip)
+          const k = Math.max(0, 1 - (0.47 * mu * wpen[i] * ih) / tl); // (the wall grips as the floor does: 0.4 at the default Grip)
           vx = vn * nx + tx * k;
           vy *= k;
           vz = vn * nz + tz * k;
@@ -1563,10 +1668,11 @@ export class SoftBody {
   // Damp deviation from rigid motion per piece (keeps throws ballistic).
   _dampPieces(dt) {
     const { x, v, m } = this;
-    const kd = 1 - Math.exp(-this.p.damping * dt * (this.dampBoost || 1) * (this.calmT > 0 ? 10 : 1));
-    const air = Math.exp(-this.p.airDrag * dt);
+    const dk = dt * (this.dampBoost || 1) * (this.calmT > 0 ? 10 : 1);
     for (const pc of this.pieces) {
       const vs = pc.verts;
+      // (its cube's own damping and drag)
+      const kd = 1 - Math.exp(-this.cDamp[pc.cube] * dk), air = Math.exp(-this.cAir[pc.cube] * dt);
       let M = 0, cx = 0, cy = 0, cz = 0, vx = 0, vy = 0, vz = 0;
       let x0 = Infinity, y0 = Infinity, z0 = Infinity, x1 = -Infinity, y1 = -Infinity, z1 = -Infinity;
       for (let k = 0; k < vs.length; k++) {
@@ -1589,7 +1695,7 @@ export class SoftBody {
       // Bounciness: remember the impact speed while a piece squashes against
       // the floor/wall; for a short window after the squash, set its rebound
       // to exactly e x the impact speed (0 = splat, 0.95 = super ball).
-      const e = this.p.bounce;
+      const e = this.cBounce[pc.cube];
       if (e >= 0 && !pc.asleep) {
         if (y0 < 0.02 && vy < -1.2 && !pc.rebT) pc.impY = Math.min(pc.impY || 0, vy);
         if (pc.impY && !pc.rebT && vy > -0.25) pc.rebT = 0.22;
@@ -1914,8 +2020,9 @@ export class SoftBody {
     let anySelf = false;
     // (where it can fold onto itself: a flap on a hinge, or soft jelly -
     // firmer jelly doesn't fold far enough, even dragged by a corner)
-    const soft = this.p.mu < 110, quiet = this.time < this.selfQuietUntil;
+    const quiet = this.time < this.selfQuietUntil;
     for (let a = 0; a < NP; a++) {
+      const soft = this.cMu[P[a].cube] < 110;
       // (or anything with a fold in it to pop out - all its tets, as the
       // fold can reach past the layer at the surface)
       const folded = P[a].foldUntil > this.time;
@@ -2140,9 +2247,12 @@ export class SoftBody {
   // Vertices a hand holds aren't pulled back (else a stiff piece fought the
   // hand every substep) - nor ones with no mass (w = 0).
   _solveRigidity(h) {
-    const r = this.p.rigidity;
-    const amt = 1 - Math.exp(-h / (0.5 * Math.pow(10, -3 * r)));
-    if (!(amt > 1e-4)) return;
+    // (each cube its own: an amount a substep per cube)
+    const AMT = this._rgAmt || (this._rgAmt = new Float64Array(MAX_CUBES));
+    for (let k = 0; k < MAX_CUBES; k++) {
+      const r = this.cRigid[k];
+      AMT[k] = r > 0 ? 1 - Math.exp(-h / (0.5 * Math.pow(10, -3 * r))) : 0;
+    }
     const P = this.pieces, x = this.x, X = this.X, m = this.m, w = this.w, aw = this._awake;
     const A = this._rgA || (this._rgA = new Float64Array(9)), R = this._rgR || (this._rgR = new Float64Array(9));
     let held = null;
@@ -2152,8 +2262,8 @@ export class SoftBody {
       for (const g of this.grabs) for (let j = 0; j < g.n; j++) held[g.idx[j]] = 1;
     }
     for (let k = 0; k < P.length; k++) {
-      const pc = P[k];
-      if (!aw[k] || pc.untangle > 0) continue;
+      const pc = P[k], amt = AMT[pc.cube];
+      if (!aw[k] || pc.untangle > 0 || !(amt > 1e-4)) continue;
       const vs = pc.verts;
       let M = 0, Cx = 0, Cy = 0, Cz = 0, cx = 0, cy = 0, cz = 0;
       for (let n = 0; n < vs.length; n++) {
@@ -2581,13 +2691,13 @@ export class SoftBody {
     let hs = this._hoodStamp;
     // (face centres too only for watery jelly, whose folds slide edge over
     // face; a firm piece on a hinge is held well enough by its vertices)
-    const selfFaces = this.p.mu < 110;
+    const softC = this.cMu, PP = this.pieces;
     const gather = (qx0, qy0, qz0, qx1, qy1, qz1, own, px, py, pz, dpx, dpy, dpz, vi) => {
       const st = ++stamp;
       const c0 = nc;
       gRel = 0;
       gGrab = !!(GP && GP[own]);
-      const self = selfOK[own] > 0 && (vi >= 0 ? selfFlag[vi] === 1 : selfFaces && vi < -1 && (selfFlag[sTri[(-2 - vi) * 3]] | selfFlag[sTri[(-2 - vi) * 3 + 1]] | selfFlag[sTri[(-2 - vi) * 3 + 2]]) === 1);
+      const self = selfOK[own] > 0 && (vi >= 0 ? selfFlag[vi] === 1 : softC[PP[own].cube] < 110 && vi < -1 && (selfFlag[sTri[(-2 - vi) * 3]] | selfFlag[sTri[(-2 - vi) * 3 + 1]] | selfFlag[sTri[(-2 - vi) * 3 + 2]]) === 1);
       if (self) {
         hs++;
         if (vi >= 0) {

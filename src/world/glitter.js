@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { LAYER_GLSL } from '../render/jellyMaterials.js';
 import { roundBoxSDF } from '../sim/mesh.js';
+import { REST_STEP } from '../sim/softbody.js';
 
 const MAX = 9000;
 const MAXBB = 24;
@@ -49,11 +50,13 @@ export class Glitter {
     this.aM = ia(3);
     this.aSeed = ia(3);
     this.aInfo = ia(2);
+    this.aMode = ia(1); // (each flake its cube's glitter)
     g.setAttribute('aTet', this.aTet);
     g.setAttribute('aBary', this.aBary);
     g.setAttribute('aM', this.aM);
     g.setAttribute('aSeed', this.aSeed);
     g.setAttribute('aInfo', this.aInfo);
+    g.setAttribute('aMode', this.aMode);
     g.instanceCount = 0;
     this.geo = g;
     // cubic zirconia: each flake a tiny cube (the same flakes, a box to draw)
@@ -61,7 +64,7 @@ export class Glitter {
     const gc = new THREE.InstancedBufferGeometry();
     for (const k of ['position', 'normal', 'uv']) gc.setAttribute(k, box.getAttribute(k));
     gc.setIndex(box.getIndex());
-    for (const k of ['aTet', 'aBary', 'aM', 'aSeed', 'aInfo']) gc.setAttribute(k, g.getAttribute(k));
+    for (const k of ['aTet', 'aBary', 'aM', 'aSeed', 'aInfo', 'aMode']) gc.setAttribute(k, g.getAttribute(k));
     gc.instanceCount = 0;
     this.geoCube = gc;
 
@@ -113,6 +116,8 @@ export class Glitter {
         attribute vec3 aM;
         attribute vec3 aSeed;
         attribute vec2 aInfo;
+        attribute float aMode;
+        varying float vMode;
         varying vec3 vN;
         varying vec3 vV;
         varying vec2 vUv;
@@ -124,7 +129,14 @@ export class Glitter {
           return texelFetch(uPos, ivec2(i - (i / uPosW) * uPosW, i / uPosW), 0).xyz;
         }
         void main() {
-          if (aSeed.x <= 0.0) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); return; }
+          // (cubic flakes in the cube mesh, the rest in the flat one)
+          #ifdef CUBE
+          bool other = aMode < 3.5;
+          #else
+          bool other = aMode > 3.5;
+          #endif
+          if (aSeed.x <= 0.0 || other) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); return; }
+          vMode = aMode;
           vec3 x0 = P(aTet.x), x1 = P(aTet.y), x2 = P(aTet.z), x3 = P(aTet.w);
           vec3 c = x0 * aBary.x + x1 * aBary.y + x2 * aBary.z + x3 * aBary.w;
           vec3 e1 = x1 - x0, e2 = x2 - x0, e3 = x3 - x0;
@@ -180,8 +192,8 @@ export class Glitter {
         uniform vec3 uLight;
         uniform vec3 uLightColor;
         uniform samplerCube envMap;
-        uniform int uMode;
         uniform float uSparkle;
+        varying float vMode;
         uniform float uShine;
         varying vec3 vN;
         varying vec3 vV;
@@ -211,6 +223,7 @@ export class Glitter {
           vec3 env = textureLod(envMap, reflect(-V, n), 0.6).rgb;
           env = env * env * 0.8; // keep the bright softboxes, drop the grey studio
           vec3 col;
+          int uMode = int(vMode + 0.5);
           if (uMode == 1) col = vec3(1.0, 0.74, 0.32);
           else if (uMode == 2) col = mix(vec3(1.0), hue(fract(vHue + ndv * 1.8)), 0.85);
           else if (uMode == 3) col = vec3(1.0, 0.6, 0.56);
@@ -229,6 +242,13 @@ export class Glitter {
     this.mesh.renderOrder = 4;
     this.mesh.visible = false;
     app.fxScene.add(this.mesh);
+    // (cubic flakes too when some cubes are flat-glittered and some cubic)
+    this.meshCube = new THREE.Mesh(this.geoCube, this.matCube);
+    this.meshCube.frustumCulled = false;
+    this.meshCube.renderOrder = 4;
+    this.meshCube.visible = false;
+    app.fxScene.add(this.meshCube);
+    this.groups = [];
   }
 
   _allocPosTex(nV) {
@@ -248,11 +268,19 @@ export class Glitter {
     if (count !== undefined) this.count = Math.max(0, Math.min(MAX, Math.round(count)));
     if (size !== undefined) this.size = size;
     if (sparkle !== undefined) this.sparkle = sparkle;
-    this.uniforms.uMode.value = Math.max(0, GLITTER_MODES[this.mode] ?? 0);
     this.uniforms.uSparkle.value = this.sparkle;
-    const cube = this.mode === 'cubic';
-    this.mesh.geometry = cube ? this.geoCube : this.geo;
-    this.mesh.material = cube ? this.matCube : this.mat;
+    // each cube's own glitter (several cubes: those with any share the flakes)
+    const cubes = this.app.cubes || [{ slot: 0, style: { glitter: this.mode } }];
+    this.groups = cubes.filter((c) => c.style.glitter && c.style.glitter !== 'off').map((c) => ({ slot: c.slot, mode: GLITTER_MODES[c.style.glitter] ?? 0 }));
+    this.anyCubic = this.groups.some((g) => g.mode === 4);
+    this.anyFlat = this.groups.some((g) => g.mode !== 4);
+    this.mesh.geometry = this.anyFlat ? this.geo : this.geoCube;
+    this.mesh.material = this.anyFlat ? this.mat : this.matCube;
+    this.meshCube.visible = false;
+  }
+
+  _key() {
+    return `${this.count}|${this.app.sb.p.size}|${this.groups.map((g) => g.slot + ':' + g.mode).join(',')}`;
   }
 
   // (Re)anchor flakes at their rest positions in the current mesh.
@@ -262,11 +290,14 @@ export class Glitter {
     const m = Math.min(0.03, half * 0.06);
     const X = sb.X, T = sb.T;
     const out = { tet: -1, b0: 0, b1: 0, b2: 0, b3: 0 };
-    const n = this.count;
+    const n = this.count, G = this.groups.length ? this.groups : [{ slot: 0, mode: 0 }];
     for (let k = 0; k < n; k++) {
+      // (shared out among the glittery cubes, each in its own rest space)
+      const grp = G[k % G.length];
       const px = this.u[k * 3] * (half - m), py = this.u[k * 3 + 1] * (half - m), pz = this.u[k * 3 + 2] * (half - m);
+      this.aMode.array[k] = grp.mode;
       let r = null;
-      if (roundBoxSDF(px, py, pz, half, sb.p.bevel) < -m * 0.5) r = sb.locateRestFast(px, py, pz, out);
+      if (roundBoxSDF(px, py, pz, half, sb.p.bevel) < -m * 0.5) r = sb.locateRestFast(px + grp.slot * REST_STEP, py, pz, out);
       if (!r) {
         this.aSeed.array[k * 3] = 0;
         continue;
@@ -287,20 +318,21 @@ export class Glitter {
       this.aInfo.array[k * 2] = py;
       this.aInfo.array[k * 2 + 1] = sb.tPiece[t];
     }
-    for (const at of [this.aTet, this.aBary, this.aM, this.aSeed, this.aInfo]) at.needsUpdate = true;
+    for (const at of [this.aTet, this.aBary, this.aM, this.aSeed, this.aInfo, this.aMode]) at.needsUpdate = true;
     this.geo.instanceCount = n;
     this.geoCube.instanceCount = n;
     this.topo = sb.topoVersion;
-    this.anchoredFor = `${n}|${sb.p.size}`;
+    this.anchoredFor = this._key();
   }
 
   update(time) {
-    const on = this.mode !== 'off' && this.count > 0;
+    const on = this.groups.length > 0 && this.count > 0;
+    this.meshCube.visible = on && this.anyFlat && this.anyCubic;
     this.mesh.visible = on;
     if (!on) return;
     const app = this.app;
     const sb = app.sb;
-    if (sb.topoVersion !== this.topo || this.anchoredFor !== `${this.count}|${sb.p.size}`) this._anchor();
+    if (sb.topoVersion !== this.topo || this.anchoredFor !== this._key()) this._anchor();
     // simulated vertex positions -> texture
     this._allocPosTex(sb.nV);
     const P = this.posData, x = sb.x;

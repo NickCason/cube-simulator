@@ -137,6 +137,7 @@ export class Cubby {
       </div>
       <div class="card-menu" hidden role="menu">
         <button data-act="update" role="menuitem">${ICON.update}<span>Save changes</span></button>
+        <button data-act="dropin" role="menuitem">${ICON.plus}<span>Drop in too</span></button>
         <button data-act="share" role="menuitem">${ICON.qr}<span>Share as CubeR code</span></button>
         <button data-act="rename" role="menuitem">${ICON.rename}<span>Rename</span></button>
         <button data-act="dice" role="menuitem" class="danger">${ICON.die}<span>Dice it</span></button>
@@ -240,7 +241,8 @@ export class Cubby {
       this.closeMenu();
       if (!item) return;
       app.audio.ui();
-      if (b.dataset.act === 'update') this.update(item);
+      if (b.dataset.act === 'dropin') this.dropIn(item);
+      else if (b.dataset.act === 'update') this.update(item);
       else if (b.dataset.act === 'share') this.share(item);
       else if (b.dataset.act === 'rename') this.rename(item);
       else if (b.dataset.act === 'dice') this.remove(item);
@@ -419,8 +421,18 @@ export class Cubby {
     const n = this.items.length;
     this.countEl.textContent = n ? `${n} ${n === 1 ? 'cube' : 'cubes'}` : '';
     this.emptyEl.hidden = n > 0;
-    this.gridEl.hidden = n === 0;
+    this.gridEl.hidden = false;
     this.gridEl.textContent = '';
+    // (first: another cube into the room, a plain jelly in a random flavour)
+    const add = document.createElement('div');
+    add.className = 'cube-card add-card';
+    add.innerHTML = `<button class="card-main"><span class="card-thumb">${ICON.plus}</span><span class="card-name">Jelly cube</span><span class="card-sub">Drop one in</span></button>`;
+    add.querySelector('.card-main').setAttribute('aria-label', 'Drop another jelly cube into the room');
+    add.querySelector('.card-main').addEventListener('click', () => {
+      this.app.audio.ui();
+      if (this.app.addCube() >= 0 && window.innerWidth <= 720) this.close();
+    });
+    this.gridEl.appendChild(add);
     for (const it of this.items) this.gridEl.appendChild(this._card(it));
     this.randomBtn.hidden = this.items.filter((it) => it.id !== this.activeId).length < 2;
   }
@@ -544,6 +556,7 @@ export class Cubby {
     const back = this._state();
     it.rec.picked = (it.rec.picked || 0) + 1;
     this._setOn(it.id, {});
+    this.app.cube.name = c.name || ''; // (its name in the stack)
     this._store();
     this.render();
     this._swapTo(c, kicker, it.rec, [{ label: 'Undo', run: () => this._restore(back) }], it);
@@ -565,6 +578,18 @@ export class Cubby {
         }, 1300);
       }
     });
+  }
+
+  // another cube into the room: this one, dropped in beside the others
+  dropIn(it) {
+    const c = decodeCube(it.code);
+    if (!c) return;
+    const slot = this.app.addCube(c);
+    if (slot < 0) return;
+    const cb = this.app.cubes.find((x) => x.slot === slot);
+    if (cb) cb.name = c.name || '';
+    this.app.ui.cubesChanged();
+    if (window.innerWidth <= 720) this.close();
   }
 
   // the cube on show, as it is now, into its saved slot (record kept)

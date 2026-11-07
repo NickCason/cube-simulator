@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { REST_STEP } from '../sim/softbody.js';
 import { TAG_FRESH } from '../sim/softbody.js';
 import { MAX_CAVITIES } from '../render/jellyMaterials.js';
 import { closestOnTriangle } from '../sim/geom.js';
@@ -172,9 +173,11 @@ export class Bubbles {
     const sb = this.app.sb;
     const half = sb.p.size / 2;
     const m = Math.min(0.07, half * 0.15);
+    // (several cubes: shared out among them - each sits in its own rest space)
+    const slots = this.app.cubes ? this.app.cubes.map((c) => c.slot) : [0];
     for (let k = 0; k < this.count; k++) {
       const b = this.items[k];
-      const X = b.u[0] * (half - m), Y = b.u[1] * (half - m), Z = b.u[2] * (half - m);
+      const X = b.u[0] * (half - m) + slots[k % slots.length] * REST_STEP, Y = b.u[1] * (half - m), Z = b.u[2] * (half - m);
       const r = sb.locateRest(X, Y, Z);
       if (r) {
         b.a.tet = r.tet;

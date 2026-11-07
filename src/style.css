@@ -2731,3 +2731,229 @@ html.dark .card-healed {
     grid-template-columns: repeat(3, 1fr);
   }
 }
+
+/* ---------------------------------------------------------------- the stack (several cubes) */
+.dock .stack-btn {
+  width: 42px;
+  height: 42px;
+  border-radius: 13px;
+  display: grid;
+  place-items: center;
+  animation: gummy-pop 0.5s ease both;
+}
+
+.dock .stack-btn[hidden] {
+  display: none;
+}
+
+.stack-btn svg {
+  width: 22px;
+  height: 22px;
+}
+
+.stack-btn:hover,
+.stack-btn.open {
+  background: rgba(0, 0, 0, 0.055);
+}
+
+.palette.stackp {
+  width: 330px;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  max-height: calc(100vh - 160px);
+}
+
+.stack-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.stack-head b {
+  font-size: 17px;
+  font-weight: 780;
+  letter-spacing: -0.015em;
+  margin-right: 8px;
+}
+
+.stack-form {
+  font-size: 12px;
+  font-weight: 560;
+  color: rgba(28, 28, 31, 0.55);
+}
+
+.palette .stack-add {
+  height: 30px;
+  padding: 0 12px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.06);
+  font-size: 12.5px;
+  font-weight: 650;
+  white-space: nowrap;
+}
+
+.stack-hint {
+  font-size: 11.5px;
+  color: rgba(28, 28, 31, 0.5);
+}
+
+.stack-list {
+  display: grid;
+  gap: 6px;
+  overflow-y: auto;
+  min-height: 0;
+  padding: 2px;
+}
+
+.stack-row {
+  position: relative;
+  display: grid;
+  grid-template-columns: 16px 64px 1fr 28px;
+  align-items: center;
+  gap: 9px;
+  height: 46px;
+  padding: 0 6px 0 4px;
+  border-radius: 12px;
+  background: rgba(0, 0, 0, 0.035);
+  cursor: grab;
+  touch-action: none;
+  -webkit-user-select: none;
+  user-select: none;
+  transition: transform 0.18s ease, box-shadow 0.18s ease, background 0.15s;
+}
+
+.stack-row.on {
+  background: #fff;
+  box-shadow: 0 0 0 2px var(--jelly), 0 4px 12px rgba(0, 0, 0, 0.08);
+}
+
+.stack-row.lift {
+  z-index: 2;
+  transition: box-shadow 0.18s ease;
+  box-shadow: 0 10px 26px rgba(40, 30, 20, 0.28);
+  cursor: grabbing;
+}
+
+.stack-row .grip {
+  color: rgba(28, 28, 31, 0.3);
+  font-size: 13px;
+  letter-spacing: -2px;
+  text-align: center;
+}
+
+/* each cube a bar, its colours as a little slab of jelly */
+.stack-row .bar {
+  height: 32px;
+  border-radius: 8px;
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.08), inset 0 6px 8px rgba(255, 255, 255, 0.35);
+}
+
+.stack-row .lab {
+  display: grid;
+  min-width: 0;
+}
+
+.stack-row .lab b {
+  font-size: 13px;
+  font-weight: 650;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.stack-row .lab i {
+  font-size: 11px;
+  font-style: normal;
+  color: rgba(28, 28, 31, 0.5);
+}
+
+.palette .stack-row .out {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  font-size: 18px;
+  line-height: 1;
+  color: rgba(28, 28, 31, 0.5);
+}
+
+.palette .stack-row .out:hover {
+  background: rgba(0, 0, 0, 0.06);
+  color: #d1242f;
+}
+
+.palette .stack-go {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  height: 42px;
+  border-radius: 13px;
+  background: var(--ink);
+  color: #fff;
+  font-size: 14px;
+  font-weight: 700;
+  box-shadow: 0 4px 14px color-mix(in srgb, var(--jelly) 40%, transparent);
+}
+
+.stack-go svg {
+  width: 20px;
+  height: 20px;
+}
+
+/* the Cubby's first card: another cube into the room */
+.cube-card.add-card .card-thumb {
+  background: transparent;
+  box-shadow: inset 0 0 0 2px rgba(0, 0, 0, 0.12);
+  border: 0;
+  outline: 2px dashed rgba(0, 0, 0, 0.18);
+  outline-offset: -8px;
+}
+
+.cube-card.add-card .card-thumb svg {
+  width: 34%;
+  height: 34%;
+  color: rgba(28, 28, 31, 0.55);
+}
+
+@media (max-width: 720px) {
+  .palette.stackp {
+    width: calc(100vw - 24px);
+    max-height: 60vh;
+  }
+  .dock .stack-btn {
+    width: 38px;
+  }
+}
+
+html.dark .stack-form,
+html.dark .stack-hint,
+html.dark .stack-row .lab i {
+  color: rgba(241, 239, 244, 0.55);
+}
+
+html.dark .stack-row {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+html.dark .stack-row.on {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+html.dark .palette .stack-add {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+html.dark .palette .stack-go {
+  background: #f1eff4;
+  color: #141318;
+}
+
+html.dark .cube-card.add-card .card-thumb {
+  outline-color: rgba(255, 255, 255, 0.22);
+}
+
+html.dark .cube-card.add-card .card-thumb svg {
+  color: rgba(241, 239, 244, 0.6);
+}

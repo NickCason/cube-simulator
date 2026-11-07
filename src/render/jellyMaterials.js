@@ -140,6 +140,8 @@ const VERT = /* glsl */ `
   attribute vec3 aRest;
   attribute vec4 aData;
   attribute float aWeld;
+  attribute float aCube;
+  varying float vCube;
   varying vec3 vWorldPos;
   varying vec3 vNormal;
   varying vec3 vViewPos;
@@ -148,6 +150,7 @@ const VERT = /* glsl */ `
   varying float vWeld;
   void main() {
     vWeld = aWeld;
+    vCube = aCube;
     vec4 wp = modelMatrix * vec4(position, 1.0);
     vWorldPos = wp.xyz;
     vNormal = mat3(modelMatrix) * normal;
@@ -188,6 +191,7 @@ export function createJellyMaterial(env, layerUniforms) {
       uSugar: { value: 0 },
       uMilk: { value: 0 },
       uIrid: { value: 0 },
+      uCubeTex: { value: emptyFloatTexture() },
       uMetal: { value: 0 },
       uOpal: { value: 0 },
       uGlow: { value: 0.5 },
@@ -294,6 +298,44 @@ export function createJellyMaterial(env, layerUniforms) {
       ${NOISE}
       ${OCT}
       ${LAYER_GLSL}
+
+      // Each cube's own look (several cubes: see JellyView.setCubeLook), a
+      // row of uCubeTex per cube: its colour, haze, glow, gloss, refraction,
+      // sugar, milk, finishes and its layers.
+      uniform highp sampler2D uCubeTex;
+      varying float vCube;
+      int gK = 0;
+      int cLayers = 0;
+      float cLY0 = 0.0, cLSpan = 1.0, cLRep = 1.0, cLExp = 1.0, cLBlur = 0.0;
+      vec4 cubeT(int x) { return texelFetch(uCubeTex, ivec2(x, gK), 0); }
+      void cLayerPair(float y, out int a, out int b, out float s) {
+        float n = float(cLayers), m = n * cLRep;
+        float h = pow(max(clamp((y - cLY0) / cLSpan, 0.0, 1.0), 1e-6), cLExp);
+        float f = h * m - 0.5;
+        float i0 = floor(f);
+        float w = max(cLBlur * 0.5, 0.012);
+        s = smoothstep(0.5 - w, 0.5 + w, f - i0);
+        a = int(mod(clamp(i0, 0.0, m - 1.0), n));
+        b = int(mod(clamp(i0 + 1.0, 0.0, m - 1.0), n));
+      }
+      vec3 cSigmaAt(float y) {
+        int a, b; float s;
+        cLayerPair(y, a, b, s);
+        return mix(cubeT(7 + a).rgb, cubeT(7 + b).rgb, s);
+      }
+      vec3 cLayerSigma(float ya, float yb, vec3 base) {
+        if (cLayers == 0) return base;
+        if (abs(yb - ya) < 1e-3) return cSigmaAt(ya);
+        vec3 acc = vec3(0.0);
+        for (int k = 0; k < 16; k++) acc += cSigmaAt(mix(ya, yb, (float(k) + 0.5) / 16.0));
+        return acc * 0.0625;
+      }
+      vec3 cLayerScatter(float y, vec3 base) {
+        if (cLayers == 0) return base;
+        int a, b; float s;
+        cLayerPair(y, a, b, s);
+        return mix(cubeT(17 + a).rgb, cubeT(17 + b).rgb, s);
+      }
 
       float sq(float x) { return x * x; }
       // a pure spectral colour, hue 0..1
@@ -415,6 +457,14 @@ export function createJellyMaterial(env, layerUniforms) {
       }
 
       void main() {
+        // (this cube's look)
+        gK = int(vCube + 0.5);
+        vec4 cq0 = cubeT(0), cq1 = cubeT(1), cq2 = cubeT(2), cq3 = cubeT(3), cq4 = cubeT(4), cq5 = cubeT(5), cq6 = cubeT(6);
+        vec3 cAbsorb = cq0.rgb, cScatterColor = cq1.rgb, cGlowColor = cq6.rgb;
+        float cScatter = cq0.a, cHazeMin = cq1.a, cGlow = cq2.x, cRough = cq2.y, cIor = cq2.z, cDisp = cq2.w;
+        float cSugar = cq3.x, cMilk = cq3.y, cIrid = cq3.z, cMetal = cq3.w, cOpal = cq4.x;
+        cLayers = int(cq4.y + 0.5);
+        cLY0 = cq4.z; cLSpan = cq4.w; cLRep = cq5.x; cLExp = cq5.y; cLBlur = cq5.z;
         float temp = vData.x;
         float glow = vData.y;
         float fresh = vData.z;
@@ -459,7 +509,7 @@ export function createJellyMaterial(env, layerUniforms) {
           N = normalize(N + (g - N * dot(g, N)) * 0.018);
         }
         // sugar coating (sour gummies): only on the moulded outside
-        float coat = uSugar * (1.0 - fresh) * (1.0 - cavity);
+        float coat = cSugar * (1.0 - fresh) * (1.0 - cavity);
         // surface micro-structure: faint knife texture on cut faces, ice crystals when frozen
         if (fresh > 0.5 || frost > 0.01) {
           vec3 q = vRest * 38.0;
@@ -481,7 +531,7 @@ export function createJellyMaterial(env, layerUniforms) {
         // grey - which next to red looks green. So no colour split there, a
         // little more jelly in the way, and the room's reflection held back.
         float rim = smoothstep(0.45, 0.98, 1.0 - NdV);
-        float disp = uDispersion * (1.0 - rim);
+        float disp = cDisp * (1.0 - rim);
 
         vec2 uv = gl_FragCoord.xy / resolution;
         vec4 back = texture(tBack, uv);
@@ -490,7 +540,7 @@ export function createJellyMaterial(env, layerUniforms) {
         vec3 Nb = back.r > 0.0 ? normalize((vec4(octDecode(back.gb), 0.0) * viewMatrix).xyz) : -N;
         float exitY = back.r > 0.0 ? back.a : vRest.y;
 
-        float rough = clamp(uRoughness + fresh * 0.02 + frost * 0.5 - melt * 0.02 + coat * 0.18, 0.015, 1.0);
+        float rough = clamp(cRough + fresh * 0.02 + frost * 0.5 - melt * 0.02 + coat * 0.18, 0.015, 1.0);
         // (specular anti-aliasing: where the surface turns faster than a
         // pixel can show - bevels and corners, on a small or low-resolution
         // screen - its reflections blur as if it were rougher, instead of the
@@ -501,34 +551,34 @@ export function createJellyMaterial(env, layerUniforms) {
         float lod = clamp(rough * 9.0 + frost * 2.5 + thick * 1.6, 0.0, uSceneLodMax);
 
         vec3 trans;
-        trans.r = sampleThrough(Pw, V, N, Nb, thick, uIor - disp, lod, rough, 0).r;
-        trans.g = sampleThrough(Pw, V, N, Nb, thick, uIor, lod, rough, 1).g;
-        trans.b = sampleThrough(Pw, V, N, Nb, thick, uIor + disp, lod, rough, 2).b;
+        trans.r = sampleThrough(Pw, V, N, Nb, thick, cIor - disp, lod, rough, 0).r;
+        trans.g = sampleThrough(Pw, V, N, Nb, thick, cIor, lod, rough, 1).g;
+        trans.b = sampleThrough(Pw, V, N, Nb, thick, cIor + disp, lod, rough, 2).b;
 
         float pathLen = thick + 0.2 * rim * rim;
         // layered: lean toward the layer you look into, so bands stay crisp
-        vec3 sigma = uLayers > 0 ? mix(layerSigma(Rp.y, Rp.y, uAbsorb), layerSigma(Rp.y, exitY, uAbsorb), 0.22) : uAbsorb;
+        vec3 sigma = cLayers > 0 ? mix(cLayerSigma(Rp.y, Rp.y, cAbsorb), cLayerSigma(Rp.y, exitY, cAbsorb), 0.22) : cAbsorb;
         vec3 Tr = exp(-sigma * pathLen * (1.0 + melt * 0.35));
-        float haze = 1.0 - exp(-(uScatter + uMilk * 7.0 + frost * 2.5) * pathLen);
-        haze = max(haze, max(uMilk * 0.72, uHazeMin));
+        float haze = 1.0 - exp(-(cScatter + cMilk * 7.0 + frost * 2.5) * pathLen);
+        haze = max(haze, max(cMilk * 0.72, cHazeMin));
 
         vec3 L = normalize(uLightDir);
         float NdL = dot(N, L);
         float wrap = max((NdL + 0.7) / 1.7, 0.0);
         vec3 irr = envLookup(N, 1.0);
         float backlit = pow(clamp(dot(V, -L), 0.0, 1.0), 3.0);
-        vec3 baseSc = uLayers > 0 ? mix(layerScatter(Rp.y, uScatterColor), layerScatter(exitY, uScatterColor), 0.25) : uScatterColor;
+        vec3 baseSc = cLayers > 0 ? mix(cLayerScatter(Rp.y, cScatterColor), cLayerScatter(exitY, cScatterColor), 0.25) : cScatterColor;
         // creamy jelly: pastel, milky body colour
-        baseSc = mix(baseSc, mix(baseSc, vec3(1.0), 0.45) * 1.05, uMilk);
+        baseSc = mix(baseSc, mix(baseSc, vec3(1.0), 0.45) * 1.05, cMilk);
         vec3 sc = mix(baseSc, vec3(0.92, 0.96, 1.0), frost * 0.85);
         // light that scattered inside the body (thin regions glow more brightly)
         // translucency: how much light glows through (and how deep it reaches)
-        vec3 scatterLight = sc * (irr * 0.55 + uLightColor * (wrap * 0.22 + backlit * (0.25 + 0.5 * uGlow)))
-          * (0.2 + 1.6 * uGlow) * (0.55 + 0.45 * exp(-pathLen * mix(3.0, 0.45, uGlow)));
+        vec3 scatterLight = sc * (irr * 0.55 + uLightColor * (wrap * 0.22 + backlit * (0.25 + 0.5 * cGlow)))
+          * (0.2 + 1.6 * cGlow) * (0.55 + 0.45 * exp(-pathLen * mix(3.0, 0.45, cGlow)));
 
         vec3 body = trans * Tr * (1.0 - haze) + scatterLight * haze;
 
-        float F0 = pow((uIor - 1.0) / (uIor + 1.0), 2.0);
+        float F0 = pow((cIor - 1.0) / (cIor + 1.0), 2.0);
         float F = min(F0 + (1.0 - F0) * pow(clamp(1.0 - NdV, 0.0, 1.0), 5.0), 1.0 - 0.5 * rim);
         vec3 Rv = reflect(-V, N);
         vec3 refl = envLookup(Rv, rough);
@@ -555,7 +605,7 @@ export function createJellyMaterial(env, layerUniforms) {
         // colours swirl. The film reflects more than bare jelly, all over the
         // face, and the light through it picks up its colours too.
         vec3 iriSpec = vec3(1.0), iriGlow = vec3(1.0);
-        if (uIrid > 0.0) {
+        if (cIrid > 0.0) {
           // (the colour mostly by the angle - each face its own, the bevels
           // running through the rainbow - the film's thickness wandering a
           // little; on milky stuff a paler, pearly sheen)
@@ -565,23 +615,23 @@ export function createJellyMaterial(env, layerUniforms) {
           // bands sweep across it as it turns)
           vec3 Rf = reflect(-V, N);
           float film = 0.3 * vnoise(Rp * 1.1) + 0.06 * vnoise(Rp * 3.3 + 3.0) + 0.05 * (N.x - N.z)
-            + uMetal * (0.3 * vnoise(Rp * 2.6 + 9.0) + 0.6 * (Rf.x * 0.7 + Rf.y * 0.5 + Rf.z * 0.3));
+            + cMetal * (0.3 * vnoise(Rp * 2.6 + 9.0) + 0.6 * (Rf.x * 0.7 + Rf.y * 0.5 + Rf.z * 0.3));
           float graze = 1.0 - NdV;
           vec3 iri = filmColor(film - 0.08 + 0.85 * graze);
-          iri = mix(vec3(dot(iri, vec3(0.3333))), iri, 1.0 - 0.55 * uMilk);
-          F = mix(F, max(F, 0.12 + 0.7 * sq(1.0 - NdV)), uIrid);
-          refl *= mix(vec3(1.0), iri * 2.0, uIrid);
-          iriSpec = mix(vec3(1.0), mix(vec3(1.0), iri, 0.7) * 1.3, uIrid);
+          iri = mix(vec3(dot(iri, vec3(0.3333))), iri, 1.0 - 0.55 * cMilk);
+          F = mix(F, max(F, 0.12 + 0.7 * sq(1.0 - NdV)), cIrid);
+          refl *= mix(vec3(1.0), iri * 2.0, cIrid);
+          iriSpec = mix(vec3(1.0), mix(vec3(1.0), iri, 0.7) * 1.3, cIrid);
           spec *= iriSpec;
           vec3 iri2 = filmColor(film - 0.07 + 0.62 * graze);
-          iri2 = mix(vec3(dot(iri2, vec3(0.3333))), iri2, 1.0 - 0.6 * uMilk);
+          iri2 = mix(vec3(dot(iri2, vec3(0.3333))), iri2, 1.0 - 0.6 * cMilk);
           // (deeper through the body than on the skin: the light crosses it)
           // (deeper still where more of it is crossed)
           // (a tint has to take its other colours away, like tinted glass, to
           // stay vivid: a pale one only went pastel under the tone mapping)
           vec3 deep2 = pow(iri2, vec3(3.0)) * 1.15 * mix(1.0, exp(-pathLen * 0.45), 0.7);
-          iriGlow = mix(vec3(1.0), pow(iri2, vec3(1.6)) * 1.5, uIrid * 0.85);
-          body = mix(body, body * mix(vec3(1.0), deep2, 0.95) + iri2 * irr * 0.06, uIrid * (1.0 - 0.6 * uMilk));
+          iriGlow = mix(vec3(1.0), pow(iri2, vec3(1.6)) * 1.5, cIrid * 0.85);
+          body = mix(body, body * mix(vec3(1.0), deep2, 0.95) + iri2 * irr * 0.06, cIrid * (1.0 - 0.6 * cMilk));
         }
 
         vec3 col = body * (1.0 - F) + refl * F + spec;
@@ -589,7 +639,7 @@ export function createJellyMaterial(env, layerUniforms) {
         // Metal: a mirror tinted by its own colour (cherry: red chrome; lemon:
         // gold), no light through it, its edges going white (Schlick, with
         // the colour as F0) - iridescent too, for holographic foil
-        if (uMetal > 0.0) {
+        if (cMetal > 0.0) {
           vec3 F0m = mix(baseSc * 0.92, vec3(0.94), 0.14);
           vec3 Fm = F0m + (vec3(1.0) - F0m) * pow(clamp(1.0 - NdV, 0.0, 1.0), 5.0);
           vec3 FmH = F0m + (vec3(1.0) - F0m) * pow(clamp(1.0 - dot(H, V), 0.0, 1.0), 5.0);
@@ -598,19 +648,19 @@ export function createJellyMaterial(env, layerUniforms) {
           // darker room, the floor and the horizon below - a mirror in an
           // evenly lit room just looks white)
           float lumR = dot(refl, vec3(0.2126, 0.7152, 0.0722));
-          vec3 reflC = mix(refl, refl * (0.2 + 1.4 * smoothstep(0.35, 1.6, lumR)) * (0.45 + 0.55 * smoothstep(-0.06, 0.3, Rv.y)), 1.0 - 0.75 * uIrid);
+          vec3 reflC = mix(refl, refl * (0.2 + 1.4 * smoothstep(0.35, 1.6, lumR)) * (0.45 + 0.55 * smoothstep(-0.06, 0.3, Rv.y)), 1.0 - 0.75 * cIrid);
           vec3 colM = reflC * Fm * 1.1 + specM + irr * baseSc * 0.05 * rough;
-          col = mix(col, colM, uMetal);
+          col = mix(col, colM, cMetal);
         }
 
         // Opal: in its milky body, little patches that flash pure spectral
         // colour as you move - each a tiny grating turned its own way
-        if (uOpal > 0.0) {
+        if (cOpal > 0.0) {
           // (a mosaic of patches at two sizes, a little way inside, each lit
           // up by how square to you it's turned)
           // (small, saturated flecks - opal's pinfire - each winking on only
           // while it's turned square to you, so they come and go as it turns)
-          vec3 qo = Rp * 6.0 + refract(-V, N, 1.0 / uIor) * min(thick, 0.5) * 2.0;
+          vec3 qo = Rp * 6.0 + refract(-V, N, 1.0 / cIor) * min(thick, 0.5) * 2.0;
           qo += (vec3(vnoise(qo * 0.8), vnoise(qo * 0.8 + 5.0), vnoise(qo * 0.8 + 9.0)) - 0.5) * 0.9; // (ragged, not round)
           vec3 fire = vec3(0.0);
           for (int s = 0; s < 2; s++) {
@@ -620,7 +670,7 @@ export function createJellyMaterial(env, layerUniforms) {
             float on = smoothstep(0.72, 0.98, face) * (1.0 - smoothstep(0.32, 0.5, wo.x));
             fire += spectrum(fract(wo.y * 5.3 + face * 1.3)) * on * (s == 0 ? 1.0 : 0.7);
           }
-          col += fire * (irr * 0.8 + uLightColor * (0.18 + 0.3 * nl) + uGlowColor * uEmit * 1.6) * uOpal * (1.0 - F) * 1.5;
+          col += fire * (irr * 0.8 + uLightColor * (0.18 + 0.3 * nl) + cGlowColor * uEmit * 1.6) * cOpal * (1.0 - F) * 1.5;
         }
 
         // Glow mode: it gives off its own light, from all of its body -
@@ -633,9 +683,9 @@ export function createJellyMaterial(env, layerUniforms) {
           // from the layers further in is mostly absorbed on the way out
           // (mixing in theirs turns a rainbow's middle to white)
           vec3 scE = sc;
-          if (uLayers > 0) {
-            scE = layerScatter(mix(Rp.y, exitY, 0.12), uScatterColor);
-            scE = mix(scE, mix(scE, vec3(1.0), 0.45) * 1.05, uMilk);
+          if (cLayers > 0) {
+            scE = cLayerScatter(mix(Rp.y, exitY, 0.12), cScatterColor);
+            scE = mix(scE, mix(scE, vec3(1.0), 0.45) * 1.05, cMilk);
             scE = mix(scE, vec3(0.92, 0.96, 1.0), frost * 0.85);
           }
           // (light from deeper in has crossed more of it: a richer colour -
@@ -644,7 +694,7 @@ export function createJellyMaterial(env, layerUniforms) {
           vec3 rich = max(mix(vec3(scL), scE, 1.0 + 0.25 * deep), 0.0);
           // slow currents of brighter light drifting about inside it, and a
           // slow breath
-          vec3 q = vRest + refract(-V, N, 1.0 / uIor) * thick * 0.5;
+          vec3 q = vRest + refract(-V, N, 1.0 / cIor) * thick * 0.5;
           float cur = vnoise(q * 2.3 + vec3(0.0, uTime * 0.16, uTime * 0.07)) * 0.65
             + vnoise(q * 5.1 - vec3(uTime * 0.11, 0.0, uTime * 0.13)) * 0.35;
           float lvl = (0.78 + 0.5 * cur) * (0.95 + 0.05 * sin(uTime * 1.3));
@@ -660,7 +710,7 @@ export function createJellyMaterial(env, layerUniforms) {
           // (a rainbow film colours its glow; metal barely glows - it's a
           // mirror in the dark, lit at its edges; opal's flecks stay seen)
           em *= iriGlow;
-          emLit = em * uEmit * (1.0 - 0.7 * uMetal) * (1.0 - 0.35 * uOpal);
+          emLit = em * uEmit * (1.0 - 0.7 * cMetal) * (1.0 - 0.35 * cOpal);
           col += emLit * (1.0 - 0.85 * F);
         }
 
@@ -705,7 +755,7 @@ export function createJellyMaterial(env, layerUniforms) {
         col += (irr * 0.35 + uLightColor * 0.12) * cavity * smoothstep(0.82, 1.0, 1.0 - cavDeep) * 0.6;
 
         // healing glow
-        col += uGlowColor * glow * (0.25 + fresh * 0.75);
+        col += cGlowColor * glow * (0.25 + fresh * 0.75);
 
         // The weld (uWeldT s after the pieces fuse): the seam lines flare
         // white-hot and the jelly round them scorches, a ragged ember edge
@@ -752,7 +802,7 @@ export function createJellyMaterial(env, layerUniforms) {
           float xb = (d - rh) / wb;
           if (th > 0.0 && abs(xb) < 3.0) {
             float band = exp(-xb * xb) * smoothstep(0.0, 0.05, th) * exp(-1.5 * th) * 0.85;
-            vec3 healC = mix(vec3(1.0, 0.94, 0.82), uGlowColor * vec3(1.15, 1.0, 0.85), smoothstep(0.0, 0.9, th));
+            vec3 healC = mix(vec3(1.0, 0.94, 0.82), cGlowColor * vec3(1.15, 1.0, 0.85), smoothstep(0.0, 0.9, th));
             col += healC * band * (1.0 + 0.3 * vnoise(pr * 22.0 + vec3(0.0, th * 2.0, 0.0)));
           }
           // (and warmth through the body while the seams are hot)

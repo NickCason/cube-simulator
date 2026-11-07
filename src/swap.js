@@ -19,6 +19,8 @@ export class Swapper {
     this.cube = null;
     this.onLand = null;
     this.landedAt = 0;
+    this.slot = 0; // (which cube: with several, only that one goes and comes)
+    this.watch = []; // cubes dropped in, waiting to land (see watchLanding)
     this.bounce = -1; // (its own bounce, held back for the landing)
     this._v = new THREE.Vector3();
   }
@@ -50,7 +52,10 @@ export class Swapper {
     this.active = true;
     this.phase = 'exit';
     this.t = 0;
-    sb.gravityScale = 0;
+    this.slot = app.cube ? app.cube.slot : 0;
+    this.multi = app.cubes ? app.cubes.length > 1 : false;
+    // (alone, gravity off; with others about, they keep theirs - see update)
+    if (!this.multi) sb.gravityScale = 0;
     sb.wakeAll();
     app.audio?.swapOut();
     // a streak of sparkles up where it goes
@@ -74,18 +79,49 @@ export class Swapper {
   // a super ball dropped from out of the picture would bounce right back out
   // of it: the first landing keeps it in view (then it's itself again)
   _unholdBounce() {
-    if (this.bounce >= 0) this.app.sb.p.bounce = this.bounce;
+    if (this.bounce >= 0) {
+      const sb = this.app.sb;
+      if (this.multi) sb.cBounce[this.slot] = this.bounce;
+      else sb.p.bounce = sb.cBounce[0] = this.bounce;
+    }
     this.bounce = -1;
   }
 
+  // the lowest point of cube slot (or of everything: -1)
+  _lowest(slot) {
+    const sb = this.app.sb;
+    let y0 = Infinity;
+    for (let i = 0; i < sb.nV; i++) if (sb.alive[i] && (slot < 0 || sb.vCube[i] === slot) && sb.x[i * 3 + 1] < y0) y0 = sb.x[i * 3 + 1];
+    return y0;
+  }
+
+  // A cube dropped into the room (App.addCube): its landing, when it comes.
+  watchLanding(slot) {
+    this.watch.push({ slot, t: 0 });
+    this.app.audio?.swapIn();
+  }
+
+  _watch(dt) {
+    for (let k = this.watch.length - 1; k >= 0; k--) {
+      const w = this.watch[k];
+      w.t += dt;
+      if (this._lowest(w.slot) < 0.02 || w.t > 3) {
+        this.watch.splice(k, 1);
+        this._landFx(w.slot);
+      }
+    }
+  }
+
   update(dt) {
+    if (dt > 0 && this.watch.length) this._watch(dt);
     if (!this.active || dt <= 0) return;
     const app = this.app, sb = app.sb;
     this.t += dt;
     if (this.phase === 'exit') {
       let y0 = Infinity, y1 = -Infinity, cx = 0, cz = 0, n = 0;
+      const mine = (i) => !this.multi || sb.vCube[i] === this.slot;
       for (let i = 0; i < sb.nV; i++) {
-        if (!sb.alive[i]) continue;
+        if (!sb.alive[i] || !mine(i)) continue;
         const y = sb.x[i * 3 + 1];
         if (y < y0) y0 = y;
         if (y > y1) y1 = y;
@@ -98,10 +134,11 @@ export class Swapper {
       cz /= n;
       // pulled from the top: the top goes first and the rest stretches after it
       const span = Math.max(0.05, y1 - y0), a = 95 * Math.min(1, this.t / 0.1);
+      const g = this.multi ? -sb.p.gravity * dt : 0;
       for (let i = 0; i < sb.nV; i++) {
-        if (!sb.alive[i] || sb.w[i] === 0) continue;
+        if (!sb.alive[i] || sb.w[i] === 0 || !mine(i)) continue;
         const o = i * 3, k = 0.3 + 0.7 * ((sb.x[o + 1] - y0) / span);
-        sb.v[o + 1] += a * k * dt;
+        sb.v[o + 1] += a * k * dt + g;
         // (and in toward the middle, a slurp up a straw)
         sb.v[o] -= (sb.x[o] - cx) * 3 * dt;
         sb.v[o + 2] -= (sb.x[o + 2] - cz) * 3 * dt;
@@ -109,12 +146,14 @@ export class Swapper {
       sb.wakeAll();
       // gone once its lowest point is above the top of the picture
       const gone = this._v.set(cx, y0, cz).project(app.camera).y > 1.04;
-      if (gone || this.t > EXIT_MAX) this._swap();
+      if (gone || this.t > EXIT_MAX) {
+        this.exitXZ = [cx, cz];
+        this._swap();
+      }
       return;
     }
     if (this.phase === 'drop') {
-      let y0 = Infinity;
-      for (let i = 0; i < sb.nV; i++) if (sb.alive[i] && sb.x[i * 3 + 1] < y0) y0 = sb.x[i * 3 + 1];
+      const y0 = this._lowest(this.multi ? this.slot : -1);
       if (y0 < 0.02 || this.t > 2.5) this._land();
       return;
     }
@@ -126,11 +165,32 @@ export class Swapper {
   }
 
   // Out of sight: the new cube's look and feel, a fresh body high above.
+  // (With others in the room only the selected cube goes: the room's size
+  // and edges stay as they are, and it comes down where it was.)
   _swap() {
     const app = this.app, sb = app.sb, c = this.cube;
     app.nails.clearAll();
     app.droplets.clear();
     app._wearStyle(c);
+    if (this.multi) {
+      app.applyStyle();
+      this._unholdBounce();
+      this.bounce = sb.cBounce[this.slot];
+      sb.cBounce[this.slot] = Math.min(this.bounce, 0.42);
+      const [x, z] = this.exitXZ || [0, 0];
+      sb.removeCube(this.slot);
+      sb.addCube(this.slot, x, this._dropHeight(sb.p.size), z, (Math.random() - 0.5) * 0.7);
+      sb.rebuild();
+      for (let i = 0; i < sb.nV; i++) if (sb.vCube[i] === this.slot) sb.v[i * 3 + 1] = DROP_V;
+      sb.weld = null;
+      for (const f of app.onHealEnd) f();
+      app.onTopologyChanged();
+      app.flash = Math.max(app.flash, 0.28);
+      this.phase = 'drop';
+      this.t = 0;
+      app.audio?.swapIn();
+      return;
+    }
     const size = app.settings.size;
     sb.p.size = size;
     app.style.edges = c.edges;
@@ -139,6 +199,7 @@ export class Swapper {
     this._unholdBounce();
     this.bounce = sb.p.bounce;
     sb.p.bounce = Math.min(sb.p.bounce, 0.42);
+    sb.cBounce[0] = sb.p.bounce;
     sb.loadCube(0, this._dropHeight(size), 0, (Math.random() - 0.5) * 0.7);
     for (let i = 0; i < sb.nV; i++) sb.v[i * 3 + 1] = DROP_V;
     sb.gravityScale = 1;
@@ -154,15 +215,22 @@ export class Swapper {
   }
 
   _land() {
-    const app = this.app, sb = app.sb, half = sb.p.size / 2;
     this.phase = 'land';
     this.landedAt = this.t;
+    this._landFx(this.multi ? this.slot : -1);
+    this.onLand?.(this.cube);
+    this.onLand = null;
+  }
+
+  // the thud of a cube landing (slot; -1: the whole body)
+  _landFx(slot) {
+    const app = this.app, sb = app.sb, half = sb.p.size / 2;
     app.shake(0.04);
     app.hitStop(0.045);
     app.audio?.thud(1.15);
     let cx = 0, cz = 0, n = 0;
     for (let i = 0; i < sb.nV; i++) {
-      if (!sb.alive[i]) continue;
+      if (!sb.alive[i] || (slot >= 0 && sb.vCube[i] !== slot)) continue;
       cx += sb.x[i * 3];
       cz += sb.x[i * 3 + 2];
       n++;
@@ -179,8 +247,6 @@ export class Swapper {
     const col = this._rgb(), top = new THREE.Vector3(cx, sb.p.size * 0.6, cz);
     app.particles.flash(new THREE.Vector3(cx, 0.05, cz), sb.p.size * 1.3, [col[0] * 3, col[1] * 3, col[2] * 3]);
     for (let k = 0; k < 22; k++) app.particles.glitter(top, 1, col, 1.3);
-    this.onLand?.(this.cube);
-    this.onLand = null;
   }
 
   // the bottom of a cube this size just out of sight above the picture
