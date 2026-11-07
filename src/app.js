@@ -774,7 +774,8 @@ export class App {
     let G = M && M.topo === sb.topoVersion ? M.G : null, idx = G ? M.idx : null;
     if (!G) {
       idx = [];
-      for (let i = 0; i < sb.nV; i++) if (sb.vCube[i] === slot) idx.push(i);
+      // (not the gel gun's blobs: their rest shapes are their own)
+      for (let i = 0; i < sb.nV; i++) if (sb.vCube[i] === slot && !sb.vTag[i]) idx.push(i);
       G = new Float64Array(idx.length * 3);
       idx.forEach((i, j) => unbevelPoint(sb.X[i * 3] - R, sb.X[i * 3 + 1], sb.X[i * 3 + 2], half, from, G, j * 3));
     }
@@ -803,7 +804,7 @@ export class App {
     if (broken) {
       const g = new Float64Array(3);
       for (let i = 0; i < sb.nV; i++) {
-        if (sb.vCube[i] !== M.slot) continue;
+        if (sb.vCube[i] !== M.slot || sb.vTag[i]) continue;
         unbevelPoint(X[i * 3] - R, X[i * 3 + 1], X[i * 3 + 2], M.half, was, g);
         bevelPoint(g[0], g[1], g[2], M.half, M.to, X, i * 3);
         X[i * 3] += R;

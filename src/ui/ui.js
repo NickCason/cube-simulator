@@ -70,7 +70,7 @@ export const TOOL_DEFS = [
   { id: 'bomb', label: 'Cherry bomb', hint: 'Click to plant · stand back', key: '8' },
   { id: 'syringe', label: 'Syringe', hint: 'Hold to pump it up', key: '9' },
   { id: 'feed', label: 'Add jelly', hint: 'Hold on a cube to ladle jelly in · feed it enough and it cubiplies', key: 'j' },
-  { id: 'gelgun', label: 'Gel gun', hint: 'Hold to pump globs of jelly at it · they soak in and swell it into lumps · Re-cube to smooth it', key: 'e' },
+  { id: 'gelgun', label: 'Gel gun', hint: 'Hold to lob globs of jelly at it · they splat and stick, globs on globs · Re-cube to clear them', key: 'e' },
   { id: 'magnet', label: 'Magnet', hint: 'Hold near nails to pull them out (and drag the jelly with them)', key: '0' },
 ];
 

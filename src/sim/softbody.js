@@ -289,6 +289,7 @@ export class SoftBody {
     this.glow = growArr(this.glow, cap, Float32Array);
     this.vPiece = growArr(this.vPiece, cap, Int32Array);
     this.vCube = growArr(this.vCube, cap, Uint8Array);
+    this.vTag = growArr(this.vTag, cap, Uint16Array); // (0, or the gel gun's blob it is: see addBlob)
     this.alive = growArr(this.alive, cap, Uint8Array);
     this.melt = growArr(this.melt, cap, Uint8Array); // (on a surface the torch melted)
     this.fpen = growArr(this.fpen, cap, Float32Array); // floor push-out this substep
@@ -317,10 +318,11 @@ export class SoftBody {
     if (n > this.tCap) this._allocT(Math.max(n, this.tCap * 2));
   }
 
-  addVertex(x, y, z, X, Y, Z, vx = 0, vy = 0, vz = 0, temp = 0, cube = 0) {
+  addVertex(x, y, z, X, Y, Z, vx = 0, vy = 0, vz = 0, temp = 0, cube = 0, tag = 0) {
     const i = this.nV++;
     this.ensureV(this.nV);
     this.vCube[i] = cube;
+    this.vTag[i] = tag;
     const o = i * 3;
     this.x[o] = x; this.x[o + 1] = y; this.x[o + 2] = z;
     this.px[o] = x; this.px[o + 1] = y; this.px[o + 2] = z;
@@ -387,15 +389,75 @@ export class SoftBody {
     this._bpNV = 0;
   }
 
+  // A blob of cube k's jelly (the gel gun's): a lumpy little ball of it,
+  // centred at c, moving at v, its rest shape centred at R in k's rest
+  // space (somewhere nothing else's is), its vertices tagged. Lumpy at
+  // rest: it keeps its lumps. rebuild() after. Returns its first vertex.
+  addBlob(k, c, v, radius, R, tag, rnd = Math.random) {
+    const mesh = buildCubeMesh(3, radius * 2, 0);
+    const base = this.nV, tBase = this.nT;
+    // (squashed one way and another; lumpy - a few slow waves over it, so
+    // neighbouring points move together: per-point noise flattened its
+    // tets into slivers, and they blew up)
+    const sx = 1 + (rnd() - 0.5) * 0.5, sy = 1 + (rnd() - 0.5) * 0.5, sz = 1 + (rnd() - 0.5) * 0.5;
+    const waves = [];
+    for (let w = 0; w < 3; w++) {
+      const z = 2 * rnd() - 1, a = rnd() * Math.PI * 2, s = Math.sqrt(1 - z * z);
+      waves.push([s * Math.cos(a), s * Math.sin(a), z, 2 + rnd() * 2, rnd() * Math.PI * 2]);
+    }
+    // (turned any which way in the world)
+    const qa = rnd() * Math.PI * 2, qb = Math.acos(2 * rnd() - 1), qc = rnd() * Math.PI * 2;
+    const ca = Math.cos(qa), sa = Math.sin(qa), cb = Math.cos(qb), sb = Math.sin(qb), cc = Math.cos(qc), sc = Math.sin(qc);
+    this.ensureV(base + mesh.nV);
+    for (let i = 0; i < mesh.nV; i++) {
+      // (rounded most of the way from a cube to a ball - all the way, its
+      // corner cells go thin - then the lumps)
+      let X = mesh.pos[i * 3], Y = mesh.pos[i * 3 + 1], Z = mesh.pos[i * 3 + 2];
+      const l = Math.hypot(X, Y, Z), li = Math.max(Math.abs(X), Math.abs(Y), Math.abs(Z));
+      if (l > 1e-9) {
+        let w = 0;
+        for (const [dx, dy, dz, fr, ph] of waves) w += Math.sin(((X * dx + Y * dy + Z * dz) / l) * fr + ph);
+        const f = (1 + 0.6 * (li / l - 1)) * (1 + 0.066 * w * Math.min(1, li / radius));
+        X *= f; Y *= f; Z *= f;
+      }
+      X *= sx; Y *= sy; Z *= sz;
+      // (z-x-z turn)
+      const x1 = ca * X - sa * Y, y1 = sa * X + ca * Y;
+      const y2 = cb * y1 - sb * Z, z2 = sb * y1 + cb * Z;
+      const wx = cc * x1 - sc * y2, wy = sc * x1 + cc * y2;
+      this.addVertex(c[0] + wx, c[1] + wy, c[2] + z2, R[0] + X, R[1] + Y, R[2] + Z, v[0], v[1], v[2], 0, k, tag);
+    }
+    this.nT = tBase + mesh.nT;
+    this.ensureT(this.nT);
+    for (let t = 0; t < mesh.nT * 4; t++) this.T[tBase * 4 + t] = mesh.tets[t] + base;
+    this.tVS.fill(1, tBase, this.nT);
+    // (a little firmer than the jelly it's from: it splats, it doesn't crumple)
+    this.tMu.fill(2.2, tBase, this.nT);
+    this._bpNV = 0;
+    return base;
+  }
+
   // Take cube k out altogether (its vertices and tets; the rest closes up,
   // keeping where it is and how it moves). rebuild() after.
   removeCube(k) {
+    this._removeVerts((i) => this.vCube[i] === k);
+  }
+
+  // Take whole pieces out (their ids: a Set) - the gel gun's blobs.
+  // rebuild() after.
+  removePieces(ids) {
+    this._removeVerts((i) => ids.has(this.vPiece[i]));
+  }
+
+  // (the vertices drop(i) says, and the tets on them - every tet's corners
+  // must all go or all stay: a cube's, or a piece's)
+  _removeVerts(drop) {
     const nV = this.nV, nT = this.nT, map = new Int32Array(nV).fill(-1);
     let n = 0;
     const vArr3 = [this.x, this.px, this.v, this.X];
-    const vArr1 = [this.w, this.m, this.temp, this.glow, this.alive, this.melt, this.fpen, this.wpen, this.vCube];
+    const vArr1 = [this.w, this.m, this.temp, this.glow, this.alive, this.melt, this.fpen, this.wpen, this.vCube, this.vTag, this.vPiece];
     for (let i = 0; i < nV; i++) {
-      if (this.vCube[i] === k) continue;
+      if (drop(i)) continue;
       if (n !== i) {
         for (const a of vArr3) { a[n * 3] = a[i * 3]; a[n * 3 + 1] = a[i * 3 + 1]; a[n * 3 + 2] = a[i * 3 + 2]; }
         for (const a of vArr1) a[n] = a[i];
@@ -492,6 +554,47 @@ export class SoftBody {
       pc.asleep = false;
     }
     this._hashDirty = true;
+  }
+
+  // Pieces nailed to each other (embeds marked pair - the gel gun's blobs)
+  // sleep and wake together: one stirring wakes the others. (Nails within
+  // a piece keep the whole body awake, as before.)
+  _wakeNailed() {
+    const tp = this.tPiece, P = this.pieces, nT = this.nT, T = this.T, v = this.v;
+    for (let pass = 0; pass < 6; pass++) {
+      let any = false;
+      for (const e of this.embeds) {
+        if (e.a.tet < 0 || e.b.tet < 0 || e.a.tet >= nT || e.b.tet >= nT) continue;
+        const A = P[tp[e.a.tet]], B = P[tp[e.b.tet]];
+        if (!A || !B || A === B || A.asleep === B.asleep) continue;
+        // (only if the nail's other end is really moving: one just not yet
+        // asleep, nudging a sleeper awake again and again, kept both up)
+        const sleeper = A.asleep ? A : B, t = A.asleep ? e.b.tet : e.a.tet;
+        let s2 = 0;
+        for (let k = 0; k < 4; k++) {
+          const o = T[t * 4 + k] * 3;
+          s2 = Math.max(s2, v[o] * v[o] + v[o + 1] * v[o + 1] + v[o + 2] * v[o + 2]);
+        }
+        if (s2 > 0.2 * 0.2) {
+          this.wake(sleeper.id);
+          any = true;
+        }
+      }
+      if (!any) break;
+    }
+  }
+
+  // Piece pc to sleep, still where it is.
+  sleepPiece(pc) {
+    const v = this.v, vs = pc.verts;
+    if (!pc.asleep) this._hashDirty = true;
+    pc.asleep = true;
+    pc.vib = 0;
+    pc.foldAsk = true; // (not to be left asleep folded into itself)
+    for (let k = 0; k < vs.length; k++) {
+      const o = vs[k] * 3;
+      v[o] = v[o + 1] = v[o + 2] = 0;
+    }
   }
 
   wake(k) {
@@ -1276,7 +1379,19 @@ export class SoftBody {
         this.pieces[k].touchT = this.time;
       }
     } else if (this._grabbedP) this._grabbedP.fill(0);
-    if (this.attract || this.gravityScale !== 1 || this.embeds.length) this.wakeAll();
+    if (this.attract || this.gravityScale !== 1 || this.embeds.some((e) => !e.pair)) this.wakeAll();
+    else if (this.embeds.length) this._wakeNailed();
+    // (pieces glued together - a gel glob, set where it landed - by their
+    // glue nails: they don't push each other out, see _solvePieceCollisions)
+    this._glue = null;
+    for (const e of this.embeds) {
+      if (!e.glue || e.a.tet < 0 || e.b.tet < 0 || e.a.tet >= this.nT || e.b.tet >= this.nT) continue;
+      const pa = this.tPiece[e.a.tet], pb = this.tPiece[e.b.tet];
+      if (pa === pb) continue;
+      if (!this._glue) this._glue = new Set();
+      this._glue.add(pa * 65536 + pb);
+      this._glue.add(pb * 65536 + pa);
+    }
     const NP = this.pieces.length;
     const aw = this._awake && this._awake.length >= NP ? this._awake : (this._awake = new Uint8Array(Math.max(NP, 64)));
     let anyAwake = false;
@@ -1594,7 +1709,22 @@ export class SoftBody {
   // Embedded rigid segments (nails): keep the distance between two anchors
   // (barycentric points inside tets) fixed.
   _solveEmbeds(h) {
-    const { x, w, T } = this;
+    const { x, T } = this;
+    // (a sleeping piece's points don't move: moved anyway, while it sleeps
+    // its last-step positions don't, and when it wakes it's flung by the
+    // difference - see _wakeNailed)
+    const w0 = this.w, aw = this._awake, vp = this.vPiece;
+    const w = this._wEmb && this._wEmb.length >= this.nV ? this._wEmb : (this._wEmb = new Float64Array(this.vCap));
+    for (const e of this.embeds) {
+      for (let s = 0; s < 2; s++) {
+        const t = s ? e.b.tet : e.a.tet;
+        if (t < 0 || t >= this.nT) continue;
+        for (let k = 0; k < 4; k++) {
+          const i = T[t * 4 + k];
+          w[i] = aw && !aw[vp[i]] ? 0 : w0[i];
+        }
+      }
+    }
     for (const e of this.embeds) {
       const A = e.a, Bn = e.b;
       if (A.tet < 0 || Bn.tet < 0 || A.tet >= this.nT || Bn.tet >= this.nT) continue;
@@ -1614,6 +1744,10 @@ export class SoftBody {
       if (L < 1e-9) continue;
       dx /= L; dy /= L; dz /= L;
       const C = L - e.len;
+      // (a pair - a gel gun's blob - is held on by a tether: it pulls, it
+      // never pushes - its two ends all but on top of each other, which way
+      // to push them apart is noise, and pushed they shook without end)
+      if (e.pair && !e.glue && C <= 0) continue;
       const den = wa + wb + (e.compliance || 0) / (h * h);
       if (den <= 0) continue;
       const dl = -C / den;
@@ -1623,6 +1757,36 @@ export class SoftBody {
         const sb = dl * Bn.b[k] * w[ib];
         x[ia * 3] += dx * sa; x[ia * 3 + 1] += dy * sa; x[ia * 3 + 2] += dz * sa;
         x[ib * 3] += dx * sb; x[ib * 3 + 1] += dy * sb; x[ib * 3 + 2] += dz * sb;
+      }
+    }
+    // (a pair's two ends: how they've moved apart this substep, damped by
+    // its damp - a glob held on by jelly settles; it doesn't swing or rock
+    // on its nails forever. Only the nails' ends: the glob itself still
+    // wobbles like jelly.)
+    const px = this.px;
+    for (const e of this.embeds) {
+      if (!e.pair || !(e.damp > 0)) continue;
+      const A = e.a, Bn = e.b;
+      if (A.tet < 0 || Bn.tet < 0 || A.tet >= this.nT || Bn.tet >= this.nT) continue;
+      const ta = A.tet * 4, tb = Bn.tet * 4;
+      let rx = 0, ry = 0, rz = 0, wa = 0, wb = 0;
+      for (let k = 0; k < 4; k++) {
+        // (a sleeping end hasn't moved: its last-step positions are old)
+        const ia = T[ta + k] * 3, ib = T[tb + k] * 3;
+        const ba = aw[vp[T[ta + k]]] ? A.b[k] : 0, bb = aw[vp[T[tb + k]]] ? Bn.b[k] : 0;
+        rx += (x[ia] - px[ia]) * ba - (x[ib] - px[ib]) * bb;
+        ry += (x[ia + 1] - px[ia + 1]) * ba - (x[ib + 1] - px[ib + 1]) * bb;
+        rz += (x[ia + 2] - px[ia + 2]) * ba - (x[ib + 2] - px[ib + 2]) * bb;
+        wa += A.b[k] * A.b[k] * w[T[ta + k]];
+        wb += Bn.b[k] * Bn.b[k] * w[T[tb + k]];
+      }
+      if (wa + wb <= 0) continue;
+      const kd = e.damp / (wa + wb);
+      for (let k = 0; k < 4; k++) {
+        const ia = T[ta + k], ib = T[tb + k];
+        const sa = -kd * A.b[k] * w[ia], sb = kd * Bn.b[k] * w[ib];
+        x[ia * 3] += rx * sa; x[ia * 3 + 1] += ry * sa; x[ia * 3 + 2] += rz * sa;
+        x[ib * 3] += rx * sb; x[ib * 3 + 1] += ry * sb; x[ib * 3 + 2] += rz * sb;
       }
     }
   }
@@ -1892,13 +2056,7 @@ export class SoftBody {
         // (debris - a die or smaller - goes quiet sooner: a settling pile
         // is what costs the most)
         if (pc.sleepT > (vs.length < 0.06 * (this.cN[pc.cube] || 1e9) ? 0.35 : 0.6)) {
-          pc.asleep = true;
-          pc.vib = 0;
-          pc.foldAsk = true; // (not to be left asleep folded into itself)
-          for (let k = 0; k < vs.length; k++) {
-            const o = vs[k] * 3;
-            v[o] = v[o + 1] = v[o + 2] = 0;
-          }
+          this.sleepPiece(pc);
           continue;
         }
       } else pc.sleepT = 0;
@@ -3238,6 +3396,8 @@ export class SoftBody {
         continue;
       }
       skip[k] = 0;
+      // (glued: its glue holds them - pushed apart as well, the two fought)
+      if (this._glue && this._glue.has(own * 65536 + tPiece[ct.t])) continue;
       WT[key] = ct.t;
       WF[key] = ct.f;
       if (GP && (GP[own] || GP[tPiece[ct.t]])) {
@@ -3327,10 +3487,12 @@ export class SoftBody {
   }
 
   // ---------------------------------------------------------------- queries
-  raycast(ox, oy, oz, dx, dy, dz, maxT = Infinity) {
+  // (skip: a piece to look straight through)
+  raycast(ox, oy, oz, dx, dy, dz, maxT = Infinity, skip = -1) {
     const { x, sTri } = this;
     let best = maxT, bf = -1, bu = 0, bv = 0;
     for (let f = 0; f < this.nF; f++) {
+      if (skip >= 0 && this.tPiece[this.sTet[f]] === skip) continue;
       const a = sTri[f * 3] * 3, b = sTri[f * 3 + 1] * 3, c = sTri[f * 3 + 2] * 3;
       const e1x = x[b] - x[a], e1y = x[b + 1] - x[a + 1], e1z = x[b + 2] - x[a + 2];
       const e2x = x[c] - x[a], e2y = x[c + 1] - x[a + 1], e2z = x[c + 2] - x[a + 2];

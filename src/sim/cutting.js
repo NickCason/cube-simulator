@@ -201,6 +201,7 @@ export function cutBody(sb, field, opts = {}) {
   // --- new vertices
   const newVerts = []; // [x,y,z,X,Y,Z,vx,vy,vz,temp]
   const newCube = []; // (and each one's cube)
+  const newTag = []; // (and its tag - a gel gun's blob: see SoftBody.vTag)
   let nextId = nV0;
   const canon = new Map(); // minus copy -> plus id
   const vSide = new Map(); // new vertex -> side
@@ -213,6 +214,7 @@ export function cutBody(sb, field, opts = {}) {
     const id = nextId++;
     newVerts.push(x[o], x[o + 1], x[o + 2], X[o], X[o + 1], X[o + 2], v[o], v[o + 1], v[o + 2], sb.temp[i]);
     newCube.push(sb.vCube[i]);
+    newTag.push(sb.vTag[i]);
     zDup[i] = id;
     canon.set(id, i);
     vSide.set(id, -1);
@@ -236,6 +238,7 @@ export function cutBody(sb, field, opts = {}) {
       newVerts.push(ix, iy, iz, IX, IY, IZ, vx, vy, vz, tp);
       newVerts.push(ix, iy, iz, IX, IY, IZ, vx, vy, vz, tp);
       newCube.push(sb.vCube[lo], sb.vCube[lo]);
+      newTag.push(sb.vTag[lo], sb.vTag[lo]);
       canon.set(mid, pid);
       vSide.set(pid, 1);
       vSide.set(mid, -1);
@@ -398,7 +401,7 @@ export function cutBody(sb, field, opts = {}) {
   for (let k = 0; k < nNew; k++) {
     const o = k * 10;
     sb.addVertex(newVerts[o], newVerts[o + 1], newVerts[o + 2], newVerts[o + 3], newVerts[o + 4], newVerts[o + 5],
-      newVerts[o + 6], newVerts[o + 7], newVerts[o + 8], newVerts[o + 9], newCube[k]);
+      newVerts[o + 6], newVerts[o + 7], newVerts[o + 8], newVerts[o + 9], newCube[k], newTag[k]);
   }
   const nT = newT.length / 4;
   sb.ensureT(nT);
@@ -511,7 +514,7 @@ export function separateClusters(sb, labels, anchors = []) {
       let id = copies.get(key);
       if (id === undefined) {
         const o = i * 3;
-        id = sb.addVertex(sb.x[o], sb.x[o + 1], sb.x[o + 2], sb.X[o], sb.X[o + 1], sb.X[o + 2], sb.v[o], sb.v[o + 1], sb.v[o + 2], sb.temp[i], sb.vCube[i]);
+        id = sb.addVertex(sb.x[o], sb.x[o + 1], sb.x[o + 2], sb.X[o], sb.X[o + 1], sb.X[o + 2], sb.v[o], sb.v[o + 1], sb.v[o + 2], sb.temp[i], sb.vCube[i], sb.vTag[i]);
         copies.set(key, id);
       }
       sb.T[t * 4 + k] = id;
@@ -598,7 +601,7 @@ export function unglue(sb, verts, plus, pairs = null) {
     }
     if (!np || !nm) continue;
     const o = i * 3;
-    const j = sb.addVertex(sb.x[o], sb.x[o + 1], sb.x[o + 2], sb.X[o], sb.X[o + 1], sb.X[o + 2], sb.v[o], sb.v[o + 1], sb.v[o + 2], sb.temp[i], sb.vCube[i]);
+    const j = sb.addVertex(sb.x[o], sb.x[o + 1], sb.x[o + 2], sb.X[o], sb.X[o + 1], sb.X[o + 2], sb.v[o], sb.v[o + 1], sb.v[o + 2], sb.temp[i], sb.vCube[i], sb.vTag[i]);
     sb.melt[j] = sb.melt[i];
     sb.glow[j] = sb.glow[i];
     for (let e = vtS[i]; e < vtS[i + 1]; e++) {
