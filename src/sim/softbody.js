@@ -1889,7 +1889,9 @@ export class SoftBody {
       } else pc.buzzT = pc.buzzA = pc.buzzB = 0;
       if (buzzing || (vrms2 < 0.035 * 0.035 && vmax2 < 0.3 * 0.3)) {
         pc.sleepT += buzzing ? 1 : dt;
-        if (pc.sleepT > 0.6) {
+        // (debris - a die or smaller - goes quiet sooner: a settling pile
+        // is what costs the most)
+        if (pc.sleepT > (vs.length < 0.06 * (this.cN[pc.cube] || 1e9) ? 0.35 : 0.6)) {
           pc.asleep = true;
           pc.vib = 0;
           pc.foldAsk = true; // (not to be left asleep folded into itself)

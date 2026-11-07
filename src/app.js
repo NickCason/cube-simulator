@@ -1079,7 +1079,11 @@ export class App {
       if (this.intro.done && this.sb.anyAwake) {
         // (its share of the frame: more of a longer frame)
         const bud = 9.5 * Math.min(2, Math.max(1, dt * 60));
-        if (this.stats.physMs > bud) this.substepRate = Math.max(420, this.substepRate * 0.985);
+        // (far over - a pile of debris all at once - it backs off within a
+        // few frames, not thirty, and a little further while it lasts)
+        const over = this.stats.physLast / bud;
+        if (over > 2) this.substepRate = Math.max(360, this.substepRate * 0.92);
+        else if (this.stats.physMs > bud) this.substepRate = Math.max(420, this.substepRate * 0.985);
         else if (this.stats.physMs < bud * 0.63) this.substepRate = Math.min(720, this.substepRate * 1.004);
       }
       this.nails.update(sdt);
