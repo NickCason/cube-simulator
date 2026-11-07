@@ -14,6 +14,7 @@ export function createFloor(env, fx) {
   mat.onBeforeCompile = (shader) => {
     shader.uniforms.tCaustic = fx.caustic;
     shader.uniforms.tFloorFx = fx.floorFx;
+    shader.uniforms.tFloorTint = fx.floorTint;
     shader.uniforms.uFloorRect = fx.floorRect;
     shader.uniforms.uGlowRect = fx.glowRect;
     shader.uniforms.uBg = fx.bg;
@@ -43,6 +44,7 @@ export function createFloor(env, fx) {
         varying vec3 vFloorPos;
         uniform sampler2D tCaustic;
         uniform sampler2D tFloorFx;
+        uniform sampler2D tFloorTint;
         uniform vec4 uFloorRect;
         uniform vec4 uGlowRect;
         uniform vec3 uBg;
@@ -72,6 +74,16 @@ export function createFloor(env, fx) {
         float contact = 0.0;
         float cover = 0.0;
         vec3 glowNear = vec3(0.0), pool = vec3(0.0);
+        // the colour the jelly over here gives the light: its own cube's
+        // (several cubes: each shadow its own colour; where two meet, they
+        // mix) - and round the shadow, the nearest shadow's (the wide fill)
+        vec3 tint = uTint;
+        if (all(greaterThan(fuv, vec2(0.0))) && all(lessThan(fuv, vec2(1.0)))) {
+          vec4 t0 = textureLod(tFloorTint, fuv, 0.5);
+          vec4 t1 = textureLod(tFloorTint, fuv, 3.0);
+          vec4 t2 = textureLod(tFloorTint, fuv, 5.0);
+          tint = t0.a > 0.02 ? t0.rgb / t0.a : t1.a > 0.002 ? t1.rgb / t1.a : t2.a > 1e-4 ? t2.rgb / t2.a : uTint;
+        }
         if (all(greaterThan(fuv, vec2(0.0))) && all(lessThan(fuv, vec2(1.0)))) {
           // soft taps (the key light is an area light: its caustics have a
           // penumbra, and the mesh's facets shouldn't show as lines)
@@ -113,17 +125,18 @@ export function createFloor(env, fx) {
           pool = textureLod(tGlow, guv, 2.5).rgb * 0.5 + textureLod(tGlow, guv, 4.0).rgb * 0.6
             + textureLod(tGlow, guv, 5.3).rgb * 0.75;
         }
-        // the colour the jelly gives the light it lets through, here: one
-        // colour - or, for layered jelly, the hue of the light that actually
-        // came through at this spot (a rainbow on its side shades the floor
-        // in bands), at the strength of the overall tint
-        vec3 tint = uTint;
+        // ...one colour a cube - or, for layered jelly, the hue of the light
+        // that actually came through at this spot (a rainbow on its side
+        // shades the floor in bands), at the strength of its tint (the
+        // caustics' alpha says where the light came through layers)
         if (uTintLocal > 0.0 && mask > 0.0) {
           vec2 cuv = (vFloorPos.xz - uCausRect.xy) * uCausRect.zw;
-          vec3 cb = textureLod(tCaustic, cuv, 3.5).rgb + textureLod(tCaustic, cuv, 5.0).rgb * 0.5;
+          vec4 c3 = textureLod(tCaustic, cuv, 3.5), c5 = textureLod(tCaustic, cuv, 5.0);
+          vec3 cb = c3.rgb + c5.rgb * 0.5;
           float cm = max(cb.r, max(cb.g, cb.b));
-          vec3 hue = mix(cb / max(cm, 1e-4), vec3(1.0), 0.3) * max(uTint.r, max(uTint.g, uTint.b));
-          tint = mix(uTint, hue, smoothstep(0.0005, 0.012, cm));
+          float lay = smoothstep(0.05, 0.4, c3.a + c5.a * 0.5);
+          vec3 hue = mix(cb / max(cm, 1e-4), vec3(1.0), 0.3) * max(tint.r, max(tint.g, tint.b));
+          tint = mix(tint, hue, smoothstep(0.0005, 0.012, cm) * lay);
         }
         // in the jelly's shadow: the light that came through it (coloured,
         // focused), and a little of its colour from light scattered inside

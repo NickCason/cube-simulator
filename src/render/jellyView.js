@@ -7,6 +7,7 @@ import {
   createCausticMaterial,
   createLightViewMaterial,
   createMaskMaterial,
+  createTintMaterial,
   createHeightMaterial,
   createReflectMaterial,
   createGlowMaterial,
@@ -18,7 +19,7 @@ import {
 const FLOOR_SPAN = 6.4;
 // (how milky jelly of that opacity looks: see setStyle)
 // a row of the cube-look texture: 7 texels of looks, 10 + 10 of layers
-const CUBE_TEX_W = 27;
+const CUBE_TEX_W = 28;
 
 const hazeMinOf = (o) => 0.92 * Math.min(1, Math.max(0, (Math.min(1, Math.max(0, o)) - 0.45) / 0.55)) ** 2;
 
@@ -271,7 +272,7 @@ export class JellyView {
     // a stepped, folded or many-sided piece seen low drew over itself 2-4x)
     this.depthMat = new THREE.ShaderMaterial({ vertexShader: this.frontMat.vertexShader, fragmentShader: 'void main() { gl_FragColor = vec4(0.0); }', colorWrite: false });
     this.prepass = true;
-    this.causticMat = createCausticMaterial(this.layerUniforms);
+    this.causticMat = createCausticMaterial();
     // the caustics' view from the key light (entry, normal, exit) and their
     // grid of rays (see createCausticMaterial); the grid's density
     const coarse = !!window.matchMedia?.('(pointer: coarse)').matches;
@@ -295,9 +296,12 @@ export class JellyView {
     this.gridScene.add(grid);
     this._corner = new THREE.Vector3();
     this.maskMat = createMaskMaterial();
+    this.tintMat = createTintMaterial();
     this.heightMat = createHeightMaterial();
-    this.reflectMat = createReflectMaterial(this.layerUniforms);
-    this.glowMat = createGlowMaterial(this.layerUniforms, this.reflectMat.uniforms.uScatterColor, this.reflectMat.uniforms.uMilk);
+    this.reflectMat = createReflectMaterial();
+    this.glowMat = createGlowMaterial();
+    // (each cube's own colour in all of them)
+    for (const m of [this.causticMat, this.tintMat, this.reflectMat, this.glowMat]) m.uniforms.uCubeTex.value = this.cubeTex;
     // the pieces again, upside down below the floor (its reflection)
     this.reflScene = new THREE.Scene();
     this.mirror = null;
@@ -311,7 +315,7 @@ export class JellyView {
     for (const m of [this.causticMat, this.glowMat]) {
       if (m.uniforms.uFloorRect) m.uniforms.uFloorRect.value = this.floorRect;
     }
-    for (const m of [this.maskMat, this.heightMat]) m.uniforms.uFloorRect.value = this.fxRect;
+    for (const m of [this.maskMat, this.heightMat, this.tintMat]) m.uniforms.uFloorRect.value = this.fxRect;
     this.setLightDir(lightDir);
     // (mipmapped: the shadow's fill takes its colour from it, blurred)
     this.rtCaustic = new THREE.WebGLRenderTarget(768, 768, {
@@ -362,6 +366,15 @@ export class JellyView {
     const bq = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), this.blurMat);
     bq.frustumCulled = false;
     this.blurScene.add(bq);
+    // each cube's shadow its own colour: the colour it gives the light, laid
+    // where its shadow falls (see createTintMaterial; mipmapped, for the
+    // wide fill round the shadow)
+    this.rtFloorTint = new THREE.WebGLRenderTarget(256, 256, {
+      type: THREE.HalfFloatType,
+      depthBuffer: false,
+      generateMipmaps: true,
+      minFilter: THREE.LinearMipmapLinearFilter,
+    });
     // glow mode: the light it casts on the floor, from above (see createGlowMaterial)
     this.rtGlow = new THREE.WebGLRenderTarget(256, 256, {
       type: THREE.HalfFloatType,
@@ -372,6 +385,7 @@ export class JellyView {
     this.fxUniforms = {
       caustic: { value: this.rtCaustic.texture },
       floorFx: { value: this.rtFloorFxB.texture },
+      floorTint: { value: this.rtFloorTint.texture },
       floorRect: { value: this.fxRect }, // (shadow and contact: fitted, see _fitFloorFx)
       glowRect: { value: this.floorRect },
       fxLodBias: { value: 0 }, // (log2 of how much finer than the whole span: keeps blurs by mip level the same size)
@@ -399,7 +413,7 @@ export class JellyView {
     // (the jelly mirrors the floor: it reads the same textures)
     const fx = this.fxUniforms;
     Object.assign(this.frontMat.uniforms, {
-      tCaustic: fx.caustic, tFloorFx: fx.floorFx, tGlowMap: fx.glowTex, uFloorRect: fx.floorRect, uGlowRect: fx.glowRect, uFxLodBias: fx.fxLodBias, uCausRect: fx.causRect, uCausGain: fx.causGain, uTint: fx.tint,
+      tCaustic: fx.caustic, tFloorFx: fx.floorFx, tFloorTint: fx.floorTint, tGlowMap: fx.glowTex, uFloorRect: fx.floorRect, uGlowRect: fx.glowRect, uFxLodBias: fx.fxLodBias, uCausRect: fx.causRect, uCausGain: fx.causGain, uTint: fx.tint,
       uGlowFloor: fx.glowFloor, uBg: fx.bg, uFloorAlbedo: fx.floorAlbedo, uFloorEnv: fx.floorEnv,
     });
     this.rtBack = null;
@@ -414,6 +428,7 @@ export class JellyView {
     this.frontMat.uniforms.uLightDir.value.copy(d);
     this.causticMat.uniforms.uLightDir.value.copy(d);
     this.maskMat.uniforms.uLightDir.value.copy(d);
+    this.tintMat.uniforms.uLightDir.value.copy(d);
   }
 
   // flavor: { hex } or { layers: [hex bottom..top] }
@@ -440,12 +455,8 @@ export class JellyView {
       scs.forEach((c, k) => L.uLayerSc.value[k].set(c.r, c.g, c.b));
     } else L.uLayers.value = 0;
     const F = this.frontMat.uniforms;
-    const C = this.causticMat.uniforms;
     F.uAbsorb.value.copy(avgAbs);
-    C.uAbsorb.value.copy(avgAbs);
     F.uScatterColor.value.copy(flavor.layers ? avgSc : scs[0]);
-    this.reflectMat.uniforms.uScatterColor.value.copy(flavor.layers ? avgSc : scs[0]);
-    this.reflectMat.uniforms.uMilk.value = Math.max(m.milk, hazeMinOf(m.opacity));
     // opacity -> cloudiness; near the top end even thin parts go solid
     const o = Math.min(1, Math.max(0, m.opacity));
     const scatter = 9 * o * o;
@@ -463,7 +474,6 @@ export class JellyView {
     F.uScatter.value = scatter + (flavor.layers ? 1.6 * (1 - o) : 0);
     F.uHazeMin.value = hazeMin;
     F.uGlow.value = m.glow;
-    C.uScatter.value = scatter + m.milk * 3;
     F.uRoughness.value = m.rough;
     F.uSugar.value = m.sugar;
     F.uMilk.value = m.milk;
@@ -472,7 +482,6 @@ export class JellyView {
     F.uOpal.value = m.opal || 0;
     F.uIor.value = m.ior;
     F.uDispersion.value = 0.018 * Math.max(0, m.ior - 1) / 0.36;
-    C.uIor.value = Math.max(1.0001, m.ior);
   }
 
   // One cube's look (its slot k: flavour, material m) into its row of the
@@ -504,6 +513,14 @@ export class JellyView {
       put(7 + j, a.x, a.y, a.z, 0);
       put(17 + j, c.r, c.g, c.b, 0);
     }
+    // the colour of light that's crossed ~0.35 units of it (its shadow's -
+    // see createTintMaterial), and how much its caustics scatter
+    const tint = new THREE.Color(0, 0, 0);
+    for (const a of abs) tint.r += Math.exp(-a.x * 0.35), tint.g += Math.exp(-a.y * 0.35), tint.b += Math.exp(-a.z * 0.35);
+    tint.multiplyScalar(1 / abs.length);
+    const cloud = Math.max(m.milk || 0, hazeMinOf(o));
+    if (cloud) tint.lerp(new THREE.Color(1, 1, 1), 0.35 * cloud).multiplyScalar(1 - 0.35 * cloud);
+    put(27, tint.r, tint.g, tint.b, 9 * o * o + (m.milk || 0) * 3);
     this.cubeTex.needsUpdate = true;
   }
 
@@ -901,6 +918,10 @@ export class JellyView {
     this.scene.overrideMaterial = this.maskMat;
     r.render(this.scene, this.fxCam);
     this.scene.overrideMaterial = this.heightMat;
+    r.render(this.scene, this.fxCam);
+    r.setRenderTarget(this.rtFloorTint);
+    r.clear(true, false, false);
+    this.scene.overrideMaterial = this.tintMat;
     r.render(this.scene, this.fxCam);
     this.scene.overrideMaterial = null;
     // blurred, ~1.2 cm sigma in the world (2 steps of 0.6 cm)

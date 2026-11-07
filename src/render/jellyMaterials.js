@@ -103,6 +103,52 @@ export const LAYER_GLSL = /* glsl */ `
   }
 `;
 
+// Each cube's own look (several cubes: see JellyView.setCubeLook), a row of
+// uCubeTex per cube: its colour, haze, glow, gloss, refraction, sugar, milk,
+// finishes, its layers, the colour it gives the light through it. useCube(k)
+// picks the row (the front shader reads its own way, all at once).
+export const CUBE_GLSL = /* glsl */ `
+  uniform highp sampler2D uCubeTex;
+  int gK = 0;
+  int cLayers = 0;
+  float cLY0 = 0.0, cLSpan = 1.0, cLRep = 1.0, cLExp = 1.0, cLBlur = 0.0;
+  vec4 cubeT(int x) { return texelFetch(uCubeTex, ivec2(x, gK), 0); }
+  void useCube(float k) {
+    gK = int(k + 0.5);
+    vec4 q4 = cubeT(4), q5 = cubeT(5);
+    cLayers = int(q4.y + 0.5);
+    cLY0 = q4.z; cLSpan = q4.w; cLRep = q5.x; cLExp = q5.y; cLBlur = q5.z;
+  }
+  void cLayerPair(float y, out int a, out int b, out float s) {
+    float n = float(cLayers), m = n * cLRep;
+    float h = pow(max(clamp((y - cLY0) / cLSpan, 0.0, 1.0), 1e-6), cLExp);
+    float f = h * m - 0.5;
+    float i0 = floor(f);
+    float w = max(cLBlur * 0.5, 0.012);
+    s = smoothstep(0.5 - w, 0.5 + w, f - i0);
+    a = int(mod(clamp(i0, 0.0, m - 1.0), n));
+    b = int(mod(clamp(i0 + 1.0, 0.0, m - 1.0), n));
+  }
+  vec3 cSigmaAt(float y) {
+    int a, b; float s;
+    cLayerPair(y, a, b, s);
+    return mix(cubeT(7 + a).rgb, cubeT(7 + b).rgb, s);
+  }
+  vec3 cLayerSigma(float ya, float yb, vec3 base) {
+    if (cLayers == 0) return base;
+    if (abs(yb - ya) < 1e-3) return cSigmaAt(ya);
+    vec3 acc = vec3(0.0);
+    for (int k = 0; k < 16; k++) acc += cSigmaAt(mix(ya, yb, (float(k) + 0.5) / 16.0));
+    return acc * 0.0625;
+  }
+  vec3 cLayerScatter(float y, vec3 base) {
+    if (cLayers == 0) return base;
+    int a, b; float s;
+    cLayerPair(y, a, b, s);
+    return mix(cubeT(17 + a).rgb, cubeT(17 + b).rgb, s);
+  }
+`;
+
 // 1x1 float texture for samplers with nothing to show yet
 function emptyFloatTexture() {
   const t = new THREE.DataTexture(new Float32Array(4), 1, 1, THREE.RGBAFormat, THREE.FloatType);
@@ -283,6 +329,7 @@ export function createJellyMaterial(env, layerUniforms) {
       uniform vec4 uCausRect;
       uniform float uCausGain;
       uniform vec3 uTint;
+      uniform sampler2D tFloorTint;
       uniform float uGlowFloor;
       uniform vec3 uBg;
       uniform vec3 uFloorAlbedo;
@@ -299,43 +346,8 @@ export function createJellyMaterial(env, layerUniforms) {
       ${OCT}
       ${LAYER_GLSL}
 
-      // Each cube's own look (several cubes: see JellyView.setCubeLook), a
-      // row of uCubeTex per cube: its colour, haze, glow, gloss, refraction,
-      // sugar, milk, finishes and its layers.
-      uniform highp sampler2D uCubeTex;
+      ${CUBE_GLSL}
       varying float vCube;
-      int gK = 0;
-      int cLayers = 0;
-      float cLY0 = 0.0, cLSpan = 1.0, cLRep = 1.0, cLExp = 1.0, cLBlur = 0.0;
-      vec4 cubeT(int x) { return texelFetch(uCubeTex, ivec2(x, gK), 0); }
-      void cLayerPair(float y, out int a, out int b, out float s) {
-        float n = float(cLayers), m = n * cLRep;
-        float h = pow(max(clamp((y - cLY0) / cLSpan, 0.0, 1.0), 1e-6), cLExp);
-        float f = h * m - 0.5;
-        float i0 = floor(f);
-        float w = max(cLBlur * 0.5, 0.012);
-        s = smoothstep(0.5 - w, 0.5 + w, f - i0);
-        a = int(mod(clamp(i0, 0.0, m - 1.0), n));
-        b = int(mod(clamp(i0 + 1.0, 0.0, m - 1.0), n));
-      }
-      vec3 cSigmaAt(float y) {
-        int a, b; float s;
-        cLayerPair(y, a, b, s);
-        return mix(cubeT(7 + a).rgb, cubeT(7 + b).rgb, s);
-      }
-      vec3 cLayerSigma(float ya, float yb, vec3 base) {
-        if (cLayers == 0) return base;
-        if (abs(yb - ya) < 1e-3) return cSigmaAt(ya);
-        vec3 acc = vec3(0.0);
-        for (int k = 0; k < 16; k++) acc += cSigmaAt(mix(ya, yb, (float(k) + 0.5) / 16.0));
-        return acc * 0.0625;
-      }
-      vec3 cLayerScatter(float y, vec3 base) {
-        if (cLayers == 0) return base;
-        int a, b; float s;
-        cLayerPair(y, a, b, s);
-        return mix(cubeT(17 + a).rgb, cubeT(17 + b).rgb, s);
-      }
 
       float sq(float x) { return x * x; }
       // a pure spectral colour, hue 0..1
@@ -400,7 +412,7 @@ export function createJellyMaterial(env, layerUniforms) {
       vec3 floorAt(vec2 xz, float rough) {
         vec2 fuv = (xz - uFloorRect.xy) * uFloorRect.zw;
         float mask = 0.0, contact = 0.0;
-        vec3 caus = vec3(0.0), glowF = vec3(0.0);
+        vec3 caus = vec3(0.0), glowF = vec3(0.0), tint = uTint;
         float lod = 1.0 + 4.0 * rough;
         if (all(greaterThan(fuv, vec2(0.0))) && all(lessThan(fuv, vec2(1.0)))) {
           vec2 cuv = (xz - uCausRect.xy) * uCausRect.zw;
@@ -408,14 +420,17 @@ export function createJellyMaterial(env, layerUniforms) {
           vec4 fx = textureLod(tFloorFx, fuv, lod + uFxLodBias);
           mask = fx.r;
           contact = fx.g;
+          // (whose shadow: its colour - see JellyView.renderFloorFx)
+          vec4 tm = textureLod(tFloorTint, fuv, max(lod + uFxLodBias - 1.0, 0.0));
+          if (tm.a > 1e-3) tint = tm.rgb / tm.a;
         }
         vec2 guv = (xz - uGlowRect.xy) * uGlowRect.zw;
         if (uGlowFloor > 0.0 && all(greaterThan(guv, vec2(0.0))) && all(lessThan(guv, vec2(1.0))))
           glowF = textureLod(tGlowMap, guv, 1.5).rgb * 0.7 + textureLod(tGlowMap, guv, 3.5).rgb * 0.9;
-        vec3 transfer = vec3(1.0 - mask) + caus * uCausGain + uTint * mask * 0.22;
+        vec3 transfer = vec3(1.0 - mask) + caus * uCausGain + tint * mask * 0.22;
         vec3 direct = uLightColor * max(normalize(uLightDir).y, 0.0) * 0.3183 * transfer * (1.0 - contact * 0.2);
         vec3 sky = textureLod(envMap, vec3(0.0, 1.0, 0.0), envMaxLod).rgb * uFloorEnv
-          * mix(vec3(1.0), uTint * 1.1, mask * 0.68) * (1.0 - contact * 0.35);
+          * mix(vec3(1.0), tint * 1.1, mask * 0.68) * (1.0 - contact * 0.35);
         vec3 c = uFloorAlbedo * (direct + sky) + glowF * uGlowFloor;
         return mix(c, uBg, smoothstep(3.2, 11.0, length(xz)));
       }
@@ -844,16 +859,19 @@ export function createLightViewMaterial(kind) {
     vertexShader: /* glsl */ `
       attribute vec3 aRest;
       attribute vec4 aData;
+      attribute float aCube;
       varying vec3 vW;
       varying vec3 vN;
       varying float vRestY;
       varying float vTemp;
+      varying float vCubeK;
       void main() {
         vec4 wp = modelMatrix * vec4(position, 1.0);
         vW = wp.xyz;
         vN = mat3(modelMatrix) * normal;
         vRestY = aRest.y;
         vTemp = aData.x;
+        vCubeK = aCube;
         gl_Position = projectionMatrix * viewMatrix * wp;
       }`,
     fragmentShader: /* glsl */ `
@@ -862,12 +880,22 @@ export function createLightViewMaterial(kind) {
       varying vec3 vN;
       varying float vRestY;
       varying float vTemp;
+      varying float vCubeK;
       ${SAFE_GLSL}
       void main() {
-        ${kind === 1 ? 'gl_FragColor = finite4(vec4(safeNormalize(vN), vTemp));' : 'gl_FragColor = finite4(vec4(vW - uOrigin, vRestY + 10.0));'}
+        // (w: the rest height, + 10 so 0 is "nothing here", + 4 a cube -
+        // see lightViewCube)
+        ${kind === 1 ? 'gl_FragColor = finite4(vec4(safeNormalize(vN), vTemp));' : 'gl_FragColor = finite4(vec4(vW - uOrigin, vRestY + 10.0 + 4.0 * floor(vCubeK + 0.5)));'}
       }`,
   });
 }
+
+// the light view's w: 0 nothing; else 10 + 4 x its cube + its rest height
+// (rest heights stay within +-1)
+export const LIGHT_VIEW_GLSL = /* glsl */ `
+  float lightViewCube(float w) { return floor((w - 8.0) * 0.25); }
+  float lightViewRestY(float w) { return w - 10.0 - 4.0 * lightViewCube(w); }
+`;
 
 // Caustics, step 2 (caustics mapping, after Shah et al. / Wallace): a dense
 // grid of the key light's rays, each looked up in the light's view of the
@@ -888,11 +916,8 @@ export function createCausticMaterial(layerUniforms) {
     depthTest: false,
     depthWrite: false,
     uniforms: {
-      ...layerUniforms,
+      uCubeTex: { value: null },
       uLightDir: { value: new THREE.Vector3(-0.45, 0.8, 0.4).normalize() },
-      uIor: { value: 1.36 },
-      uAbsorb: { value: new THREE.Vector3(0.2, 2.4, 2.0) },
-      uScatter: { value: 0.35 },
       uFloorRect: { value: new THREE.Vector4(-3, -3, 1 / 6, 1 / 6) },
       tEntry: { value: null },
       tNormal: { value: null },
@@ -906,13 +931,15 @@ export function createCausticMaterial(layerUniforms) {
       uniform sampler2D tEntry;
       uniform sampler2D tNormal;
       uniform sampler2D tExit;
+      uniform highp sampler2D uCubeTex;
       uniform vec3 uOrigin;
       uniform mat4 uLightInvVP;
       uniform vec3 uLightDir;
-      uniform float uIor;
       uniform vec4 uFloorRect;
       uniform float uGridN;
       uniform vec4 uCausRect;
+      ${LIGHT_VIEW_GLSL}
+      flat varying float vK;
       varying vec3 vOld;
       varying vec3 vNew;
       varying float vValid;
@@ -945,8 +972,13 @@ export function createCausticMaterial(layerUniforms) {
           vPath = 0.0;
           vNdL = 1.0;
           vTemp = 0.0;
+          vK = 0.0;
         } else {
           P = E.xyz + uOrigin;
+          // (the cube it goes into: its own refraction, colour, haze)
+          float kA = lightViewCube(E.w);
+          vK = kA;
+          float ior = max(1.0001, texelFetch(uCubeTex, ivec2(2, int(kA)), 0).z);
           vec4 Nt = texelFetch(tNormal, ij, 0);
           // the normal smoothed over ~2 cm (the mesh's normals bend only at
           // its triangle edges, and caustics are all about how the normal
@@ -961,7 +993,7 @@ export function createCausticMaterial(layerUniforms) {
           float nl = dot(Ns, Ns);
           vec3 N = nl > 1e-12 ? Ns * inversesqrt(nl) : vec3(0.0, 1.0, 0.0);
           vec4 X = texelFetch(tExit, ij, 0);
-          vec3 r = refract(Ld, N, 1.0 / uIor);
+          vec3 r = refract(Ld, N, 1.0 / ior);
           if (dot(r, r) < 1e-6) r = Ld;
           float t = max(P.y, 0.0) / -min(r.y, -0.08);
           F = P + r * t;
@@ -976,8 +1008,8 @@ export function createCausticMaterial(layerUniforms) {
           vValid = nl > 1e-12 ? smoothstep(0.0, 0.05, P.y) : 0.0;
           vOld = P + Ld * (-P.y / Ld.y);
           vNew = F;
-          vRestA = E.w - 10.0;
-          vRestB = X.w > 0.5 ? X.w - 10.0 : vRestA;
+          vRestA = lightViewRestY(E.w);
+          vRestB = X.w > 0.5 ? lightViewRestY(X.w) : vRestA;
           vNdL = dot(N, normalize(uLightDir));
           vTemp = Nt.w;
         }
@@ -985,10 +1017,8 @@ export function createCausticMaterial(layerUniforms) {
         gl_Position = vec4(cuv * 2.0 - 1.0, 0.0, 1.0);
       }`,
     fragmentShader: /* glsl */ `
-      uniform vec3 uAbsorb;
-      uniform float uScatter;
-      uniform float uIor;
-      ${LAYER_GLSL}
+      ${CUBE_GLSL}
+      flat varying float vK;
       varying vec3 vOld;
       varying vec3 vNew;
       varying float vValid;
@@ -1000,19 +1030,24 @@ export function createCausticMaterial(layerUniforms) {
       void main() {
         // (only cells whose rays all went through the jelly)
         if (!(vValid >= 0.01) || !(vNdL > 0.0)) discard; // (NaN-safe)
+        useCube(vK);
+        vec4 q0 = cubeT(0);
+        float ior = max(1.0001, cubeT(2).z), scatter = cubeT(27).a;
         float oldA = length(dFdx(vOld)) * length(dFdy(vOld));
         float newA = length(dFdx(vNew)) * length(dFdy(vNew));
         // focusing (capped: a cell squeezed to nothing would be a spike)
         float ratio = clamp(oldA / max(newA, 1e-9), 0.0, 3.5);
-        float F0 = pow((uIor - 1.0) / (uIor + 1.0), 2.0);
+        float F0 = pow((ior - 1.0) / (ior + 1.0), 2.0);
         float Ft = 1.0 - (F0 + (1.0 - F0) * pow(clamp(1.0 - vNdL, 0.0, 1.0), 5.0));
-        vec3 sig = layerSigma(vRestA, vRestB, uAbsorb);
-        vec3 T = exp(-sig * vPath) * exp(-uScatter * vPath * 0.7);
+        vec3 sig = cLayerSigma(vRestA, vRestB, q0.rgb);
+        vec3 T = exp(-sig * vPath) * exp(-scatter * vPath * 0.7);
         // frosted jelly scatters light: no sharp caustics
         T *= 1.0 - 0.9 * smoothstep(0.05, 0.6, -vTemp);
         vec3 c = T * ratio * Ft * vValid;
         bvec3 bad = equal(floatBitsToUint(c) & uvec3(0x7f800000u), uvec3(0x7f800000u));
-        gl_FragColor = vec4(any(bad) ? vec3(0.0) : min(c, vec3(8.0)), 1.0);
+        // (alpha: this light came through layers - the floor takes its
+        // shadow's colour from it there, band by band)
+        gl_FragColor = vec4(any(bad) ? vec3(0.0) : min(c, vec3(8.0)), cLayers > 0 ? 1.0 : 0.0);
       }`,
   });
 }
@@ -1021,24 +1056,25 @@ export function createCausticMaterial(layerUniforms) {
 // floor to sample - see JellyView.renderReflection): its colour as it looks
 // (in glow mode, as it shines), the reflection fading with height above the
 // floor. No refraction: it's soft and dim, nobody can tell.
-export function createReflectMaterial(layerUniforms) {
+export function createReflectMaterial() {
   return new THREE.ShaderMaterial({
     side: THREE.FrontSide,
     uniforms: {
-      ...layerUniforms,
-      uScatterColor: { value: new THREE.Color(1, 0.3, 0.3) },
+      uCubeTex: { value: null },
       uEmit: { value: 0 },
-      uMilk: { value: 0 },
       uFade: { value: 2.6 },
     },
     vertexShader: /* glsl */ `
       attribute vec3 aRest;
       attribute vec4 aData;
+      attribute float aCube;
       varying vec3 vRest;
       varying vec3 vN;
       varying vec3 vW;
       varying float vGlow;
+      varying float vCube;
       void main() {
+        vCube = aCube;
         vec4 wp = modelMatrix * vec4(position, 1.0);
         vW = wp.xyz;
         vN = mat3(modelMatrix) * normal;
@@ -1047,22 +1083,23 @@ export function createReflectMaterial(layerUniforms) {
         gl_Position = projectionMatrix * viewMatrix * wp;
       }`,
     fragmentShader: /* glsl */ `
-      uniform vec3 uScatterColor;
       uniform float uEmit;
-      uniform float uMilk;
       uniform float uFade;
       varying vec3 vRest;
       varying vec3 vN;
       varying vec3 vW;
       varying float vGlow;
-      ${LAYER_GLSL}
+      varying float vCube;
+      ${CUBE_GLSL}
       ${SAFE_GLSL}
       void main() {
         // (mirrored: -y is how high the real point is above the floor)
         float h = max(-vW.y, 0.0);
         float fade = exp(-h * uFade);
-        vec3 sc = layerScatter(vRest.y, uScatterColor);
-        sc = mix(sc, mix(sc, vec3(1.0), 0.45), uMilk);
+        useCube(vCube);
+        vec4 q1 = cubeT(1);
+        vec3 sc = cLayerScatter(vRest.y, q1.rgb);
+        sc = mix(sc, mix(sc, vec3(1.0), 0.45), max(cubeT(3).y, q1.a));
         vec3 V = safeNormalize(cameraPosition - vW);
         float rim = pow(clamp(1.0 - abs(dot(safeNormalize(vN), V)), 0.0, 1.0), 2.0);
         vec3 c = sc * mix(0.42 + 0.3 * rim, 0.85 + 0.5 * rim, uEmit) + vec3(1.0, 0.9, 0.75) * vGlow * 0.6;
@@ -1075,7 +1112,7 @@ export function createReflectMaterial(layerUniforms) {
 // bit of its surface in its own colour (a rainbow lying on its side lights
 // the floor in bands), weighted by how near the floor it is. Summed, then
 // blurred by the floor through the mip levels (see floor.js).
-export function createGlowMaterial(layerUniforms, scatterColor, milk) {
+export function createGlowMaterial() {
   return new THREE.ShaderMaterial({
     side: THREE.DoubleSide,
     transparent: true,
@@ -1086,33 +1123,35 @@ export function createGlowMaterial(layerUniforms, scatterColor, milk) {
     depthTest: false,
     depthWrite: false,
     uniforms: {
-      ...layerUniforms,
-      uScatterColor: scatterColor,
-      uMilk: milk,
+      uCubeTex: { value: null },
       uFloorRect: { value: new THREE.Vector4(-3, -3, 1 / 6, 1 / 6) },
     },
     vertexShader: /* glsl */ `
       attribute vec3 aRest;
+      attribute float aCube;
       uniform vec4 uFloorRect;
       varying float vH;
       varying vec3 vRest;
+      varying float vCube;
       void main() {
+        vCube = aCube;
         vH = position.y;
         vRest = aRest;
         vec2 uv = (position.xz - uFloorRect.xy) * uFloorRect.zw;
         gl_Position = vec4(uv * 2.0 - 1.0, 0.0, 1.0);
       }`,
     fragmentShader: /* glsl */ `
-      uniform vec3 uScatterColor;
-      uniform float uMilk;
       varying float vH;
       varying vec3 vRest;
-      ${LAYER_GLSL}
+      varying float vCube;
+      ${CUBE_GLSL}
       ${SAFE_GLSL}
       void main() {
         float w = exp(-max(vH, 0.0) * 5.0);
-        vec3 sc = layerScatter(vRest.y, uScatterColor);
-        sc = mix(sc, mix(sc, vec3(1.0), 0.45), uMilk);
+        useCube(vCube);
+        vec4 q1 = cubeT(1);
+        vec3 sc = cLayerScatter(vRest.y, q1.rgb);
+        sc = mix(sc, mix(sc, vec3(1.0), 0.45), max(cubeT(3).y, q1.a));
         gl_FragColor = finite4(vec4(sc * w, w));
       }`,
   });
@@ -1148,6 +1187,45 @@ export function createMaskMaterial() {
     fragmentShader: /* glsl */ `
       varying float vH;
       void main() { gl_FragColor = vec4(1.0, 0.0, 0.0, 1.0); }`,
+  });
+}
+
+// The colour each cube gives the light through it, laid on the floor where
+// its shadow falls (along the light, like the mask). Added up with a weight
+// (every surface over a spot: a cube's top and bottom both count), so the
+// floor reads sum / weight - and where two shadows overlap, they mix.
+export function createTintMaterial() {
+  return new THREE.ShaderMaterial({
+    side: THREE.DoubleSide,
+    transparent: true,
+    blending: THREE.CustomBlending,
+    blendEquation: THREE.AddEquation,
+    blendSrc: THREE.OneFactor,
+    blendDst: THREE.OneFactor,
+    depthTest: false,
+    depthWrite: false,
+    uniforms: {
+      uCubeTex: { value: null },
+      uLightDir: { value: new THREE.Vector3(-0.45, 0.8, 0.4).normalize() },
+      uFloorRect: { value: new THREE.Vector4(-3, -3, 1 / 6, 1 / 6) },
+    },
+    vertexShader: /* glsl */ `
+      attribute float aCube;
+      uniform vec3 uLightDir;
+      uniform vec4 uFloorRect;
+      varying float vCube;
+      void main() {
+        vec3 Ld = -normalize(uLightDir);
+        vec3 P = position;
+        vec3 oldP = P + Ld * (-P.y / Ld.y);
+        vCube = aCube;
+        vec2 uv = (oldP.xz - uFloorRect.xy) * uFloorRect.zw;
+        gl_Position = vec4(uv * 2.0 - 1.0, 0.0, 1.0);
+      }`,
+    fragmentShader: /* glsl */ `
+      uniform highp sampler2D uCubeTex;
+      varying float vCube;
+      void main() { gl_FragColor = vec4(texelFetch(uCubeTex, ivec2(27, int(vCube + 0.5)), 0).rgb, 1.0); }`,
   });
 }
 
