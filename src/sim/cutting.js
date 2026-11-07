@@ -54,6 +54,8 @@ export function relocateAnchors(sb, anchors) {
  * opts.separate: separation speed applied along the normal
  * opts.light: only the rebuild the next cut needs (the caller rebuilds fully
  *   before the body is stepped or drawn)
+ * opts.glueAll: split the tets along it but glue it all back - the seam a
+ *   tear will open later (see unglue); its vertices come back as .seam
  * Returns { changed, pieces: [pieceIds touched], sideOfVertex }
  */
 export function cutBody(sb, field, opts = {}) {
@@ -346,11 +348,11 @@ export function cutBody(sb, field, opts = {}) {
     }
   }
 
-  // --- re-glue outside the region (partial cuts)
+  // --- re-glue outside the region (partial cuts) - or everywhere (a seam)
   const remap = new Map();
-  if (region) {
+  if (region || opts.glueAll) {
     for (let g = 0; g < glue.length; g += 5) {
-      if (!region(glue[g + 2], glue[g + 3], glue[g + 4])) remap.set(glue[g + 1], glue[g]);
+      if (opts.glueAll || !region(glue[g + 2], glue[g + 3], glue[g + 4])) remap.set(glue[g + 1], glue[g]);
     }
     if (remap.size) for (let k = 0; k < newT.length; k++) {
       const r = remap.get(newT[k]);
@@ -362,7 +364,7 @@ export function cutBody(sb, field, opts = {}) {
   // the slit a blade's width - in the rest shape too - so its two sides
   // don't sit pressed together (in contact) for ever. (Snapping keeps the
   // nearest vertices ~0.3 cell from the cut, so this can't turn a tet over.)
-  if (remap.size) {
+  if (remap.size && !opts.glueAll) {
     const kh = (opts.kerf ?? 0.035 * hEdge) / 2;
     for (let g = 0; g < glue.length; g += 5) {
       const plus = glue[g], minus = glue[g + 1];
@@ -426,7 +428,9 @@ export function cutBody(sb, field, opts = {}) {
       vv[o] += nrm[0] * f; vv[o + 1] += nrm[1] * f; vv[o + 2] += nrm[2] * f;
     }
   }
-  return { changed: true, side, newVerts: nNew, nT };
+  const seam = [];
+  if (opts.glueAll) for (let g = 0; g < glue.length; g += 5) seam.push(glue[g]);
+  return { changed: true, side, newVerts: nNew, nT, seam };
 }
 
 // Planar field helper
@@ -541,6 +545,39 @@ function tidyLabels(sb, labels) {
 }
 
 // Remove tets matching predicate(t, cx, cy, cz). Returns removed centroids.
+// Tear along existing faces: each of verts is split in two - the tets
+// marked in plus (by tet index) take the copy, the others keep it - then the
+// body is rebuilt. No tet is cut, so a tear can run across a piece this way a
+// few vertices at a time, the slit opening as it goes (cutting one plane over
+// and over re-split its tets each time: millions). A vertex with no plus tet,
+// or no other, isn't on the seam: left be. Returns how many were split.
+export function unglue(sb, verts, plus) {
+  const T = sb.T, vtS = sb.vtStart, vtL = sb.vtList;
+  let n = 0;
+  for (const i of verts) {
+    let np = 0, nm = 0;
+    for (let e = vtS[i]; e < vtS[i + 1]; e++) {
+      const t = vtL[e];
+      if (sb.vol0[t] <= 0) continue;
+      if (plus[t]) np++;
+      else nm++;
+    }
+    if (!np || !nm) continue;
+    const o = i * 3;
+    const j = sb.addVertex(sb.x[o], sb.x[o + 1], sb.x[o + 2], sb.X[o], sb.X[o + 1], sb.X[o + 2], sb.v[o], sb.v[o + 1], sb.v[o + 2], sb.temp[i]);
+    sb.melt[j] = sb.melt[i];
+    sb.glow[j] = sb.glow[i];
+    for (let e = vtS[i]; e < vtS[i + 1]; e++) {
+      const t = vtL[e];
+      if (!plus[t]) continue;
+      for (let k = 0; k < 4; k++) if (T[t * 4 + k] === i) T[t * 4 + k] = j;
+    }
+    n++;
+  }
+  if (n) sb.rebuild();
+  return n;
+}
+
 export function removeTets(sb, pred, anchors = []) {
   captureAnchors(sb, anchors);
   const { T, x } = sb;

@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { cutBody, planeField, removeTets, removeSmallPieces } from '../sim/cutting.js';
+import { cutBody, planeField, unglue } from '../sim/cutting.js';
 import { maxStretch } from '../sim/strain.js';
 import { polarRot } from '../sim/softbody.js';
 import { makeNailGun } from '../world/models.js';
@@ -197,14 +197,35 @@ export class HandTool {
       // (not pulled hard enough - eased off: it firms up again)
       if (cur) {
         cur.p -= step * 0.8;
-        if (cur.p <= 0) this._endTear();
-        else this._damage(cur);
+        // (a rip already open waits for the next pull, along the same seam)
+        if (cur.p <= 0 && !cur.done) this._endTear();
+        else {
+          cur.p = Math.max(0, cur.p);
+          this._damage(cur);
+        }
       }
       return;
     }
     const t = cur || this._startTear(best);
-    t.p += (step * (1 + 3 * Math.max(0, best.over - 1))) / this._tearTime();
+    if (!t) return;
+    t.p += (step * (1 + 1.5 * Math.max(0, best.over - 1))) / this._tearTime();
     t.n = best.n;
+    // the rip runs along the seam as it gives: after the first sixth of the
+    // way, so much of the seam open as it is through - a stage at a time
+    // (each a rebuild), the last when it's all the way
+    const N = t.seam.length, want = t.p >= 1 ? N : Math.floor(Math.max(0, (t.p - 0.15) / 0.85) * N);
+    if (want > t.done && (want === N || want - t.done >= Math.max(4, Math.ceil(N * 0.12)))) {
+      const n = unglue(sb, t.seam.subarray(t.done, want), t.plus);
+      t.done = want;
+      t.ver = sb.topoVersion;
+      // (pieces are renumbered by the rebuild: it's the one its unopened seam is in)
+      if (want < N) t.piece = sb.vPiece[t.seam[want]];
+      if (n) {
+        app.audio?.squish(0.35 + 0.3 * t.p, 0.7 + 0.25 * t.p);
+        app.audio?.crack(0.08 + 0.1 * t.p);
+        app.markDamaged();
+      }
+    }
     if (t.p < 1) {
       this._damage(t);
       // (a creak now and then as it gives)
@@ -214,7 +235,7 @@ export class HandTool {
       }
       return;
     }
-    // through: one ragged cut across the band, where it's drawn out now
+    // through: the seam's all open - where it ran, now
     const o = [0, 0, 0];
     let wsum = 0;
     for (let q = 0; q < t.band.length; q++) {
@@ -223,32 +244,33 @@ export class HandTool {
       wsum += wq;
     }
     for (let e = 0; e < 3; e++) o[e] /= wsum || 1;
-    const k = t.piece, [nx, ny, nz] = t.n, half = t.half;
+    const [nx, ny, nz] = t.n, half = t.half;
     this.tear = null;
+    // (if the seam didn't part it - a piece the plane crosses twice - the
+    // slit stays and that's that)
+    {
+      const ps = new Set();
+      for (const d of this.drags.values()) ps.add(sb.vPiece[d.grab.idx[0]]);
+      if (ps.size < 2) {
+        this._cool = 0.35;
+        return;
+      }
+    }
     for (const d of this.drags.values()) {
       const g = d.grab;
-      if (g.piece !== k) continue;
       const c = [0, 0, 0];
       for (let j = 0; j < g.n; j++) for (let q = 0; q < 3; q++) c[q] += sb.x[g.idx[j] * 3 + q] / g.n;
       for (let q = 0; q < 3; q++) d.off[q] = d.pt[q] - c[q];
       this._aim(d);
     }
-    const field = ragged(planeField(nx, ny, nz, nx * o[0] + ny * o[1] + nz * o[2]), 0.035 * size);
-    const res = cutBody(sb, field, { separate: 0.3, anchors: app.allAnchors(), pieces: [k] });
-    if (!res.changed) return;
     // (the torn ends keep most of the shape they were drawn out to - see
-    // _yield; the cut leaves slivers in a neck drawn out several times over,
-    // a hair thick in the jelly's own shape, that buzz the ends at 17 m/s:
-    // they go, and any crumb they leave)
-    const thin = 0.03 * sb.hCell ** 3, h2 = 2 * half;
-    // (the halves: the pieces the hands hold now)
+    // _yield - on the halves, the pieces the hands hold now)
+    const h2 = 2 * half;
     const halves = new Set();
     for (const d of this.drags.values()) halves.add(sb.vPiece[d.grab.idx[0]]);
     this._yield(o, t.n, h2, this._plastic(), halves);
     sb.calmT = 0.3;
-    const cut = removeTets(sb, (q, cx, cy, cz) => sb.vol0[q] < thin && Math.abs((cx - o[0]) * nx + (cy - o[1]) * ny + (cz - o[2]) * nz) < h2, app.allAnchors());
-    if (!cut.length) sb.rebuild();
-    removeSmallPieces(sb, 0.002 * size ** 3, app.allAnchors());
+    sb.rebuild();
     // (the torn ends were drawn out soft: they stay soft and firm up over a
     // moment - given their full stiffness back at once, stretched as they
     // are, the halves sprang apart at 30+ m/s)
@@ -268,20 +290,44 @@ export class HandTool {
     app.glowPulse?.(o[0], o[1], o[2], 0.8);
   }
 
-  // A tear begins: the band of the piece's tets across the line between the
-  // hands, through the most stretched one - its full width, ~a cell either
-  // side, weighted toward the middle.
+  // A tear begins: one ragged cut across the line between the hands,
+  // through the most stretched spot - but glued back all along (see
+  // cutBody's glueAll): the seam it will run along, opened a stretch at a
+  // time from the edge nearest that spot (see update, unglue). The tets on
+  // the seam's far side are "plus"; the band of tets either side of it
+  // softens as it gives. (Run along the mesh's own faces, the torn face came
+  // out a regular egg-crate of facets.)
   _startTear(best) {
-    const sb = this.app.sb, pc = sb.pieces[best.k], o = tetCentre(sb, best.m.t), [nx, ny, nz] = best.n;
+    const app = this.app, sb = app.sb, o = tetCentre(sb, best.m.t), [nx, ny, nz] = best.n;
+    const field = ragged(planeField(nx, ny, nz, nx * o[0] + ny * o[1] + nz * o[2]), 0.035 * sb.p.size);
+    const res = cutBody(sb, field, { glueAll: true, anchors: app.allAnchors(), pieces: [best.k] });
+    if (!res.changed || !res.seam.length) return null;
+    app.onTopologyChanged();
+    const seam = res.seam.filter((i) => sb.alive[i]);
+    if (!seam.length) return null;
+    const k = sb.vPiece[seam[0]], pc = sb.pieces[k];
     const half = 1.5 * sb.hCell, band = [], prof = [];
+    const plus = new Uint8Array(sb.nT);
     for (const t of pc.tets) {
       if (sb.vol0[t] <= 0) continue;
-      const c = tetCentre(sb, t), d = Math.abs((c[0] - o[0]) * nx + (c[1] - o[1]) * ny + (c[2] - o[2]) * nz);
+      const c = tetCentre(sb, t);
+      if (field.value(c[0], c[1], c[2]) > 0) plus[t] = 1;
+      const d = Math.abs((c[0] - o[0]) * nx + (c[1] - o[1]) * ny + (c[2] - o[2]) * nz);
       if (d >= half) continue;
       band.push(t);
       prof.push(1 - (d / half) * (d / half));
     }
-    this.tear = { piece: best.k, ver: sb.topoVersion, band: Int32Array.from(band), prof: Float32Array.from(prof), p: 0, n: best.n, creak: 0, half };
+    // (where it starts: the seam's surface vertex nearest the spot)
+    const onS = new Uint8Array(sb.nV);
+    for (let q = 0; q < sb.nF * 3; q++) onS[sb.sTri[q]] = 1;
+    const d2o = (i) => (sb.x[i * 3] - o[0]) ** 2 + (sb.x[i * 3 + 1] - o[1]) ** 2 + (sb.x[i * 3 + 2] - o[2]) ** 2;
+    let start = -1;
+    for (const i of seam) if (onS[i] && (start < 0 || d2o(i) < d2o(start))) start = i;
+    if (start < 0) start = seam[0];
+    const sx = sb.x[start * 3], sy = sb.x[start * 3 + 1], sz = sb.x[start * 3 + 2];
+    const d2s = (i) => (sb.x[i * 3] - sx) ** 2 + (sb.x[i * 3 + 1] - sy) ** 2 + (sb.x[i * 3 + 2] - sz) ** 2;
+    seam.sort((p, q) => d2s(p) - d2s(q));
+    this.tear = { piece: k, ver: sb.topoVersion, band: Int32Array.from(band), prof: Float32Array.from(prof), p: 0, n: best.n, creak: 0, half, plus, seam: Int32Array.from(seam), done: 0 };
     return this.tear;
   }
 
@@ -376,7 +422,7 @@ export class HandTool {
   // (s) how long it gives, pulled just past its limit, before it parts:
   // stiff stuff quickly, soft stuff draws out
   _tearTime() {
-    return (0.35 + 1.1 * (1 - this._stiffness())) * (this.app.st?.tough ?? 1);
+    return (0.6 + 1.6 * (1 - this._stiffness())) * (this.app.st?.tough ?? 1);
   }
 }
 

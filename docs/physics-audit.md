@@ -65,9 +65,11 @@ Pieces sleep when still. A per-tet cap stops tiny tets from buzzing.
 - **Tear:** only two hands tear.
   1. Pull a piece apart past 1.12× the distance you took hold at.
   2. Once the middle band is stretched past the piece's limit, it starts to
-     give: a band across the pull softens and draws out thin.
-  3. Keep pulling and it parts, as one ragged cut.
-  4. Ease off before then and it firms back up.
+     give: a ragged seam is cut across the pull but left glued, and the band
+     either side softens.
+  3. Keep pulling and the seam unzips from the edge nearest the most-stretched
+     spot, a stage at a time (`unglue`), until the halves part.
+  4. Ease off and the rip waits, still open, until the next pull.
 
 **Controls.** Feel: Toughness, the Tearing switch. Lab: Grab size, Hand
 strength, Poke.
@@ -77,8 +79,9 @@ strength, Poke.
   - **Stretch and time:** it takes about 18% more stretch than before, and
     gives over a sustained pull rather than snapping. Both depend on
     stiffness: limit = material base × (1.08 + 0.17·softness) × √toughness;
-    time = (0.35 + 1.1·softness) s × toughness. Jello tears in about 0.75 s
-    of pulling, slime and mochi in about 1.4 s.
+    time = (0.6 + 1.6·softness) s × toughness. The rip runs across visibly
+    (jello about 1 s, gummy about 0.6 s, slime about 0.8 s from first give to
+    apart), and pauses when the slit relieves the stretch.
   - **No more violent flying apart:** at the 4–6× stretch a long pull reaches,
     the halves used to fly apart at 15–36 m/s. Now:
     - the torn ends stay soft and firm up over 1 s;
