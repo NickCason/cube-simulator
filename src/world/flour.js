@@ -13,6 +13,8 @@
 import * as THREE from 'three';
 import { resolveFlavor } from '../styles.js';
 import { POWDERS } from './powders.js';
+import { REST_STEP } from '../sim/softbody.js';
+import { roundBoxSDF } from '../sim/mesh.js';
 
 const N = 384, SPAN = 6.4, HALF = SPAN / 2, CELL = SPAN / N; // (1.7 cm a texel)
 const MAX = 1.5; // (as thick as it piles on the floor)
@@ -60,6 +62,98 @@ export class Flour {
         cb.coatRec = null;
       }
     });
+  }
+
+  // A re-cube, just before the pieces fuse: the powder on them blown off in
+  // puffs - each where powder is, in its colour, as much as was there. On
+  // the cube's outside it puffs straight out from where it is; on a cut
+  // face - inside the cube about to be made, against another piece - it's
+  // squeezed out along the seam to the nearest bit of the outside and puffs
+  // from there, not through the jelly. (only: the one cube re-cubing alone)
+  puff(only = -1) {
+    const app = this.app, sb = app.sb, D = sb.dust, C = sb.coat, x = sb.x, X = sb.X;
+    if (!this.dusty) return;
+    const surf = this._surf(sb);
+    // (each cube's outside, at rest: a coarse grid of its outer vertices, to
+    // find the nearest to a buried one)
+    const outer = new Map(), cellOf = (k, rx, ry, rz, h) => `${k}|${Math.floor(rx / h)}|${Math.floor(ry / h)}|${Math.floor(rz / h)}`;
+    const onOut = (i) => {
+      const k = sb.vCube[i], half = sb.cSize[k] / 2;
+      return Math.abs(roundBoxSDF(X[i * 3] - k * REST_STEP, X[i * 3 + 1], X[i * 3 + 2], half, sb.cBevel[k])) < 0.3 * (sb.cH[k] || sb.hCell);
+    };
+    for (let i = 0; i < sb.nV; i++) {
+      if (!surf[i] || !sb.alive[i] || sb.vTag[i] || (only >= 0 && sb.vCube[i] !== only) || !onOut(i)) continue;
+      const k = sb.vCube[i], h = 0.12 * sb.cSize[k], key = cellOf(k, X[i * 3] - k * REST_STEP, X[i * 3 + 1], X[i * 3 + 2], h);
+      (outer.get(key) || outer.set(key, []).get(key)).push(i);
+    }
+    const nearestOut = (i) => {
+      const k = sb.vCube[i], h = 0.12 * sb.cSize[k], rx = X[i * 3] - k * REST_STEP, ry = X[i * 3 + 1], rz = X[i * 3 + 2];
+      const ci = Math.floor(rx / h), cj = Math.floor(ry / h), ck = Math.floor(rz / h);
+      let best = -1, bd = Infinity;
+      for (let r = 0; r <= 5 && best < 0; r++)
+        for (let di = -r; di <= r; di++)
+          for (let dj = -r; dj <= r; dj++)
+            for (let dk = -r; dk <= r; dk++) {
+              if (Math.max(Math.abs(di), Math.abs(dj), Math.abs(dk)) !== r) continue;
+              for (const j of outer.get(`${k}|${ci + di}|${cj + dj}|${ck + dk}`) || []) {
+                const d = (X[j * 3] - k * REST_STEP - rx) ** 2 + (X[j * 3 + 1] - ry) ** 2 + (X[j * 3 + 2] - rz) ** 2;
+                if (d < bd) (bd = d), (best = j);
+              }
+            }
+      return best;
+    };
+    // (each cube's middle now, for which way is out)
+    const mid = new Float64Array(8 * 4);
+    for (let i = 0; i < sb.nV; i++) {
+      if (!sb.alive[i] || sb.vTag[i]) continue;
+      const q = sb.vCube[i] * 4;
+      mid[q] += x[i * 3]; mid[q + 1] += x[i * 3 + 1]; mid[q + 2] += x[i * 3 + 2]; mid[q + 3]++;
+    }
+    // the puffs: what's to go, gathered where it'll go from - cells of
+    // several cm (all of it powdered: some 600 puffs, no more)
+    const cells = new Map(), cs = 0.09;
+    let any = false;
+    for (let i = 0; i < sb.nV; i++) {
+      const d = D[i];
+      if (!(d > 0.02) || !surf[i] || (only >= 0 && sb.vCube[i] !== only)) continue;
+      const from = onOut(i) ? i : nearestOut(i);
+      if (from < 0) continue;
+      const k = sb.vCube[i], m = mid[k * 4 + 3] || 1;
+      const px = x[from * 3], py = x[from * 3 + 1], pz = x[from * 3 + 2];
+      let ox = px - mid[k * 4] / m, oy = py - mid[k * 4 + 1] / m, oz = pz - mid[k * 4 + 2] / m;
+      const ol = Math.hypot(ox, oy, oz) || 1;
+      const key = `${Math.floor(px / cs)},${Math.floor(py / cs)},${Math.floor(pz / cs)}`;
+      const c = cells.get(key) || cells.set(key, { x: 0, y: 0, z: 0, ox: 0, oy: 0, oz: 0, r: 0, g: 0, b: 0, a: 0, n: 0 }).get(key);
+      c.x += px; c.y += py; c.z += pz; c.ox += ox / ol; c.oy += oy / ol; c.oz += oz / ol;
+      c.r += C[i * 5]; c.g += C[i * 5 + 1]; c.b += C[i * 5 + 2]; c.a += d; c.n++;
+      any = true;
+    }
+    const rnd = (a, b) => a + Math.random() * (b - a), share = Math.min(1, 600 / Math.max(1, cells.size * 2.2));
+    for (const c of cells.values()) {
+      const n = c.n, px = c.x / n, py = c.y / n, pz = c.z / n, ol = Math.hypot(c.ox, c.oy, c.oz) || 1;
+      const ox = c.ox / ol, oy = c.oy / ol, oz = c.oz / ol, col = [c.r / c.a, c.g / c.a, c.b / c.a];
+      const want = Math.min(4, 1 + c.a * 0.6) * share, puffs = Math.floor(want) + (Math.random() < want % 1 ? 1 : 0);
+      // (a soft cloud of it, billowing out and hanging a moment as it thins -
+      // and a few grains of it flung out further, falling)
+      for (let q = 0; q < puffs; q++) {
+        const sp = rnd(0.25, 0.7);
+        app.particles.alpha.spawn(px + ox * 0.02, py + oy * 0.02, pz + oz * 0.02,
+          (ox + rnd(-0.45, 0.45)) * sp, (oy + 0.35 + rnd(-0.2, 0.4)) * sp, (oz + rnd(-0.45, 0.45)) * sp,
+          rnd(1.2, 2.0), rnd(0.1, 0.15), rnd(0.32, 0.5), [col[0], col[1], col[2], Math.min(0.55, 0.32 + 0.08 * c.a)], [col[0], col[1], col[2], 0], 2.4, -0.18);
+      }
+      if (Math.random() < 0.6 * share)
+        app.particles.alpha.spawn(px, py, pz, (ox + rnd(-0.3, 0.3)) * 1.6, (oy + 0.6) * 1.4, (oz + rnd(-0.3, 0.3)) * 1.6,
+          rnd(0.5, 0.8), rnd(0.008, 0.012), rnd(0.006, 0.01), [col[0], col[1], col[2], 0.9], [col[0], col[1], col[2], 0.6], 0.6, 1.2);
+    }
+    // (and gone from the jelly)
+    for (let i = 0; i < sb.nV; i++) {
+      if (only >= 0 && sb.vCube[i] !== only) continue;
+      D[i] = 0;
+      for (let q = 0; q < 5; q++) C[i * 5 + q] = 0;
+    }
+    this.dusty = only >= 0 && D.some((v) => v > 0.002);
+    for (const cb of app.cubes) if (only < 0 || cb.slot === only) (cb.floured = false), (cb.coatRec = null);
+    if (any) app.audio?.puff?.(Math.min(1, 0.3 + cells.size / 60));
   }
 
   // (texel of x, z: -1 off the square)

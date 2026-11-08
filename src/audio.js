@@ -736,6 +736,14 @@ export class AudioEngine {
     this._tone(t, 'square', f, f, 0.035, 0.016, 0.001);
   }
 
+  // (a re-cube's: the powder on it blown off - a soft breathy poof)
+  puff(amount = 0.6) {
+    if (!this._ok('puff', 0.2)) return;
+    const t = this.ctx.currentTime;
+    this._noise(t, 0.32, 'lowpass', 2400, 380, 0.7, 0.24 * amount, 0.012);
+    this._noise(t + 0.02, 0.16, 'bandpass', 900, 500, 1.2, 0.12 * amount, 0.006);
+  }
+
   // Googly eyes (see Eyes): one stuck on, a little tacky press; its pupil
   // rattling round its dome, a tiny plastic tick (at: where, for panning);
   // one peeled off, a sticky unpeel.

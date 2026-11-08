@@ -331,6 +331,7 @@ export class Healer {
     this.fillField = null;
     this.fillTemplate = null;
     this.only = -1; // (one cube re-cubing on its own: its slot - see start)
+    this.puffed = false; // (its powder blown off yet: see update)
   }
 
   // opts: scale (a new size), layout (a stack), only (just that cube: the
@@ -345,6 +346,7 @@ export class Healer {
     this.t = 0;
     this.fused = false;
     this.gathered = false;
+    this.puffed = false;
     this.only = opts.only ?? -1;
     this.ejected = app.nails.ejectAll(this.only);
     for (const f of app.onHealStart) f();
@@ -786,6 +788,12 @@ export class Healer {
       if (p) app.particles?.glitter(p.c0.clone().lerp(p.cF, g), 1);
     }
     const end = TL.flyStart + TL.flyDur + TL.stagger;
+    // (just before it's whole again: the powder on it blown off - see
+    // Flour.puff)
+    if (!this.puffed && t > end - 0.3) {
+      this.puffed = true;
+      app.flour?.puff(this.only);
+    }
     if ((t > end && this._maxError() < 0.025) || t > end + 0.45) this._fuse();
   }
 
