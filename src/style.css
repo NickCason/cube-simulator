@@ -4282,3 +4282,125 @@ body.powders-on .hint {
     height: 22px;
   }
 }
+
+/* ---------------------------------------------------------------- the mallet's resonance meter */
+.res-meter {
+  --lv: 0;
+  position: fixed;
+  left: 50%;
+  bottom: calc(max(18px, calc(env(safe-area-inset-bottom) + 8px)) + 66px);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 13px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.55);
+  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(12px);
+  color: rgba(28, 28, 31, 0.7);
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  opacity: 0;
+  transform: translate(-50%, 8px) scale(0.86, 1.12);
+  transform-origin: 50% 100%;
+  transition: opacity 0.35s, transform 0.5s cubic-bezier(0.25, 2, 0.45, 1);
+  pointer-events: none !important;
+  z-index: 5;
+}
+.res-meter.show {
+  opacity: 1;
+  transform: translate(-50%, 0);
+}
+/* (the hint steps up out of its way) */
+body.res-on .hint {
+  bottom: calc(max(18px, calc(env(safe-area-inset-bottom) + 8px)) + 108px);
+}
+.res-pips {
+  display: flex;
+  gap: 5px;
+}
+.res-pips i {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: rgba(28, 28, 31, 0.13);
+  box-shadow: inset 0 0 0 1px rgba(28, 28, 31, 0.08);
+  transition: background 0.2s, box-shadow 0.2s, transform 0.25s cubic-bezier(0.25, 2, 0.45, 1);
+}
+.res-pips i.on {
+  /* (amber to hot pink as it builds) */
+  background: hsl(calc(38 - 70 * var(--lv)), 95%, calc(56% - 4% * var(--lv)));
+  box-shadow: 0 0 calc(4px + 8px * var(--lv)) hsla(calc(38 - 70 * var(--lv)), 100%, 60%, 0.75);
+  transform: scale(1.08);
+}
+.res-meter.beat .res-pips i.next {
+  background: hsla(calc(38 - 70 * var(--lv)), 95%, 60%, 0.55);
+  transform: scale(1.35);
+}
+.res-track {
+  position: relative;
+  width: 110px;
+  height: 6px;
+  border-radius: 3px;
+  background: rgba(28, 28, 31, 0.1);
+  overflow: visible;
+}
+.res-win {
+  position: absolute;
+  top: 0;
+  height: 100%;
+  border-radius: 3px;
+  background: hsla(calc(38 - 70 * var(--lv)), 95%, 58%, 0.45);
+  transition: background 0.15s;
+}
+.res-meter.beat .res-win {
+  background: hsla(calc(38 - 70 * var(--lv)), 100%, 58%, 0.95);
+  box-shadow: 0 0 8px hsla(calc(38 - 70 * var(--lv)), 100%, 60%, 0.8);
+}
+.res-head {
+  position: absolute;
+  top: 50%;
+  left: 0;
+  width: 3px;
+  height: 14px;
+  margin: -7px 0 0 -1.5px;
+  border-radius: 2px;
+  background: rgba(28, 28, 31, 0.78);
+}
+.res-meter.burst {
+  animation: res-burst 0.65s ease-out forwards;
+}
+@keyframes res-burst {
+  0% { transform: translate(-50%, 0) scale(1); }
+  30% { transform: translate(-50%, -4px) scale(1.18); box-shadow: 0 0 26px hsla(330, 100%, 62%, 0.85); }
+  100% { transform: translate(-50%, -10px) scale(1.05); opacity: 0; }
+}
+html.dark .res-meter {
+  color: rgba(241, 239, 244, 0.8);
+  background: rgba(22, 21, 27, 0.6);
+}
+html.dark .res-pips i {
+  background: rgba(241, 239, 244, 0.14);
+}
+html.dark .res-track {
+  background: rgba(241, 239, 244, 0.12);
+}
+html.dark .res-head {
+  background: rgba(241, 239, 244, 0.9);
+}
+@media (max-width: 720px) {
+  .res-meter {
+    bottom: calc(max(18px, calc(env(safe-area-inset-bottom) + 8px)) + 60px);
+  }
+  body.res-on .hint {
+    bottom: calc(max(18px, calc(env(safe-area-inset-bottom) + 8px)) + 100px);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .res-meter.burst {
+    animation: none;
+  }
+}
+

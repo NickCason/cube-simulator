@@ -877,6 +877,71 @@ export class UI {
     this.healEl.classList.toggle('pulse', d);
   }
 
+  // The mallet's resonance: hits on the beat so far (pips), and where the
+  // next beat is - a playhead running across the streak's life, through the
+  // two windows a hit lands on the beat in (the next beat, and the one after).
+  // null: none going (it fades); burst: it went.
+  resonance(st) {
+    let el = this.resEl;
+    if (!el) {
+      if (!st) return;
+      el = this.resEl = document.createElement('div');
+      el.className = 'res-meter';
+      el.setAttribute('aria-hidden', 'true');
+      el.innerHTML = `<span class="res-lbl">Resonance</span><span class="res-pips"></span><span class="res-track"><i class="res-win"></i><i class="res-win"></i><b class="res-head"></b></span>`;
+      this.root.appendChild(el);
+      this.resPips = el.querySelector('.res-pips');
+      this.resHead = el.querySelector('.res-head');
+      this.resWins = el.querySelectorAll('.res-win');
+      this._resMax = 0;
+    }
+    const on = !!st && !st.burst;
+    if (st?.burst) {
+      el.classList.remove('burst');
+      void el.offsetWidth;
+      el.classList.add('burst');
+      for (const p of this.resPips.children) p.classList.add('on');
+      clearTimeout(this._resT);
+      this._resT = setTimeout(() => {
+        el.classList.remove('show', 'burst');
+        document.body.classList.remove('res-on');
+      }, 700);
+      return;
+    }
+    if (!on) {
+      if (el.classList.contains('show') && !el.classList.contains('burst')) {
+        el.classList.remove('show', 'beat');
+        document.body.classList.remove('res-on');
+      }
+      return;
+    }
+    clearTimeout(this._resT);
+    el.classList.remove('burst');
+    if (this._resMax !== st.max) {
+      this._resMax = st.max;
+      this.resPips.innerHTML = '<i></i>'.repeat(st.max);
+      // (the windows: as the mallet takes a hit to be on its beat - see MalletTool.strike)
+      const span = st.life;
+      st.wins.forEach(([a, b], k) => {
+        this.resWins[k].style.left = `${(a / span) * 100}%`;
+        this.resWins[k].style.width = `${((b - a) / span) * 100}%`;
+      });
+    }
+    const pips = this.resPips.children, lv = st.max > 1 ? (st.hits - 1) / (st.max - 1) : 0;
+    for (let k = 0; k < pips.length; k++) {
+      pips[k].classList.toggle('on', k < st.hits);
+      pips[k].classList.toggle('next', k === st.hits);
+    }
+    const inWin = st.wins.some(([a, b]) => st.u >= a && st.u <= b);
+    el.classList.toggle('beat', inWin);
+    el.style.setProperty('--lv', lv.toFixed(3));
+    this.resHead.style.left = `${Math.min(100, (st.u / st.life) * 100).toFixed(2)}%`;
+    if (!el.classList.contains('show')) {
+      el.classList.add('show');
+      document.body.classList.add('res-on');
+    }
+  }
+
   hint(text, ms = 2600) {
     const el = this.hintEl;
     // (one already up: a jiggle for the new one)

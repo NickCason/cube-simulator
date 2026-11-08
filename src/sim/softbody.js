@@ -133,6 +133,8 @@ export class SoftBody {
     this.collisionsEnabled = true;
     this.selfQuietUntil = 0; // (sim time) no self-contact before this: see radialImpulse
     this.topoVersion = 0;
+    this.restVersion = 0; // (rest shapes changed in place - the render's rest points to re-read: see easeRest)
+    this._restEase = null;
     // (bumped when whole cubes - or pieces - come and go and the tets are
     // renumbered: what's anchored by tet index, and not in embeds, re-finds
     // its place - see Bubbles)
@@ -633,6 +635,36 @@ export class SoftBody {
       if (pc.asleep) this._hashDirty = true;
       pc.sleepT = 0;
       pc.asleep = false;
+    }
+  }
+
+  // Some vertices' rest shape eased over dur (s) from where it is now to
+  // tgt (3 a vertex) - the torn ends' drawn-out shape giving back after a
+  // tear (see HandTool._yield): at once it sprang the halves apart; never,
+  // they kept it for good, thin shards of it. A change in topology ends it.
+  easeRest(idx, tgt, dur) {
+    const X = this.X, from = new Float64Array(idx.length * 3);
+    for (let j = 0; j < idx.length; j++) for (let c = 0; c < 3; c++) from[j * 3 + c] = X[idx[j] * 3 + c];
+    this._restEase = { idx, from, tgt, t: 0, dur, ver: this.topoVersion };
+  }
+  _tickRestEase(dt) {
+    const E = this._restEase, X = this.X;
+    if (E.ver !== this.topoVersion) {
+      this._restEase = null;
+      return;
+    }
+    E.t += dt;
+    const u = Math.min(1, E.t / E.dur), k = u * u * (3 - 2 * u);
+    for (let j = 0; j < E.idx.length; j++) {
+      const o = E.idx[j] * 3;
+      for (let c = 0; c < 3; c++) X[o + c] = E.from[j * 3 + c] + (E.tgt[j * 3 + c] - E.from[j * 3 + c]) * k;
+    }
+    this._computeRest();
+    if (u >= 1) {
+      this._computeMass();
+      this._computeEscape();
+      this._restEase = null;
+      this.restVersion++;
     }
   }
 
@@ -1413,6 +1445,7 @@ export class SoftBody {
     const nS = P.substeps;
     const h = dt / nS;
     this.time += dt;
+    if (this._restEase) this._tickRestEase(dt);
     this.impacts.length = 0;
     const NP0 = this.pieces.length;
     if (!this._imp || this._imp.length < NP0 * 12) {

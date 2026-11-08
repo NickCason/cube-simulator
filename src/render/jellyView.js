@@ -4,6 +4,7 @@ import { FREE_N, bakeFree } from '../freeform.js';
 import { MAX_CUBES, REST_STEP } from '../sim/softbody.js';
 import {
   createBackMaterial,
+  createCoverMaterial,
   createJellyMaterial,
   createCausticMaterial,
   createLightViewMaterial,
@@ -360,6 +361,11 @@ export class JellyView {
     // (depth first, so the front shader - the heavy one - runs once a pixel:
     // a stepped, folded or many-sided piece seen low drew over itself 2-4x)
     this.depthMat = new THREE.ShaderMaterial({ vertexShader: this.frontMat.vertexShader, fragmentShader: 'void main() { gl_FragColor = vec4(0.0); }', colorWrite: false });
+    // (the nearest skin's coat, a pixel at a time, at half size: what the
+    // glitter and bubbles inside are seen through - see renderCover)
+    this.coverMat = createCoverMaterial();
+    this.coverMat.uniforms.uCubeTex.value = this.cubeTex;
+    this.coverU = { tCover: { value: null }, uCoverOn: { value: 0 }, uCoverInv: { value: new THREE.Vector2(1, 1) } };
     this.prepass = true;
     this.causticMat = createCausticMaterial();
     // the caustics' view from the key light (entry, normal, exit) and their
@@ -692,6 +698,7 @@ export class JellyView {
     const sf = surfaceOf(m.surface), dens = (sf.density || 1) / (m.surfScale ?? 1), [nu, nv] = surfaceFit(sf, dens);
     this._bakeCube(k, sf, size, m.bevelRatio ?? 0.13, dens);
     put(29, m.dust || 0, m.skin || 0, m.through ? 1 : 0, sf.ao || 0);
+    (this._ownCoat ||= [])[k] = (m.dust || 0) > 0 || (m.sugar || 0) > 0;
     put(31, sf.kind, (sf.depth || 0) * (m.surfDepth ?? 1) * size, nu, nv);
     this.cubeTex.needsUpdate = true;
     if (flavor.layers && flavor.shape === 'free') {
@@ -907,6 +914,10 @@ export class JellyView {
   }
 
   setSize(w, h) {
+    this.rtCover?.dispose();
+    this.rtCover = new THREE.WebGLRenderTarget(Math.max(1, w >> 1), Math.max(1, h >> 1), { depthBuffer: true });
+    this.coverU.tCover.value = this.rtCover.texture;
+    this.coverU.uCoverInv.value.set(1 / w, 1 / h);
     if (this.rtBack) this.rtBack.dispose();
     this.rtBack = new THREE.WebGLRenderTarget(w, h, { type: THREE.HalfFloatType, depthBuffer: true });
     this.rtBackRest?.dispose();
@@ -915,8 +926,9 @@ export class JellyView {
   }
 
   syncTopology(sb) {
-    if (sb.topoVersion === this.topoVersion) return false;
+    if (sb.topoVersion === this.topoVersion && sb.restVersion === this._restVersion) return false;
     this.topoVersion = sb.topoVersion;
+    this._restVersion = sb.restVersion;
     for (const m of [this.allMesh, ...this.layerMeshes]) {
       if (!m) continue;
       this.scene.remove(m);
@@ -1064,14 +1076,20 @@ export class JellyView {
     this.bakeLater();
     const topo = this.syncTopology(sb);
     const n = sb.nV, x = sb.x, temp = sb.temp, glow = sb.glow, dust = sb.dust, coat = sb.coat;
-    let ps = 0, ts = 0, gs = 0, ds = 0;
+    let ps = 0, ts = 0, gs = 0, ds = 0, cold = 0;
     for (let i = 0; i < n; i++) {
       const w = 1 + (i & 7) * 0.37, o = i * 3;
       ps += (x[o] + x[o + 1] * 1.3 + x[o + 2] * 1.7) * w;
       ts += temp[i] * w;
+      if (temp[i] < cold) cold = temp[i];
       ds += (dust[i] + coat[i * 5] * 0.71 + coat[i * 5 + 1] * 0.37 + coat[i * 5 + 2] * 0.23 + coat[i * 5 + 3] * 0.13 + coat[i * 5 + 4] * 0.07) * w;
       gs += glow[i];
     }
+    // (a coat anywhere - flour, a cube's own dusting or sugar, frost: the
+    // skin's coverage wanted, see renderCover)
+    let own = false;
+    for (const pc of sb.pieces) if (this._ownCoat?.[pc.cube]) own = true;
+    this.coverWanted = ds > 0 || cold < -0.05 || own;
     const fill = sb.fill && sb.fill.topo === sb.topoVersion;
     const moved = topo || fill || ps !== this._ps;
     const now = performance.now();
@@ -1403,10 +1421,29 @@ export class JellyView {
   // Render pieces back-to-front in layers: pieces that don't overlap on
   // screen share a pass; a piece that overlaps one behind it goes in a later
   // layer so it refracts that piece.
+  // The skin's coat, where it's nearest the eye (see createCoverMaterial):
+  // the glitter and bubbles inside fade under flour, sugar, frost. Only
+  // drawn while there's a coat anywhere.
+  renderCover(camera) {
+    const on = !!(this.coverWanted && this.allMesh && this.rtCover);
+    this.coverU.uCoverOn.value = on ? 1 : 0;
+    if (!on) return;
+    const r = this.renderer, prev = r.getRenderTarget(), pc = r.getClearColor(this._v2c || (this._v2c = new THREE.Color())), pa = r.getClearAlpha();
+    r.setRenderTarget(this.rtCover);
+    r.setClearColor(0x000000, 0);
+    r.clear(true, true, false);
+    this.scene.overrideMaterial = this.coverMat;
+    r.render(this.scene, camera);
+    this.scene.overrideMaterial = null;
+    r.setRenderTarget(prev);
+    r.setClearColor(pc, pa);
+  }
+
   renderPieces(camera, sb, rtScene, rtTrans, copyFn) {
     const r = this.renderer;
     const v = this._v;
     if (!this.allMesh) return;
+    this.renderCover(camera);
     const NP = Math.min(sb.pieces.length, this.pieceIdx.length / 2);
     const maxL = Math.min(this.maxLayers, this.layerCap, this.layerMeshes.length);
     // (the layers as last time, if nothing's changed: the camera still, the

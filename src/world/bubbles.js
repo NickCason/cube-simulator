@@ -21,7 +21,7 @@ export class Bubbles {
     // the jelly in front, depth pulled to the jelly surface so tools in front
     // still hide them.
     const mat = new THREE.ShaderMaterial({
-      uniforms: { uLight: { value: app.lightDir } },
+      uniforms: { uLight: { value: app.lightDir }, ...app.jelly.coverU },
       transparent: true,
       depthWrite: false,
       depthTest: true,
@@ -44,6 +44,9 @@ export class Bubbles {
         }`,
       fragmentShader: /* glsl */ `
         uniform vec3 uLight;
+        uniform sampler2D tCover;
+        uniform float uCoverOn;
+        uniform vec2 uCoverInv;
         varying vec3 vN;
         varying vec3 vV;
         varying vec3 vTint;
@@ -58,6 +61,8 @@ export class Bubbles {
           vec3 sil = mix(vec3(lum), vTint, 0.55) * 1.25 + 0.06;
           vec3 c = mix(sil, sil * 0.18, line) + vec3(5.0) * (spec + spec2) * (vTint + 0.25);
           float a = clamp(silver * 0.8 + (spec + spec2) * 2.0, 0.0, 1.0) * clamp(lum * 2.5, 0.0, 1.0);
+          // (under flour, sugar, frost on the skin in front: hidden, as much as it covers)
+          if (uCoverOn > 0.5) { float cv = 1.0 - texture(tCover, gl_FragCoord.xy * uCoverInv).r; a *= cv * cv; }
           gl_FragColor = vec4(c, a);
         }`,
     });

@@ -294,6 +294,55 @@ const VERT = /* glsl */ `
   }
 `;
 
+// How much of what's behind a point of its skin its coat hides - the flour
+// it's been rolled in or sifted on (in the patches the jelly draws it in -
+// see the dusting in createJellyMaterial: powder hides most, sugar
+// crystals, sprinkles and glitter flakes less, between them), its own
+// dusting (starch, icing sugar), a sugar coat, frost. Needs NOISE. data:
+// the vertex data (temp, -, fresh, flour), coat/coatM the flour's make-up,
+// q3/q29 its cube's looks rows 3 and 29.
+const COVER_GLSL = /* glsl */ `
+  float coatCover(vec4 data, vec4 coat, float coatM, vec3 rest, vec4 q3, vec4 q29) {
+    float a = data.w, fresh = data.z, c = 0.0;
+    if (a > 0.004) {
+      float ia = 1.0 / max(a, 1e-3);
+      float ps = clamp(coat.a * ia, 0.0, 1.0), pm = clamp(coatM * ia, 0.0, 1.0);
+      float wP = (1.0 - ps) * (1.0 - pm), wC = ps * (1.0 - pm), wS = pm * (1.0 - ps), wG = ps * pm;
+      float n = fbm3(rest * 46.0) * 0.6 + vnoise(rest * 150.0) * 0.4;
+      float cov = smoothstep(n - 0.1, n + 0.1, a * 1.15 - 0.06);
+      c = cov * 0.95 * wP + clamp(a * 1.1, 0.0, 1.0) * 0.55 * wC + clamp(a * 1.3, 0.0, 1.0) * 0.8 * wS + clamp(a * 1.2, 0.0, 1.0) * 0.6 * wG;
+    }
+    c = max(c, q29.x * (1.0 - fresh) * 0.85);
+    c = max(c, q3.x * (1.0 - fresh * (1.0 - q29.z)) * 0.5);
+    c = max(c, 0.6 * smoothstep(0.05, 0.7, -data.x));
+    return clamp(c, 0.0, 1.0);
+  }
+`;
+
+// The nearest skin's coat, a pixel at a time (see coatCover): what the
+// glitter and the bubbles inside are seen through - see JellyView.rtCover.
+export function createCoverMaterial() {
+  return new THREE.ShaderMaterial({
+    side: THREE.FrontSide,
+    uniforms: { uCubeTex: { value: emptyFloatTexture() } },
+    vertexShader: VERT,
+    fragmentShader: /* glsl */ `
+      uniform highp sampler2D uCubeTex;
+      varying float vCube;
+      varying vec3 vRest;
+      varying vec4 vData;
+      varying vec4 vCoat;
+      varying float vCoatM;
+      ${NOISE}
+      ${COVER_GLSL}
+      void main() {
+        int k = int(vCube + 0.5);
+        float c = coatCover(vData, vCoat, vCoatM, vRest, texelFetch(uCubeTex, ivec2(3, k), 0), texelFetch(uCubeTex, ivec2(29, k), 0));
+        gl_FragColor = vec4(c, 0.0, 0.0, 1.0);
+      }`,
+  });
+}
+
 // Back faces: linear view depth, packed view-space exit normal, and what
 // the line of sight leaves through - the coat on the outside there (sugar
 // crystals, a dusting, flour it's picked up) or frost: 0 for bare jelly. (A
@@ -884,6 +933,7 @@ export function createJellyMaterial(env, layerUniforms) {
         float exitCoat = back.r > 0.0 && (uBackRest > 0.5 || cLayers <= 0) ? clamp(back.a, 0.0, 1.0) : 0.0;
 
         float rough = clamp(cRough + fresh * 0.02 + frost * 0.5 - melt * 0.02 + coat * 0.18 + dust * 0.45 + surfRough, 0.015, 1.0);
+        float roughMat = rough; // (the stuff's own - the anti-aliasing below only blurs)
         // (specular anti-aliasing: where the surface turns faster than a
         // pixel can show - bevels and corners, on a small or low-resolution
         // screen - its reflections blur as if it were rougher, instead of the
@@ -997,7 +1047,15 @@ export function createJellyMaterial(env, layerUniforms) {
         body = mix(body, body * 0.1, rkSeam * 0.9);
 
         float F0 = pow((cIor - 1.0) / (cIor + 1.0), 2.0);
-        float F = min(F0 + (1.0 - F0) * pow(clamp(1.0 - NdV, 0.0, 1.0), 5.0), 1.0 - 0.5 * rim);
+        // (how much of the room it mirrors: a glossy skin all of it at a
+        // grazing angle, a matte one far less - its roughness scatters the
+        // sheen away (Karis's fit to the split-sum environment BRDF). With
+        // plain Schlick a matte cube, and every slope of its surface map,
+        // still flared mirror-bright at its rims)
+        vec4 ebr = roughMat * vec4(-1.0, -0.0275, -0.572, 0.022) + vec4(1.0, 0.0425, 1.04, -0.04);
+        float eba = min(ebr.x * ebr.x, exp2(-9.28 * NdV)) * ebr.x + ebr.y;
+        vec2 ebAB = vec2(-1.04, 1.04) * eba + ebr.zw;
+        float F = min(F0 * ebAB.x + ebAB.y, 1.0 - 0.5 * rim);
         vec3 Rv = reflect(-V, N);
         vec3 refl = envLookup(Rv, rough);
         // below the horizon it mirrors the real floor where that ray lands -
@@ -1334,6 +1392,8 @@ export function createLightViewMaterial(kind) {
       attribute vec3 aRest;
       attribute vec4 aData;
       attribute float aCube;
+      attribute vec4 aCoat;
+      attribute float aCoatM;
       varying vec3 vW;
       varying vec3 vN;
       varying float vRestY;
@@ -1341,9 +1401,15 @@ export function createLightViewMaterial(kind) {
       varying float vTemp;
       varying float vCubeK;
       varying float vFresh;
+      varying vec4 vData;
+      varying vec4 vCoat;
+      varying float vCoatM;
       void main() {
         vec4 wp = modelMatrix * vec4(position, 1.0);
         vFresh = aData.z;
+        vData = aData;
+        vCoat = aCoat;
+        vCoatM = aCoatM;
         vW = wp.xyz;
         vN = mat3(modelMatrix) * normal;
         vRestY = aRest.y;
@@ -1361,8 +1427,16 @@ export function createLightViewMaterial(kind) {
       varying float vTemp;
       varying float vCubeK;
       varying float vFresh;
+      varying vec4 vData;
+      varying vec4 vCoat;
+      varying float vCoatM;
       ${SAFE_GLSL}
-      ${kind === 0 ? '' : CUBE_GLSL + SURF_GLSL}
+      ${kind === 0 ? 'uniform highp sampler2D uCubeTex;' : CUBE_GLSL + SURF_GLSL}
+      ${kind === 1 ? '' : NOISE + COVER_GLSL}
+      // (how much of the light its coat stops, here: see coatCover)
+      float cover() {
+        ${kind === 1 ? 'return 0.0;' : 'int k = int(vCubeK + 0.5); return coatCover(vData, vCoat, vCoatM, vRest3, texelFetch(uCubeTex, ivec2(3, k), 0), texelFetch(uCubeTex, ivec2(29, k), 0));'}
+      }
       // (its surface map's relief, bending the light going in - and coming
       // out - so the caustics carry its pattern: as the jelly's own shading
       // does, but as the light sees it)
@@ -1384,7 +1458,9 @@ export function createLightViewMaterial(kind) {
       void main() {
         // (w: the rest height, + 10 so 0 is "nothing here", + 4 a cube -
         // see lightViewCube; and the rest point, for the gradients)
-        ${kind === 1 ? 'gl_FragColor = finite4(vec4(surfN(safeNormalize(vN)), vTemp));' : 'gl_FragColor = finite4(vec4(vW - uOrigin, vRestY + 10.0 + 4.0 * floor(vCubeK + 0.5))); oRest = finite4(vec4(vRest3, 1.0));'}
+        // (and its coat there - going in, the rest point's w; coming out, 1 +
+        // it, as 1 there means "something here")
+        ${kind === 1 ? 'gl_FragColor = finite4(vec4(surfN(safeNormalize(vN)), vTemp));' : `gl_FragColor = finite4(vec4(vW - uOrigin, vRestY + 10.0 + 4.0 * floor(vCubeK + 0.5))); oRest = finite4(vec4(vRest3, ${kind === 0 ? 'cover()' : '1.0 + cover()'}));`}
         ${kind === 2 ? 'oNrm = finite4(vec4(surfN(safeNormalize(vN)), 1.0)); // (the far side: its outward normal, for the light leaving)' : ''}
       }`,
   });
@@ -1608,6 +1684,14 @@ export function createCausticMaterial(layerUniforms) {
           // went in, as the jelly's own shading does: at the silhouette the
           // two took turns ray by ray, and its light came out in stripes)
           vSig = cGradPath(restA, RB.w > 0.5 ? RB.xyz : restA + (Q - P), cubeT(0).rgb);
+          // Through a coat - flour, sugar, frost - where it went in or came
+          // out, the light's scattered: dimmer, and spread wide (the floor
+          // blurs light by how far it fell: see floor.js) - a soft glow
+          // under the powdered patches in place of the bright lines, the
+          // coat's own patches cast over the caustics
+          float cvr = 1.0 - (1.0 - clamp(texelFetch(tEntryRest, ij, 0).w, 0.0, 1.0)) * (1.0 - (RB.w > 0.5 ? clamp(RB.w - 1.0, 0.0, 1.0) : 0.0));
+          vValid *= 1.0 - 0.7 * cvr;
+          vThrow = mix(vThrow, max(vThrow, 1.6), cvr);
           vNdL = dot(N, normalize(uLightDir));
           vTemp = Nt.w;
         }
@@ -1827,11 +1911,20 @@ export function createTintMaterial() {
     vertexShader: /* glsl */ `
       attribute float aCube;
       attribute vec3 aRest;
+      attribute vec4 aData;
+      attribute vec4 aCoat;
+      attribute float aCoatM;
       uniform vec3 uLightDir;
       uniform vec4 uFloorRect;
       varying float vCube;
       varying vec3 vRest;
+      varying vec4 vData;
+      varying vec4 vCoat;
+      varying float vCoatM;
       void main() {
+        vData = aData;
+        vCoat = aCoat;
+        vCoatM = aCoatM;
         vec3 Ld = -normalize(uLightDir);
         vec3 P = position;
         vec3 oldP = P + Ld * (-P.y / Ld.y);
@@ -1843,7 +1936,12 @@ export function createTintMaterial() {
     fragmentShader: /* glsl */ `
       varying float vCube;
       varying vec3 vRest;
+      varying vec4 vData;
+      varying vec4 vCoat;
+      varying float vCoatM;
       ${CUBE_GLSL}
+      ${NOISE}
+      ${COVER_GLSL}
       void main() {
         useCube(vCube);
         vec3 t = cubeT(27).rgb;
@@ -1854,6 +1952,9 @@ export function createTintMaterial() {
           float cloud = max(cubeT(3).y + a.a, cubeT(1).a);
           t = mix(exp(-a.rgb * 0.35), vec3(1.0), 0.35 * cloud) * (1.0 - 0.35 * cloud);
         }
+        // (through a coat - flour, sugar, frost - the light's scattered:
+        // its shadow greyer, paler of the jelly's colour)
+        t = mix(t, vec3(0.4), 0.85 * coatCover(vData, vCoat, vCoatM, vRest, cubeT(3), cubeT(29)));
         gl_FragColor = vec4(t, 1.0);
       }`,
   });

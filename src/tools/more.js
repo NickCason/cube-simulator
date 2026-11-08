@@ -68,6 +68,11 @@ function anchorOk(sb, a) {
 // jelly shatters instead.
 const RES_HITS = 6;
 const RES_NOTES = [392.0, 440.0, 523.25, 587.33, 659.25, 783.99];
+// (a hit is on the beat this close to the next beat, or the one after - in
+// beats - and the streak's lost this long after the last hit)
+const RES_WINS = [[0.8, 1.2], [1.76, 2.24]];
+const RES_LIFE = 2.6;
+const SWING = 0.1; // (s) from the click to the head landing
 
 // Move piece k `amount` of the way back to its rest shape - turned and
 // sized to fit how it lies now, standing on the floor - and take the same
@@ -199,6 +204,10 @@ export class MalletTool {
     if (this.tear) this._tear();
     if (this.shards) this._crack();
     this._resonance();
+    // (its meter: while a streak's going and the mallet's in hand)
+    const r = this.res, app = this.app;
+    // (where a click now would land: the swing's still to come)
+    app.ui?.resonance?.(r && app.tool === this ? { hits: r.hits, max: RES_HITS, u: (app.clock.t + SWING - r.last) / r.T, wins: RES_WINS, life: RES_LIFE } : null);
     const a = this.anim;
     if (!a) return;
     if (a.press) {
@@ -206,7 +215,7 @@ export class MalletTool {
       return;
     }
     a.t += dt;
-    const T1 = 0.1, T2 = 0.5;
+    const T1 = SWING, T2 = 0.5;
     let ang;
     if (a.t < T1) {
       const u = a.t / T1;
@@ -247,11 +256,11 @@ export class MalletTool {
       // on the beat? (the swing is in real time, like the hand that clicks)
       const now = app.clock.t, T = this.beat();
       const r = this.res;
-      const live = r && r.piece === piece && r.topo === sb.topoVersion && now - r.last < 2.6 * T;
+      const live = r && r.piece === piece && r.topo === sb.topoVersion && now - r.last < RES_LIFE * T;
       let onBeat = false;
       if (live) {
-        const gap = now - r.last;
-        onBeat = Math.abs(gap - T) < 0.2 * T || Math.abs(gap - 2 * T) < 0.24 * T;
+        const u = (now - r.last) / T;
+        onBeat = RES_WINS.some(([a, b]) => u >= a && u <= b);
       }
       const hits = onBeat ? r.hits + 1 : 1;
       this.res = { piece, topo: sb.topoVersion, hits, last: now, T };
@@ -331,7 +340,7 @@ export class MalletTool {
     if (!r) return;
     const app = this.app, sb = app.sb;
     const now = app.clock.t;
-    if (r.topo !== sb.topoVersion || now - r.last > 2.6 * r.T || !sb.pieces[r.piece]) {
+    if (r.topo !== sb.topoVersion || now - r.last > RES_LIFE * r.T || !sb.pieces[r.piece]) {
       this.res = null;
       if (!app.healer.active) sb.dampBoost = 1;
       return;
@@ -358,6 +367,7 @@ export class MalletTool {
     const pc = sb.pieces[piece];
     if (!pc) return;
     this.res = null;
+    app.ui?.resonance?.({ burst: true });
     if (!app.healer.active) sb.dampBoost = 1;
     // (no self-contact while it tears, nor while the chunks fly: see radialImpulse)
     sb.selfQuietUntil = sb.time + 0.5;

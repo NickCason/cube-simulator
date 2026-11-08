@@ -74,6 +74,7 @@ export class Glitter {
     this._allocBBTex(64);
     const F = app.jelly.frontMat.uniforms;
     this.uniforms = {
+      ...app.jelly.coverU,
       uCubeTex: { value: app.jelly.cubeTex },
       uGradTex: { value: app.jelly.gradTex },
       uFreeTex: { value: app.jelly.freeTex },
@@ -192,6 +193,9 @@ export class Glitter {
         uniform vec3 uLightColor;
         uniform samplerCube envMap;
         uniform float uSparkle;
+        uniform sampler2D tCover;
+        uniform float uCoverOn;
+        uniform vec2 uCoverInv;
         varying float vMode;
         uniform float uShine;
         varying vec3 vN;
@@ -229,6 +233,8 @@ export class Glitter {
           else if (uMode == 4) col = mix(vec3(1.0), hue(fract(vHue + ndv * 2.6 + dot(n, L) * 0.7)), 0.55); // white, with fire
           else col = vec3(0.92, 0.95, 1.0);
           vec3 c = col * (env + uLightColor * glint * 14.0) * uSparkle * rim + col * 0.03;
+          // (under flour, sugar, frost on the skin in front: hidden, as much as it covers)
+          if (uCoverOn > 0.5) { float cv = 1.0 - texture(tCover, gl_FragCoord.xy * uCoverInv).r; c *= cv * cv; }
           gl_FragColor = vec4(min(c * vTint * vBoost, vec3(64.0)), 1.0);
         }`,
     });

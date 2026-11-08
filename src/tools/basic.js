@@ -194,7 +194,12 @@ export class HandTool {
       this.lastStretch = m.s;
       this.lastLimit = lim;
     }
+    if (!this.tear && this.pending) this._resume(on);
     const cur = this.tear;
+    if (cur?.resumed) {
+      const pl = this._pull(on.get(cur.piece));
+      if (pl && (!best || best.k !== cur.piece || best.over < pl.over)) best = { ...pl, m: best?.k === cur.piece ? best.m : null };
+    }
     // (once it's giving, it goes on giving near its limit)
     if (!best || best.over <= (cur ? 0.92 : 1) || (cur && cur.piece !== best.k)) {
       // (not pulled hard enough - eased off: it firms up again)
@@ -273,11 +278,22 @@ export class HandTool {
     const h2 = 2 * half;
     const halves = new Set();
     for (const d of this.drags.values()) halves.add(sb.vPiece[d.grab.idx[0]]);
-    this._yield(o, t.n, h2, this._plastic(), halves);
+    const plastic = this._plastic(), yl = this._yield(o, t.n, h2, plastic, halves);
     sb.calmT = 0.3;
     sb.rebuild();
     // (a crumb the seam cut off on its own: gone)
     removeSmallPieces(sb, 0.002 * size ** 3, app.allAnchors());
+    // ...and the drawn-out ends give back, over a moment, as much as the
+    // stuff springs back: jelly and gummy nearly all the way - no shards
+    // left standing - slime and putty hardly (see SoftBody.easeRest)
+    if (yl.moved.length) {
+      const keep = plastic * plastic, X = sb.X, tgt = new Float64Array(yl.moved.length * 3);
+      for (let j = 0; j < yl.moved.length; j++) for (let c = 0; c < 3; c++) {
+        const i3 = yl.moved[j] * 3 + c;
+        tgt[j * 3 + c] = yl.was[j * 3 + c] + (X[i3] - yl.was[j * 3 + c]) * keep;
+      }
+      sb.easeRest(Int32Array.from(yl.moved), tgt, 1.3);
+    }
     // (the torn ends were drawn out soft: they stay soft and firm up over a
     // moment - given their full stiffness back at once, stretched as they
     // are, the halves sprang apart at 30+ m/s)
@@ -306,7 +322,7 @@ export class HandTool {
   // out a regular egg-crate of facets.)
   _startTear(best) {
     const app = this.app, sb = app.sb, o = tetCentre(sb, best.m.t), [nx, ny, nz] = best.n;
-    const field = ragged(planeField(nx, ny, nz, nx * o[0] + ny * o[1] + nz * o[2]), 0.035 * sb.p.size);
+    const field = ragged(planeField(nx, ny, nz, nx * o[0] + ny * o[1] + nz * o[2]), 0.035 * sb.p.size, sb.p.size);
     const res = cutBody(sb, field, { glueAll: true, anchors: app.allAnchors(), pieces: [best.k] });
     if (!res.changed || !res.seam.length) return null;
     app.onTopologyChanged();
@@ -335,7 +351,8 @@ export class HandTool {
     const sx = sb.x[start * 3], sy = sb.x[start * 3 + 1], sz = sb.x[start * 3 + 2];
     const d2s = (i) => (sb.x[i * 3] - sx) ** 2 + (sb.x[i * 3 + 1] - sy) ** 2 + (sb.x[i * 3 + 2] - sz) ** 2;
     seam.sort((p, q) => d2s(p) - d2s(q));
-    this.tear = { piece: k, ver: sb.topoVersion, band: Int32Array.from(band), prof: Float32Array.from(prof), p: 0, n: best.n, creak: 0, half, plus, seam: Int32Array.from(seam), done: 0 };
+    this.tear = { piece: k, ver: sb.topoVersion, band: Int32Array.from(band), prof: Float32Array.from(prof), p: 0, n: best.n, creak: 0, half, plus, seam: Int32Array.from(seam), done: 0, resumed: false };
+    this.pending = null;
     return this.tear;
   }
 
@@ -349,6 +366,7 @@ export class HandTool {
   _yield(o, n, h2, beta, only) {
     const sb = this.app.sb, x = sb.x, X = sb.X;
     const A = new Float64Array(9), R = new Float64Array(9);
+    const moved = [], was = [];
     for (const pc of sb.pieces) {
       if (!only.has(pc.id)) continue;
       const vs = pc.verts;
@@ -380,9 +398,12 @@ export class HandTool {
         // R^T (x - c) + C: where it is now, in the rest frame
         const ux = x[o3] - cx, uy = x[o3 + 1] - cy, uz = x[o3 + 2] - cz;
         const gx = Cx + R[0] * ux + R[3] * uy + R[6] * uz, gy = Cy + R[1] * ux + R[4] * uy + R[7] * uz, gz = Cz + R[2] * ux + R[5] * uy + R[8] * uz;
+        moved.push(i);
+        was.push(X[o3], X[o3 + 1], X[o3 + 2]);
         X[o3] += w * (gx - X[o3]); X[o3 + 1] += w * (gy - X[o3 + 1]); X[o3 + 2] += w * (gz - X[o3 + 2]);
       }
     }
+    return { moved, was };
   }
 
   // Gummy jelly comes apart in strings: across the stretch of slit just
@@ -423,6 +444,68 @@ export class HandTool {
     const sb = this.app.sb;
     if (t.ver !== sb.topoVersion) return; // (a rebuild cleared it already)
     for (let q = 0; q < t.band.length; q++) sb.tDmg[t.band[q]] = 0;
+    // (let go part way through: kept - pulled again with a hand either side
+    // of it, it goes on from there, along the same seam: see _resume)
+    if (t.done > 0 && t.done < t.seam.length) this.pending = t;
+  }
+
+  // A tear let go of part way, taken up again: a hand on each side of it -
+  // each holding jelly that was on its own side when it started, however
+  // far the flap's swung since - pulling: the same seam, from where it got to.
+  _resume(on) {
+    const pt = this.pending, app = this.app, sb = app.sb;
+    if (pt.ver !== sb.topoVersion || pt.done >= pt.seam.length) {
+      this.pending = null;
+      return;
+    }
+    const k = sb.vPiece[pt.seam[pt.done]], hands = on.get(k);
+    if (!hands || hands.length < 2) return;
+    const vtS = sb.vtStart, vtL = sb.vtList, x = sb.x;
+    // (which side a hand holds: the held vertex nearest where its finger went
+    // down that's wholly on one side - a hold reaches either side of a seam
+    // it's taken near; 1 the far side, 0 this, -1 can't tell)
+    const side = (d) => {
+      const g = d.grab, order = Array.from(g.idx.subarray(0, g.n));
+      const d2 = (i) => (x[i * 3] - d.pt[0]) ** 2 + (x[i * 3 + 1] - d.pt[1]) ** 2 + (x[i * 3 + 2] - d.pt[2]) ** 2;
+      order.sort((p, q) => d2(p) - d2(q));
+      for (const i of order) {
+        let p = 0, n = 0;
+        for (let e = vtS[i]; e < vtS[i + 1]; e++) {
+          const t = vtL[e];
+          if (sb.vol0[t] <= 0 || t >= pt.plus.length) continue;
+          if (pt.plus[t]) p++;
+          else n++;
+        }
+        if (p && !n) return 1;
+        if (n && !p) return 0;
+      }
+      return -1;
+    };
+    const a = side(hands[0].d), b = side(hands[1].d);
+    if (a < 0 || b < 0 || a === b) return;
+    // (and not from the far end of the cube: within reach of where it got to)
+    const i = pt.seam[pt.done], [A, B] = hands, size = sb.p.size;
+    const mx = (A.c[0] + B.c[0]) / 2 - x[i * 3], my = (A.c[1] + B.c[1]) / 2 - x[i * 3 + 1], mz = (A.c[2] + B.c[2]) / 2 - x[i * 3 + 2];
+    if (mx * mx + my * my + mz * mz > size * size) return;
+    pt.resumed = true;
+    pt.piece = k;
+    pt.p = Math.max(pt.p, 0.15 + (0.85 * pt.done) / pt.seam.length);
+    this.tear = pt;
+    this.pending = null;
+    this._damage(pt);
+    app.audio?.squish(0.3, 0.75);
+  }
+
+  // (a tear taken up again gives as the hands draw apart - a flap it left
+  // may swing on what holds it rather than stretch, so its stretch alone
+  // never came to the limit: torn half off, it stayed that way)
+  _pull(hands) {
+    if (!hands || hands.length < 2) return null;
+    const sb = this.app.sb, [A, B] = hands;
+    const ax = B.c[0] - A.c[0], ay = B.c[1] - A.c[1], az = B.c[2] - A.c[2], L = Math.hypot(ax, ay, az);
+    if (!(L > 1e-4)) return null;
+    const d0 = B.d.d0 || L;
+    return { over: 0.92 + 2.5 * (L / d0 - 1.04), k: sb.vPiece[A.d.grab.idx[0]], n: [ax / L, ay / L, az / L] };
   }
 
   // How stiff the jelly is, 0 (pudding) .. 1 (rubber, or rigid)
@@ -455,12 +538,18 @@ export class HandTool {
 
 // A torn surface, not a cut one: the field's zero set rippled by a few
 // crossed waves (random each tear), amp high; the normal by differences.
-function ragged(f, amp) {
+// (scale: the size the waves are for. Never steeper than ~half the cut's own
+// slope: steeper, the torn face folded over itself - thin slabs of jelly
+// either side of a fold, shards that tangled and stuck)
+function ragged(f, amp, scale = 1) {
   const W = [];
+  let ks = 0;
   for (let i = 0; i < 4; i++) {
-    const u = Math.random() * 2 - 1, th = Math.random() * Math.PI * 2, r = Math.sqrt(1 - u * u);
-    W.push([r * Math.cos(th), u, r * Math.sin(th), 5 + Math.random() * 9, Math.random() * 6.3]);
+    const u = Math.random() * 2 - 1, th = Math.random() * Math.PI * 2, r = Math.sqrt(1 - u * u), k = (5 + Math.random() * 9) / scale;
+    W.push([r * Math.cos(th), u, r * Math.sin(th), k, Math.random() * 6.3]);
+    ks += k;
   }
+  amp = Math.min(amp, (2 * 0.5) / ks);
   const wav = (x, y, z) => {
     let s = 0;
     for (const [a, b, c, k, ph] of W) s += Math.sin((a * x + b * y + c * z) * k + ph);
