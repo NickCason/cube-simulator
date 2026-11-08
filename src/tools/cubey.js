@@ -82,6 +82,7 @@ export class CuberTool {
     // (a face snapped onto one left the cube welded in). (Its cube's rows:
     // each cube's rest shape sits apart along x - see REST_STEP.)
     const cube = sb.pieces[hit.piece].cube || 0, g = sb.cH[cube], half = sb.cSize[cube] / 2, R = cube * REST_STEP;
+    const cs = Math.min(1.6, Math.max(0.6, app.st?.cuberSize ?? 1)); // (its scoop's size: the Cubicle's)
     const mid = (v, o) => o - half + (Math.round((v - o + half) / g - 0.5) + 0.5) * g;
     const d = p.clone().sub(F.c);
     const X = [0, 1, 2].map((k) => F.C.getComponent(k) + d.dot(F.ax[k]));
@@ -91,12 +92,12 @@ export class CuberTool {
     const ctr = [0, 0, 0], hs = [0, 0, 0];
     for (let k = 0; k < 3; k++) {
       if (k === kd) {
-        const inner = mid(X[k] - sg * 2.5 * g, k ? 0 : R), outer = X[k] + sg * 0.6 * g;
+        const inner = mid(X[k] - sg * 2.5 * cs * g, k ? 0 : R), outer = X[k] + sg * 0.6 * g;
         ctr[k] = (inner + outer) / 2;
         hs[k] = Math.abs(outer - inner) / 2;
       } else {
         ctr[k] = mid(X[k], k ? 0 : R);
-        hs[k] = 1.25 * g;
+        hs[k] = 1.25 * cs * g;
       }
     }
     // (back into the world)
@@ -216,7 +217,10 @@ export class DicerTool {
     const verts = sb.pieces[hit.piece].verts.slice();
     const F = frameOf(sb, verts);
     const ext = [0, 1, 2].map((k) => F.hi[k] - F.lo[k]);
-    const n = Math.min(...ext) >= 5.5 * sb.hCell ? 3 : Math.min(...ext) >= 3 * sb.hCell ? 2 : 0;
+    // (as many a side as the Cubicle asks - so long as each is a couple of
+    // its mesh's cells across: a small piece, 2 a side, or none)
+    const mn = Math.min(...ext), fit = mn >= 5.5 * sb.hCell ? Math.floor(mn / (1.83 * sb.hCell)) : mn >= 3 * sb.hCell ? 2 : 0;
+    const n = fit < 2 ? 0 : Math.max(2, Math.min(fit, Math.round(app.st?.dice ?? 3)));
     if (!n) {
       app.ui?.hint('Too small to dice', 1400);
       app.audio.clink(0.5);

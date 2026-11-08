@@ -29,6 +29,8 @@ function eyePairChip(two) {
   return `<svg viewBox="0 0 24 24" aria-hidden="true">${two ? e(6.6) + e(17.4) : e(12)}</svg>`;
 }
 
+const RESET_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4.5 12a7.5 7.5 0 1 0 2.2-5.3"/><path d="M4 4.5v4h4"/></svg>';
+
 const svg = (inner) =>
   `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${inner}</svg>`;
 
@@ -394,18 +396,38 @@ export class UI {
     this.tuneEl = root.querySelector('.palette.tune');
     this.rows = {};
     const scroll = this.tuneEl.querySelector('.tune-scroll');
-    let group = null;
+    let group = null, into = scroll;
+    // (the Cubicle's: a box a tool - its icon and name, a reset for just its
+    // knobs - which goes to the top while that tool's in hand)
+    this.labGroups = {};
     for (const st of SETTINGS) {
       if (st.group !== group) {
         group = st.group;
-        const h = document.createElement('div');
-        h.className = st.lab ? 'lbl lab-row' : 'lbl';
-        h.textContent = group;
-        scroll.appendChild(h);
+        if (st.lab) {
+          const box = document.createElement('div');
+          box.className = 'lab-row lab-group';
+          if (st.tool) box.dataset.tool = st.tool;
+          box.innerHTML = `<div class="lbl lab-head">${st.tool && ICONS[st.tool] ? `<i class="lab-ico">${ICONS[st.tool]}</i>` : ''}<span>${group}</span><button class="lab-reset" title="${group}: back to normal" aria-label="${group}: back to normal">${RESET_ICON}</button></div>`;
+          const keys = SETTINGS.filter((x) => x.lab && x.group === group).map((x) => x.key);
+          box.querySelector('.lab-reset').addEventListener('click', (e) => {
+            e.preventDefault();
+            app.audio.ui();
+            app.resetSettings(keys);
+          });
+          scroll.appendChild(box);
+          this.labGroups[st.tool || group] = box;
+          into = box;
+        } else {
+          const h = document.createElement('div');
+          h.className = 'lbl';
+          h.textContent = group;
+          scroll.appendChild(h);
+          into = scroll;
+        }
       }
       const row = document.createElement('label');
-      row.className = st.lab ? 'row lab-row' : 'row';
-      row.innerHTML = `<span class="name">${st.label}</span><input type="range" min="0" max="1" step="${st.int ? 1 / 240 : 0.001}"><span class="word"></span>`;
+      row.className = st.lab ? 'row' : 'row';
+      row.innerHTML = `<span class="name">${st.label}</span><input type="range" min="0" max="1" step="${st.step ?? (st.int ? 1 / 240 : 0.001)}"><span class="word"></span>`;
       const input = row.querySelector('input');
       const word = row.querySelector('.word');
       const valueOf = () => {
@@ -419,7 +441,7 @@ export class UI {
         app.setSetting(st.key, v, !st.release);
       });
       if (st.release) input.addEventListener('change', () => app.setSetting(st.key, valueOf(), true));
-      scroll.appendChild(row);
+      into.appendChild(row);
       this.rows[st.key] = { st, input, word };
     }
     // tearing (two hands pulling it apart): a switch under Feel
@@ -520,6 +542,25 @@ export class UI {
       const first = scroll.querySelector('.lab-row');
       if (first) scroll.insertBefore(row, first);
       else scroll.appendChild(row);
+      // ...and every tool at once: gentle, as made, or wild
+      const pre = document.createElement('div');
+      pre.className = 'lab-row lab-presets';
+      pre.innerHTML = '<span class="name">Every tool</span><div class="seg"></div>';
+      for (const [id, name, title] of [['gentle', 'Gentle', 'Every tool softer and slower'], ['normal', 'Normal', 'Every tool as it was made'], ['wild', 'Wild', 'Every tool turned right up']]) {
+        const b = document.createElement('button');
+        b.className = 'opt';
+        b.textContent = name;
+        b.title = title;
+        b.addEventListener('click', () => {
+          app.audio.ui();
+          app.labPreset(id);
+          this.hint({ gentle: 'Every tool gentler', normal: 'Every tool back to normal', wild: 'Every tool turned right up' }[id], 1400);
+        });
+        pre.querySelector('.seg').appendChild(b);
+      }
+      row.after(pre);
+      this.labTop = pre;
+      this._pinLab(app.tool?.id);
     }
     this.tuneEl.querySelector('.reset').addEventListener('click', () => {
       app.audio.ui();
@@ -737,8 +778,16 @@ export class UI {
     }
   }
 
+  // (the Cubicle: the tool in hand's knobs at the top, marked)
+  _pinLab(id) {
+    const box = this.labGroups?.[id];
+    for (const k in this.labGroups || {}) this.labGroups[k].classList.toggle('in-hand', k === id);
+    if (box && this.labTop && this.labTop.nextElementSibling !== box) this.labTop.after(box);
+  }
+
   setTool(id) {
     for (const k in this.buttons) this.buttons[k].classList.toggle('active', k === id);
+    this._pinLab(id);
     // (the sieve in hand: what's in it, to pick from; the googly eyes: theirs)
     this.powdersEl.hidden = id !== 'flour';
     this.eyeRow.hidden = id !== 'eyes';

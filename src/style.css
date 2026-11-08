@@ -1740,6 +1740,79 @@ html.dark .hint {
   margin-top: 6px;
 }
 
+/* (every tool at once: gentle, normal, wild) */
+.palette.tune .lab-presets {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: center;
+  gap: 10px;
+  margin: 4px 0 6px;
+}
+.palette.tune .lab-presets .name {
+  font-size: 13px;
+  font-weight: 560;
+}
+.palette.tune .lab-presets .opt {
+  height: 28px;
+  font-size: 12px;
+}
+
+/* (a tool's knobs: its icon and name, a reset - the one in hand on top, lit) */
+.palette.tune .lab-group {
+  margin: 2px -8px 4px;
+  padding: 2px 8px 4px;
+  border-radius: 12px;
+  transition: background 0.2s, box-shadow 0.2s;
+}
+.palette.tune .lab-group.in-hand {
+  background: rgba(255, 186, 40, 0.1);
+  box-shadow: inset 0 0 0 1px rgba(232, 160, 20, 0.32);
+}
+.palette.tune .lab-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.palette.tune .lab-ico svg {
+  display: block;
+  width: 15px;
+  height: 15px;
+}
+.palette.tune .lab-group.in-hand .lab-head > span::after {
+  content: 'in hand';
+  margin-left: 7px;
+  padding: 1px 6px;
+  border-radius: 6px;
+  font-size: 9.5px;
+  letter-spacing: 0.04em;
+  background: rgba(232, 160, 20, 0.2);
+}
+.palette.tune .lab-reset {
+  margin-left: auto;
+  width: 24px;
+  height: 24px;
+  display: grid;
+  place-items: center;
+  border-radius: 7px;
+  opacity: 0.45;
+  transition: opacity 0.15s, background 0.15s;
+}
+.palette.tune .lab-reset:hover {
+  opacity: 1;
+  background: rgba(0, 0, 0, 0.06);
+}
+.palette.tune .lab-reset svg {
+  width: 14px;
+  height: 14px;
+}
+html.dark .palette.tune .lab-group.in-hand {
+  background: rgba(255, 186, 40, 0.08);
+  box-shadow: inset 0 0 0 1px rgba(255, 186, 40, 0.28);
+}
+html.dark .palette.tune .lab-reset:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
 /* ---------------------------------------------------------------- cubby: saved cubes */
 .cubby-btn {
   position: fixed;

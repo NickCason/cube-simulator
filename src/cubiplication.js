@@ -251,7 +251,7 @@ export class Cubiplication {
     const pl = { ...linOf(cb) }, parent = as(cb);
     const kid = (base) => {
       const style = JSON.parse(JSON.stringify(base.style)), tune = { ...base.tune, size: c };
-      const changes = mutate(style, tune, { rnd, gen: pl.gen });
+      const changes = mutate(style, tune, { rnd, gen: pl.gen, boost: app.st?.mutation ?? 1 });
       return { style, tune, changes };
     };
     const A = kid(cb), B = kid(cb);

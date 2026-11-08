@@ -86,7 +86,7 @@ export class AutoGunTool extends HoleGunTool {
       // (up to four a frame, so a slow phone still gets its fourteen a second)
       for (let n = 0; n < 4 && this.cool <= 0; n++) {
         this.fire();
-        this.cool += 1 / RATE;
+        this.cool += 1 / (RATE * (this.app.st?.autoRate ?? 1));
       }
       if (this.cool < 0) this.cool = 0;
     } else this.cool = 0;

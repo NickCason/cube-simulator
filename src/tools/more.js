@@ -669,7 +669,7 @@ export class TorchTool extends NozzleTool {
     app.fireAt(tip.clone().addScaledVector(dir, 0.12), 1.0);
     if (tg.jelly) {
       const sb = app.sb;
-      sb.addHeat(tg.point.x, tg.point.y, tg.point.z, 0.3, 2.1 * dt * (app.st?.torchHeat ?? 1), 1.6, -1.3);
+      sb.addHeat(tg.point.x, tg.point.y, tg.point.z, 0.3 * (app.st?.flameSize ?? 1), 2.1 * dt * (app.st?.torchHeat ?? 1), 1.6, -1.3);
       // very hot jelly slumps, then turns to liquid and runs off (see Fluid),
       // from the surface in: its tets go - a batch every 0.15 s, one rebuild
       // each - and their volume flows on as molten jelly, in its colour
@@ -999,7 +999,7 @@ export class BallerTool {
   down(e, ray, hit) {
     if (!hit) return false;
     if (this.anim) return true;
-    const r = 0.21;
+    const r = 0.21 * (this.app.st?.ballSize ?? 1); // (its scoop's size: the Cubicle's)
     const n = V(hit.normal);
     const p = V(hit.point);
     const c = p.clone().addScaledVector(n, -r * 0.62);

@@ -108,7 +108,7 @@ export class GelGunTool extends HoleGunTool {
 
   fire() {
     const app = this.app, sb = app.sb;
-    this.cool = 1 / RATE;
+    this.cool = 1 / (RATE * (app.st?.globRate ?? 1)); // (how fast: the Cubicle's)
     if (sb.nT > 30000 || app.healer?.active) return;
     const k = app.cube?.slot ?? 0, size = sb.cSize[k] || sb.p.size;
     const muzzle = this.model.localToWorld(new THREE.Vector3(0, 0.005, -0.22));
@@ -133,11 +133,14 @@ export class GelGunTool extends HoleGunTool {
     // cube - its rest shape off to one side of the cube's (a place of its
     // own, so nothing else's rest shape overlaps it), at a height on it
     // picked at random: a layered cube's globs come in its colours.
-    const r = Math.cbrt((3 * GLOB) / (4 * Math.PI)) * size * (0.8 + Math.random() * 0.4);
+    // (how big: the Cubicle's glob size - its radius - held to what a place
+    // of its own beside the cube has room for)
+    const gs = Math.min(1.7, Math.max(0.6, app.st?.globSize ?? 1));
+    const r = Math.cbrt((3 * GLOB) / (4 * Math.PI)) * size * gs * (0.8 + Math.random() * 0.4);
     const used = new Set(this.blobs.filter((b) => b.cube === k).map((b) => b.slot));
     let slot = 0;
     while (used.has(slot)) slot++;
-    const rMax = Math.cbrt((3 * GLOB) / (4 * Math.PI)) * size * 1.2;
+    const rMax = Math.cbrt((3 * GLOB) / (4 * Math.PI)) * size * gs * 1.2;
     const R = [k * REST_STEP + ((slot % 4) - 1.5) * 3 * rMax, (Math.random() - 0.5) * (size - 2 * rMax), size / 2 + 1.8 * rMax + Math.floor(slot / 4) * 3 * rMax];
     const tag = this.nextTag;
     this.nextTag = (this.nextTag % 65535) + 1;

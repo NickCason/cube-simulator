@@ -739,7 +739,7 @@ export class HoleGunTool extends NailGunTool {
     const tA = segs[0][0] - 0.06, tB = through ? segs[segs.length - 1][1] + 0.06 : tEnd;
     // (at least ~3/4 of a cell across: the cut's inside and outside are told at
     // the mesh's vertices, and a thinner tunnel can slip between them all)
-    const A = at(tA), B = at(tB), r = Math.max(0.045 * size * Math.pow(power, 0.35) * (light ? 0.75 : 1), 0.75 * sb.hCell);
+    const A = at(tA), B = at(tB), r = Math.max(0.045 * size * Math.pow(power, 0.35) * (light ? 0.75 : 1) * (app.st?.holeSize ?? 1), 0.75 * sb.hCell);
     // the channel: a ragged tunnel, its plug crushed out
     const anchors = app.allAnchors();
     const res = cutBody(sb, ragged(capsuleField(A, B, r), 0.22 * r), { separate: 0, snap: 0.15, anchors });

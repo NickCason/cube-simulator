@@ -224,10 +224,12 @@ export class Eyes {
     const fx = -ax, fy = gy - ay, fz = -az;
     const R = L.R * Math.min(L.su, L.sv), st = EYE_STYLES[L.e.s] || EYE_STYLES[0];
     const room = Math.max(0.02, 0.9 - st.pupil); // (how far the pupil can go: in eye radii)
-    const k = 1 / Math.max(R, 1e-3);
+    // (how loose they are: the Cubicle's pupil wiggle - thrown about more,
+    // and settling slower)
+    const wig = this.app.st?.pupilWiggle ?? 1, k = wig / Math.max(R, 1e-3);
     L.pv[0] += (fx * L.u.x + fy * L.u.y + fz * L.u.z) * k * t;
     L.pv[1] += (fx * L.v.x + fy * L.v.y + fz * L.v.z) * k * t;
-    const damp = Math.exp(-2.6 * t);
+    const damp = Math.exp((-2.6 * t) / wig);
     L.pv[0] *= damp;
     L.pv[1] *= damp;
     L.pp[0] += L.pv[0] * t;

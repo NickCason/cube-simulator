@@ -174,7 +174,8 @@ export class FlourTool {
     if (!this.on || !(dt > 0)) return;
     // sifting: grains out of the mesh, from all over it
     const R = m.userData.radius * 0.88;
-    this.siftT = Math.min(this.siftT + dt * RATE, 8);
+    const amt = app.st?.siftRate ?? 1, spread = app.st?.siftSpread ?? 1; // (the Cubicle's)
+    this.siftT = Math.min(this.siftT + dt * RATE * amt, 8);
     while (this.siftT >= 1 && this.n < MAXG) {
       this.siftT -= 1;
       // (more through the middle of it, thinning out to the rim: the fall
@@ -184,7 +185,7 @@ export class FlourTool {
       const i = this.n++, o = i * 3;
       this.g[o] = x; this.g[o + 1] = y; this.g[o + 2] = z;
       // (shaken out every which way a little: the fall spreads as it goes)
-      this.gv[o] = rnd(-0.22, 0.22); this.gv[o + 1] = rnd(-0.3, -0.06); this.gv[o + 2] = rnd(-0.22, 0.22);
+      this.gv[o] = rnd(-0.22, 0.22) * spread; this.gv[o + 1] = rnd(-0.3, -0.06); this.gv[o + 2] = rnd(-0.22, 0.22) * spread;
       // (where it'll land: what's under it now - near enough, as it spreads)
       const hit = sb.raycast(x, y, z, 0, -1, 0, y + 0.1);
       this.gh[i] = hit ? hit.point[1] : 0;
@@ -233,7 +234,7 @@ export class FlourTool {
           const hit = sb.raycast(x, H[i] + 0.06, z, 0, -1, 0, 0.14);
           const look = this.gl.subarray(i * 5, i * 5 + 5);
           if (hit) {
-            app.flour.coatAround(hit.point[0], hit.point[1], hit.point[2], hit.piece, GRAIN, COAT_R, look, this.powder.rec);
+            app.flour.coatAround(hit.point[0], hit.point[1], hit.point[2], hit.piece, GRAIN, COAT_R * Math.sqrt(app.st?.siftSpread ?? 1), look, this.powder.rec);
             this._puff(x, hit.point[1], z, look);
             done = true;
           } else H[i] = 0;

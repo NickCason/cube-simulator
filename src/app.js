@@ -758,16 +758,34 @@ export class App {
     this.applyStyle();
   }
 
-  resetSettings() {
+  // only: just these keys (a Cubicle tool's knobs: see Ui) - else all of it
+  resetSettings(only = null) {
     const oldSize = this.sb.p.size;
     // (the jelly resets - the selected cube's material and everyone's world;
     // your sound levels and the tearing switch stay)
     const keep = new Set(['volume', 'impacts', 'wobble', 'tear']);
     for (const cb of this.cubes) {
-      for (const k of Object.keys(cb.tune)) if (!keep.has(k) && (cb === this.cube || !PER_CUBE(k))) delete cb.tune[k];
+      for (const k of Object.keys(cb.tune)) if (!keep.has(k) && (!only || only.includes(k)) && (cb === this.cube || !PER_CUBE(k))) delete cb.tune[k];
     }
+    if (only) for (const k of only) delete this.tune[k];
     this.applyStyle();
     if (Math.abs(this.settings.size - oldSize) > 1e-6) this.setCubeSize(this.settings.size);
+  }
+
+  // The Cubicle's every tool at once: gentle (softer, slower, smaller),
+  // normal (as made) or wild (turned right up) - each knob to the same far
+  // along its own scale.
+  labPreset(id) {
+    const t = { gentle: 0.22, wild: 0.86 }[id];
+    const keys = SETTINGS.filter((st) => st.lab && st.tool && st.key !== 'dice' && st.key !== 'boilOff');
+    if (t === undefined) return this.resetSettings(keys.map((st) => st.key));
+    for (const st of keys) {
+      // (the middle of a knob's scale is its normal: this far below or above it)
+      const mid = st.from(st.def ?? 1), v = st.to(t < 0.5 ? mid * (t / 0.5) : mid + (1 - mid) * ((t - 0.5) / 0.5));
+      this.tune[st.key] = st.int ? Math.round(v) : v;
+      for (const cb of this.cubes) cb.tune[st.key] = this.tune[st.key];
+    }
+    this.applyStyle();
   }
 
   // The selected cube's size (each its own): it re-forms at the new size -

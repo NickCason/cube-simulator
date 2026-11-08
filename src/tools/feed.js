@@ -83,7 +83,7 @@ export class FeedTool {
       if (p.y <= C.top + b.d.r * 0.4 && p.x > C.x0 && p.x < C.x1 && p.z > C.z0 && p.z < C.z1) {
         app.droplets.items.splice(i, 1);
         this.blobs.splice(k, 1);
-        mito.feed(0.024, p);
+        mito.feed(0.024 * (app.st?.ladle ?? 1), p); // (a ladle's worth: the Cubicle's)
       } else if (b.d.t > 2) this.blobs.splice(k, 1); // (missed: a blob on the floor)
     }
     if (!this.f) return;

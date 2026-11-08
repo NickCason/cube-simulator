@@ -144,7 +144,7 @@ export class AcidTool {
       this._stream(lip, this.land, t);
       if (this.on && this.tilt > 0.62) {
         const fl2 = app.fluid;
-        this.pourT += t * POUR * this.flow;
+        this.pourT += t * POUR * this.flow * (this.app.st?.acidPour ?? 1);
         while (this.pourT >= 1) {
           this.pourT -= 1;
           fl2.add(this.land.x, this.land.y + 0.04, this.land.z, fl2.vol, rnd(-0.15, 0.15), -0.8, rnd(-0.15, 0.15), ACID[0], ACID[1], ACID[2], 0.05, 1);
@@ -238,7 +238,7 @@ export class AcidTool {
           // the jelly round where it's pressed in (its outside: the
           // liquid's cells of the jelly near it - see Fluid._jellyCells)
           // dissolves, most right there: a round bite, not a ragged one
-          this._eat(fl, sb, i, tt, EAT * s * dt);
+          this._eat(fl, sb, i, tt, EAT * s * dt * (this.app.st?.acidStrength ?? 1));
           sb.wake(sb.tPiece[tt]);
           left -= SPEND * dt;
           eating++;

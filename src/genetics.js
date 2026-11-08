@@ -94,10 +94,11 @@ function gradientFrom(hex, rnd) {
 
 // Mutate a child's style and tune (both its own copies) in place. rnd: a
 // 0..1 random source; gen: how far down its family it is. Returns its changes.
-export function mutate(style, tune, { rnd = Math.random, gen = 0 } = {}) {
+export function mutate(style, tune, { rnd = Math.random, gen = 0, boost = 1 } = {}) {
   const changes = [];
   const add = (c) => c && changes.push(c);
-  const wild = Math.min(2, 1 + 0.12 * gen);
+  // (boost: the Cubicle's mutation - 0 none, 1 as ever, more and more go)
+  const wild = Math.min(2, 1 + 0.12 * gen) * boost;
   const chance = (p) => rnd() < p * wild;
 
   // ---- the big ones first (what it is), then what it's like
