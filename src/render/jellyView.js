@@ -244,6 +244,52 @@ function snapToShape(pos, nrm, mids, first, disp, shapes, cube) {
   }
 }
 
+// (screen outlines, for the refraction layers: see renderPieces)
+function convexHull(pts) {
+  pts.sort((p, q) => p[0] - q[0] || p[1] - q[1]);
+  const cr = (o, a, b) => (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]);
+  const lo = [], up = [];
+  for (const p of pts) {
+    while (lo.length >= 2 && cr(lo[lo.length - 2], lo[lo.length - 1], p) <= 0) lo.pop();
+    lo.push(p);
+  }
+  for (let i = pts.length - 1; i >= 0; i--) {
+    const p = pts[i];
+    while (up.length >= 2 && cr(up[up.length - 2], up[up.length - 1], p) <= 0) up.pop();
+    up.push(p);
+  }
+  up.pop();
+  lo.pop();
+  return lo.concat(up);
+}
+function polyArea(P) {
+  let s = 0;
+  for (let i = 0; i < P.length; i++) {
+    const p = P[i], q = P[(i + 1) % P.length];
+    s += p[0] * q[1] - q[0] * p[1];
+  }
+  return Math.abs(s) / 2;
+}
+// (convex S clipped to convex C, both anticlockwise)
+function clipConvex(S, C) {
+  let out = S;
+  for (let i = 0; i < C.length && out.length; i++) {
+    const A = C[i], B = C[(i + 1) % C.length], inp = out;
+    out = [];
+    for (let j = 0; j < inp.length; j++) {
+      const P = inp[j], Q = inp[(j + 1) % inp.length];
+      const sp = (B[0] - A[0]) * (P[1] - A[1]) - (B[1] - A[1]) * (P[0] - A[0]);
+      const sq = (B[0] - A[0]) * (Q[1] - A[1]) - (B[1] - A[1]) * (Q[0] - A[0]);
+      if (sp >= 0) out.push(P);
+      if (sp >= 0 !== sq >= 0) {
+        const t = sp / (sp - sq);
+        out.push([P[0] + (Q[0] - P[0]) * t, P[1] + (Q[1] - P[1]) * t]);
+      }
+    }
+  }
+  return out;
+}
+
 // Owns the jelly GPU geometry and the multi-pass jelly rendering. The
 // pieces share their vertex attributes and are drawn together: one mesh of
 // them all (for the passes that draw every piece - the light's view, the
@@ -1089,34 +1135,85 @@ export class JellyView {
     for (let k = 0; k < NP; k++) {
       const pc = sb.pieces[k];
       if (!pc || this.pieceIdx[k * 2 + 1] <= this.pieceIdx[k * 2]) continue;
-      const b = pc.bbox;
-      let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+      const b = pc.bbox, pts = [];
+      let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity, behind = false;
       for (let c = 0; c < 8; c++) {
         v.set(c & 1 ? b[3] : b[0], c & 2 ? b[4] : b[1], c & 4 ? b[5] : b[2]).project(camera);
+        if (v.z > 1) behind = true;
+        pts.push([v.x, v.y]);
         if (v.x < x0) x0 = v.x;
         if (v.x > x1) x1 = v.x;
         if (v.y < y0) y0 = v.y;
         if (v.y > y1) y1 = v.y;
       }
+      // (its outline on screen: the hull of its box's corners - or, a
+      // corner behind the camera, the box round them)
+      const hull = behind ? [[x0, y0], [x1, y0], [x1, y1], [x0, y1]] : convexHull(pts);
       const d = v.set(pc.com[0], pc.com[1], pc.com[2]).distanceToSquared(camera.position);
-      items.push({ k, d, x0, y0, x1, y1, layer: 0 });
+      items.push({ k, d, x0, y0, x1, y1, hull, area: polyArea(hull), layer: 0 });
     }
     items.sort((a, b) => b.d - a.d);
-    // pieces overlapping on screen go into successive layers so the nearer
-    // ones refract the farther ones; each layer costs two passes and a
-    // full-screen copy, so piles share the last few (maxLayers)
+    // Pieces overlapping on screen go into successive layers, so the nearer
+    // refracts the farther. Overlap is by their outlines - by the boxes
+    // round them, cubes stacked side by side chained up layer after layer
+    // just touching. Each layer costs two passes and a full-screen copy, so
+    // there are only so many (maxLayers); past that, layers are merged where
+    // the least overlaps: a nearer and a farther piece sharing a layer, the
+    // nearer can't show the farther (it vanishes behind it - a cube behind
+    // a cube, gone at some angles), so that's kept to the least screen.
     const maxL = Math.min(this.maxLayers, this.layerMeshes.length);
-    let nLayers = 1;
+    const edges = [];
+    let depthN = 1;
     for (let i = 0; i < items.length; i++) {
       const a = items[i];
+      let dep = 0;
       for (let j = 0; j < i; j++) {
         const b = items[j];
         if (a.x0 > b.x1 || b.x0 > a.x1 || a.y0 > b.y1 || b.y0 > a.y1) continue;
-        a.layer = Math.max(a.layer, b.layer + 1);
+        const ov = polyArea(clipConvex(a.hull, b.hull));
+        // (a sliver - stacked neighbours, seen a little from above - is
+        // left out: it would cost a layer for next to nothing)
+        if (!(ov > 0.01 * Math.min(a.area, b.area))) continue;
+        edges.push(j, i, ov);
+        dep = Math.max(dep, b.layer + 1);
       }
-      a.layer = Math.min(a.layer, maxL - 1);
-      nLayers = Math.max(nLayers, a.layer + 1);
+      a.layer = dep;
+      depthN = Math.max(depthN, dep + 1);
     }
+    if (depthN > maxL) {
+      // merge the depths into maxL runs, in order, losing the least overlap:
+      // W[x][y] = overlap between depth x (farther) and y; cost of a run =
+      // what's inside it (a prefix sum over the square), a small DP over runs
+      const D = depthN, W = new Float64Array(D * D);
+      for (let e = 0; e < edges.length; e += 3) W[items[edges[e]].layer * D + items[edges[e + 1]].layer] += edges[e + 2];
+      const S = new Float64Array((D + 1) * (D + 1));
+      for (let x = 0; x < D; x++) for (let y = 0; y < D; y++) S[(x + 1) * (D + 1) + y + 1] = W[x * D + y] + S[x * (D + 1) + y + 1] + S[(x + 1) * (D + 1) + y] - S[x * (D + 1) + y];
+      const run = (lo, hi) => S[(hi + 1) * (D + 1) + hi + 1] - S[lo * (D + 1) + hi + 1] - S[(hi + 1) * (D + 1) + lo] + S[lo * (D + 1) + lo];
+      // best[g][e]: least lost with depths 0..e-1 in g runs; cut[g][e]: where the last run starts
+      const best = [new Float64Array(D + 1).fill(Infinity)], cut = [new Int32Array(D + 1)];
+      best[0][0] = 0;
+      for (let g = 1; g <= maxL; g++) {
+        best[g] = new Float64Array(D + 1).fill(Infinity);
+        cut[g] = new Int32Array(D + 1);
+        for (let e = 1; e <= D; e++)
+          for (let st = g - 1; st < e; st++) {
+            const c = best[g - 1][st] + run(st, e - 1);
+            if (c < best[g][e]) {
+              best[g][e] = c;
+              cut[g][e] = st;
+            }
+          }
+      }
+      const group = new Int32Array(D);
+      for (let g = maxL, e = D; g > 0; g--) {
+        const st = cut[g][e];
+        for (let x = st; x < e; x++) group[x] = g - 1;
+        e = st;
+      }
+      for (const it of items) it.layer = group[it.layer];
+      depthN = maxL;
+    }
+    let nLayers = depthN;
     // each layer's mesh: its pieces' runs of the index (rewritten only when
     // a piece changes layer)
     let changed = false;

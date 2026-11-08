@@ -141,7 +141,7 @@ export class App {
     this.scene.add(key.target);
 
     this.jelly = new JellyView(renderer, this.env, this.lightDir);
-    if (this.coarse) this.jelly.maxLayers = 3;
+    if (this.coarse) this.jelly.maxLayers = 4;
     // warm dynamic light for flames and blasts (lights the floor and the jelly)
     this.fireLight = new THREE.PointLight(0xff8a3c, 0, 3.5, 2);
     this.fireLight.position.set(0, 1, 0);
