@@ -359,3 +359,30 @@ export function orient(obj, pos, dir) {
   obj.position.copy(pos);
   obj.quaternion.setFromUnitVectors(_up, dir.clone().normalize());
 }
+
+// Acid bottle: a glass flask of glowing green acid, a yellow hazard label;
+// along +Y from its base at the origin, its mouth at userData.lip.
+export function makeAcidBottle(M) {
+  const g = new THREE.Group();
+  const glass = new THREE.MeshStandardMaterial({ color: 0xe6f7ee, metalness: 0, roughness: 0.04, transparent: true, opacity: 0.32, envMap: M.steel.envMap, envMapIntensity: 1.4, depthWrite: false });
+  const acid = new THREE.MeshStandardMaterial({ color: 0x86ff2e, emissive: 0x3cbf00, emissiveIntensity: 0.9, roughness: 0.15, transparent: true, opacity: 0.88 });
+  const body = new THREE.Mesh(new THREE.CylinderGeometry(0.058, 0.064, 0.15, 28), glass);
+  body.position.y = 0.075;
+  const shoulder = new THREE.Mesh(new THREE.CylinderGeometry(0.022, 0.058, 0.05, 28, 1, true), glass);
+  shoulder.position.y = 0.175;
+  const neck = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.022, 0.06, 20, 1, true), glass);
+  neck.position.y = 0.23;
+  const lip = new THREE.Mesh(new THREE.TorusGeometry(0.022, 0.005, 8, 24), glass);
+  lip.rotation.x = Math.PI / 2;
+  lip.position.y = 0.26;
+  const liquid = new THREE.Mesh(new THREE.CylinderGeometry(0.052, 0.058, 0.11, 28), acid);
+  liquid.position.y = 0.06;
+  liquid.name = 'acid';
+  const label = new THREE.Mesh(new THREE.CylinderGeometry(0.0655, 0.0655, 0.06, 28, 1, true), new THREE.MeshStandardMaterial({ color: 0xffd21a, roughness: 0.45, envMap: M.steel.envMap }));
+  label.position.y = 0.08;
+  const band = new THREE.Mesh(new THREE.CylinderGeometry(0.066, 0.066, 0.012, 28, 1, true), M.rubber);
+  band.position.y = 0.08;
+  g.add(liquid, body, shoulder, neck, lip, label, band);
+  g.userData.lip = new THREE.Vector3(0, 0.262, 0);
+  return g;
+}

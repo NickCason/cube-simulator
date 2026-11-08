@@ -31,6 +31,7 @@ export const ICONS = {
   dicer: svg('<rect x="3.8" y="3.8" width="16.4" height="16.4" rx="3"/><path d="M9.3 3.8v16.4M14.7 3.8v16.4M3.8 9.3h16.4M3.8 14.7h16.4"/>'),
   autogun: svg('<path d="M9.5 9.2h11M9.5 12h11.5M9.5 14.8h11"/><rect x="3.4" y="8" width="6.6" height="8" rx="2"/><path d="M5.6 16v3.6"/>'),
   feed: svg('<path d="M3.5 10.5h12a6 6 0 0 1-12 0Z"/><path d="m15.5 10.5 5-6.2"/><path d="M8.4 6.6c0-1 .8-1.6.8-2.6M11.6 6.6c0-1 .8-1.6.8-2.6"/>'),
+  acid: svg('<path d="M9.5 3h5M10.5 3v5.2L5.2 18.4A1.8 1.8 0 0 0 6.8 21h10.4a1.8 1.8 0 0 0 1.6-2.6L13.5 8.2V3"/><path d="M7.4 15.4h9.2"/><circle cx="10.6" cy="18" r=".8"/><circle cx="13.6" cy="17.2" r=".6"/>'),
   gelgun: svg('<path d="M3.5 11h10.5l2.6 1.4v2H11l-1.5 4.4H6.3l1.2-4.4h-4z"/><circle cx="8.6" cy="7.3" r="2.6"/><path d="M19.6 9.2c1.6.2 2.2 1.6 1.4 2.6-.7.9-2.4.8-2.8-.4-.3-1 .3-2.3 1.4-2.2Z"/>'),
   cuber: svg('<rect x="3.2" y="11.6" width="9" height="9" rx="2"/><path d="M5.6 15.6v-1.4h1.4"/><path d="m11.6 12.4 6.3-6.3a1.8 1.8 0 0 1 2.5 2.5l-6.3 6.3"/>'),
   baller: svg(
@@ -65,6 +66,7 @@ export const TOOL_DEFS = [
   { id: 'mallet', label: 'Mallet', hint: 'Click to smack · hit on its beat to build resonance · frozen, sugar and ice cubes shatter', key: '4' },
   { id: 'torch', label: 'Torch', hint: 'Hold over the jelly to melt it · it runs off as liquid', key: '5' },
   { id: 'freeze', label: 'Cryo spray', hint: 'Hold to freeze it solid · spray a puddle to set it back into jelly', key: '6' },
+  { id: 'acid', label: 'Acid', hint: 'Hold over the jelly to pour acid · it fizzes and eats in, melting the jelly to liquid', key: 'a' },
   { id: 'baller', label: 'Melon baller', hint: 'Click to scoop out a ball', key: '7' },
   { id: 'cuber', label: 'Cube cuber', hint: 'Click to scoop out a cube', key: 'c' },
   { id: 'bomb', label: 'Cherry bomb', hint: 'Click to plant · stand back', key: '8' },

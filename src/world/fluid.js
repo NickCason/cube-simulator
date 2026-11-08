@@ -41,6 +41,11 @@ export class Fluid {
     this.v = new Float32Array(N * 3);
     this.col = new Float32Array(N * 3);
     this.temp = new Float32Array(N);
+    // (acid: how strong it still is - 0, molten jelly - and the jelly's tet
+    // it pressed into this frame, -1 none: see AcidTool)
+    this.acid = new Float32Array(N);
+    this.acidTet = new Int32Array(N).fill(-1);
+    this.keepAwake = false; // (acid still working: the pool mustn't sleep)
     this.age = new Float32Array(N);
     this.lam = new Float32Array(N);
     this.dp = new Float32Array(N * 3);
@@ -143,9 +148,10 @@ export class Fluid {
     this.mat.emissive.setScalar(e);
   }
 
-  // Melted jelly in: volume (m^3) at a point, moving at v, its colour.
-  // Volume collects until there's a particle's worth.
-  add(x, y, z, vol, vx, vy, vz, r, g, b, spread = 0.03) {
+  // Melted jelly in: volume (m^3) at a point, moving at v, its colour (and
+  // how strong an acid it is: see AcidTool). Volume collects until there's
+  // a particle's worth.
+  add(x, y, z, vol, vx, vy, vz, r, g, b, spread = 0.03, acid = 0) {
     this.bank += vol;
     spread = Math.max(spread, 0.004); // (never two in one spot)
     if (this.bank >= this.vol) this.wake();
@@ -170,8 +176,10 @@ export class Fluid {
       }
       this.v[o] = vx; this.v[o + 1] = vy; this.v[o + 2] = vz;
       this.col[o] = r; this.col[o + 1] = g; this.col[o + 2] = b;
-      this.temp[i] = 1;
+      this.temp[i] = acid > 0 ? 0 : 1;
       this.age[i] = 0;
+      this.acid[i] = acid;
+      this.acidTet[i] = -1;
     }
     if (this.n >= this.max) this.bank = 0;
     this.mesh.visible = this.n > 0;
@@ -222,6 +230,31 @@ export class Fluid {
     if (this.n) this.drainT = 0.6;
   }
 
+  // Particles gone where drop(i) says (spent acid fuming off: see AcidTool).
+  removeWhere(drop) {
+    let w = 0;
+    for (let i = 0; i < this.n; i++) {
+      if (drop(i)) continue;
+      if (w !== i) {
+        for (let c = 0; c < 3; c++) {
+          this.x[w * 3 + c] = this.x[i * 3 + c];
+          this.v[w * 3 + c] = this.v[i * 3 + c];
+          this.col[w * 3 + c] = this.col[i * 3 + c];
+        }
+        this.temp[w] = this.temp[i];
+        this.age[w] = this.age[i];
+        this.acid[w] = this.acid[i];
+        this.acidTet[w] = this.acidTet[i];
+      }
+      w++;
+    }
+    if (w === this.n) return;
+    this.n = w;
+    this.mesh.visible = w > 0;
+    if (!w) this.geo.setDrawRange(0, 0);
+    this.wake();
+  }
+
   clear() {
     this.n = 0;
     this.bank = 0;
@@ -244,8 +277,9 @@ export class Fluid {
       return;
     }
     if (!(dt > 0)) return;
-    // (a pool that's come to rest sleeps till jelly moves near it)
-    if (this.asleep && this._stirred()) this.wake();
+    // (a pool that's come to rest sleeps till jelly moves near it - or
+    // while acid in it is still eating)
+    if (this.asleep && (this.keepAwake || this._stirred())) this.wake();
     if (!this.asleep) {
       this._jellyCells();
       const h = Math.min(dt, 1 / 30) / SUB;
@@ -253,7 +287,7 @@ export class Fluid {
       const v = this.v;
       let v2 = 0;
       for (let o = 0; o < this.n * 3; o += 3) v2 = Math.max(v2, v[o] * v[o] + v[o + 1] * v[o + 1] + v[o + 2] * v[o + 2]);
-      this.stillT = v2 < 0.04 * 0.04 ? this.stillT + dt : 0;
+      this.stillT = v2 < 0.04 * 0.04 && !this.keepAwake ? this.stillT + dt : 0;
       if (this.stillT > 0.6) {
         this.asleep = true;
         v.fill(0, 0, this.n * 3);
@@ -621,6 +655,7 @@ export class Fluid {
       for (let e = cs[hb], e1 = cs[hb + 1]; e < e1; e++) {
         const t = ctl[e];
         if (!(sb._tetGap(t, q[o], q[o + 1], q[o + 2]) < 0)) continue;
+        if (this.acid[i] > 0) this.acidTet[i] = t;
         const t4 = t * 4, ia = T[t4], ib = T[t4 + 1], ic = T[t4 + 2], id = T[t4 + 3];
         const a3 = ia * 3, b3 = ib * 3, c3 = ic * 3, d3 = id * 3;
         let wx = 0, wy = 1, wz = 0, step = 0.004;
@@ -681,7 +716,7 @@ export class Fluid {
   _setCold() {
     const n = this.n;
     let any = false;
-    for (let i = 0; i < n; i++) if (this.temp[i] < SET_T) any = true;
+    for (let i = 0; i < n; i++) if (this.temp[i] < SET_T && this.acid[i] === 0) any = true;
     if (!any) return;
     const released = this.coolT > 0.45;
     this._grid(this.x);
@@ -693,16 +728,16 @@ export class Fluid {
     };
     const L2 = (1.4 * D) ** 2;
     for (let i = 0; i < n; i++) {
-      if (this.temp[i] >= SET_T) continue;
+      if (this.temp[i] >= SET_T || this.acid[i] !== 0) continue;
       this._near(this.x, i, (j, dx, dy, dz, d2) => {
-        if (d2 > L2 || this.temp[j] >= SET_T) return;
+        if (d2 > L2 || this.temp[j] >= SET_T || this.acid[j] !== 0) return;
         const a = find(i), b = find(j);
         if (a !== b) par[b] = a;
       });
     }
     const groups = new Map();
     for (let i = 0; i < n; i++) {
-      if (this.temp[i] >= SET_T) continue;
+      if (this.temp[i] >= SET_T || this.acid[i] !== 0) continue;
       const r = find(i);
       if (!groups.has(r)) groups.set(r, []);
       groups.get(r).push(i);
@@ -747,6 +782,8 @@ export class Fluid {
         }
         this.temp[w] = this.temp[i];
         this.age[w] = this.age[i];
+        this.acid[w] = this.acid[i];
+        this.acidTet[w] = this.acidTet[i];
       }
       w++;
     }

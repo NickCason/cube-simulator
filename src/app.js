@@ -19,6 +19,7 @@ import { CuberTool, DicerTool } from './tools/cubey.js';
 import { FeedTool } from './tools/feed.js';
 import { AutoGunTool } from './tools/autogun.js';
 import { GelGunTool } from './tools/gelgun.js';
+import { AcidTool } from './tools/acid.js';
 import { Cubiplication } from './cubiplication.js';
 import { makeMaterials, makeBomb } from './world/models.js';
 import { physicsWarmJob } from './sim/warm.js';
@@ -236,6 +237,7 @@ export class App {
       holegun: new HoleGunTool(this),
       autogun: new AutoGunTool(this),
       gelgun: new GelGunTool(this),
+      acid: new AcidTool(this),
       mallet: new MalletTool(this),
       torch: new TorchTool(this),
       freeze: new FreezeTool(this),

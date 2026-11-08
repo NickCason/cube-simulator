@@ -11,7 +11,7 @@ const _p = [0, 0, 0];
 const _p2 = [0, 0, 0];
 
 // What is under the pointer: jelly, floor, or a point in mid-air.
-function target(app, ray) {
+export function target(app, ray) {
   const hit = app.pickJelly(ray);
   // (molten jelly in front of it - or on the floor - is what's aimed at)
   const wet = app.fluid.n ? app.fluid.pick(ray) : null;
@@ -784,11 +784,30 @@ function smoothMelted(sb, gone) {
   }
 }
 
-// (TorchTool) these tets to molten jelly: their volume (rest, times how
-// swollen) into the liquid at their middles, moving as they were, coloured
-// by their rest height; then they go.
+// (TorchTool) its hottest tets to molten jelly, half of it boiling off; a
+// spike left standing - a hot tet with three of its faces bare, or two
+// where it's hottest - goes with them.
 TorchTool.prototype._liquefy = function (set) {
-  const app = this.app, sb = app.sb, T = sb.T, x = sb.x, v = sb.v;
+  const sb = this.app.sb, T = sb.T, temp = sb.temp;
+  liquefy(this.app, set, {
+    boilOff: this.app.st?.boilOff ?? 0.5,
+    steam: true,
+    spike: (t) => {
+      const tt = (temp[T[t * 4]] + temp[T[t * 4 + 1]] + temp[T[t * 4 + 2]] + temp[T[t * 4 + 3]]) * 0.25;
+      return tt > 0.95 ? 2 : tt > 0.8 ? 3 : 0;
+    },
+  });
+};
+
+// These tets to molten jelly: their volume into the liquid at their
+// middles, moving as they were, in their colour; then they go - the torch's
+// and the acid's. o: boilOff (the share of it that boils away), full (all
+// its volume, not just what's left of it slumped), spike(t) (round the
+// hole, how many of a tet's faces left bare make it go too: 0 not it),
+// steam (puffs off the boil).
+export function liquefy(app, set, o = {}) {
+  const sb = app.sb, T = sb.T, x = sb.x, v = sb.v;
+  const boilOff = o.boilOff ?? 0, spike = o.spike || (() => 0);
   const col = new THREE.Color();
   // (how much of what melts drips off on strings: the gooier, the more)
   const dripShare = app.strands ? 0.3 * Math.min(1, (app.st?.goo ?? 0.35) * 1.5) : 0;
@@ -825,8 +844,8 @@ TorchTool.prototype._liquefy = function (set) {
       else faces.set(k, [t]);
     }
     if (set.has(t) || c3[0] < x0 - 0.08 || c3[0] > x1 + 0.08 || c3[1] < y0 - 0.08 || c3[1] > y1 + 0.08 || c3[2] < z0 - 0.08 || c3[2] > z1 + 0.08) continue;
-    const tt = (sb.temp[T[t * 4]] + sb.temp[T[t * 4 + 1]] + sb.temp[T[t * 4 + 2]] + sb.temp[T[t * 4 + 3]]) * 0.25;
-    if (tt > 0.8) inner.push(t, tt > 0.95 ? 2 : 3);
+    const need = spike(t);
+    if (need) inner.push(t, need);
   }
   for (let pass = 0; pass < 2; pass++) {
     const add = [];
@@ -856,7 +875,7 @@ TorchTool.prototype._liquefy = function (set) {
     // (the space it leaves - slumped, it's shrunk - and half of that boils
     // off in the flame)
     // (and a share of it drips off on a string instead - see below)
-    const vol = sb.vol0[t] * Math.min(1, sb.tVS[t]) * (1 - (app.st?.boilOff ?? 0.5)) * (1 - dripShare);
+    const vol = sb.vol0[t] * (o.full ? 1 : Math.min(1, sb.tVS[t])) * (1 - boilOff) * (1 - dripShare);
     liquid += vol / (1 - dripShare) - vol;
     app.fluid.add(cx, cy, cz, vol, vx, vy - 0.3, vz, col.r, col.g, col.b, Math.cbrt(sb.vol0[t]) * 1.5);
   }
@@ -871,7 +890,7 @@ TorchTool.prototype._liquefy = function (set) {
       }
       m += 4;
     }
-    if (m) app.particles.smoke({ x: sx / m, y: sy / m + 0.05, z: sz / m }, Math.min(6, 1 + (set.size >> 3)), 0.25, 0.92, 0.9, 0.3);
+    if (m && o.steam) app.particles.smoke({ x: sx / m, y: sy / m + 0.05, z: sz / m }, Math.min(6, 1 + (set.size >> 3)), 0.25, 0.92, 0.9, 0.3);
     if (m) { sx /= m; sy /= m; sz /= m; }
   }
   // (what's left round the hole is a melted surface - see TAG_MELT - and
@@ -909,7 +928,7 @@ TorchTool.prototype._liquefy = function (set) {
       app.fluid.add(sx, sy, sz, liquid, 0, -0.3, 0, col.r, col.g, col.b, 0.05);
     }
   }
-};
+}
 
 export class FreezeTool extends NozzleTool {
   constructor(app) {
