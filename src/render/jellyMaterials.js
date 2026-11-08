@@ -287,12 +287,19 @@ const VERT = /* glsl */ `
   }
 `;
 
-// Back faces: linear view depth, packed view-space exit normal, exit rest height.
+// Back faces: linear view depth, packed view-space exit normal, and what
+// the line of sight leaves through - the coat on the outside there (sugar
+// crystals, a dusting, flour it's picked up) or frost: 0 for bare jelly. (A
+// gradient up its height takes its rest height there instead, unless the
+// whole rest point goes in the second target.)
 export function createBackMaterial(rest = false) {
   return new THREE.ShaderMaterial({
     side: THREE.BackSide,
+    uniforms: { uCubeTex: { value: emptyFloatTexture() } },
     vertexShader: VERT,
     fragmentShader: /* glsl */ `
+      uniform highp sampler2D uCubeTex;
+      varying float vCube;
       varying vec3 vWorldPos;
       varying vec3 vNormal;
       varying vec3 vViewPos;
@@ -303,7 +310,13 @@ export function createBackMaterial(rest = false) {
       ${rest ? 'layout(location = 1) out highp vec4 oRest;' : ''}
       void main() {
         vec3 vn = safeNormalize((viewMatrix * vec4(safeNormalize(vNormal), 0.0)).xyz);
-        gl_FragColor = finite4(vec4(-vViewPos.z, octEncode(vn), vRest.y));
+        int k = int(vCube + 0.5);
+        vec4 q3 = texelFetch(uCubeTex, ivec2(3, k), 0), q29 = texelFetch(uCubeTex, ivec2(29, k), 0);
+        float fresh = vData.z;
+        float coat = max(max(q3.x * (1.0 - fresh * (1.0 - q29.z)), q29.x * (1.0 - fresh)), vData.w);
+        coat = max(coat, 0.8 * smoothstep(0.05, 0.7, -vData.x));
+        ${rest ? 'float a = coat;' : 'float a = texelFetch(uCubeTex, ivec2(4, k), 0).y > 0.5 ? vRest.y : coat;'}
+        gl_FragColor = finite4(vec4(-vViewPos.z, octEncode(vn), a));
         // (rest: and the whole rest point there, into a second target - for
         // a gradient across, corner to corner or out from the middle, the
         // way through from where it went in to here)
@@ -628,6 +641,13 @@ export function createJellyMaterial(env, layerUniforms) {
         float temp = vData.x;
         float glow = vData.y;
         float fresh = vData.z;
+        // its coats and skins: a dusting (starch, icing sugar), a film or
+        // foil that's only on the outside (a cut face is bare), sugar all
+        // through (a sugar cube's cut is grainy too)
+        vec4 cq29 = cubeT(29);
+        float cDust = cq29.x, cSkin = cq29.y, cThrough = cq29.z;
+        cIrid *= 1.0 - cSkin * fresh;
+        cMetal *= 1.0 - cSkin * fresh;
         float frost = smoothstep(0.05, 0.7, -temp);
         float melt = smoothstep(0.3, 1.1, temp);
 
@@ -668,8 +688,13 @@ export function createJellyMaterial(env, layerUniforms) {
                         vnoise(q + vec3(0, 0, e)) + 0.5 * vnoise((q + vec3(0, 0, e)) * 2.1 + 7.0) - n0) / e;
           N = normalize(N + (g - N * dot(g, N)) * 0.018);
         }
-        // sugar coating (sour gummies): only on the moulded outside
-        float coat = cSugar * (1.0 - fresh) * (1.0 - cavity);
+        // sugar coating (sour gummies): only on the moulded outside (a sugar
+        // cube's all sugar: its cuts too)
+        float coat = cSugar * (1.0 - fresh * (1.0 - cThrough)) * (1.0 - cavity);
+        // a dusting: its own on the outside (mochi's starch), or flour it's
+        // been rolled in - wherever that touched, cut faces too
+        float dustOwn = cDust * (1.0 - fresh) * (1.0 - cavity), dustFlour = vData.w * (1.0 - cavity);
+        float dust = max(dustOwn, dustFlour);
         // surface micro-structure: faint knife texture on cut faces, ice crystals when frozen
         if (fresh > 0.5 || frost > 0.01) {
           vec3 q = vRest * 38.0;
@@ -702,8 +727,11 @@ export function createJellyMaterial(env, layerUniforms) {
         // else nothing's looked up for it, here or below)
         vec3 exitR = Rp;
         if (cLayers > 0 && back.r > 0.0) exitR = uBackRest > 0.5 ? textureLod(tBackRest, uv, 0.0).xyz : vec3(Rp.x, back.a, Rp.z);
+        // (and what it leaves through: the far side's coat, if any - see
+        // createBackMaterial)
+        float exitCoat = back.r > 0.0 && (uBackRest > 0.5 || cLayers <= 0) ? clamp(back.a, 0.0, 1.0) : 0.0;
 
-        float rough = clamp(cRough + fresh * 0.02 + frost * 0.5 - melt * 0.02 + coat * 0.18, 0.015, 1.0);
+        float rough = clamp(cRough + fresh * 0.02 + frost * 0.5 - melt * 0.02 + coat * 0.18 + dust * 0.45, 0.015, 1.0);
         // (specular anti-aliasing: where the surface turns faster than a
         // pixel can show - bevels and corners, on a small or low-resolution
         // screen - its reflections blur as if it were rougher, instead of the
@@ -711,12 +739,26 @@ export function createJellyMaterial(env, layerUniforms) {
         vec3 dNx = dFdx(vNormal), dNy = dFdy(vNormal);
         float a2 = rough * rough * rough * rough + min(0.5 * (dot(dNx, dNx) + dot(dNy, dNy)), 0.18);
         rough = max(rough, sqrt(sqrt(min(a2, 1.0))));
-        float lod = clamp(rough * 9.0 + frost * 2.5 + thick * 1.6, 0.0, uSceneLodMax);
+        float lod = clamp(rough * 9.0 + frost * 2.5 + thick * 1.6 + exitCoat * 1.8, 0.0, uSceneLodMax);
 
         vec3 trans;
         trans.r = sampleThrough(Pw, V, N, Nb, thick, cIor - disp, lod, rough, 0).r;
         trans.g = sampleThrough(Pw, V, N, Nb, thick, cIor, lod, rough, 1).g;
         trans.b = sampleThrough(Pw, V, N, Nb, thick, cIor + disp, lod, rough, 2).b;
+        // The far side's coat, seen from inside - a sour gummy cut open,
+        // looked into: the room behind is seen through its sugar, not past
+        // it - blurred, and whitened by the crystals (or the dusting, the
+        // flour, the frost), lit from outside, in the way.
+        if (exitCoat > 0.0) {
+          vec3 Lx = normalize(uLightDir);
+          vec3 coatLit = envLookup(Nb, 1.0) * 0.8 + uLightColor * (max(dot(Nb, Lx), 0.0) * 0.45 + 0.04);
+          // (its grains, where the line of sight leaves - as a rest point:
+          // the rest target's, or carried on unturned from where it went in)
+          vec3 xr = uBackRest > 0.5 ? textureLod(tBackRest, uv, 0.0).xyz : Rp + refract(-V, N, 1.0 / cIor) * thick;
+          float grain = 1.0 - smoothstep(0.38, 0.5, worley(xr * 56.0).x);
+          vec3 frosted = coatLit * vec3(0.98, 0.97, 0.95) * (0.8 + 0.45 * grain);
+          trans = mix(trans, frosted, clamp(exitCoat * (0.8 + 0.12 * grain), 0.0, 0.94));
+        }
 
         float pathLen = thick + 0.2 * rim * rim;
         // Rubik: the sticker you look into (its seams dark, its white milky)
@@ -968,6 +1010,22 @@ export function createJellyMaterial(env, layerUniforms) {
           col = mix(col, sugarCol + keyLight * glint, grain * coat * 0.9);
           // fine dusting between the grains
           col = mix(col, mix(vec3(1.0), sc, 0.4) * (irr * 0.5 + keyLight * nl * 0.3), coat * 0.14 * (1.0 - grain));
+        }
+
+        // a dusting (mochi's starch, a marshmallow's icing sugar, flour it's
+        // been rolled in): fine white powder, matte, clumped thicker here
+        // and there - thin, the colour under it shows through
+        if (dust > 0.0) {
+          float clump = fbm3(vRest * 64.0) * 0.65 + 0.35 * vnoise(vRest * 190.0);
+          // (its own: even, mottled. Flour: as much as there is, that much of
+          // the surface under powder - thick, all of it; thin, clumps of it
+          // here and there - so a patch thins out at its edge, not the shape
+          // of the mesh it's kept on)
+          float pc = fbm3(vRest * 46.0) * 0.6 + vnoise(vRest * 150.0) * 0.4;
+          float d = max(clamp(dustOwn * (0.72 + 0.75 * (clump - 0.5)), 0.0, 1.0),
+            smoothstep(pc - 0.1, pc + 0.1, dustFlour * 1.15 - 0.06));
+          vec3 powder = vec3(0.97, 0.955, 0.925) * (irr * 0.72 + keyLight * (max(dot(N, L), 0.0) * 0.55 + 0.08)) + emLit * 0.35;
+          col = mix(col, powder, d * 0.9);
         }
 
         // frost layer: white crystalline film with sparkles

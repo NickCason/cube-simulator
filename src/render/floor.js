@@ -45,6 +45,8 @@ export function createFloor(env, fx) {
     shader.uniforms.uPatScale = fx.patScale;
     shader.uniforms.uPatGlow = fx.patGlow;
     shader.uniforms.uPatSun = fx.patSun;
+    shader.uniforms.tFlour = fx.flour;
+    shader.uniforms.uFlourRect = fx.flourRect;
     shader.vertexShader = shader.vertexShader
       .replace('#include <common>', '#include <common>\nvarying vec3 vFloorPos;')
       .replace('#include <worldpos_vertex>', '#include <worldpos_vertex>\nvFloorPos = (modelMatrix * vec4(transformed, 1.0)).xyz;');
@@ -79,6 +81,14 @@ export function createFloor(env, fx) {
         uniform vec4 uSel;
         uniform vec4 uSelCol;
         uniform float uSelPing;
+        uniform sampler2D tFlour;
+        uniform vec4 uFlourRect;
+        float fHash(vec2 p) { return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453); }
+        float fNoise(vec2 p) {
+          vec2 i = floor(p), f = fract(p);
+          f = f * f * (3.0 - 2.0 * f);
+          return mix(mix(fHash(i), fHash(i + vec2(1.0, 0.0)), f.x), mix(fHash(i + vec2(0.0, 1.0)), fHash(i + vec2(1.0, 1.0)), f.x), f.y);
+        }
         ${FLOOR_PATTERN_GLSL}
         // a rounded square's signed distance (half side h, corner radius r)
         float sdRoundSq(vec2 p, float h, float r) {
@@ -91,7 +101,22 @@ export function createFloor(env, fx) {
         `#include <roughnessmap_fragment>
         // (a place's floor: its pattern)
         vec3 patGlow;
-        diffuseColor.rgb = floorPattern(vFloorPos.xz, diffuseColor.rgb, patGlow);`,
+        diffuseColor.rgb = floorPattern(vFloorPos.xz, diffuseColor.rgb, patGlow);
+        // flour on it (see Flour): powdery white and matte - as much as
+        // there is, that much of the floor under it: thick, all of it; thin,
+        // drifts and clumps of it with the floor between
+        float flourAmt = 0.0;
+        {
+          vec2 fl = (vFloorPos.xz - uFlourRect.xy) * uFlourRect.zw;
+          if (all(greaterThan(fl, vec2(0.0))) && all(lessThan(fl, vec2(1.0)))) {
+            float f = texture2D(tFlour, fl).r * 1.275;
+            vec2 q = vFloorPos.xz;
+            float n = fNoise(q * 28.0) * 0.5 + fNoise(q * 90.0) * 0.32 + fHash(floor(q * 420.0)) * 0.18;
+            flourAmt = smoothstep(n - 0.16, n + 0.16, f * 2.4);
+          }
+        }
+        diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.95, 0.94, 0.91), flourAmt);
+        roughnessFactor = mix(roughnessFactor, 1.0, flourAmt);`,
       )
       .replace(
         '#include <lights_fragment_begin>',
@@ -210,7 +235,7 @@ export function createFloor(env, fx) {
           vec4 rf = textureLod(tRefl, suv, uReflLod + 3.0 * (1.0 - textureLod(tRefl, suv, uReflLod).a));
           vec3 Vf = normalize(cameraPosition - vFloorPos);
           float fres = 0.4 + 0.6 * pow(1.0 - max(Vf.y, 0.0), 3.0);
-          gl_FragColor.rgb = mix(gl_FragColor.rgb, rf.rgb / max(rf.a, 1e-3), clamp(rf.a * uReflAmount * fres, 0.0, 1.0));
+          gl_FragColor.rgb = mix(gl_FragColor.rgb, rf.rgb / max(rf.a, 1e-3), clamp(rf.a * uReflAmount * fres * (1.0 - flourAmt), 0.0, 1.0));
         }
         // glow mode: the jelly lights the floor round it
         if (uGlowFloor > 0.0) {
@@ -247,7 +272,7 @@ export function createFloor(env, fx) {
             gl_FragColor.rgb = mix(gl_FragColor.rgb, rc, clamp(k * 0.8, 0.0, 0.92));
           }
         }
-        gl_FragColor.rgb += patGlow * uPatGlow;
+        gl_FragColor.rgb += patGlow * uPatGlow * (1.0 - flourAmt);
         float fdist = length(vFloorPos.xz);
         float fade = smoothstep(3.2, 11.0, fdist);
         gl_FragColor.rgb = mix(gl_FragColor.rgb, uBg, fade);`,

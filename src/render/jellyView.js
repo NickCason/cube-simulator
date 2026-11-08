@@ -23,7 +23,7 @@ const FLOOR_SPAN = 6.4;
 // (how milky jelly of that opacity looks: see setStyle)
 // a row of the cube-look texture: 7 texels of looks, 10 + 10 of layers, the
 // colour of its light, a freeform gradient's depth
-export const CUBE_TEX_W = 29;
+export const CUBE_TEX_W = 30;
 
 const hazeMinOf = (o) => 0.92 * Math.min(1, Math.max(0, (Math.min(1, Math.max(0, o)) - 0.45) / 0.55)) ** 2;
 
@@ -186,7 +186,7 @@ function tessellate(pos, nrm, data, mids, first, disp) {
       data[o4] = (data[da4] + data[db4]) * 0.5;
       data[o4 + 1] = (data[da4 + 1] + data[db4 + 1]) * 0.5;
       data[o4 + 2] = Math.max(data[da4 + 2], data[db4 + 2]);
-      data[o4 + 3] = 0;
+      data[o4 + 3] = (data[da4 + 3] + data[db4 + 3]) * 0.5; // (flour)
     }
   }
 }
@@ -326,6 +326,9 @@ export class JellyView {
     this.cubeTex.generateMipmaps = false;
     this.cubeTex.needsUpdate = true;
     this.frontMat.uniforms.uCubeTex.value = this.cubeTex;
+    // (the back faces read it too: what coat the line of sight leaves through)
+    this.backMat.uniforms.uCubeTex.value = this.cubeTex;
+    this.backMatRest.uniforms.uCubeTex.value = this.cubeTex;
     // each cube's gradient (layered), as a strip: its absorption and the
     // colour inside along it, two rows a cube (see setCubeLook, CUBE_GLSL)
     this.gradData = new Uint16Array(GRAD_N * GRAD_ROWS * 4);
@@ -525,6 +528,9 @@ export class JellyView {
       sel: { value: new THREE.Vector4(0, 0, 0.5, 0) },
       selCol: { value: new THREE.Vector4(1, 1, 1, 0) },
       selPing: { value: 9 },
+      // flour on the floor (see Flour): how much, over a square of it
+      flour: { value: null },
+      flourRect: { value: new THREE.Vector4(-3.2, -3.2, 1 / 6.4, 1 / 6.4) },
     };
     // (the jelly mirrors the floor: it reads the same textures)
     const fx = this.fxUniforms;
@@ -643,6 +649,9 @@ export class JellyView {
     if (cloud) tint.lerp(new THREE.Color(1, 1, 1), 0.35 * cloud).multiplyScalar(1 - 0.35 * cloud);
     put(27, tint.r, tint.g, tint.b, 9 * o * o + (m.milk || 0) * 3);
     put(28, 1 / ref, Math.max(1, Math.round(flavor.tiles || 1)), 0, 0);
+    // its coats and skins: a dusting on the outside, iridescence and metal only
+    // on the outside (a film, a foil), sugar all through
+    put(29, m.dust || 0, m.skin || 0, m.through ? 1 : 0, 0);
     this.cubeTex.needsUpdate = true;
     if (flavor.layers && flavor.shape === 'free') {
       bakeFree(flavor, this.freeData.subarray(k * this.freeSlab, (k + 1) * this.freeSlab));
@@ -844,22 +853,26 @@ export class JellyView {
   // moving - goes 5 times a second, and only its temperatures.
   update(sb) {
     const topo = this.syncTopology(sb);
-    const n = sb.nV, x = sb.x, temp = sb.temp, glow = sb.glow;
-    let ps = 0, ts = 0, gs = 0;
+    const n = sb.nV, x = sb.x, temp = sb.temp, glow = sb.glow, dust = sb.dust;
+    let ps = 0, ts = 0, gs = 0, ds = 0;
     for (let i = 0; i < n; i++) {
       const w = 1 + (i & 7) * 0.37, o = i * 3;
       ps += (x[o] + x[o + 1] * 1.3 + x[o + 2] * 1.7) * w;
       ts += temp[i] * w;
+      ds += dust[i] * w;
       gs += glow[i];
     }
     const fill = sb.fill && sb.fill.topo === sb.topoVersion;
     const moved = topo || fill || ps !== this._ps;
     const now = performance.now();
     const warmed = ts !== this._ts && now - (this._dataAt || 0) > 200;
-    if (!moved && !warmed && !(gs > 0 || this._gs > 0)) return;
+    // (flour landing on it: as soon as it's there)
+    const floured = ds !== this._ds;
+    if (!moved && !warmed && !floured && !(gs > 0 || this._gs > 0)) return;
     this._ps = ps;
     this._ts = ts;
     this._gs = gs;
+    this._ds = ds;
     this._dataAt = now;
     const pos = this.pos, nrm = this.nrm, data = this.data;
     sb.writeRender(pos, nrm, data);

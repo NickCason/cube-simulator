@@ -404,11 +404,12 @@ const LEGEND_BY_REC = {
   gelled: ['Wearer of Many Globs', 'the Gloriously Gelled', 'Who Grew a Second Self'],
   smashed: ['Who Took the Mallet', 'the Hammered', 'Anvil-Hearted'],
   scooped: ['Who Was Scooped and Lived', 'of the Missing Piece', 'the Hollowed'],
+  floured: ['Who Rolled in Flour', 'the Dusted', 'the Well-Floured'],
 };
 const REC_ADJ = {
   cuts: ['Scarred', 'Battle-Scarred'], tears: ['Torn'], diced: ['Diced'], shots: ['Pierced', 'Bulletproof'], booms: ['Shellshocked', 'Blast-Proof'],
   healed: ['Reborn', 'Undying'], melted: ['Fireproof', 'Scorched'], frozen: ['Thawed', 'Frostbitten'], acid: ['Etched', 'Corroded'],
-  gelled: ['Globby', 'Encrusted'], smashed: ['Dented', 'Hammered'], scooped: ['Hollow', 'Scooped'],
+  gelled: ['Globby', 'Encrusted'], smashed: ['Dented', 'Hammered'], scooped: ['Hollow', 'Scooped'], floured: ['Floury', 'Dusted', 'Breaded'],
 };
 
 // phrase puns with slots: {V} verb, {Ving}, {A} adjective, {N} noun, {F} flavour word, {M} material noun, {C} colour word

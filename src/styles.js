@@ -223,7 +223,10 @@ export function tileLocal(x, y, z, size, tiles) {
 }
 
 // Material presets. Look: depth (colour), opacity, glow (translucency),
-// rough, ior, sugar (crystal coating), milk (creamy body).
+// rough, ior, sugar (crystal coating), milk (creamy body); dust (a powder
+// on the outside: starch, icing sugar), skin (its iridescence and metal a
+// film or foil on the outside only - cut, it's bare), through (its sugar
+// all the way through, not a coat).
 // Feel: mu (firmness), damping (viscosity), weight (density), lambda (volume
 // keeping), bounce, grip. (Stored as style.texture: the first five were the
 // original "textures", and saved styles and ?texture= links still name them.)
@@ -236,8 +239,8 @@ export const TEXTURES = {
   slime: { name: 'Slime', depth: 0.8, opacity: 0.5, glow: 0.95, rough: 0.01, ior: 1.35, sugar: 0, milk: 0.2, mu: 52, damping: 5.5, weight: 1.05, lambda: 24, bounce: 0.08, grip: 1.4, goo: 1 },
   water: { name: 'Water balloon', depth: 0.45, opacity: 0.04, glow: 0.55, rough: 0.014, ior: 1.333, sugar: 0, milk: 0, mu: 46, damping: 0.32, weight: 1.5, lambda: 40, bounce: 0.3, grip: 0.8, goo: 0.15 },
   syrup: { name: 'Syrup', depth: 1.9, opacity: 0, glow: 0.72, rough: 0.013, ior: 1.49, sugar: 0, milk: 0, mu: 50, damping: 12, weight: 1.4, lambda: 30, bounce: 0.02, grip: 1.45, goo: 1 },
-  mochi: { name: 'Mochi', depth: 0.45, opacity: 0.86, glow: 0.62, rough: 0.3, ior: 1.32, sugar: 0, milk: 0.9, mu: 70, damping: 9, weight: 1.1, lambda: 18, bounce: 0.04, grip: 1.45, goo: 0.9 },
-  marshmallow: { name: 'Marshmallow', label: 'Marsh\u00admallow', depth: 0.22, opacity: 0.95, glow: 0.85, rough: 0.45, ior: 1.3, sugar: 0, milk: 1, mu: 80, damping: 7, weight: 0.35, lambda: 1.8, bounce: 0.25, grip: 1, goo: 0.7 },
+  mochi: { name: 'Mochi', depth: 0.45, opacity: 0.86, glow: 0.62, rough: 0.3, ior: 1.32, sugar: 0, milk: 0.9, mu: 70, damping: 9, weight: 1.1, lambda: 18, bounce: 0.04, grip: 1.45, goo: 0.9, dust: 0.38 },
+  marshmallow: { name: 'Marshmallow', label: 'Marsh\u00admallow', depth: 0.22, opacity: 0.95, glow: 0.85, rough: 0.45, ior: 1.3, sugar: 0, milk: 1, mu: 80, damping: 7, weight: 0.35, lambda: 1.8, bounce: 0.25, grip: 1, goo: 0.7, dust: 0.42 },
   rubber: { name: 'Rubber', depth: 1.25, opacity: 0.97, glow: 0.15, rough: 0.26, ior: 1.5, sugar: 0, milk: 0.4, mu: 900, damping: 1, weight: 1.2, lambda: 30, bounce: 0.9, grip: 1.3, goo: 0.15 },
   glass: { name: 'Glass', depth: 0.14, opacity: 0, glow: 0.22, rough: 0.008, ior: 1.52, sugar: 0, milk: 0, mu: 1000, damping: 2.5, weight: 1.6, lambda: 40, bounce: 0.25, grip: 0.4, rigidity: 0.85, goo: 0, brittle: true, chip: '#eef8ff', glassy: true },
   // firm and dead: barely gives, doesn't bounce, crumbles more than it stretches
@@ -250,12 +253,12 @@ export const TEXTURES = {
   candy: { name: 'Hard candy', label: 'Hard candy', depth: 1.1, opacity: 0.1, glow: 0.4, rough: 0.012, ior: 1.5, sugar: 0, milk: 0, mu: 1000, damping: 3, weight: 1.4, lambda: 40, bounce: 0.35, grip: 0.6, rigidity: 0.92, goo: 0, brittle: true, chip: 'flavor', glassy: true },
   // brittle (the mallet shatters it, chips fly - see MalletTool.strike):
   // a sugar cube - white, sparkly-grainy, firm and crumbly
-  sugar: { name: 'Sugar cube', label: 'Sugar cube', depth: 0.32, opacity: 0.93, glow: 0.55, rough: 0.55, ior: 1.32, sugar: 1, milk: 1, mu: 760, damping: 8, weight: 1.15, lambda: 14, bounce: 0.03, grip: 1.35, rigidity: 0.6, tough: 0.45, goo: 0, brittle: true, chip: '#fffaf3' },
+  sugar: { name: 'Sugar cube', label: 'Sugar cube', depth: 0.32, opacity: 0.93, glow: 0.55, rough: 0.55, ior: 1.32, sugar: 1, milk: 1, mu: 760, damping: 8, weight: 1.15, lambda: 14, bounce: 0.03, grip: 1.35, rigidity: 0.6, tough: 0.45, goo: 0, brittle: true, chip: '#fffaf3', through: true },
   // an ice cube - clear, slippery, hard; the torch runs it to water, cryo sets it again
   ice: { name: 'Ice cube', label: 'Ice cube', depth: 0.2, opacity: 0.02, glow: 0.32, rough: 0.012, ior: 1.31, sugar: 0, milk: 0.06, mu: 1000, damping: 3, weight: 0.92, lambda: 40, bounce: 0.18, grip: 0.05, rigidity: 0.94, goo: 0, brittle: true, chip: '#dcefff' },
   // finishes: a rainbow film on glass (soap bubble), holographic foil, pearl, opal, chrome
-  prism: { name: 'Prism', depth: 0.16, opacity: 0.02, glow: 0.62, rough: 0.01, ior: 1.5, sugar: 0, milk: 0, irid: 1, mu: 380, damping: 2.6, weight: 1.2, lambda: 30, bounce: 0.45, grip: 0.7, rigidity: 0.15, goo: 0.1 },
-  holo: { name: 'Holo', depth: 0.8, opacity: 0.97, glow: 0.3, rough: 0.07, ior: 1.5, sugar: 0, milk: 0.1, irid: 1, metal: 0.72, mu: 420, damping: 3, weight: 1.3, lambda: 30, bounce: 0.5, grip: 0.8, rigidity: 0.1, goo: 0.1 },
+  prism: { name: 'Prism', depth: 0.16, opacity: 0.02, glow: 0.62, rough: 0.01, ior: 1.5, sugar: 0, milk: 0, irid: 1, mu: 380, damping: 2.6, weight: 1.2, lambda: 30, bounce: 0.45, grip: 0.7, rigidity: 0.15, goo: 0.1, skin: 1 },
+  holo: { name: 'Holo', depth: 0.8, opacity: 0.97, glow: 0.3, rough: 0.07, ior: 1.5, sugar: 0, milk: 0.1, irid: 1, metal: 0.72, mu: 420, damping: 3, weight: 1.3, lambda: 30, bounce: 0.5, grip: 0.8, rigidity: 0.1, goo: 0.1, skin: 1 },
   pearl: { name: 'Pearl', depth: 0.35, opacity: 0.9, glow: 0.7, rough: 0.12, ior: 1.45, sugar: 0, milk: 0.85, irid: 0.85, mu: 300, damping: 4, weight: 1.1, lambda: 26, bounce: 0.3, grip: 0.9, goo: 0.2 },
   opal: { name: 'Opal', depth: 0.3, opacity: 0.55, glow: 0.88, rough: 0.025, ior: 1.45, sugar: 0, milk: 0.72, irid: 0.18, opal: 1, mu: 260, damping: 3, weight: 1.05, lambda: 28, bounce: 0.4, grip: 0.85, goo: 0.2 },
   chrome: { name: 'Chrome', depth: 1, opacity: 1, glow: 0.1, rough: 0.045, ior: 1.6, sugar: 0, milk: 0, metal: 1, mu: 210, damping: 1.6, weight: 2.8, lambda: 30, bounce: 0.3, grip: 0.6, goo: 0.1 },

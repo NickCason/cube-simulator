@@ -296,6 +296,7 @@ export class SoftBody {
     this.vTag = growArr(this.vTag, cap, Uint16Array); // (0, or the gel gun's blob it is: see addBlob)
     this.alive = growArr(this.alive, cap, Uint8Array);
     this.melt = growArr(this.melt, cap, Uint8Array); // (on a surface the torch melted)
+    this.dust = growArr(this.dust, cap, Float32Array); // (flour on it, 0..1: see FlourTool)
     this.fpen = growArr(this.fpen, cap, Float32Array); // floor push-out this substep
     this.wpen = growArr(this.wpen, cap, Float32Array); // wall push-out this substep
     this.vCap = cap;
@@ -336,6 +337,7 @@ export class SoftBody {
     this.glow[i] = 0;
     this.alive[i] = 1;
     this.melt[i] = 0;
+    this.dust[i] = 0;
     return i;
   }
 
@@ -462,7 +464,7 @@ export class SoftBody {
     const nV = this.nV, nT = this.nT, map = new Int32Array(nV).fill(-1);
     let n = 0;
     const vArr3 = [this.x, this.px, this.v, this.X];
-    const vArr1 = [this.w, this.m, this.temp, this.glow, this.alive, this.melt, this.fpen, this.wpen, this.vCube, this.vTag, this.vPiece];
+    const vArr1 = [this.w, this.m, this.temp, this.glow, this.alive, this.melt, this.dust, this.fpen, this.wpen, this.vCube, this.vTag, this.vPiece];
     for (let i = 0; i < nV; i++) {
       if (drop(i)) continue;
       if (n !== i) {
@@ -1344,14 +1346,14 @@ export class SoftBody {
       } else nrm[o + 1] = 1;
     }
     if (extra) {
-      // extra: [temp, glow, fresh, piece] per render vertex
-      const temp = this.temp, glow = this.glow, rTag = this.rTag;
+      // extra: [temp, glow, fresh, dust] per render vertex
+      const temp = this.temp, glow = this.glow, dust = this.dust, rTag = this.rTag;
       for (let r = 0; r < n; r++) {
         const i = rSim[r];
         extra[r * 4] = temp[i];
         extra[r * 4 + 1] = glow[i];
         extra[r * 4 + 2] = rTag[r] === TAG_FRESH ? 1 : 0;
-        extra[r * 4 + 3] = this.X[i * 3 + 1];
+        extra[r * 4 + 3] = dust[i];
       }
     }
   }

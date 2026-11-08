@@ -386,3 +386,47 @@ export function makeAcidBottle(M) {
   g.userData.lip = new THREE.Vector3(0, 0.262, 0);
   return g;
 }
+
+// A flour sieve: a steel rim over a fine mesh (a heap of flour in it), a
+// handle out to the side. Its mesh is at y 0, centred; the handle along +x.
+export function makeSieve(M) {
+  const g = new THREE.Group();
+  const R = 0.085;
+  const rim = new THREE.Mesh(new THREE.CylinderGeometry(R, R * 0.97, 0.045, 40, 1, true), M.steel);
+  rim.position.y = 0.0225;
+  const lip = new THREE.Mesh(new THREE.TorusGeometry(R, 0.0035, 8, 40), M.steel);
+  lip.rotation.x = Math.PI / 2;
+  lip.position.y = 0.045;
+  // (the mesh: a fine grid of wires, see through)
+  const cv = document.createElement('canvas');
+  cv.width = cv.height = 128;
+  const c2 = cv.getContext('2d');
+  c2.clearRect(0, 0, 128, 128);
+  c2.strokeStyle = 'rgba(70,72,78,0.95)';
+  c2.lineWidth = 1.4;
+  for (let k = 0; k <= 128; k += 8) {
+    c2.beginPath(); c2.moveTo(k, 0); c2.lineTo(k, 128); c2.stroke();
+    c2.beginPath(); c2.moveTo(0, k); c2.lineTo(128, k); c2.stroke();
+  }
+  const tex = new THREE.CanvasTexture(cv);
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  tex.repeat.set(5, 5);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  const mesh = new THREE.Mesh(new THREE.CircleGeometry(R * 0.985, 40), new THREE.MeshStandardMaterial({ map: tex, transparent: true, metalness: 0.8, roughness: 0.4, side: THREE.DoubleSide, depthWrite: false, envMap: M.steel.envMap }));
+  mesh.rotation.x = -Math.PI / 2;
+  mesh.position.y = 0.002;
+  // (the flour in it: a soft heap)
+  const heap = new THREE.Mesh(new THREE.SphereGeometry(R * 0.9, 28, 10, 0, Math.PI * 2, 0, Math.PI / 2), new THREE.MeshStandardMaterial({ color: 0xf7f4ec, roughness: 1, metalness: 0 }));
+  heap.scale.y = 0.28;
+  heap.position.y = 0.003;
+  heap.name = 'heap';
+  const handle = new THREE.Mesh(new THREE.CylinderGeometry(0.008, 0.009, 0.15, 12), M.wood);
+  handle.rotation.z = Math.PI / 2;
+  handle.position.set(R + 0.075, 0.034, 0);
+  const ferrule = new THREE.Mesh(new THREE.CylinderGeometry(0.011, 0.011, 0.022, 12), M.steel);
+  ferrule.rotation.z = Math.PI / 2;
+  ferrule.position.set(R + 0.006, 0.034, 0);
+  g.add(rim, lip, mesh, heap, handle, ferrule);
+  g.userData.radius = R;
+  return g;
+}

@@ -19,12 +19,14 @@ import { CuberTool, DicerTool } from './tools/cubey.js';
 import { FeedTool } from './tools/feed.js';
 import { AutoGunTool } from './tools/autogun.js';
 import { GelGunTool } from './tools/gelgun.js';
+import { FlourTool } from './tools/flour.js';
 import { AcidTool } from './tools/acid.js';
 import { Cubiplication } from './cubiplication.js';
 import { makeMaterials, makeBomb } from './world/models.js';
 import { physicsWarmJob } from './sim/warm.js';
 import { Droplets } from './world/droplets.js';
 import { Fluid } from './world/fluid.js';
+import { Flour } from './world/flour.js';
 import { Strands } from './world/strands.js';
 import { Bubbles } from './world/bubbles.js';
 import { GlassRoom } from './world/glassroom.js';
@@ -190,6 +192,7 @@ export class App {
     this.flash = 0;
     this.anchorProviders = [() => this.nails.anchors()];
     this.bubbles = new Bubbles(this);
+    this.flour = new Flour(this); // (on the floor, and on the jelly: see FlourTool)
     this.glitter = new Glitter(this);
     this.portraits = new Portraits(this); // (a cube's picture, taken properly: see portrait.js)
     this.cubiplication = new Cubiplication(this); // (fed jelly, a cube cubiplies - see tools/feed.js)
@@ -239,6 +242,7 @@ export class App {
       autogun: new AutoGunTool(this),
       gelgun: new GelGunTool(this),
       acid: new AcidTool(this),
+      flour: new FlourTool(this),
       mallet: new MalletTool(this),
       torch: new TorchTool(this),
       freeze: new FreezeTool(this),
@@ -442,9 +446,11 @@ export class App {
     this.jelly.multiCube = this.cubes.length > 1; // (their shadows on each other)
     // (a gradient across, corner to corner or out from the middle: the jelly
     // draws where each line of sight leaves it as a whole rest point)
+    // (and a layered one with a coat: its rest height can't share with the
+    // coat the back pass keeps for what the line of sight leaves through)
     this.jelly.needRest = this.cubes.some((cb) => {
-      const f = resolveFlavor(cb.style);
-      return !!f.layers && f.shape !== 'up';
+      const f = resolveFlavor(cb.style), t = TEXTURES[cb.style.texture];
+      return !!f.layers && (f.shape !== 'up' || t.sugar > 0 || t.dust > 0 || !!cb.floured);
     });
     // (any layered one: the floor takes its shadow's colour band by band)
     this.jelly.fxUniforms.tintLocal.value = this.cubes.some((cb) => resolveFlavor(cb.style).layers) ? 1 : 0;
@@ -1312,6 +1318,7 @@ export class App {
       this.nails.update(sdt);
       this.droplets.update(sdt);
       this.fluid.update(sdt);
+      this.flour.update(sdt);
       this.strands.update(sdt);
       this.bubbles.update();
       for (const k in this.tools) if (this.tools[k] !== this.tool && this.tools[k].background) this.tools[k].update(sdt, dt);
@@ -1958,6 +1965,7 @@ export class App {
   setPlace(id, animate = true) {
     if (!PLACE_BY_ID[id] || id === this.place) return;
     this.place = id;
+    this.flour?.sweep(); // (a new place: a clean floor)
     try {
       localStorage.setItem('cube-sim-place', id);
     } catch (e) {}
