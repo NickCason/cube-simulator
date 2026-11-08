@@ -405,6 +405,15 @@ export class App {
     return resolveSettings(this.tune, TEXTURES[this.style.texture]);
   }
 
+  // the room as it is (its cubes, their looks, names and families) for next time
+  saveScene() {
+    try {
+      localStorage.setItem('cube-sim-scene', JSON.stringify({ sel: this.sel, order: this.stackOrder, cubes: this.cubes.map((c) => ({ slot: c.slot, style: c.style, tune: c.tune, name: c.name || '', lin: c.lin || null })) }));
+    } catch (e) {
+      /* private mode */
+    }
+  }
+
   applyStyle() {
     const f = resolveFlavor(this.style);
     const tex = TEXTURES[this.style.texture];
@@ -454,7 +463,7 @@ export class App {
     try {
       localStorage.setItem('cube-sim-style', JSON.stringify(this.style));
       localStorage.setItem('cube-sim-tune', JSON.stringify(this.tune));
-      localStorage.setItem('cube-sim-scene', JSON.stringify({ sel: this.sel, order: this.stackOrder, cubes: this.cubes.map((c) => ({ slot: c.slot, style: c.style, tune: c.tune, name: c.name || '', lin: c.lin || null })) }));
+      this.saveScene();
     } catch (e) {
       /* private mode */
     }

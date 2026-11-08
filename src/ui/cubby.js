@@ -3,7 +3,7 @@
 // code (a link and a QR code), and open the codes other people send - from a
 // link, or pasted in (an installed iPhone app doesn't get links: Safari does).
 
-import { linOf } from '../family.js';
+import { linOf, touchMember } from '../family.js';
 import { FamilyView, TREE_ICON } from './family.js';
 import { captureCube, encodeCube, decodeCube, cubeLink, cubeSummary, cleanName } from '../cubecode.js';
 import { nameCube } from '../namegen.js';
@@ -732,7 +732,9 @@ export class Cubby {
       box.appendChild(img);
     } else box.innerHTML = cubeArt(captureCube(this.app));
     this._shot = shot;
-    this.nameInput.value = this._suggest();
+    // (its own name, if it has one - a cubiplied cube's, as in its family
+    // tree - else a new one; the die rolls others)
+    this.nameInput.value = cleanName(this.app.cube?.name || '') || this._suggest();
     this.newForm.hidden = false;
     this.emptyEl.hidden = true;
     if (!isTouch()) {
@@ -755,7 +757,20 @@ export class Cubby {
     this.endSave();
     // (the cube on show is this one now; an unsaved cube's record comes with it)
     const lin = this.app.cube ? { ...linOf(this.app.cube) } : null;
+    this._named(lin, name);
     this._put({ id: this._id(), code: encodeCube(c), thumb, pv: thumb ? PV : 0, at: Date.now(), rec: { ...this.loose }, lin }, `Cubed! “${name}” is in your Cubby`, null, true);
+  }
+
+  // A cube saved or renamed: the one on show (if it's that one) and its
+  // family tree take the name too.
+  _named(lin, name, onShow = true) {
+    const cb = this.app.cube;
+    if (onShow && cb) {
+      cb.name = name;
+      this.app.saveScene();
+      this.app.ui?.cubesChanged?.();
+    }
+    if (lin?.id) touchMember(lin.id, { name });
   }
 
   // keep a cube that came in a code (its portrait, and the record of its
@@ -884,6 +899,8 @@ export class Cubby {
       if (keep && name && name !== c.name) {
         it.code = encodeCube({ ...c, name });
         this._store();
+        // (the one on show, if it's this one; its family tree either way)
+        this._named(it.lin, name, it.id === this.activeId && !!this.app.cube?.lin && this.app.cube.lin.id === it.lin?.id);
       }
       this.render();
     };
