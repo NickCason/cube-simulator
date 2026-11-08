@@ -233,9 +233,9 @@ export class Glitter {
         }`,
     });
     this.mat = mat;
-    this.matCube = mat.clone();
-    this.matCube.uniforms = this.uniforms;
-    this.matCube.defines = { CUBE: '' };
+    // (the cubic flakes' own: made the same way - a clone of it copied the
+    // uniforms, and the room's reflection, a render target's, can't be)
+    this.matCube = new THREE.ShaderMaterial({ uniforms: this.uniforms, transparent: true, depthWrite: false, depthTest: true, blending: THREE.AdditiveBlending, vertexShader: mat.vertexShader, fragmentShader: mat.fragmentShader, defines: { CUBE: '' } });
     this.mesh = new THREE.Mesh(g, mat);
     this.mesh.frustumCulled = false;
     this.mesh.renderOrder = 4;

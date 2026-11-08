@@ -430,7 +430,13 @@ export class JellyView {
       type: THREE.HalfFloatType,
       depthBuffer: false,
       samples: 4,
+      count: 2,
     });
+    // (its second: how far the light that landed there fell from the jelly,
+    // by its light - mipmapped, read round about: see floor.js)
+    this.rtCaustic.textures[0].generateMipmaps = false;
+    this.rtCaustic.textures[1].generateMipmaps = true;
+    this.rtCaustic.textures[1].minFilter = THREE.LinearMipmapLinearFilter;
     // ...blurred, as the shadow's map is (a Gaussian ~3 mm, both ways), for
     // the floor and the jelly's view of it to read: read sharp with taps
     // centimetres apart, every caustic line was stamped over in copies - a
@@ -502,6 +508,7 @@ export class JellyView {
     });
     this.fxUniforms = {
       caustic: { value: this.rtCausticB.texture },
+      causThrow: { value: this.rtCaustic.textures[1] }, // (how far its light fell: see floor.js)
       floorFx: { value: this.rtFloorFxB.texture },
       floorTint: { value: this.rtFloorTint.texture },
       floorRect: { value: this.fxRect }, // (shadow and contact: fitted, see _fitFloorFx)
@@ -573,6 +580,7 @@ export class JellyView {
   // flavor: { hex } or { layers: [hex bottom..top] }
   // m: resolved material {depth, opacity, glow, rough, ior, sugar, milk}
   setStyle(flavor, m, size = 1) {
+    this.lookVersion = (this.lookVersion || 0) + 1;
     const ref = 0.55 / m.depth;
     const colors = (flavor.layers || [flavor.hex]).map((h) => new THREE.Color(h));
     const abs = colors.map((c) => absorptionFromColor(c, ref));
@@ -675,9 +683,18 @@ export class JellyView {
     put(31, sf.kind, (sf.depth || 0) * (m.surfDepth ?? 1) * size, nu, nv);
     this.cubeTex.needsUpdate = true;
     if (flavor.layers && flavor.shape === 'free') {
-      bakeFree(flavor, this.freeData.subarray(k * this.freeSlab, (k + 1) * this.freeSlab));
-      this.freeTex.needsUpdate = true;
+      // (baked - 32 cubed colours, and the whole grid sent to the GPU, a
+      // megabyte - only when its colours or points have changed: every
+      // slider dragged and every cube picked re-baked them all)
+      const key = JSON.stringify([flavor.layers, flavor.nodes, flavor.blur, flavor.repeat, flavor.bias, flavor.tiles, flavor.k]);
+      const baked = this._freeBaked || (this._freeBaked = []);
+      if (baked[k] !== key) {
+        baked[k] = key;
+        bakeFree(flavor, this.freeData.subarray(k * this.freeSlab, (k + 1) * this.freeSlab));
+        this.freeTex.needsUpdate = true;
+      }
     } else if (flavor.layers) this._gradStrip(k, flavor, abs, scs);
+    this.lookVersion = (this.lookVersion || 0) + 1;
   }
 
   // A layered cube's gradient as its strip: absorption (its first row) and
@@ -1084,6 +1101,19 @@ export class JellyView {
 
   renderFloorFx(sb) {
     const r = this.renderer;
+    this.fxUniforms.causGain.value = CAUS_GAIN * this.causticLevel;
+    // (nothing changed since last time - the jelly still, the same looks,
+    // the same light - and none of this changes with the camera: all of it
+    // as it was; only glow mode's light pool again, which pulses. A cube at
+    // rest cost the light's three views, the caustics and their blurs and
+    // the shadow's maps, every frame, for nothing.)
+    const L = this.lightDir;
+    const sig = sb ? `${sb.topoVersion}|${sb.nV}|${this._ps}|${this._ts}|${this._ds}|${this.lookVersion}|${L.x},${L.y},${L.z}|${Math.round(this.causticLevel * 200)}|${this.multiCube}|${this.disperse}|${sb.fill ? performance.now() : 0}` : '';
+    if (sig && sig === this._fxSig) {
+      this._renderGlowMap();
+      return;
+    }
+    this._fxSig = sig;
     const prevClear = r.getClearColor(new THREE.Color());
     const prevAlpha = r.getClearAlpha();
     r.setClearColor(0x000000, 0);
@@ -1091,7 +1121,6 @@ export class JellyView {
     // light's view is the cubes' shadows on each other too - faded out,
     // only that)
     const caus = this.causticLevel > 0.01;
-    this.fxUniforms.causGain.value = CAUS_GAIN * this.causticLevel;
     const lit = sb && this.allMesh && (caus || this.multiCube) && this._fitLightView(sb);
     if (lit) {
       for (const { rt, mat } of this.lightView) {
@@ -1163,13 +1192,21 @@ export class JellyView {
     this.blurMat.uniforms.uStep.value.set(0, st);
     r.setRenderTarget(this.rtFloorFxB);
     r.render(this.blurScene, this.fxCam);
-    if (this.fxUniforms.glowFloor.value > 0) {
-      r.setRenderTarget(this.rtGlow);
-      r.clear(true, false, false);
-      this.scene.overrideMaterial = this.glowMat;
-      r.render(this.scene, this.fxCam);
-    }
     r.autoClear = auto;
+    this.scene.overrideMaterial = null;
+    r.setClearColor(prevClear, prevAlpha);
+    this._renderGlowMap();
+  }
+
+  // (glow mode: the light its parts cast on the floor, each its own colour)
+  _renderGlowMap() {
+    if (!(this.fxUniforms.glowFloor.value > 0)) return;
+    const r = this.renderer, prevClear = r.getClearColor(this._prevClear || (this._prevClear = new THREE.Color())), prevAlpha = r.getClearAlpha();
+    r.setClearColor(0x000000, 0);
+    r.setRenderTarget(this.rtGlow);
+    r.clear(true, false, false);
+    this.scene.overrideMaterial = this.glowMat;
+    r.render(this.scene, this.fxCam);
     this.scene.overrideMaterial = null;
     r.setClearColor(prevClear, prevAlpha);
   }

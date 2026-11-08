@@ -14,6 +14,7 @@ export function createFloor(env, fx) {
   });
   mat.onBeforeCompile = (shader) => {
     shader.uniforms.tCaustic = fx.caustic;
+    shader.uniforms.tCausThrow = fx.causThrow;
     shader.uniforms.tFloorFx = fx.floorFx;
     shader.uniforms.tFloorTint = fx.floorTint;
     shader.uniforms.uFloorRect = fx.floorRect;
@@ -58,6 +59,7 @@ export function createFloor(env, fx) {
         `#include <common>
         varying vec3 vFloorPos;
         uniform sampler2D tCaustic;
+        uniform sampler2D tCausThrow;
         uniform sampler2D tFloorFx;
         uniform sampler2D tFloorTint;
         uniform vec4 uFloorRect;
@@ -219,11 +221,39 @@ export function createFloor(env, fx) {
             vec2 a1 = vec2(-0.5 * a0.x - 0.866 * a0.y, 0.866 * a0.x - 0.5 * a0.y);
             vec2 a2 = vec2(-0.5 * a0.x + 0.866 * a0.y, -0.866 * a0.x - 0.5 * a0.y);
             vec2 k1 = vec2(0.012 * sp) * uCausRect.zw, k2 = vec2(-0.022 * sp) * uCausRect.zw;
-            caus = textureLod(tCaustic, cuv, lc + 1.0).rgb * 0.3
+            vec3 crisp = textureLod(tCaustic, cuv, lc + 1.0).rgb * 0.3
               + (textureLod(tCaustic, cuv + a0 * k1, lc).rgb + textureLod(tCaustic, cuv + a1 * k1, lc).rgb
               + textureLod(tCaustic, cuv + a2 * k1, lc).rgb) * 0.14
               + (textureLod(tCaustic, cuv + a0 * k2, lc).rgb + textureLod(tCaustic, cuv + a1 * k2, lc).rgb
               + textureLod(tCaustic, cuv + a2 * k2, lc).rgb) * 0.0933;
+            // ...and light that fell further than it does from jelly sitting
+            // here - out of a cube held up in the air - lands softer still,
+            // spread wider the higher it was: the key light's softness, as
+            // it blurs a shadow's edge, so much wider a metre on (uPenumbra).
+            // How far the light landing round here fell, each ray's fall
+            // weighted by its light: the caustics' second target.
+            vec4 tw = textureLod(tCausThrow, cuv, 3.5);
+            float thr = tw.g > 1e-5 ? tw.r / tw.g : 0.0;
+            float bw = max(0.0, thr - 0.25) * uPenumbra * 1.6;
+            float soft = smoothstep(0.003, 0.02, bw);
+            caus = crisp;
+            if (soft > 0.0) {
+              // (two rings of six, each tap as wide as they're apart: a
+              // smooth blur, not copies - and never sharper than two of the
+              // texture's texels: the caustics' rays land a few millimetres
+              // apart at the jelly's edges, and finer taps beat against
+              // their comb into stripes)
+              float texW = 1.0 / (float(textureSize(tCaustic, 0).x) * uCausRect.z);
+              float rb = 0.5 * bw + 0.012 * sp, lb = log2(max(2.0, rb / texW));
+              vec2 o = vec2(rb) * uCausRect.zw;
+              vec3 wide = textureLod(tCaustic, cuv, lb + 0.5).rgb * 0.2;
+              for (int i = 0; i < 6; i++) {
+                float ang = float(i) * 1.0471976 + 0.3;
+                vec2 d = vec2(cos(ang), sin(ang)) * o;
+                wide += textureLod(tCaustic, cuv + d * 0.5, lb).rgb * 0.08 + textureLod(tCaustic, cuv + vec2(-d.y, d.x) * 0.866 + d * 0.5, lb + 0.5).rgb * 0.0533;
+              }
+              caus = mix(crisp, wide, soft);
+            }
           }
           vec4 fx0 = textureLod(tFloorFx, fuv, 0.0);
           vec2 o3 = uTexel * 7.0;

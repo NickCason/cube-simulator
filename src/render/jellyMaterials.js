@@ -1399,7 +1399,7 @@ export function createCausticMaterial(layerUniforms) {
       uniform sampler2D tEntryRest;
       uniform sampler2D tExitRest;
       uniform sampler2D tExitN;
-      uniform highp sampler2D uCubeTex;
+      ${CUBE_GLSL}
       uniform vec3 uOrigin;
       uniform mat4 uLightInvVP;
       uniform mat4 uLightVP;
@@ -1414,11 +1414,11 @@ export function createCausticMaterial(layerUniforms) {
       varying vec3 vOld;
       varying vec3 vNew;
       varying float vValid;
-      varying vec3 vRestA;
-      varying vec3 vRestB;
+      varying vec3 vSig;
       varying float vPath;
       varying float vNdL;
       varying float vTemp;
+      varying float vThrow;
       // where a world point sits in the light's view (its texture's uv)
       vec2 lightUV(vec3 q) {
         vec4 c = uLightVP * vec4(q, 1.0);
@@ -1481,11 +1481,11 @@ export function createCausticMaterial(layerUniforms) {
           vOld = F;
           vNew = F;
           vValid = 0.0;
-          vRestA = vec3(0.0);
-          vRestB = vec3(0.0);
+          vSig = vec3(0.0);
           vPath = 0.0;
           vNdL = 1.0;
           vTemp = 0.0;
+          vThrow = 0.0;
           vK = 0.0;
         } else {
           P = E.xyz + uOrigin;
@@ -1528,6 +1528,9 @@ export function createCausticMaterial(layerUniforms) {
             F = Q + r2 * (max(Q.y, 0.0) / -min(r2.y, -0.06));
             // (its colour deepens with the way through the jelly - only that)
             vPath = length(Q - P);
+            // (and how far it falls from the jelly to the floor: the further,
+            // the softer it lands - see floor.js)
+            vThrow = length(F - Q);
             // (what the far side lets out - none at all just short of the
             // angle that keeps it in - and light thrown upward never lands)
             float ct = max(dot(r2, n1), 0.0), F0 = pow((ior - 1.0) / (ior + 1.0), 2.0);
@@ -1541,6 +1544,8 @@ export function createCausticMaterial(layerUniforms) {
             float t = max(P.y, 0.0) / -min(r.y, -0.08);
             F = P + r * t;
             vPath = t;
+            // (bounced round inside, it comes out low down: half the way)
+            vThrow = 0.5 * t;
             tOut = 0.85;
             xuv = tuv;
           }
@@ -1549,9 +1554,17 @@ export function createCausticMaterial(layerUniforms) {
           vValid = (nl > 1e-12 ? smoothstep(0.0, 0.05, P.y) : 0.0) * tOut;
           vOld = P + Ld * (-P.y / Ld.y);
           vNew = F;
-          vRestA = texelFetch(tEntryRest, ij, 0).xyz;
+          // (its colour along the way through: worked out once a ray, here,
+          // not for every pixel of its cell - a gradient's 16 looks along
+          // its path, per pixel, were most of a layered cube's caustics)
+          vec3 restA = texelFetch(tEntryRest, ij, 0).xyz;
           vec4 RB = textureLod(tExitRest, xuv, 0.0);
-          vRestB = RB.w > 0.5 ? RB.xyz : vRestA;
+          useCube(kA);
+          // (where it comes out, as a rest point: the light's view of the far
+          // side there - or, off its edge, carried on unturned from where it
+          // went in, as the jelly's own shading does: at the silhouette the
+          // two took turns ray by ray, and its light came out in stripes)
+          vSig = cGradPath(restA, RB.w > 0.5 ? RB.xyz : restA + (Q - P), cubeT(0).rgb);
           vNdL = dot(N, normalize(uLightDir));
           vTemp = Nt.w;
         }
@@ -1565,11 +1578,14 @@ export function createCausticMaterial(layerUniforms) {
       varying vec3 vOld;
       varying vec3 vNew;
       varying float vValid;
-      varying vec3 vRestA;
-      varying vec3 vRestB;
+      varying vec3 vSig;
       varying float vPath;
       varying float vNdL;
       varying float vTemp;
+      varying float vThrow;
+      // (the second target: how far this light fell from the jelly, weighted
+      // by how much of it there is - and that weight: see floor.js)
+      layout(location = 1) out highp vec4 oThrow;
       void main() {
         // (only cells whose rays all went through the jelly)
         if (!(vValid >= 0.01) || !(vNdL > 0.0)) discard; // (NaN-safe)
@@ -1582,7 +1598,7 @@ export function createCausticMaterial(layerUniforms) {
         float ratio = clamp(oldA / max(newA, 1e-9), 0.0, 3.5);
         float F0 = pow((ior - 1.0) / (ior + 1.0), 2.0);
         float Ft = 1.0 - (F0 + (1.0 - F0) * pow(clamp(1.0 - vNdL, 0.0, 1.0), 5.0));
-        vec3 sig = cGradPath(vRestA, vRestB, q0.rgb);
+        vec3 sig = vSig;
         vec3 T = exp(-sig * vPath) * exp(-scatter * vPath * 0.7);
         // frosted jelly scatters light: no sharp caustics
         T *= 1.0 - 0.9 * smoothstep(0.05, 0.6, -vTemp);
@@ -1591,7 +1607,10 @@ export function createCausticMaterial(layerUniforms) {
         bvec3 bad = equal(floatBitsToUint(c) & uvec3(0x7f800000u), uvec3(0x7f800000u));
         // (alpha: this light came through layers - the floor takes its
         // shadow's colour from it there, band by band)
-        gl_FragColor = vec4(any(bad) ? vec3(0.0) : min(c, vec3(8.0)), cLayers > 0 && (uChannel < 0.0 || abs(uChannel - 1.0) < 0.5) ? 1.0 : 0.0);
+        vec3 cc = any(bad) ? vec3(0.0) : min(c, vec3(8.0));
+        gl_FragColor = vec4(cc, cLayers > 0 && (uChannel < 0.0 || abs(uChannel - 1.0) < 0.5) ? 1.0 : 0.0);
+        float lum = (cc.r + cc.g + cc.b) * 0.3333;
+        oThrow = vec4(clamp(vThrow, 0.0, 4.0) * lum, lum, 0.0, 1.0);
       }`,
   });
 }

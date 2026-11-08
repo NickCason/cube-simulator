@@ -10,10 +10,12 @@ import { target } from './more.js';
 import { makeSieve } from '../world/models.js';
 import { POWDERS, POWDER_BY_ID, SPRINKLE, rainbowAt } from '../world/powders.js';
 
-const RATE = 200; // grains a second, shaken out
-const GRAIN = 0.022; // (each: how much it floured the jelly where it landed)
-const FLOOR = 0.07; // ...and the floor
-const MAXG = 360;
+const RATE = 420; // grains a second, shaken out (a wide sieve: a wide fall)
+const GRAIN = 0.0055; // (each: how much it floured the jelly where it landed - a little, over a wide patch: it builds up)
+const COAT_R = 0.2; // (...that patch's radius)
+const FLOOR = 0.045; // ...and the floor
+const FLOOR_R = 0.034;
+const MAXG = 900;
 const rnd = (a, b) => a + Math.random() * (b - a);
 
 export class FlourTool {
@@ -158,7 +160,7 @@ export class FlourTool {
       const top = sb.raycast(spot.x, spot.y + 2, spot.z, 0, -1, 0, 4);
       if (top) spot.set(top.point[0], top.point[1], top.point[2]);
     }
-    spot.y = Math.max(spot.y, 0) + 0.27;
+    spot.y = Math.max(spot.y, 0) + 0.34;
     if (!this.pos) this.pos = spot.clone();
     this.pos.lerp(spot, 1 - Math.exp(-t * 14));
     this.shake += ((this.on ? 1 : 0) - this.shake) * (1 - Math.exp(-t * 12));
@@ -175,12 +177,15 @@ export class FlourTool {
     this.siftT = Math.min(this.siftT + dt * RATE, 8);
     while (this.siftT >= 1 && this.n < MAXG) {
       this.siftT -= 1;
-      const a = Math.random() * Math.PI * 2, r = R * Math.sqrt(Math.random());
+      // (more through the middle of it, thinning out to the rim: the fall
+      // lands soft-edged, a dusting, not a disc)
+      const a = Math.random() * Math.PI * 2, r = R * Math.pow(Math.random(), 0.8);
       const x = m.position.x + Math.cos(a) * r, y = m.position.y - 0.004, z = m.position.z + Math.sin(a) * r;
       const i = this.n++, o = i * 3;
       this.g[o] = x; this.g[o + 1] = y; this.g[o + 2] = z;
-      this.gv[o] = rnd(-0.05, 0.05); this.gv[o + 1] = rnd(-0.35, -0.1); this.gv[o + 2] = rnd(-0.05, 0.05);
-      // (where it'll land: what's under it now)
+      // (shaken out every which way a little: the fall spreads as it goes)
+      this.gv[o] = rnd(-0.22, 0.22); this.gv[o + 1] = rnd(-0.3, -0.06); this.gv[o + 2] = rnd(-0.22, 0.22);
+      // (where it'll land: what's under it now - near enough, as it spreads)
       const hit = sb.raycast(x, y, z, 0, -1, 0, y + 0.1);
       this.gh[i] = hit ? hit.point[1] : 0;
       // (what it is: a pinch of rainbow powder is one bright colour; a
@@ -194,10 +199,10 @@ export class FlourTool {
     }
     // (and a haze of the finest of it, drifting down with it - not of
     // sprinkles, or glitter)
-    if (!this.powder.multi && Math.random() < dt * 14) {
+    if (!this.powder.multi && Math.random() < dt * 26) {
       const a = Math.random() * Math.PI * 2, r = R * Math.sqrt(Math.random()), hc = this.powder.rainbow ? rainbowAt(performance.now() / 1000) : this.powder.lin;
-      app.particles.alpha.spawn(m.position.x + Math.cos(a) * r, m.position.y - 0.01, m.position.z + Math.sin(a) * r, rnd(-0.03, 0.03), rnd(-0.45, -0.25), rnd(-0.03, 0.03),
-        rnd(0.5, 0.8), rnd(0.02, 0.03), rnd(0.05, 0.08), [hc[0], hc[1], hc[2], 0.16], [hc[0], hc[1], hc[2], 0], 1.2, -0.4);
+      app.particles.alpha.spawn(m.position.x + Math.cos(a) * r, m.position.y - 0.01, m.position.z + Math.sin(a) * r, rnd(-0.06, 0.06), rnd(-0.4, -0.2), rnd(-0.06, 0.06),
+        rnd(0.6, 1), rnd(0.03, 0.045), rnd(0.08, 0.13), [hc[0], hc[1], hc[2], 0.13], [hc[0], hc[1], hc[2], 0], 1.2, -0.4);
     }
   }
 
@@ -213,9 +218,9 @@ export class FlourTool {
       let i = 0;
       while (i < this.n) {
         const o = i * 3;
-        V[o] = V[o] * k + rnd(-0.5, 0.5) * dt;
+        V[o] = V[o] * k + rnd(-0.9, 0.9) * dt;
         V[o + 1] = V[o + 1] * k - 3 * dt;
-        V[o + 2] = V[o + 2] * k + rnd(-0.5, 0.5) * dt;
+        V[o + 2] = V[o + 2] * k + rnd(-0.9, 0.9) * dt;
         const x = P[o] + V[o] * dt, y = P[o + 1] + V[o + 1] * dt, z = P[o + 2] + V[o + 2] * dt;
         if (y > H[i]) {
           P[o] = x; P[o + 1] = y; P[o + 2] = z;
@@ -228,13 +233,13 @@ export class FlourTool {
           const hit = sb.raycast(x, H[i] + 0.06, z, 0, -1, 0, 0.14);
           const look = this.gl.subarray(i * 5, i * 5 + 5);
           if (hit) {
-            app.flour.coatAround(hit.point[0], hit.point[1], hit.point[2], hit.piece, GRAIN, 0.11, look, this.powder.rec);
+            app.flour.coatAround(hit.point[0], hit.point[1], hit.point[2], hit.piece, GRAIN, COAT_R, look, this.powder.rec);
             this._puff(x, hit.point[1], z, look);
             done = true;
           } else H[i] = 0;
         } else {
           const look = this.gl.subarray(i * 5, i * 5 + 5);
-          app.flour.add(x, z, FLOOR, 0.022, look);
+          app.flour.add(x, z, FLOOR, FLOOR_R, look);
           this._puff(x, 0, z, look);
           done = true;
         }

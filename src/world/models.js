@@ -391,12 +391,12 @@ export function makeAcidBottle(M) {
 // handle out to the side. Its mesh is at y 0, centred; the handle along +x.
 export function makeSieve(M) {
   const g = new THREE.Group();
-  const R = 0.085;
-  const rim = new THREE.Mesh(new THREE.CylinderGeometry(R, R * 0.97, 0.045, 40, 1, true), M.steel);
-  rim.position.y = 0.0225;
-  const lip = new THREE.Mesh(new THREE.TorusGeometry(R, 0.0035, 8, 40), M.steel);
+  const R = 0.14;
+  const rim = new THREE.Mesh(new THREE.CylinderGeometry(R, R * 0.97, 0.06, 56, 1, true), M.steel);
+  rim.position.y = 0.03;
+  const lip = new THREE.Mesh(new THREE.TorusGeometry(R, 0.0045, 8, 56), M.steel);
   lip.rotation.x = Math.PI / 2;
-  lip.position.y = 0.045;
+  lip.position.y = 0.06;
   // (the mesh: a fine grid of wires, see through)
   const cv = document.createElement('canvas');
   cv.width = cv.height = 128;
@@ -410,22 +410,22 @@ export function makeSieve(M) {
   }
   const tex = new THREE.CanvasTexture(cv);
   tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
-  tex.repeat.set(5, 5);
+  tex.repeat.set(8, 8);
   tex.colorSpace = THREE.SRGBColorSpace;
-  const mesh = new THREE.Mesh(new THREE.CircleGeometry(R * 0.985, 40), new THREE.MeshStandardMaterial({ map: tex, transparent: true, metalness: 0.8, roughness: 0.4, side: THREE.DoubleSide, depthWrite: false, envMap: M.steel.envMap }));
+  const mesh = new THREE.Mesh(new THREE.CircleGeometry(R * 0.985, 56), new THREE.MeshStandardMaterial({ map: tex, transparent: true, metalness: 0.8, roughness: 0.4, side: THREE.DoubleSide, depthWrite: false, envMap: M.steel.envMap }));
   mesh.rotation.x = -Math.PI / 2;
   mesh.position.y = 0.002;
   // (the flour in it: a soft heap)
-  const heap = new THREE.Mesh(new THREE.SphereGeometry(R * 0.9, 28, 10, 0, Math.PI * 2, 0, Math.PI / 2), new THREE.MeshStandardMaterial({ color: 0xf7f4ec, roughness: 1, metalness: 0 }));
-  heap.scale.y = 0.28;
+  const heap = new THREE.Mesh(new THREE.SphereGeometry(R * 0.9, 36, 10, 0, Math.PI * 2, 0, Math.PI / 2), new THREE.MeshStandardMaterial({ color: 0xf7f4ec, roughness: 1, metalness: 0 }));
+  heap.scale.y = 0.24;
   heap.position.y = 0.003;
   heap.name = 'heap';
-  const handle = new THREE.Mesh(new THREE.CylinderGeometry(0.008, 0.009, 0.15, 12), M.wood);
+  const handle = new THREE.Mesh(new THREE.CylinderGeometry(0.011, 0.012, 0.2, 12), M.wood);
   handle.rotation.z = Math.PI / 2;
-  handle.position.set(R + 0.075, 0.034, 0);
-  const ferrule = new THREE.Mesh(new THREE.CylinderGeometry(0.011, 0.011, 0.022, 12), M.steel);
+  handle.position.set(R + 0.1, 0.045, 0);
+  const ferrule = new THREE.Mesh(new THREE.CylinderGeometry(0.014, 0.014, 0.028, 12), M.steel);
   ferrule.rotation.z = Math.PI / 2;
-  ferrule.position.set(R + 0.006, 0.034, 0);
+  ferrule.position.set(R + 0.008, 0.045, 0);
   g.add(rim, lip, mesh, heap, handle, ferrule);
   g.userData.radius = R;
   return g;
