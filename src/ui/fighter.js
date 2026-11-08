@@ -1,6 +1,7 @@
 // The fighter card: a picked cube's name slammed across the screen, its
 // stats as bars of little cubes, and its record - how many times it's been
-// healed, picked, cut, torn, shot and blown up.
+// healed, picked, cut, torn, shot, blown up, smashed, melted, frozen,
+// dissolved, scooped, globbed, given eyes and rolled in powder.
 
 import { cubeSummary, cubeStats } from '../cubecode.js';
 import { resolveFlavor, flavorMainHex, gradientCSS } from '../styles.js';
@@ -13,7 +14,18 @@ const RECORD = [
   ['diced', 'Diced'],
   ['shots', 'Shots'],
   ['booms', 'Booms'],
+  ['smashed', 'Smashed'],
+  ['melted', 'Melted'],
+  ['frozen', 'Frozen'],
+  ['acid', 'Acid baths'],
+  ['scooped', 'Scooped'],
+  ['gelled', 'Globbed'],
+  ['eyed', 'Eyes on'],
+  // (rolled in a powder: all of them as one, see below)
+  ['dusted', 'Dusted'],
 ];
+// (the powders' own records - see powders.js - shown together as dusted)
+const DUSTS = ['floured', 'sugared', 'cocoa', 'matcha', 'sprinkled', 'glittered', 'rainbowed'];
 
 export class FighterCard {
   constructor(root, app) {
@@ -69,7 +81,7 @@ export class FighterCard {
       recEl.appendChild(s);
     } else {
       for (const [k, label] of RECORD) {
-        const n = rec[k] || 0;
+        const n = k === 'dusted' ? DUSTS.reduce((t, d) => t + (rec[d] || 0), 0) : rec[k] || 0;
         if (!n && k !== 'healed') continue;
         const s = document.createElement('span');
         s.innerHTML = `<b>${n}</b> `;

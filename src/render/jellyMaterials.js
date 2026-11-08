@@ -778,7 +778,7 @@ export function createJellyMaterial(env, layerUniforms) {
         // jelly, cut faces too: the line of sight goes on into one to its far
         // wall, seen as a cut-open bubble's is. Finer than a few pixels, it
         // fades into a little roughness (else it sparkles).
-        float surfAO = 1.0, surfRough = 0.0, surfShadow = 1.0;
+        float surfAO = 1.0, surfRough = 0.0, surfShadow = 1.0, surfH = 1.0, surfFade = 0.0;
         vec4 cq31 = cubeT(31);
         if (cq31.x > 0.5 && cavity < 0.5) {
           vec4 cq28s = cubeT(28);
@@ -826,6 +826,8 @@ export function createJellyMaterial(env, layerUniforms) {
               } else N = sfBend(sf, vRest, dRx, dRy, dPx, dPy, N, fade, h);
               // (its hollows a little darker: less of the room reaches in)
               surfAO = 1.0 - cq29.w * (1.0 - clamp(h, 0.0, 1.0)) * fade;
+              surfH = clamp(h, 0.0, 1.0);
+              surfFade = fade;
             }
           }
         }
@@ -836,6 +838,9 @@ export function createJellyMaterial(env, layerUniforms) {
         // been rolled in - wherever that touched, cut faces too
         float dustOwn = cDust * (1.0 - fresh) * (1.0 - cavity), dustFlour = vData.w * (1.0 - cavity);
         float dust = max(dustOwn, dustFlour);
+        // (on a surface map, powder settles: deep in its hollows, thin on what
+        // stands up - knocked off the tops, gathered in the pits)
+        dust = clamp(dust * mix(1.0, mix(1.7, 0.45, surfH), surfFade), 0.0, 1.0);
         // (sprinkles and glitter lie flat on it: drawn in the rest-space plane
         // the surface here is nearest - its normal from how the rest point
         // runs across the pixel)

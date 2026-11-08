@@ -22,8 +22,8 @@ import { GelGunTool } from './tools/gelgun.js';
 import { FlourTool } from './tools/flour.js';
 import { EyesTool } from './tools/eyes.js';
 import { Eyes, LATE_LAYER } from './world/eyes.js';
-import { copyEyes } from './eyes.js';
-import { SURFACE } from './surfaces.js';
+import { copyEyes, EYE_FACES } from './eyes.js';
+import { SURFACE, SURFACES } from './surfaces.js';
 import { AcidTool } from './tools/acid.js';
 import { Cubiplication } from './cubiplication.js';
 import { makeMaterials, makeBomb } from './world/models.js';
@@ -446,9 +446,10 @@ export class App {
     for (const cb of this.cubes) {
       const ct = TEXTURES[cb.style.texture], cs = resolveSettings(cb.tune, ct);
       fizz.push({ slot: cb.slot, count: cs.bubbles, scale: cs.bubbleSize });
+      // (its surface map holds on better, or slides: see surfaces.js grip)
       sb.setCube(cb.slot, {
         mu: App.safeMu(cs.mu, cs.weight, sb.cSize[cb.slot], cs.lambda, cs.gravity),
-        damping: cs.damping, lambdaRatio: cs.lambda, bounce: cs.bounce, friction: cs.grip,
+        damping: cs.damping, lambdaRatio: cs.lambda, bounce: cs.bounce, friction: cs.grip * (SURFACE[cb.style.surface]?.grip ?? 1),
         rigidity: cs.rigidity, density: cs.weight, airDrag: cs.airDrag,
       });
       this.jelly.setCubeLook(cb.slot, resolveFlavor(cb.style), { ...ct, ...cs, surface: cb.style.surface, bevelRatio: (EDGES[cb.style.edges] || EDGES[DEFAULT_STYLE.edges]).bevel }, sb.cSize[cb.slot]);
@@ -468,7 +469,7 @@ export class App {
     sb.p.damping = st.damping;
     sb.p.lambdaRatio = st.lambda;
     sb.p.bounce = st.bounce;
-    sb.p.friction = st.grip;
+    sb.p.friction = st.grip * (SURFACE[this.style.surface]?.grip ?? 1);
     sb.p.rigidity = st.rigidity;
     sb.p.grabK = st.handPull;
     sb.p.contactGrip = st.contactGrip;
@@ -1642,7 +1643,7 @@ export class App {
     const flavors = ['cherry', 'lime', 'blue', 'grape', 'orange', 'lemon', 'watermelon', 'cola'];
     const style = c
       ? { flavor: c.flavor, layers: copyLayers(c.layers), texture: c.texture, edges: EDGES[c.edges] ? c.edges : DEFAULT_STYLE.edges, glitter: c.glitter, rubik: Number.isFinite(c.rubik) ? c.rubik : 1, eyes: copyEyes(c.eyes), surface: SURFACE[c.surface] ? c.surface : 'none' }
-      : { flavor: flavors[Math.floor(Math.random() * flavors.length)], layers: copyLayers(DEFAULT_STYLE.layers), texture: 'jello', edges: DEFAULT_STYLE.edges, glitter: 'off', eyes: [], surface: 'none' };
+      : { flavor: flavors[Math.floor(Math.random() * flavors.length)], layers: copyLayers(DEFAULT_STYLE.layers), texture: 'jello', edges: DEFAULT_STYLE.edges, glitter: 'off', eyes: Math.random() < 0.12 ? copyEyes(EYE_FACES.pair) : [], surface: Math.random() < 0.2 ? SURFACES[1 + Math.floor(Math.random() * (SURFACES.length - 1))].id : 'none' };
     // (its own material sliders; the world's as everyone's)
     const tune = {};
     for (const k of Object.keys(this.tune)) if (!PER_CUBE(k)) tune[k] = this.tune[k];

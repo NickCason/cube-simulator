@@ -11,6 +11,8 @@
 // Each: id, name, density (cells across a face), depth (its relief, a share
 // of the cube's size), ao (how much darker its hollows are - pits, not studs),
 // rough (how much it scatters the light besides: frosted's mostly that),
+// grip (how much better it holds on - the floor, other cubes: knurled and
+// tread plate are made to - a share of the material's own),
 // period (one that has a form - a grid, hexes, rows - repeats this often
 // across and up, in cells: a face holds a whole number of repeats, each
 // face's start where the next one's ends, so a hex cut by an edge meets its
@@ -98,14 +100,14 @@ const holes = (prob, r0, r1) => (x, y, z) => {
 export const SURFACES = [
   { id: 'none', name: 'Smooth' },
   {
-    id: 'swiss', name: 'Swiss cheese', density: 3.4, depth: 0.03, ao: 0.6, through: true,
+    id: 'swiss', name: 'Swiss cheese', density: 3.4, depth: 0.03, ao: 0.6, through: true, grip: 1.0,
     words: [['Holey', 'Swiss', 'Cheesy', 'Pitted'], ['Cheese', 'Emmental', 'Swiss', 'Holes']],
     glsl: 'return sfHoles(p, 0.72, 0.16, 0.46);',
     js: holes(0.72, 0.16, 0.46),
     holes: [0.72, 0.16, 0.46],
   },
   {
-    id: 'diamond', name: 'Diamond plate', density: 6, depth: 0.01, rough: 0.04, period: [2, 2],
+    id: 'diamond', name: 'Diamond plate', density: 6, depth: 0.01, rough: 0.04, period: [2, 2], grip: 1.45,
     words: [['Plated', 'Treaded', 'Industrial', 'Steel-Toed'], ['Treadplate', 'Plate', 'Deck', 'Tread']],
     glsl: `vec2 c = floor(p), f = fract(p) - 0.5;
       float s = mod(c.x + c.y, 2.0) < 0.5 ? 1.0 : -1.0;
@@ -118,19 +120,19 @@ export const SURFACES = [
     },
   },
   {
-    id: 'hammered', name: 'Hammered', density: 6, depth: 0.011, ao: 0.25, rough: 0.03,
+    id: 'hammered', name: 'Hammered', density: 6, depth: 0.011, ao: 0.25, rough: 0.03, grip: 1.1,
     words: [['Hammered', 'Beaten', 'Dimpled', 'Forged'], ['Pewter', 'Anvil', 'Smithy', 'Tankard']],
     glsl: 'vec2 v = sfVor(p); return min(1.0, v.x * v.x * 2.4);',
     js: (x, y) => Math.min(1, vor(x, y)[0] ** 2 * 2.4),
   },
   {
-    id: 'waffle', name: 'Waffle', density: 5, depth: 0.012, ao: 0.45, period: [1, 1],
+    id: 'waffle', name: 'Waffle', density: 5, depth: 0.012, ao: 0.45, period: [1, 1], grip: 1.25,
     words: [['Waffled', 'Gridded', 'Toasted', 'Syrupy'], ['Waffle', 'Griddle', 'Brunch', 'Grid']],
     glsl: 'vec2 f = abs(fract(p) - 0.5); return smoothstep(0.3, 0.4, max(f.x, f.y));',
     js: (x, y) => sstep(0.3, 0.4, Math.max(Math.abs(fract(x) - 0.5), Math.abs(fract(y) - 0.5))),
   },
   {
-    id: 'bubblewrap', name: 'Bubble wrap', density: 6, depth: 0.016, period: [1, SQRT3],
+    id: 'bubblewrap', name: 'Bubble wrap', density: 6, depth: 0.016, period: [1, SQRT3], grip: 1.15,
     words: [['Poppable', 'Bubbly', 'Padded', 'Fragile'], ['Bubble Wrap', 'Popper', 'Parcel', 'Packing']],
     glsl: 'float d = length(sfHex(p)) / 0.36; return d < 1.0 ? sqrt(1.0 - d * d) : 0.0;',
     js: (x, y) => {
@@ -139,7 +141,7 @@ export const SURFACES = [
     },
   },
   {
-    id: 'scales', name: 'Scales', density: 6, depth: 0.014, ao: 0.3, period: [1, 4 / 3],
+    id: 'scales', name: 'Scales', density: 6, depth: 0.014, ao: 0.3, period: [1, 4 / 3], grip: 0.92,
     words: [['Scaly', 'Draconic', 'Armoured', 'Fishy'], ['Dragon', 'Wyrm', 'Mermaid', 'Scales']],
     // (rows of discs, each covering the top of the row below: the highest one
     // here is on top; its lower edge stands proud)
@@ -162,7 +164,7 @@ export const SURFACES = [
     },
   },
   {
-    id: 'honeycomb', name: 'Honeycomb', density: 5, depth: 0.01, ao: 0.4, period: [1, SQRT3],
+    id: 'honeycomb', name: 'Honeycomb', density: 5, depth: 0.01, ao: 0.4, period: [1, SQRT3], grip: 1.2,
     words: [['Honeycombed', 'Waxy', 'Hexed', 'Buzzing'], ['Hive', 'Honeycomb', 'Comb', 'Apiary']],
     glsl: 'vec2 o = abs(sfHex(p)); return smoothstep(0.4, 0.47, max(dot(o, vec2(0.5, 0.8660254)), o.x));',
     js: (x, y) => {
@@ -171,13 +173,13 @@ export const SURFACES = [
     },
   },
   {
-    id: 'studs', name: 'Brick studs', density: 4, depth: 0.016, period: [1, 1],
+    id: 'studs', name: 'Brick studs', density: 4, depth: 0.016, period: [1, 1], grip: 1.3,
     words: [['Studded', 'Snap-Together', 'Toy', 'Clicky'], ['Brick', 'Block', 'Studs', 'Builder']],
     glsl: 'return smoothstep(0.33, 0.3, length(fract(p) - 0.5));',
     js: (x, y) => sstep(0.33, 0.3, Math.hypot(fract(x) - 0.5, fract(y) - 0.5)),
   },
   {
-    id: 'golf', name: 'Golf ball', density: 9, depth: 0.005, ao: 0.3, period: [1, SQRT3],
+    id: 'golf', name: 'Golf ball', density: 9, depth: 0.005, ao: 0.3, period: [1, SQRT3], grip: 0.95,
     words: [['Dimpled', 'Teed-Up', 'Fore', 'Clubhouse'], ['Golf Ball', 'Birdie', 'Tee', 'Hole-in-One']],
     glsl: 'float d = length(sfHex(p)) / 0.47; return d < 1.0 ? 1.0 - sqrt(1.0 - d * d) : 1.0;',
     js: (x, y) => {
@@ -186,7 +188,7 @@ export const SURFACES = [
     },
   },
   {
-    id: 'quilted', name: 'Quilted', density: 8, depth: 0.018, ao: 0.4, period: [2, 2],
+    id: 'quilted', name: 'Quilted', density: 8, depth: 0.018, ao: 0.4, period: [2, 2], grip: 1.15,
     words: [['Quilted', 'Tufted', 'Puffy', 'Cosy'], ['Quilt', 'Duvet', 'Pillow', 'Eiderdown']],
     glsl: `vec2 f = fract(vec2(p.x + p.y, p.x - p.y) * 0.5);
       return sqrt(max(sin(3.14159265 * f.x) * sin(3.14159265 * f.y), 0.0));`,
@@ -196,7 +198,7 @@ export const SURFACES = [
     },
   },
   {
-    id: 'ripples', name: 'Ripples', density: 2.5, depth: 0.035,
+    id: 'ripples', name: 'Ripples', density: 2.5, depth: 0.035, grip: 1.0,
     words: [['Rippled', 'Rain-Dropped', 'Pond', 'Splashy'], ['Puddle', 'Pond', 'Raindrop', 'Ripple']],
     glsl: `vec2 c = floor(p), f = fract(p);
       float h = 0.0;
@@ -218,19 +220,19 @@ export const SURFACES = [
     },
   },
   {
-    id: 'corrugated', name: 'Corrugated', density: 9, depth: 0.007, ao: 0.2, period: [1, 0],
+    id: 'corrugated', name: 'Corrugated', density: 9, depth: 0.007, ao: 0.2, period: [1, 0], grip: 1.3,
     words: [['Corrugated', 'Ridged', 'Fluted', 'Sheet-Metal'], ['Shed', 'Roof', 'Washboard', 'Ridge']],
     glsl: 'return 0.5 + 0.5 * sin(6.2831853 * p.x);',
     js: (x) => 0.5 + 0.5 * Math.sin(TAU * x),
   },
   {
-    id: 'knurled', name: 'Knurled', density: 14, depth: 0.004, ao: 0.25, rough: 0.05, period: [1, 1],
+    id: 'knurled', name: 'Knurled', density: 14, depth: 0.004, ao: 0.25, rough: 0.05, period: [1, 1], grip: 1.6,
     words: [['Knurled', 'Grippy', 'Machined', 'Cross-Hatched'], ['Grip', 'Knurl', 'Handle', 'Dial']],
     glsl: 'return min(abs(fract(p.x + p.y) - 0.5), abs(fract(p.x - p.y) - 0.5)) * 2.0;',
     js: (x, y) => Math.min(Math.abs(fract(x + y) - 0.5), Math.abs(fract(x - y) - 0.5)) * 2,
   },
   {
-    id: 'crackle', name: 'Crackle', density: 5, depth: 0.006, ao: 0.5,
+    id: 'crackle', name: 'Crackle', density: 5, depth: 0.006, ao: 0.5, grip: 1.1,
     words: [['Crackled', 'Crazed', 'Parched', 'Antique'], ['Glaze', 'Mudflat', 'Desert', 'Relic']],
     glsl: 'vec2 v = sfVor(p); return smoothstep(0.0, 0.07, v.y - v.x);',
     js: (x, y) => {
@@ -239,7 +241,7 @@ export const SURFACES = [
     },
   },
   {
-    id: 'pebbled', name: 'Pebbled', density: 8, depth: 0.009, ao: 0.35, rough: 0.06,
+    id: 'pebbled', name: 'Pebbled', density: 8, depth: 0.009, ao: 0.35, rough: 0.06, grip: 1.35,
     words: [['Pebbled', 'Leathery', 'Gnarly', 'Swampy'], ['Croc', 'Gator', 'Pebble', 'Leather']],
     glsl: 'vec2 v = sfVor(p); return sqrt(clamp((v.y - v.x) * 2.8, 0.0, 1.0));',
     js: (x, y) => {
@@ -248,7 +250,7 @@ export const SURFACES = [
     },
   },
   {
-    id: 'craters', name: 'Moon craters', density: 4.5, depth: 0.016, ao: 0.4, rough: 0.06,
+    id: 'craters', name: 'Moon craters', density: 4.5, depth: 0.016, ao: 0.4, rough: 0.06, grip: 1.2,
     words: [['Cratered', 'Lunar', 'Pockmarked', 'Asteroid'], ['Moon', 'Crater', 'Meteor', 'Luna']],
     glsl: `vec2 c = floor(p), f = fract(p);
       float bowl = 1.0, rim = 0.0;
@@ -275,7 +277,7 @@ export const SURFACES = [
     },
   },
   {
-    id: 'woven', name: 'Basket weave', density: 4, depth: 0.008, ao: 0.35, period: [2, 2],
+    id: 'woven', name: 'Basket weave', density: 4, depth: 0.008, ao: 0.35, period: [2, 2], grip: 1.25,
     words: [['Woven', 'Wicker', 'Plaited', 'Basketed'], ['Basket', 'Hamper', 'Wicker', 'Weave']],
     glsl: `vec2 c = floor(p), f = fract(p);
       bool across = mod(c.x + c.y, 2.0) < 0.5;
@@ -287,7 +289,7 @@ export const SURFACES = [
     },
   },
   {
-    id: 'bricks', name: 'Bricks', density: 4, depth: 0.007, ao: 0.45, period: [1, 1],
+    id: 'bricks', name: 'Bricks', density: 4, depth: 0.007, ao: 0.45, period: [1, 1], grip: 1.2,
     words: [['Bricked', 'Brick-Built', 'Mortared', 'Walled'], ['Wall', 'Brickwork', 'Chimney', 'Mason']],
     glsl: `vec2 q = vec2(p.x, p.y * 2.0);
       q.x += 0.5 * mod(floor(q.y), 2.0);
@@ -299,19 +301,19 @@ export const SURFACES = [
     },
   },
   {
-    id: 'stars', name: 'Stars', density: 4, depth: 0.011, period: [1, 1],
+    id: 'stars', name: 'Stars', density: 4, depth: 0.011, period: [1, 1], grip: 1.1,
     words: [['Starry', 'Star-Spangled', 'Twinkly', 'Stellar'], ['Star', 'Starlight', 'Twinkle', 'Comet']],
     glsl: 'return clamp(-sfStar(fract(p) - 0.5, 0.36, 0.42) / 0.05, 0.0, 1.0);',
     js: (x, y) => clamp(-sdStar(fract(x) - 0.5, fract(y) - 0.5, 0.36, 0.42) / 0.05, 0, 1),
   },
   {
-    id: 'hearts', name: 'Hearts', density: 4, depth: 0.011, period: [1, 1],
+    id: 'hearts', name: 'Hearts', density: 4, depth: 0.011, period: [1, 1], grip: 1.1,
     words: [['Lovey', 'Sweetheart', 'Smitten', 'Adoring'], ['Heart', 'Sweetheart', 'Valentine', 'Crush']],
     glsl: 'vec2 q = (fract(p) - vec2(0.5, 0.2)) * 1.65; return clamp(-sfHeart(q) / 0.08, 0.0, 1.0);',
     js: (x, y) => clamp(-sdHeart((fract(x) - 0.5) * 1.65, (fract(y) - 0.2) * 1.65) / 0.08, 0, 1),
   },
   {
-    id: 'swirl', name: 'Swirls', density: 4, depth: 0.006, period: [1, 1],
+    id: 'swirl', name: 'Swirls', density: 4, depth: 0.006, period: [1, 1], grip: 1.05,
     words: [['Swirly', 'Whorled', 'Hypnotic', 'Spiralling'], ['Whorl', 'Swirl', 'Spiral', 'Fingerprint']],
     glsl: `vec2 o = fract(p) - 0.5;
       float d = length(o);
@@ -322,13 +324,13 @@ export const SURFACES = [
     },
   },
   {
-    id: 'frosted', name: 'Frosted', density: 22, depth: 0.004, rough: 0.28,
+    id: 'frosted', name: 'Frosted', density: 22, depth: 0.004, rough: 0.28, grip: 1.2,
     words: [['Frosted', 'Sandblasted', 'Misty', 'Matte'], ['Frost', 'Mist', 'Sandglass', 'Haze']],
     glsl: 'return sfNoise(p) * 0.6 + sfNoise(p * 2.0 + 7.0) * 0.4;',
     js: (x, y) => vnoise(x, y) * 0.6 + vnoise(x * 2.3 + 9, y * 2.3 + 4) * 0.4,
   },
   {
-    id: 'sponge', name: 'Sponge', density: 7, depth: 0.012, ao: 0.5, through: true,
+    id: 'sponge', name: 'Sponge', density: 7, depth: 0.012, ao: 0.5, through: true, grip: 1.15,
     words: [['Spongy', 'Aerated', 'Porous', 'Bubbly'], ['Sponge', 'Aero', 'Pumice', 'Coral']],
     glsl: 'return sfHoles(p, 0.85, 0.12, 0.32);',
     js: holes(0.85, 0.12, 0.32),
