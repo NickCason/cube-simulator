@@ -1,12 +1,14 @@
-// Flour: a sieve of it. Hold it over the jelly - or the floor - and it
-// shakes: a fine fall of flour sifts down and dusts whatever it lands on
-// (the jelly where it lands - see Flour.coat - or the floor). Roll a cube
-// through what's on the floor and it's floured where it touched (see
-// Flour); a full re-cube sweeps it all away.
+// The sieve: flour in it - or sugar, cocoa, matcha, sprinkles, glitter,
+// rainbow powder (see powders.js; pick from the row over the dock). Hold
+// it over the jelly - or the floor - and it shakes: a fine fall of it
+// sifts down and dusts whatever it lands on (the jelly where it lands - see
+// Flour.coat - or the floor). Roll a cube through what's on the floor and
+// it's coated where it touched (see Flour); a full re-cube sweeps it away.
 
 import * as THREE from 'three';
 import { target } from './more.js';
 import { makeSieve } from '../world/models.js';
+import { POWDERS, POWDER_BY_ID, SPRINKLE, rainbowAt } from '../world/powders.js';
 
 const RATE = 200; // grains a second, shaken out
 const GRAIN = 0.022; // (each: how much it floured the jelly where it landed)
@@ -37,10 +39,15 @@ export class FlourTool {
     this.g = new Float32Array(MAXG * 3);
     this.gv = new Float32Array(MAXG * 3);
     this.gh = new Float32Array(MAXG);
+    // (and each one's colour, as seen, and what it is: its look - see Flour)
+    this.gc = new Float32Array(MAXG * 4);
+    this.gl = new Float32Array(MAXG * 5);
     this.n = 0;
     const geo = new THREE.BufferGeometry();
     this.gAttr = new THREE.BufferAttribute(this.g, 3).setUsage(THREE.DynamicDrawUsage);
+    this.cAttr = new THREE.BufferAttribute(this.gc, 4).setUsage(THREE.DynamicDrawUsage);
     geo.setAttribute('position', this.gAttr);
+    geo.setAttribute('aCol', this.cAttr);
     geo.setDrawRange(0, 0);
     this.scaleU = { value: 600 };
     this.points = new THREE.Points(geo, new THREE.ShaderMaterial({
@@ -49,22 +56,53 @@ export class FlourTool {
       depthWrite: false,
       vertexShader: /* glsl */ `
         uniform float uScale;
+        attribute vec4 aCol;
+        varying vec4 vCol;
         void main() {
           vec4 mv = modelViewMatrix * vec4(position, 1.0);
           gl_Position = projectionMatrix * mv;
-          gl_PointSize = max(1.5, 0.0085 * uScale / max(-mv.z, 0.05));
+          gl_PointSize = max(1.5, 0.0085 * aCol.a * uScale / max(-mv.z, 0.05));
+          vCol = aCol;
         }`,
       fragmentShader: /* glsl */ `
+        varying vec4 vCol;
         void main() {
           vec2 p = gl_PointCoord * 2.0 - 1.0;
           float r = dot(p, p);
           if (r > 1.0) discard;
-          gl_FragColor = vec4(0.98, 0.97, 0.94, 0.85 * (1.0 - r));
+          gl_FragColor = vec4(vCol.rgb, 0.88 * (1.0 - r * r));
         }`,
     }));
     this.points.frustumCulled = false;
     this.points.renderOrder = 1;
     app.particles.scene.add(this.points);
+    // what's in it (as it was last left)
+    let id = 'flour';
+    try {
+      id = localStorage.getItem('cube-sim-powder') || id;
+    } catch (e) {}
+    this.setPowder(POWDER_BY_ID[id] ? id : 'flour', false);
+  }
+
+  // What's in the sieve (see powders.js).
+  setPowder(id, say = true) {
+    const p = POWDER_BY_ID[id];
+    if (!p) return;
+    this.powder = p;
+    try {
+      localStorage.setItem('cube-sim-powder', id);
+    } catch (e) {}
+    const hc = p.rainbow ? [1, 0.55, 0.75] : p.multi ? [0.98, 0.9, 0.92] : p.col;
+    this.heap?.material.color.setRGB(hc[0], hc[1], hc[2], THREE.SRGBColorSpace);
+    if (this.heap) this.heap.material.roughness = p.sparkle ? 0.35 : 1;
+    this.app.ui?.setPowder?.(id);
+    if (say) this.app.ui?.hint(`${p.name} in the sieve`, 1200);
+  }
+
+  // (the next one along: the sieve's key again)
+  nextPowder() {
+    const i = POWDERS.indexOf(this.powder);
+    this.setPowder(POWDERS[(i + 1) % POWDERS.length].id);
   }
 
   activate() {
@@ -145,12 +183,21 @@ export class FlourTool {
       // (where it'll land: what's under it now)
       const hit = sb.raycast(x, y, z, 0, -1, 0, y + 0.1);
       this.gh[i] = hit ? hit.point[1] : 0;
+      // (what it is: a pinch of rainbow powder is one bright colour; a
+      // sprinkle or a glitter flake is seen in its own as it falls)
+      const P = this.powder, L = this.gl, C = this.gc, l = i * 5, c = i * 4;
+      const col = P.rainbow ? rainbowAt(performance.now() / 1000) : P.lin;
+      L[l] = col[0]; L[l + 1] = col[1]; L[l + 2] = col[2]; L[l + 3] = P.sparkle; L[l + 4] = P.multi;
+      const seen = P.multi ? SPRINKLE[Math.floor(Math.random() * SPRINKLE.length)] : col;
+      C[c] = seen[0]; C[c + 1] = seen[1]; C[c + 2] = seen[2];
+      C[c + 3] = P.multi && !P.sparkle ? 1.5 : P.sparkle ? 1.1 : 1;
     }
-    // (and a haze of the finest of it, drifting down with it)
-    if (Math.random() < dt * 14) {
-      const a = Math.random() * Math.PI * 2, r = R * Math.sqrt(Math.random());
+    // (and a haze of the finest of it, drifting down with it - not of
+    // sprinkles, or glitter)
+    if (!this.powder.multi && Math.random() < dt * 14) {
+      const a = Math.random() * Math.PI * 2, r = R * Math.sqrt(Math.random()), hc = this.powder.rainbow ? rainbowAt(performance.now() / 1000) : this.powder.lin;
       app.particles.alpha.spawn(m.position.x + Math.cos(a) * r, m.position.y - 0.01, m.position.z + Math.sin(a) * r, rnd(-0.03, 0.03), rnd(-0.45, -0.25), rnd(-0.03, 0.03),
-        rnd(0.5, 0.8), rnd(0.02, 0.03), rnd(0.05, 0.08), [0.98, 0.97, 0.94, 0.16], [1, 1, 0.98, 0], 1.2, -0.4);
+        rnd(0.5, 0.8), rnd(0.02, 0.03), rnd(0.05, 0.08), [hc[0], hc[1], hc[2], 0.16], [hc[0], hc[1], hc[2], 0], 1.2, -0.4);
     }
   }
 
@@ -179,14 +226,16 @@ export class FlourTool {
         let done = false;
         if (H[i] > 0.002) {
           const hit = sb.raycast(x, H[i] + 0.06, z, 0, -1, 0, 0.14);
+          const look = this.gl.subarray(i * 5, i * 5 + 5);
           if (hit) {
-            app.flour.coatAround(hit.point[0], hit.point[1], hit.point[2], hit.piece, GRAIN, 0.11);
-            this._puff(x, hit.point[1], z);
+            app.flour.coatAround(hit.point[0], hit.point[1], hit.point[2], hit.piece, GRAIN, 0.11, look, this.powder.rec);
+            this._puff(x, hit.point[1], z, look);
             done = true;
           } else H[i] = 0;
         } else {
-          app.flour.add(x, z, FLOOR, 0.022);
-          this._puff(x, 0, z);
+          const look = this.gl.subarray(i * 5, i * 5 + 5);
+          app.flour.add(x, z, FLOOR, 0.022, look);
+          this._puff(x, 0, z, look);
           done = true;
         }
         if (!done) {
@@ -202,20 +251,25 @@ export class FlourTool {
             V[o + c] = V[j * 3 + c];
           }
           H[i] = H[j];
+          this.gc.copyWithin(i * 4, j * 4, j * 4 + 4);
+          this.gl.copyWithin(i * 5, j * 5, j * 5 + 5);
         }
       }
     }
     this.points.geometry.setDrawRange(0, this.n);
-    if (this.n || this._shown) this.gAttr.needsUpdate = true;
+    if (this.n || this._shown) {
+      this.gAttr.needsUpdate = true;
+      this.cAttr.needsUpdate = true;
+    }
     this._shown = this.n > 0;
     // (the heap in the sieve goes down a little as it sifts, back up after)
     if (this.heap) this.heap.scale.y = 0.28 - 0.06 * this.shake;
   }
 
-  // (a wisp where a grain came down, now and then)
-  _puff(x, y, z) {
-    if (Math.random() > 0.18) return;
+  // (a wisp where a grain came down, now and then - not of sprinkles)
+  _puff(x, y, z, look) {
+    if (look[4] > 0.5 || Math.random() > 0.18) return;
     this.app.particles.alpha.spawn(x, y + 0.004, z, rnd(-0.05, 0.05), rnd(0.02, 0.08), rnd(-0.05, 0.05),
-      rnd(0.4, 0.8), rnd(0.01, 0.016), rnd(0.03, 0.05), [0.98, 0.97, 0.94, 0.3], [1, 1, 0.98, 0], 2.5, 0);
+      rnd(0.4, 0.8), rnd(0.01, 0.016), rnd(0.03, 0.05), [look[0], look[1], look[2], 0.3], [look[0], look[1], look[2], 0], 2.5, 0);
   }
 }

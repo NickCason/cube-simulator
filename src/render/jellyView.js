@@ -23,7 +23,7 @@ const FLOOR_SPAN = 6.4;
 // (how milky jelly of that opacity looks: see setStyle)
 // a row of the cube-look texture: 7 texels of looks, 10 + 10 of layers, the
 // colour of its light, a freeform gradient's depth
-export const CUBE_TEX_W = 30;
+export const CUBE_TEX_W = 31; // (the last row: the powder on it - Flour writes it)
 
 const hazeMinOf = (o) => 0.92 * Math.min(1, Math.max(0, (Math.min(1, Math.max(0, o)) - 0.45) / 0.55)) ** 2;
 
@@ -147,7 +147,7 @@ function vertexNormals(index, pos, nrm, n) {
 // disp (to the true shape - see snapToShape). data (per-vertex extras) may
 // be null.
 const PHONG = 0.75;
-function tessellate(pos, nrm, data, mids, first, disp) {
+function tessellate(pos, nrm, data, mids, first, disp, coat = null, coatM = null) {
   for (let m = 0, k = first, j = 0; m < mids.length; m += 3, k++, j++) {
     const a = mids[m] * 3, b = mids[m + 1] * 3;
     const ax = pos[a], ay = pos[a + 1], az = pos[a + 2];
@@ -186,7 +186,15 @@ function tessellate(pos, nrm, data, mids, first, disp) {
       data[o4] = (data[da4] + data[db4]) * 0.5;
       data[o4 + 1] = (data[da4 + 1] + data[db4 + 1]) * 0.5;
       data[o4 + 2] = Math.max(data[da4 + 2], data[db4 + 2]);
-      data[o4 + 3] = (data[da4 + 3] + data[db4 + 3]) * 0.5; // (flour)
+      data[o4 + 3] = (data[da4 + 3] + data[db4 + 3]) * 0.5; // (powder)
+    }
+    if (coat) {
+      const ca = mids[m] * 4, cb = mids[m + 1] * 4, o4 = k * 4;
+      coat[o4] = (coat[ca] + coat[cb]) * 0.5;
+      coat[o4 + 1] = (coat[ca + 1] + coat[cb + 1]) * 0.5;
+      coat[o4 + 2] = (coat[ca + 2] + coat[cb + 2]) * 0.5;
+      coat[o4 + 3] = (coat[ca + 3] + coat[cb + 3]) * 0.5;
+      coatM[k] = (coatM[mids[m]] + coatM[mids[m + 1]]) * 0.5;
     }
   }
 }
@@ -528,9 +536,13 @@ export class JellyView {
       sel: { value: new THREE.Vector4(0, 0, 0.5, 0) },
       selCol: { value: new THREE.Vector4(1, 1, 1, 0) },
       selPing: { value: 9 },
-      // flour on the floor (see Flour): how much, over a square of it
+      // powder on the floor (see Flour), over a square of it: (colour times
+      // the amount, the amount) and (sparkle, multi times it); and the key
+      // light, for its glints
       flour: { value: null },
+      flour2: { value: null },
       flourRect: { value: new THREE.Vector4(-3.2, -3.2, 1 / 6.4, 1 / 6.4) },
+      flourSun: { value: lightDir },
     };
     // (the jelly mirrors the floor: it reads the same textures)
     const fx = this.fxUniforms;
@@ -778,6 +790,8 @@ export class JellyView {
     this.pos = new Float32Array(n * 3);
     this.nrm = new Float32Array(n * 3);
     this.data = new Float32Array(n * 4);
+    this.coat = new Float32Array(n * 4); // (the powder on it: see SoftBody.coat)
+    this.coatM = new Float32Array(n);
     this.disp2 = new Float32Array(L2.mids.length / 3);
     for (let m = 0, k = nL1; m < L2.mids.length; m += 3, k++) cube[k] = cube[L2.mids[m]];
     tessellate(rest, restN, null, L2.mids, nL1, this.disp2);
@@ -786,6 +800,8 @@ export class JellyView {
     this.aPos = new THREE.BufferAttribute(this.pos, 3).setUsage(THREE.DynamicDrawUsage);
     this.aNrm = new THREE.BufferAttribute(this.nrm, 3).setUsage(THREE.DynamicDrawUsage);
     this.aData = new THREE.BufferAttribute(this.data, 4).setUsage(THREE.DynamicDrawUsage);
+    this.aCoat = new THREE.BufferAttribute(this.coat, 4).setUsage(THREE.DynamicDrawUsage);
+    this.aCoatM = new THREE.BufferAttribute(this.coatM, 1).setUsage(THREE.DynamicDrawUsage);
     this.aRest = new THREE.BufferAttribute(rest.slice(0, n * 3), 3);
     this.aCube = new THREE.BufferAttribute(cube.slice(0, n), 1);
     // distance from the just-healed seams (see Healer._fuse, weldFieldJob)
@@ -810,6 +826,8 @@ export class JellyView {
       g.setAttribute('position', this.aPos);
       g.setAttribute('normal', this.aNrm);
       g.setAttribute('aData', this.aData);
+      g.setAttribute('aCoat', this.aCoat);
+      g.setAttribute('aCoatM', this.aCoatM);
       g.setAttribute('aRest', this.aRest);
       g.setAttribute('aWeld', this.aWeld);
       g.setAttribute('aCube', this.aCube);
@@ -853,13 +871,13 @@ export class JellyView {
   // moving - goes 5 times a second, and only its temperatures.
   update(sb) {
     const topo = this.syncTopology(sb);
-    const n = sb.nV, x = sb.x, temp = sb.temp, glow = sb.glow, dust = sb.dust;
+    const n = sb.nV, x = sb.x, temp = sb.temp, glow = sb.glow, dust = sb.dust, coat = sb.coat;
     let ps = 0, ts = 0, gs = 0, ds = 0;
     for (let i = 0; i < n; i++) {
       const w = 1 + (i & 7) * 0.37, o = i * 3;
       ps += (x[o] + x[o + 1] * 1.3 + x[o + 2] * 1.7) * w;
       ts += temp[i] * w;
-      ds += dust[i] * w;
+      ds += (dust[i] + coat[i * 5] * 0.71 + coat[i * 5 + 1] * 0.37 + coat[i * 5 + 2] * 0.23 + coat[i * 5 + 3] * 0.13 + coat[i * 5 + 4] * 0.07) * w;
       gs += glow[i];
     }
     const fill = sb.fill && sb.fill.topo === sb.topoVersion;
@@ -875,15 +893,20 @@ export class JellyView {
     this._ds = ds;
     this._dataAt = now;
     const pos = this.pos, nrm = this.nrm, data = this.data;
-    sb.writeRender(pos, nrm, data);
+    sb.writeRender(pos, nrm, data, this.coat, this.coatM);
     if (fill) this._fill(sb, sb.fill);
-    tessellate(pos, nrm, data, this.mids1, this.nBase, this.disp1);
-    tessellate(pos, nrm, data, this.mids2, this.nL1, this.disp2);
+    tessellate(pos, nrm, data, this.mids1, this.nBase, this.disp1, this.coat, this.coatM);
+    tessellate(pos, nrm, data, this.mids2, this.nL1, this.disp2, this.coat, this.coatM);
     if (moved) {
       this.aPos.needsUpdate = true;
       this.aNrm.needsUpdate = true;
     }
     this.aData.needsUpdate = true;
+    if (floured || this._coatShown) {
+      this.aCoat.needsUpdate = true;
+      this.aCoatM.needsUpdate = true;
+    }
+    this._coatShown = ds > 0;
   }
 
   // The heal's liquid fill: what was missing rises from its holes' walls

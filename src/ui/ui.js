@@ -6,6 +6,7 @@ import { PlacesPanel, PLACE_ICON } from './places.js';
 import { GradEditor } from './gradedit.js';
 import { FreeEditor } from './freeedit.js';
 import { CubipliedCard } from './cubiplied.js';
+import { POWDERS } from '../world/powders.js';
 
 const svg = (inner) =>
   `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${inner}</svg>`;
@@ -68,7 +69,7 @@ export const TOOL_DEFS = [
   { id: 'torch', label: 'Torch', hint: 'Hold over the jelly to melt it · it runs off as liquid', key: '5' },
   { id: 'freeze', label: 'Cryo spray', hint: 'Hold to freeze it solid · spray a puddle to set it back into jelly', key: '6' },
   { id: 'acid', label: 'Acid', hint: 'Hold over the jelly to pour acid · it fizzes and eats in, melting the jelly to liquid', key: 'a' },
-  { id: 'flour', label: 'Flour', hint: 'Hold to sift flour onto the jelly or the floor · roll a cube through it to coat it · Re-cube sweeps it up', key: 'u' },
+  { id: 'flour', label: 'Sieve', hint: 'Hold to sift it on · roll a cube through it to coat it · Re-cube sweeps it up', key: 'u' },
   { id: 'baller', label: 'Melon baller', hint: 'Click to scoop out a ball', key: '7' },
   { id: 'cuber', label: 'Cube cuber', hint: 'Click to scoop out a cube', key: 'c' },
   { id: 'bomb', label: 'Cherry bomb', hint: 'Click to plant · stand back', key: '8' },
@@ -189,6 +190,28 @@ export class UI {
       this.toolsEl.appendChild(b);
       this.buttons[d.id] = b;
     }
+    // the sieve's powders: a row over the dock while it's in hand
+    this.powdersEl = document.createElement('div');
+    this.powdersEl.className = 'powders';
+    this.powdersEl.hidden = true;
+    this.powdersEl.setAttribute('role', 'radiogroup');
+    this.powdersEl.setAttribute('aria-label', 'In the sieve');
+    for (const p of POWDERS) {
+      const b = document.createElement('button');
+      b.dataset.powder = p.id;
+      b.title = p.name;
+      b.setAttribute('aria-label', p.name);
+      b.setAttribute('role', 'radio');
+      b.style.setProperty('--c', p.css);
+      b.innerHTML = '<span></span>';
+      b.addEventListener('click', (e) => {
+        e.stopPropagation();
+        app.audio.ui();
+        app.tools?.flour?.setPowder(p.id);
+      });
+      this.powdersEl.appendChild(b);
+    }
+    root.appendChild(this.powdersEl);
     const chips = this.paletteEl.querySelector('.chips');
     for (const f of FLAVORS) {
       const b = document.createElement('button');
@@ -480,7 +503,9 @@ export class UI {
         return;
       }
       const d = TOOL_DEFS.find((t) => t.key === e.key);
-      if (d) app.setTool(d.id);
+      // (the sieve's key with it in hand: the next powder)
+      if (d && d.id === 'flour' && app.tool === app.tools.flour) app.tools.flour.nextPowder();
+      else if (d) app.setTool(d.id);
       else if (e.key === 'h' || e.key === 'H') {
         if (app.heal()) this.cubby?.tally('healed');
       }
@@ -610,8 +635,20 @@ export class UI {
     this.muteEl.classList.toggle('off', m);
   }
 
+  // (what's in the sieve: its chip on)
+  setPowder(id) {
+    for (const b of this.powdersEl.children) {
+      const on = b.dataset.powder === id;
+      b.classList.toggle('on', on);
+      b.setAttribute('aria-checked', on ? 'true' : 'false');
+    }
+  }
+
   setTool(id) {
     for (const k in this.buttons) this.buttons[k].classList.toggle('active', k === id);
+    // (the sieve in hand: what's in it, to pick from)
+    this.powdersEl.hidden = id !== 'flour';
+    document.body.classList.toggle('powders-on', id === 'flour');
     const d = TOOL_DEFS.find((t) => t.id === id);
     const touch = this.app.isTouch || window.matchMedia?.('(pointer: coarse)').matches;
     if (!d) return;

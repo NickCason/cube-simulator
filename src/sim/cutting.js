@@ -200,7 +200,8 @@ export function cutBody(sb, field, opts = {}) {
 
   // --- new vertices
   const newVerts = []; // [x,y,z,X,Y,Z,vx,vy,vz,temp]
-  const newDust = []; // (and the flour on each)
+  const newDust = []; // (and the powder on each)
+  const newCoat = []; // (and what it is: SoftBody.coat's five)
   const newCube = []; // (and each one's cube)
   const newTag = []; // (and its tag - a gel gun's blob: see SoftBody.vTag)
   let nextId = nV0;
@@ -215,6 +216,7 @@ export function cutBody(sb, field, opts = {}) {
     const id = nextId++;
     newVerts.push(x[o], x[o + 1], x[o + 2], X[o], X[o + 1], X[o + 2], v[o], v[o + 1], v[o + 2], sb.temp[i]);
     newDust.push(sb.dust[i]);
+    for (let c = 0; c < 5; c++) newCoat.push(sb.coat[i * 5 + c]);
     newCube.push(sb.vCube[i]);
     newTag.push(sb.vTag[i]);
     zDup[i] = id;
@@ -242,6 +244,7 @@ export function cutBody(sb, field, opts = {}) {
       // (flour along a surface edge carries on; inside, there's none)
       const dp = sb.dust[lo] + (sb.dust[hi] - sb.dust[lo]) * t;
       newDust.push(dp, dp);
+      for (let q = 0; q < 2; q++) for (let c = 0; c < 5; c++) newCoat.push(sb.coat[lo * 5 + c] + (sb.coat[hi * 5 + c] - sb.coat[lo * 5 + c]) * t);
       newCube.push(sb.vCube[lo], sb.vCube[lo]);
       newTag.push(sb.vTag[lo], sb.vTag[lo]);
       canon.set(mid, pid);
@@ -408,6 +411,7 @@ export function cutBody(sb, field, opts = {}) {
     const id = sb.addVertex(newVerts[o], newVerts[o + 1], newVerts[o + 2], newVerts[o + 3], newVerts[o + 4], newVerts[o + 5],
       newVerts[o + 6], newVerts[o + 7], newVerts[o + 8], newVerts[o + 9], newCube[k], newTag[k]);
     sb.dust[id] = newDust[k] || 0;
+    for (let c = 0; c < 5; c++) sb.coat[id * 5 + c] = newCoat[k * 5 + c] || 0;
   }
   const nT = newT.length / 4;
   sb.ensureT(nT);
@@ -522,6 +526,7 @@ export function separateClusters(sb, labels, anchors = []) {
         const o = i * 3;
         id = sb.addVertex(sb.x[o], sb.x[o + 1], sb.x[o + 2], sb.X[o], sb.X[o + 1], sb.X[o + 2], sb.v[o], sb.v[o + 1], sb.v[o + 2], sb.temp[i], sb.vCube[i], sb.vTag[i]);
         sb.dust[id] = sb.dust[i];
+        sb.coat.copyWithin(id * 5, i * 5, i * 5 + 5);
         copies.set(key, id);
       }
       sb.T[t * 4 + k] = id;
@@ -612,6 +617,7 @@ export function unglue(sb, verts, plus, pairs = null) {
     sb.melt[j] = sb.melt[i];
     sb.glow[j] = sb.glow[i];
     sb.dust[j] = sb.dust[i];
+    sb.coat.copyWithin(j * 5, i * 5, i * 5 + 5);
     for (let e = vtS[i]; e < vtS[i + 1]; e++) {
       const t = vtL[e];
       if (!plus[t]) continue;

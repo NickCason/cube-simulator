@@ -363,6 +363,7 @@ const CUBE_MORPHS = ['cube', 'block', 'brick', 'hedron', 'box', 'bit'];
 const ROBOT_NUMS = ['3000', '9000', '64', '128', '2000', 'XL', 'Mk II', 'X', '5000', 'Prime', 'Ultra', 'GT'];
 const PLURALS = ['Cubes', 'Jigglers', 'Wobbles', 'Blocks', 'Squares', 'Gels', 'Hexahedrons', 'Cubettes'];
 const ROMAN = ['', 'I', 'II', 'III', 'IV', 'V', 'VI', 'VII', 'VIII', 'IX', 'X', 'XI', 'XII', 'XIII', 'XIV', 'XV'];
+const COATS = new Set(['floured', 'sugared', 'cocoa', 'matcha', 'sprinkled', 'glittered', 'rainbowed']);
 const ORDINAL = ['', 'the First', 'the Second', 'the Third', 'the Fourth', 'the Fifth', 'the Sixth', 'the Seventh', 'the Eighth', 'the Ninth', 'the Tenth'];
 // twins named as a pair: the first gets one half, its twin the other (some
 // halves suit a cube more than others - a wobbly one, a sweet one...)
@@ -405,11 +406,19 @@ const LEGEND_BY_REC = {
   smashed: ['Who Took the Mallet', 'the Hammered', 'Anvil-Hearted'],
   scooped: ['Who Was Scooped and Lived', 'of the Missing Piece', 'the Hollowed'],
   floured: ['Who Rolled in Flour', 'the Dusted', 'the Well-Floured'],
+  sugared: ['the Sugar-Coated', 'Who Rolled in Sugar', 'the Candied'],
+  cocoa: ['the Cocoa-Dusted', 'Who Fell in the Cocoa', 'the Truffled'],
+  matcha: ['the Matcha-Dusted', 'of the Tea Ceremony', 'the Steeped'],
+  sprinkled: ['Who Fell in the Sprinkles', 'the Sprinkled', 'the Hundreds-and-Thousands'],
+  glittered: ['the Bedazzled', 'Who Rolled in Glitter', 'the Sparkle-Dusted'],
+  rainbowed: ['of the Colour Festival', 'the Holi-Dusted', 'Who Wore Every Colour'],
 };
 const REC_ADJ = {
   cuts: ['Scarred', 'Battle-Scarred'], tears: ['Torn'], diced: ['Diced'], shots: ['Pierced', 'Bulletproof'], booms: ['Shellshocked', 'Blast-Proof'],
   healed: ['Reborn', 'Undying'], melted: ['Fireproof', 'Scorched'], frozen: ['Thawed', 'Frostbitten'], acid: ['Etched', 'Corroded'],
   gelled: ['Globby', 'Encrusted'], smashed: ['Dented', 'Hammered'], scooped: ['Hollow', 'Scooped'], floured: ['Floury', 'Dusted', 'Breaded'],
+  sugared: ['Sugar-Coated', 'Candied', 'Sugar-Frosted'], cocoa: ['Cocoa-Dusted', 'Truffled'], matcha: ['Matcha-Dusted', 'Tea-Dusted'],
+  sprinkled: ['Sprinkled', 'Confetti'], glittered: ['Bedazzled', 'Glittered', 'Sparkle-Dusted'], rainbowed: ['Holi', 'Paint-Splashed', 'Technicolour'],
 };
 
 // phrase puns with slots: {V} verb, {Ving}, {A} adjective, {N} noun, {F} flavour word, {M} material noun, {C} colour word
@@ -641,7 +650,8 @@ export function cubeTraits(c, rec = null, ctx = {}) {
   if (gen > 0) sal.family = Math.min(0.95, 0.68 + gen * 0.07) + (parent ? 0.05 : 0);
   const changes = (ctx.changes || []).filter((x) => x && x.tier >= 2);
   if (changes.length) sal.mutation = changes.some((x) => x.tier >= 3) ? 1 : 0.8;
-  const storied = rec ? Object.keys(LEGEND_BY_REC).filter((k) => (rec[k] || 0) >= (k === 'healed' ? 10 : k === 'shots' ? 8 : 3)) : [];
+  // (a coat of something - flour, sprinkles - is a story the first time)
+  const storied = rec ? Object.keys(LEGEND_BY_REC).filter((k) => (rec[k] || 0) >= (k === 'healed' ? 10 : k === 'shots' ? 8 : COATS.has(k) ? 1 : 3)) : [];
   if (storied.length) sal.record = Math.min(1, 0.6 + storied.length * 0.15);
   finish.forEach(([, , s], i) => (sal['finish' + i] = s));
   feel.forEach(([, , s], i) => (sal['feel' + i] = s));

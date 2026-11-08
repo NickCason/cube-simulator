@@ -4098,3 +4098,70 @@ html.dark .fam-tag.here {
 html.dark .fam-pic {
   background: linear-gradient(#2a2832, #1d1c23);
 }
+
+/* ---------------------------------------------------------------- the sieve's powders */
+/* (a row over the dock while the sieve's in hand: what's in it) */
+.powders {
+  position: fixed;
+  left: 50%;
+  bottom: calc(max(18px, calc(env(safe-area-inset-bottom) + 8px)) + 64px);
+  transform: translateX(-50%);
+  display: flex;
+  gap: 4px;
+  padding: 5px 7px;
+  border-radius: 999px;
+  background: var(--glass);
+  -webkit-backdrop-filter: blur(20px) saturate(1.7);
+  backdrop-filter: blur(20px) saturate(1.7);
+  border: 1px solid var(--line);
+  box-shadow: 0 8px 22px rgba(40, 30, 20, 0.12), inset 0 1px 0 rgba(255, 255, 255, 0.85);
+}
+
+.powders[hidden] {
+  display: none;
+}
+
+.powders button {
+  appearance: none;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.powders button span {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--c);
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.14), 0 1px 2px rgba(0, 0, 0, 0.12);
+  transition: transform 0.15s;
+}
+
+.powders button:hover span {
+  transform: scale(1.1);
+}
+
+.powders button.on {
+  box-shadow: 0 0 0 2px var(--ink);
+}
+
+body.powders-on .hint {
+  bottom: calc(max(18px, calc(env(safe-area-inset-bottom) + 8px)) + 112px);
+}
+
+@media (max-width: 720px) {
+  .powders {
+    bottom: calc(max(18px, calc(env(safe-area-inset-bottom) + 8px)) + 58px);
+  }
+  body.powders-on .hint {
+    bottom: calc(max(18px, calc(env(safe-area-inset-bottom) + 8px)) + 104px);
+  }
+}

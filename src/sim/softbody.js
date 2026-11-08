@@ -296,7 +296,10 @@ export class SoftBody {
     this.vTag = growArr(this.vTag, cap, Uint16Array); // (0, or the gel gun's blob it is: see addBlob)
     this.alive = growArr(this.alive, cap, Uint8Array);
     this.melt = growArr(this.melt, cap, Uint8Array); // (on a surface the torch melted)
-    this.dust = growArr(this.dust, cap, Float32Array); // (flour on it, 0..1: see FlourTool)
+    this.dust = growArr(this.dust, cap, Float32Array); // (powder on it, 0..1: see Flour)
+    // (and what it is: its colour, sparkle and multi, each times the amount
+    // - so mixed, they average by how much of each - see Flour.coat)
+    this.coat = growArr(this.coat, cap * 5, Float32Array);
     this.fpen = growArr(this.fpen, cap, Float32Array); // floor push-out this substep
     this.wpen = growArr(this.wpen, cap, Float32Array); // wall push-out this substep
     this.vCap = cap;
@@ -338,6 +341,7 @@ export class SoftBody {
     this.alive[i] = 1;
     this.melt[i] = 0;
     this.dust[i] = 0;
+    this.coat.fill(0, i * 5, i * 5 + 5);
     return i;
   }
 
@@ -470,6 +474,7 @@ export class SoftBody {
       if (n !== i) {
         for (const a of vArr3) { a[n * 3] = a[i * 3]; a[n * 3 + 1] = a[i * 3 + 1]; a[n * 3 + 2] = a[i * 3 + 2]; }
         for (const a of vArr1) a[n] = a[i];
+        this.coat.copyWithin(n * 5, i * 5, i * 5 + 5);
       }
       map[i] = n++;
     }
@@ -1320,7 +1325,7 @@ export class SoftBody {
   }
 
   // Fill render buffers (positions + smooth normals per render vertex).
-  writeRender(pos, nrm, extra) {
+  writeRender(pos, nrm, extra, coat = null, coatM = null) {
     const x = this.x, rSim = this.rSim, rIndex = this.rIndex, n = this.rCount;
     for (let r = 0; r < n; r++) {
       const i = rSim[r] * 3;
@@ -1354,6 +1359,15 @@ export class SoftBody {
         extra[r * 4 + 1] = glow[i];
         extra[r * 4 + 2] = rTag[r] === TAG_FRESH ? 1 : 0;
         extra[r * 4 + 3] = dust[i];
+      }
+    }
+    if (coat) {
+      // [colour, sparkle] and [multi] per render vertex (times the amount)
+      const C = this.coat;
+      for (let r = 0; r < n; r++) {
+        const i = rSim[r] * 5;
+        coat[r * 4] = C[i]; coat[r * 4 + 1] = C[i + 1]; coat[r * 4 + 2] = C[i + 2]; coat[r * 4 + 3] = C[i + 3];
+        coatM[r] = C[i + 4];
       }
     }
   }

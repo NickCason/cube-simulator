@@ -46,7 +46,9 @@ export function createFloor(env, fx) {
     shader.uniforms.uPatGlow = fx.patGlow;
     shader.uniforms.uPatSun = fx.patSun;
     shader.uniforms.tFlour = fx.flour;
+    shader.uniforms.tFlour2 = fx.flour2;
     shader.uniforms.uFlourRect = fx.flourRect;
+    shader.uniforms.uFlourSun = fx.flourSun;
     shader.vertexShader = shader.vertexShader
       .replace('#include <common>', '#include <common>\nvarying vec3 vFloorPos;')
       .replace('#include <worldpos_vertex>', '#include <worldpos_vertex>\nvFloorPos = (modelMatrix * vec4(transformed, 1.0)).xyz;');
@@ -82,7 +84,16 @@ export function createFloor(env, fx) {
         uniform vec4 uSelCol;
         uniform float uSelPing;
         uniform sampler2D tFlour;
+        uniform sampler2D tFlour2;
         uniform vec4 uFlourRect;
+        uniform vec3 uFlourSun;
+        // (a sprinkle's or a glitter flake's colour: as the jelly's)
+        vec3 sprinkleColF(float h) {
+          int i = int(floor(h * 7.0));
+          vec3 c = i == 0 ? vec3(1.0, 0.31, 0.6) : i == 1 ? vec3(1.0, 0.83, 0.23) : i == 2 ? vec3(0.3, 0.67, 0.97) : i == 3 ? vec3(0.41, 0.86, 0.49)
+            : i == 4 ? vec3(0.98, 0.98, 0.96) : i == 5 ? vec3(0.69, 0.59, 0.99) : vec3(1.0, 0.55, 0.2);
+          return pow(c, vec3(2.2));
+        }
         float fHash(vec2 p) { return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453); }
         float fNoise(vec2 p) {
           vec2 i = floor(p), f = fract(p);
@@ -102,20 +113,60 @@ export function createFloor(env, fx) {
         // (a place's floor: its pattern)
         vec3 patGlow;
         diffuseColor.rgb = floorPattern(vFloorPos.xz, diffuseColor.rgb, patGlow);
-        // flour on it (see Flour): powdery white and matte - as much as
-        // there is, that much of the floor under it: thick, all of it; thin,
-        // drifts and clumps of it with the floor between
-        float flourAmt = 0.0;
+        // powder on it (see Flour) - as much as there is, that much of the
+        // floor under it: thick, all of it; thin, drifts and clumps with
+        // the floor between - in its colour, as it's made: fine powder;
+        // grains that catch the light (sugar, glitter - flakes each a
+        // colour); sprinkles lying every which way
+        float flourAmt = 0.0, flourGlint = 0.0;
+        vec3 flourAlb = vec3(0.95, 0.94, 0.91), flourGlintCol = vec3(1.0);
         {
           vec2 fl = (vFloorPos.xz - uFlourRect.xy) * uFlourRect.zw;
           if (all(greaterThan(fl, vec2(0.0))) && all(lessThan(fl, vec2(1.0)))) {
-            float f = texture2D(tFlour, fl).r * 1.275;
-            vec2 q = vFloorPos.xz;
-            float n = fNoise(q * 28.0) * 0.5 + fNoise(q * 90.0) * 0.32 + fHash(floor(q * 420.0)) * 0.18;
-            flourAmt = smoothstep(n - 0.16, n + 0.16, f * 2.4);
+            vec4 F = texture2D(tFlour, fl);
+            float a = F.a * 1.5;
+            if (a > 0.004) {
+              vec4 F2 = texture2D(tFlour2, fl);
+              float ia = 1.0 / max(F.a, 0.004);
+              vec3 pc = clamp(F.rgb * ia, 0.0, 1.0);
+              float ps = clamp(F2.r * ia, 0.0, 1.0), pm = clamp(F2.g * ia, 0.0, 1.0);
+              vec2 q = vFloorPos.xz;
+              float n = fNoise(q * 28.0) * 0.5 + fNoise(q * 90.0) * 0.32 + fHash(floor(q * 420.0)) * 0.18;
+              flourAlb = pc;
+              flourAmt = smoothstep(n - 0.16, n + 0.16, a * 2.4) * (1.0 - ps) * (1.0 - pm);
+              if (ps > 0.02) {
+                vec2 g = q * (pm > 0.5 ? 150.0 : 75.0), gi = floor(g), gf = fract(g) - 0.5;
+                float on = step(fHash(gi), a * 1.6) * (1.0 - smoothstep(0.26, 0.4, length(gf))) * ps;
+                vec3 gc = pm > 0.5 ? mix(sprinkleColF(fHash(gi + 7.0)), pc, 0.25) : mix(vec3(1.0), pc, 0.4);
+                flourAlb = mix(flourAlb, gc, on);
+                flourAmt = max(flourAmt, on);
+                vec3 gn = normalize(vec3(fHash(gi + 3.1) - 0.5, 1.3, fHash(gi + 5.7) - 0.5));
+                vec3 Vf = normalize(cameraPosition - vFloorPos);
+                flourGlint = on * pow(max(dot(reflect(-Vf, gn), normalize(uFlourSun)), 0.0), 50.0) * 16.0;
+                flourGlintCol = gc;
+              }
+              if (pm * (1.0 - ps) > 0.02) {
+                vec2 g = q * 30.0, c0 = floor(g - 0.5);
+                float best = 9.0, id = 0.0;
+                for (int i = 0; i < 2; i++)
+                  for (int j = 0; j < 2; j++) {
+                    vec2 c = c0 + vec2(float(i), float(j));
+                    if (fHash(c * 1.31 + 0.7) > a * 1.4) continue;
+                    vec2 o = c + 0.2 + 0.6 * vec2(fHash(c + 11.1), fHash(c + 23.7));
+                    float an = fHash(c + 5.3) * 6.2832;
+                    vec2 dir = vec2(cos(an), sin(an)), d = g - o;
+                    float t = clamp(dot(d, dir), -0.3, 0.3);
+                    float dist = length(d - dir * t);
+                    if (dist < best) { best = dist; id = fHash(c + 3.3); }
+                  }
+                float rod = (1.0 - smoothstep(0.075, 0.1, best)) * pm * (1.0 - ps);
+                flourAlb = mix(flourAlb, sprinkleColF(id), rod);
+                flourAmt = max(flourAmt, rod);
+              }
+            }
           }
         }
-        diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.95, 0.94, 0.91), flourAmt);
+        diffuseColor.rgb = mix(diffuseColor.rgb, flourAlb, flourAmt);
         roughnessFactor = mix(roughnessFactor, 1.0, flourAmt);`,
       )
       .replace(
@@ -273,6 +324,7 @@ export function createFloor(env, fx) {
           }
         }
         gl_FragColor.rgb += patGlow * uPatGlow * (1.0 - flourAmt);
+        gl_FragColor.rgb += flourGlintCol * flourGlint;
         float fdist = length(vFloorPos.xz);
         float fade = smoothstep(3.2, 11.0, fdist);
         gl_FragColor.rgb = mix(gl_FragColor.rgb, uBg, fade);`,

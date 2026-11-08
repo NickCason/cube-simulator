@@ -263,8 +263,12 @@ export function createLayerUniforms() {
 const VERT = /* glsl */ `
   attribute vec3 aRest;
   attribute vec4 aData;
+  attribute vec4 aCoat;
+  attribute float aCoatM;
   attribute float aWeld;
   attribute float aCube;
+  varying vec4 vCoat;
+  varying float vCoatM;
   varying float vCube;
   varying vec3 vWorldPos;
   varying vec3 vNormal;
@@ -275,6 +279,8 @@ const VERT = /* glsl */ `
   void main() {
     vWeld = aWeld;
     vCube = aCube;
+    vCoat = aCoat;
+    vCoatM = aCoatM;
     vec4 wp = modelMatrix * vec4(position, 1.0);
     vWorldPos = wp.xyz;
     vNormal = mat3(modelMatrix) * normal;
@@ -452,6 +458,8 @@ export function createJellyMaterial(env, layerUniforms) {
       varying vec3 vViewPos;
       varying vec3 vRest;
       varying vec4 vData;
+      varying vec4 vCoat;
+      varying float vCoatM;
       varying float vWeld;
       ${NOISE}
       ${OCT}
@@ -609,6 +617,53 @@ export function createJellyMaterial(env, layerUniforms) {
         return clamp(c.xy / c.w * 0.5 + 0.5, vec2(0.001), vec2(0.999));
       }
       // Two-interface refraction: enter through N, exit through Nb.
+      // a sprinkle's or a glitter flake's colour (one of powders.js SPRINKLE)
+      vec3 sprinkleCol(float h) {
+        int i = int(floor(h * 7.0));
+        vec3 c = i == 0 ? vec3(1.0, 0.31, 0.6) : i == 1 ? vec3(1.0, 0.83, 0.23) : i == 2 ? vec3(0.3, 0.67, 0.97) : i == 3 ? vec3(0.41, 0.86, 0.49)
+          : i == 4 ? vec3(0.98, 0.98, 0.96) : i == 5 ? vec3(0.69, 0.59, 0.99) : vec3(1.0, 0.55, 0.2);
+        return pow(c, vec3(2.2)); // (as they look: linear for the light)
+      }
+      // Sprinkles at q (a point in the plane of the surface, rest space):
+      // in each cell (as many cells as dens says) a rod lying its own way,
+      // its own colour - (colour, how much of here a rod covers, how near
+      // its middle line). (Rods reach under half a cell from their middles:
+      // the two nearest cells each way are all that can touch here.)
+      vec4 sprinkles(vec2 p, float dens, out float ridge) {
+        vec2 q = p * 30.0, c0 = floor(q - 0.5);
+        float best = 9.0, id = 0.0;
+        for (int i = 0; i < 2; i++)
+          for (int j = 0; j < 2; j++) {
+            vec2 c = c0 + vec2(float(i), float(j));
+            vec3 c3 = vec3(c, 7.0);
+            if (hash13(c3 * 1.31 + 0.7) > dens) continue;
+            vec2 o = c + 0.2 + 0.6 * vec2(hash13(c3 + 11.1), hash13(c3 + 23.7));
+            float an = hash13(c3 + 5.3) * 6.2832;
+            vec2 dir = vec2(cos(an), sin(an)), d = q - o;
+            float t = clamp(dot(d, dir), -0.3, 0.3);
+            float dist = length(d - dir * t);
+            if (dist < best) { best = dist; id = hash13(c3 + 3.3); }
+          }
+        ridge = 1.0 - clamp(best / 0.1, 0.0, 1.0);
+        return vec4(sprinkleCol(id), 1.0 - smoothstep(0.075, 0.1, best));
+      }
+      // Glitter at q (in the plane of the surface): a little hexagonal flake
+      // a cell (as many as dens says) - (its id, how much of here it covers)
+      vec2 flakes(vec2 p, float dens) {
+        vec2 q = p * 110.0, c0 = floor(q - 0.5);
+        float best = 9.0, id = 0.0;
+        for (int i = 0; i < 2; i++)
+          for (int j = 0; j < 2; j++) {
+            vec2 c = c0 + vec2(float(i), float(j));
+            vec3 c3 = vec3(c, 3.0);
+            if (hash13(c3 * 1.17 + 0.3) > dens) continue;
+            vec2 d = abs(q - (c + 0.3 + 0.4 * vec2(hash13(c3 + 13.1), hash13(c3 + 29.7))));
+            float dist = max(d.x * 0.866 + d.y * 0.5, d.y);
+            if (dist < best) { best = dist; id = hash13(c3 + 4.4); }
+          }
+        return vec2(id, 1.0 - smoothstep(0.24, 0.3, best));
+      }
+
       vec3 sampleThrough(vec3 P, vec3 V, vec3 N, vec3 Nb, float thick, float ior, float lod, float rough, int ch) {
         vec3 r1 = refract(-V, N, 1.0 / ior);
         vec3 Pexit = P + r1 * thick;
@@ -695,6 +750,11 @@ export function createJellyMaterial(env, layerUniforms) {
         // been rolled in - wherever that touched, cut faces too
         float dustOwn = cDust * (1.0 - fresh) * (1.0 - cavity), dustFlour = vData.w * (1.0 - cavity);
         float dust = max(dustOwn, dustFlour);
+        // (sprinkles and glitter lie flat on it: drawn in the rest-space plane
+        // the surface here is nearest - its normal from how the rest point
+        // runs across the pixel)
+        vec3 restN = abs(cross(dFdx(vRest), dFdy(vRest)));
+        vec2 flat2 = restN.x > restN.y && restN.x > restN.z ? vRest.yz : restN.y > restN.z ? vRest.xz : vRest.xy;
         // surface micro-structure: faint knife texture on cut faces, ice crystals when frozen
         if (fresh > 0.5 || frost > 0.01) {
           vec3 q = vRest * 38.0;
@@ -757,6 +817,9 @@ export function createJellyMaterial(env, layerUniforms) {
           vec3 xr = uBackRest > 0.5 ? textureLod(tBackRest, uv, 0.0).xyz : Rp + refract(-V, N, 1.0 / cIor) * thick;
           float grain = 1.0 - smoothstep(0.38, 0.5, worley(xr * 56.0).x);
           vec3 frosted = coatLit * vec3(0.98, 0.97, 0.95) * (0.8 + 0.45 * grain);
+          // (its colour: white crystals, frost - or, dusted, the powder's)
+          vec4 cq30 = cubeT(30);
+          frosted *= mix(vec3(1.0), cq30.rgb / 0.98, cq30.a);
           trans = mix(trans, frosted, clamp(exitCoat * (0.8 + 0.12 * grain), 0.0, 0.94));
         }
 
@@ -1012,20 +1075,52 @@ export function createJellyMaterial(env, layerUniforms) {
           col = mix(col, mix(vec3(1.0), sc, 0.4) * (irr * 0.5 + keyLight * nl * 0.3), coat * 0.14 * (1.0 - grain));
         }
 
-        // a dusting (mochi's starch, a marshmallow's icing sugar, flour it's
-        // been rolled in): fine white powder, matte, clumped thicker here
-        // and there - thin, the colour under it shows through
+        // A dusting: its own (mochi's starch, a marshmallow's icing sugar -
+        // even, mottled, white), or what it's been sifted on or rolled in
+        // (see Flour) - as much as there is, that much of the surface under
+        // it, so a patch thins out at its edge (not the shape of the mesh
+        // it's kept on); its colour, and how it's made: fine powder,
+        // crystals that glint (sugar), sprinkles each their own colour,
+        // glitter flakes that flash as it turns.
         if (dust > 0.0) {
-          float clump = fbm3(vRest * 64.0) * 0.65 + 0.35 * vnoise(vRest * 190.0);
-          // (its own: even, mottled. Flour: as much as there is, that much of
-          // the surface under powder - thick, all of it; thin, clumps of it
-          // here and there - so a patch thins out at its edge, not the shape
-          // of the mesh it's kept on)
-          float pc = fbm3(vRest * 46.0) * 0.6 + vnoise(vRest * 150.0) * 0.4;
-          float d = max(clamp(dustOwn * (0.72 + 0.75 * (clump - 0.5)), 0.0, 1.0),
-            smoothstep(pc - 0.1, pc + 0.1, dustFlour * 1.15 - 0.06));
-          vec3 powder = vec3(0.97, 0.955, 0.925) * (irr * 0.72 + keyLight * (max(dot(N, L), 0.0) * 0.55 + 0.08)) + emLit * 0.35;
-          col = mix(col, powder, d * 0.9);
+          vec3 lit = irr * 0.72 + keyLight * (max(dot(N, L), 0.0) * 0.55 + 0.08);
+          if (dustOwn > 0.0) {
+            float clump = fbm3(vRest * 64.0) * 0.65 + 0.35 * vnoise(vRest * 190.0);
+            col = mix(col, vec3(0.97, 0.955, 0.925) * lit + emLit * 0.35, clamp(dustOwn * (0.72 + 0.75 * (clump - 0.5)), 0.0, 1.0) * 0.9);
+          }
+          if (dustFlour > 0.004) {
+            float a = dustFlour, ia = 1.0 / max(vData.w, 1e-3);
+            vec3 pc = clamp(vCoat.rgb * ia, 0.0, 1.0);
+            float ps = clamp(vCoat.a * ia, 0.0, 1.0), pm = clamp(vCoatM * ia, 0.0, 1.0);
+            float wP = (1.0 - ps) * (1.0 - pm), wC = ps * (1.0 - pm), wS = pm * (1.0 - ps), wG = ps * pm;
+            if (wP > 0.02) {
+              float n = fbm3(vRest * 46.0) * 0.6 + vnoise(vRest * 150.0) * 0.4;
+              float cov = smoothstep(n - 0.1, n + 0.1, a * 1.15 - 0.06);
+              col = mix(col, pc * lit + emLit * 0.3 * pc, cov * 0.92 * wP);
+            }
+            if (wC > 0.02) {
+              vec2 w = worley(vRest * 64.0);
+              float grain = (1.0 - smoothstep(0.34, 0.47, w.x)) * step(w.y, a * 1.1);
+              vec3 cn = normalize(N + (vec3(hash13(vec3(w.y * 91.0)), hash13(vec3(w.y * 37.0 + 5.0)), hash13(vec3(w.y * 13.0 + 9.0))) - 0.5) * 1.4);
+              float glint = pow(max(dot(reflect(-V, cn), L), 0.0), 70.0) * 22.0;
+              vec3 cc = mix(vec3(1.0), pc, 0.5) * (irr * 0.6 + keyLight * (max(dot(cn, L), 0.0) * 0.45 + 0.1)) * (0.8 + 0.3 * w.y) + keyLight * glint + emLit * 0.5;
+              col = mix(col, cc, grain * 0.9 * wC);
+            }
+            if (wS > 0.02) {
+              float ridge;
+              vec4 sp = sprinkles(flat2, clamp(a * 1.3, 0.0, 1.0), ridge);
+              vec3 sc2 = sp.rgb * (lit * (0.75 + 0.45 * ridge) + 0.03) + keyLight * pow(max(dot(reflect(-V, N), L), 0.0), 40.0) * 0.4 * ridge + emLit * 0.3 * sp.rgb;
+              col = mix(col, sc2, sp.a * wS);
+            }
+            if (wG > 0.02) {
+              vec2 fl = flakes(flat2, clamp(a * 1.2, 0.0, 1.0));
+              vec3 fn = normalize(N + (vec3(hash13(vec3(fl.x * 71.0)), hash13(vec3(fl.x * 29.0 + 3.0)), hash13(vec3(fl.x * 17.0 + 7.0))) - 0.5) * 1.2);
+              vec3 hue = mix(sprinkleCol(fract(fl.x * 13.7)), pc, 0.2);
+              float g = pow(max(dot(reflect(-V, fn), L), 0.0), 40.0) * 26.0;
+              vec3 fc = hue * (envLookup(reflect(-V, fn), 0.15) * 0.9 + keyLight * (g + 0.15) + 0.04) + emLit * 0.4 * hue;
+              col = mix(col, fc, fl.y * wG);
+            }
+          }
         }
 
         // frost layer: white crystalline film with sparkles
