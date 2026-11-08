@@ -13,6 +13,7 @@
 import { SETTINGS, resolveSettings, settingWord } from './settings.js';
 import { TEXTURES, EDGES, GLITTERS, MIN_LAYERS, MAX_LAYERS, MAX_REPEAT, resolveFlavor, flavorMainHex, gradStops, copyLayers } from './styles.js';
 import { freeNodes } from './freeform.js';
+import { EYE_STYLES, EYE_SIZES, EYE_R_MIN, EYE_R_MAX, MAX_EYES, copyEyes, onSurface, eyeFrame, mirrorEye } from './eyes.js';
 
 export const TIER = { DRIFT: 0, MUTATION: 1, MAJOR: 2, LEGENDARY: 3 };
 
@@ -223,7 +224,58 @@ export function mutate(style, tune, { rnd = Math.random, gen = 0 } = {}) {
   const nudges = 1 + (rnd() < 0.45 ? 1 : 0);
   for (let k = 0; k < nudges; k++) add(moveSlider(style, tune, pick(rnd, DRIFT_KEYS), (rnd() - 0.5) * 0.3, 0));
   if (style.layers) style.layers = copyLayers(style.layers);
+  mutateEyes(style, rnd, chance, add);
   return changes;
+}
+
+// Its googly eyes (a family's: every child has its parent's): now and then a
+// third one, two become one (a cyclops), they grow or shrink, change their
+// look, one wanders - and once in a long while one born without grows a pair.
+// (A change that'd put one over another doesn't happen; a pair one of them's
+// left is two on their own.)
+function mutateEyes(style, rnd, chance, add) {
+  const b = EDGES[style.edges]?.bevel ?? 0.13;
+  let eyes = copyEyes(style.eyes);
+  const at = (p) => onSurface(p, b);
+  const fits = (list) => list.every((e, i) => list.every((o, j) => j <= i || Math.hypot(e.x - o.x, e.y - o.y, e.z - o.z) >= (e.r + o.r) * 1.02));
+  const tryIt = (list, change) => {
+    if (!fits(list)) return false;
+    eyes = list;
+    add(change);
+    return true;
+  };
+  if (eyes.length) {
+    const mid = [0, 0, 0];
+    for (const e of eyes) (mid[0] += e.x / eyes.length), (mid[1] += e.y / eyes.length), (mid[2] += e.z / eyes.length);
+    if (eyes.length < MAX_EYES && chance(0.04)) {
+      // (a third: above the middle of them, on the same face)
+      const { p, n } = at(mid), { up } = eyeFrame(n), r = eyes[0].r;
+      const q = at(p.map((v, i) => v + up[i] * r * 2.6)).p;
+      tryIt([...eyes, { x: q[0], y: q[1], z: q[2], r, s: eyes[0].s, p: 0 }], { tier: 2, label: 'A third eye!', kind: 'eyes' });
+    } else if (eyes.length >= 2 && chance(0.03)) {
+      // (a pair become one, in the middle of them: a cyclops)
+      const a = eyes[0], o = eyes.find((e) => e !== a && e.p && e.p === a.p) || eyes[1];
+      const q = at([(a.x + o.x) / 2, (a.y + o.y) / 2, (a.z + o.z) / 2]).p;
+      tryIt([{ x: q[0], y: q[1], z: q[2], r: Math.min(EYE_R_MAX, a.r * 1.6), s: a.s, p: 0 }, ...eyes.filter((e) => e !== a && e !== o)], { tier: 2, label: 'Cyclops!', kind: 'eyes' });
+    } else if (chance(0.05)) {
+      const up = rnd() < 0.5, k = up ? 1.3 : 0.76;
+      tryIt(eyes.map((e) => ({ ...e, r: Math.min(EYE_R_MAX, Math.max(EYE_R_MIN, e.r * k)) })), { tier: 1, label: up ? 'Bigger eyes' : 'Smaller eyes', kind: 'eyes' });
+    } else if (chance(0.05)) {
+      const s = 1 + Math.floor(rnd() * (EYE_STYLES.length - 1)), to = (eyes[0].s + s) % EYE_STYLES.length;
+      tryIt(eyes.map((e) => ({ ...e, s: to })), { tier: 1, label: EYE_STYLES[to].trait, kind: 'eyes' });
+    } else if (chance(0.03)) {
+      // (one of them wanders off a little - its pair no longer)
+      const w = Math.floor(rnd() * eyes.length), e = eyes[w], q = at([e.x + (rnd() - 0.5) * 0.18, e.y + (rnd() - 0.5) * 0.18, e.z + (rnd() - 0.5) * 0.18]).p;
+      tryIt(eyes.map((x, i) => (i === w ? { ...x, x: q[0], y: q[1], z: q[2], p: 0 } : x)), { tier: 1, label: 'A wandering eye', kind: 'eyes' });
+    }
+  } else if (chance(0.004)) {
+    // (none: it's grown a pair, on its front)
+    const e = { ...at([-0.16, 0.12, 0.5]).p.reduce((o, v, i) => ((o['xyz'[i]] = v), o), {}), r: EYE_SIZES[1], s: 0, p: 1 };
+    tryIt([e, { ...mirrorEye(e, b) }], { tier: 3, label: 'Grew eyes!', kind: 'eyes' });
+  }
+  // (a pair one of them's left: two on their own)
+  for (const e of eyes) if (e.p && eyes.filter((o) => o.p === e.p).length !== 2) e.p = 0;
+  style.eyes = eyes;
 }
 
 // the biggest tier among a child's changes

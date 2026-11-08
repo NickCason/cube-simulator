@@ -736,6 +736,32 @@ export class AudioEngine {
     this._tone(t, 'square', f, f, 0.035, 0.016, 0.001);
   }
 
+  // Googly eyes (see Eyes): one stuck on, a little tacky press; its pupil
+  // rattling round its dome, a tiny plastic tick (at: where, for panning);
+  // one peeled off, a sticky unpeel.
+  eyeStick(amount = 1) {
+    if (!this._ok('eyeStick', 0.03)) return;
+    const t = this.ctx.currentTime;
+    this._tone(t, 'sine', 520, 210, 0.07, 0.22 * amount, 0.002);
+    this._noise(t, 0.03, 'bandpass', 1800, 900, 3, 0.16 * amount, 0.001);
+  }
+
+  eyeRattle(amount = 0.5, at = null) {
+    if (!this._ok('eyeRattle', 0.025)) return;
+    amount *= Math.min(1, this.impactLevel * 1.8);
+    if (amount < 0.02) return;
+    const t = this.ctx.currentTime, out = this._panned(this._panOf(at)), f = rnd(3200, 5200);
+    this._tone(t, 'triangle', f, f * 0.92, 0.018, 0.07 * amount, 0.0005, out);
+    this._noise(t, 0.008, 'highpass', 6000, 6000, 0.7, 0.06 * amount, 0.0004, out);
+  }
+
+  eyePeel(amount = 1) {
+    if (!this._ok('eyePeel', 0.05)) return;
+    const t = this.ctx.currentTime;
+    this._noise(t, 0.09, 'bandpass', 700, 2600, 2.5, 0.2 * amount, 0.004);
+    this._tone(t + 0.06, 'sine', 300, 900, 0.05, 0.14 * amount, 0.002);
+  }
+
   ui() {
     if (!this._ok('ui', 0.03)) return;
     const t = this.ctx.currentTime;

@@ -11,7 +11,8 @@
 // units). when: a season (winter spring summer autumn - else any time), or
 // a day it's for (halloween christmas newyear valentine lunar pancake
 // piday paddy fools easter earthday midsummer chocolate coffee diwali
-// midwinter friday13), when it's only on then.
+// midwinter friday13), when it's only on then. eyes: a face it comes with
+// (EYE_FACES, in eyes.js: pair boo cross beady sleepy monster cyclops).
 
 const S = (id, names, note, look, mat, x = {}) => ({ id, names, note, look, mat, ...x });
 
@@ -34,7 +35,7 @@ export const SPECIALS = [
   S('sugar-lump', ['One Lump or Two', 'Sugar Lump'], 'Sparkly-grainy, crumbly, sweet all the way through.', '#fffaf3', 'sugar', { edges: 'sharp' }),
   S('marshmallow-cloud', ['Marshmallow Cloud', 'Puffball'], 'So light it barely lands. Dusted in icing sugar.', '#ffd6e4', 'marshmallow', { edges: 'pillow' }),
   S('matcha-mochi', ['Matcha Mochi', 'Green Tea Pillow'], 'Starch-dusted outside, smooth and stretchy within.', '#a3c06c', 'mochi', { edges: 'pillow' }),
-  S('slime-time', ['Slime Time', 'The Blob'], 'It goes where it likes. Mostly down.', '#78ff1e', 'slime', { tune: { glow: 1 } }),
+  S('slime-time', ['Slime Time', 'The Blob'], 'It goes where it likes. Mostly down.', '#78ff1e', 'slime', { tune: { glow: 1 }, eyes: 'boo' }),
   S('water-bomb', ['Water Bomb', 'Splash Zone'], 'Wobbles like it’s about to burst. It might.', '#4fc3f7', 'water'),
   S('maple-drip', ['Maple Drip', 'Golden Syrup'], 'Slow, sticky, glowing like a kitchen window.', '#c97b1a', 'syrup'),
   S('rubber-duckie', ['Rubber Duckie', 'Super Bouncer'], 'Throw it. Then duck.', '#ffd60a', 'gummy', { tune: { bounce: 0.95 } }),
@@ -179,20 +180,20 @@ export const SPECIALS = [
   S('pancake-stack', ['Pancake Stack', 'Short Stack'], 'Golden pancakes, butter between. Flip it.', 'up 0.1 r3 #e3a857 #fff3c4', 'gummy', { edges: 'pillow', when: 'pancake', tune: { depth: 1.5 } }),
   S('cherry-pi', ['Cherry Pi', 'Pi(e) Day'], 'Crust, cherries, crust. 3.14159 slices.', 'up 0 #e1a95f #b5121b #e1a95f', 'gummy', { edges: 'soft', when: 'piday', tune: { depth: 1.6 } }),
   S('lucky-clover', ['Lucky Clover', 'Pot o’ Gold'], 'Shamrock green with gold at the end of it.', '#00a550', 'gummy', { glitter: 'gold', when: 'paddy' }),
-  S('totally-normal', ['Totally Normal Cube', 'Definitely Jelly'], 'Nothing to see here. Just a perfectly normal sugar cube.', '#fffaf3', 'slime', { edges: 'sharp', when: 'fools' }),
+  S('totally-normal', ['Totally Normal Cube', 'Definitely Jelly'], 'Nothing to see here. Just a perfectly normal sugar cube.', '#fffaf3', 'slime', { edges: 'sharp', when: 'fools', eyes: 'beady' }),
   S('easter-egg', ['Easter Egg', 'Egg Hunt'], 'Pastel shells, one inside the other.', 'shell 0.2 #fff3b0 #ffc8dd #cdb4db #b9fbc0', 'creamy', { edges: 'pillow', when: 'easter' }),
   S('midsummer', ['Midsummer', 'Longest Day'], 'The sun at its highest, glowing all over.', 'core 1 #fffbe6 #ffd23f #ff9f1c', 'opal', { tune: { glow: 1 }, when: 'midsummer' }),
   S('triple-chocolate', ['Triple Chocolate', 'Death by Chocolate'], 'Dark, milk and white, stacked up.', 'up 0.1 #2b1608 #6f4e37 #f3e3cc', 'gummy', { edges: 'sharp', when: 'chocolate', tune: { depth: 2 } }),
   S('espresso', ['Espresso Shot', 'Double Shot'], 'Dark, strong, a golden crema on top.', 'up 0.6 #2b1608 #6f4e37 #e8c9a0', 'syrup', { when: 'coffee' }),
   S('diya', ['Festival of Lights', 'Diya Glow'], 'A small flame in gold and saffron.', 'core 0.7 #fff3b0 #ffb703 #ff6a00', 'syrup', { glitter: 'gold', tune: { glow: 1 }, when: 'diwali' }),
   S('longest-night', ['Longest Night', 'Midwinter'], 'The darkest night of the year, full of stars.', 'up 0.9 #1a1a40 #050510', 'jello', { glitter: 'silver', when: 'midwinter', tune: { depth: 2.5 } }),
-  S('black-cat', ['Black Cat', 'Unlucky for Some'], 'Glossy black, with a hint of green in its eye.', '#121212', 'syrup', { edges: 'round', when: 'friday13', tune: { depth: 3 } }),
+  S('black-cat', ['Black Cat', 'Unlucky for Some'], 'Glossy black, with a hint of green in its eye.', '#121212', 'syrup', { edges: 'round', when: 'friday13', tune: { depth: 3 }, eyes: 'pair' }),
   // (Halloween week)
   S('jack-o-lantern', ['Jack-o’-Lantern', 'Pumpkin Glow'], 'Carved, lit, and grinning on the step.', 'core 0.6 #ffe066 #ff7518', 'jello', { tune: { glow: 1 }, when: 'halloween' }),
-  S('witches-brew', ['Witch’s Brew', 'Cauldron Bubble'], 'Bubble, bubble. Don’t ask what’s in it.', 'free 0.6 #6bff1e #5e2a86 #111111', 'slime', { tune: { bubbles: 160, glow: 1 }, when: 'halloween' }),
+  S('witches-brew', ['Witch’s Brew', 'Cauldron Bubble'], 'Bubble, bubble. Don’t ask what’s in it.', 'free 0.6 #6bff1e #5e2a86 #111111', 'slime', { tune: { bubbles: 160, glow: 1 }, when: 'halloween', eyes: 'monster' }),
   S('eyeball', ['Eyeball', 'All-Seeing Eye'], 'It’s watching. It’s always watching.', 'core 0.15 #000000 #1e88e5 #fafafa', 'gummy', { when: 'halloween' }),
   S('vampire-kiss', ['Vampire Kiss', 'Blood Moon'], 'Dark as a cape, red as a kiss.', 'free 0.55 #5c0010 #111111 #8a0010', 'syrup', { when: 'halloween' }),
-  S('ghost', ['Ghost', 'Boo'], 'Pale, see-through and floating about.', '#f4f4f8', 'jello', { tune: { opacity: 0.05, glow: 1 }, when: 'halloween' }),
+  S('ghost', ['Ghost', 'Boo'], 'Pale, see-through and floating about.', '#f4f4f8', 'jello', { tune: { opacity: 0.05, glow: 1 }, when: 'halloween', eyes: 'boo' }),
   S('candy-corn-hw', ['Trick or Treat', 'Candy Corn'], 'The sweet that turns up every Halloween.', 'up 0 #ffcc12 #ff7a00 #fffaf0', 'candy', { edges: 'soft', when: 'halloween' }),
   // (December)
   S('candy-cane', ['Candy Cane', 'Peppermint Stick'], 'Red and white, hung on the tree.', 'up 0 r4 #e8102e #fafafa', 'candy', { edges: 'round', when: 'christmas' }),
@@ -201,5 +202,5 @@ export const SPECIALS = [
   S('snow-globe', ['Snow Globe', 'Shake It'], 'Give it a shake and watch the snow fall.', '#e8f4ff', 'water', { glitter: 'silver', tune: { glitterAmount: 7000, glitterSize: 0.6 }, when: 'christmas' }),
   S('christmas-jumper', ['Christmas Jumper', 'Holly Jolly'], 'Red, green and white, knitted with love.', 'free 0.1 #b5121b #0b5d1e #fafafa #b5121b', 'gummy', { edges: 'pillow', when: 'christmas' }),
   S('holly-berry', ['Holly Berry', 'Deck the Halls'], 'A red berry in a green leaf.', 'core 0.2 #d4102a #0b5d1e', 'gummy', { when: 'christmas' }),
-  S('green-grump', ['Green Grump', 'Bah Humbug'], 'Fluffy, green and not feeling festive.', '#8bc34a', 'marshmallow', { edges: 'pillow', when: 'christmas' }),
+  S('green-grump', ['Green Grump', 'Bah Humbug'], 'Fluffy, green and not feeling festive.', '#8bc34a', 'marshmallow', { edges: 'pillow', when: 'christmas', eyes: 'cross' }),
 ];

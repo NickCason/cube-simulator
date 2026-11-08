@@ -7,6 +7,26 @@ import { GradEditor } from './gradedit.js';
 import { FreeEditor } from './freeedit.js';
 import { CubipliedCard } from './cubiplied.js';
 import { POWDERS } from '../world/powders.js';
+import { EYE_STYLES } from '../eyes.js';
+
+// (the googly eyes' chips: a little eye of each kind, its size, one or two)
+const EYE_PUPIL = { classic: 4, big: 5.6, tiny: 2.3, lashes: 3.8, angry: 3.6, sleepy: 3.4 };
+function eyeChip(id) {
+  const lower = id === 'angry' ? 1.5 : 0, py = id === 'sleepy' ? 15.5 : 14;
+  let extra = '';
+  if (id === 'lashes') extra = '<path d="M7 5.6 5.4 3.6M12 3.6V1.4M17 5.6l1.6-2" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>';
+  if (id === 'angry') extra = '<path d="M4.5 5.2 17 8.4" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/>';
+  if (id === 'sleepy') extra = '<path d="M3.5 12.6a8.5 8.5 0 0 1 17 0z" fill="currentColor" opacity=".5"/><path d="M3.5 12.6h17" stroke="currentColor" stroke-width="1.6"/>';
+  return `<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="${12.6 + lower}" r="8.4" fill="#fff" stroke="currentColor" stroke-width="1.6"/><circle cx="12.6" cy="${py + lower}" r="${EYE_PUPIL[id]}" fill="currentColor"/>${extra}</svg>`;
+}
+function eyeSizeChip(i) {
+  const r = [4.6, 6.6, 9][i];
+  return `<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="${r}" fill="#fff" stroke="currentColor" stroke-width="1.6"/><circle cx="12.4" cy="${12 + r * 0.25}" r="${r * 0.45}" fill="currentColor"/></svg>`;
+}
+function eyePairChip(two) {
+  const e = (x) => `<circle cx="${x}" cy="12" r="4.6" fill="#fff" stroke="currentColor" stroke-width="1.5"/><circle cx="${x + 0.5}" cy="13.3" r="2" fill="currentColor"/>`;
+  return `<svg viewBox="0 0 24 24" aria-hidden="true">${two ? e(6.6) + e(17.4) : e(12)}</svg>`;
+}
 
 const svg = (inner) =>
   `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${inner}</svg>`;
@@ -32,6 +52,7 @@ export const ICONS = {
   dicer: svg('<rect x="3.8" y="3.8" width="16.4" height="16.4" rx="3"/><path d="M9.3 3.8v16.4M14.7 3.8v16.4M3.8 9.3h16.4M3.8 14.7h16.4"/>'),
   autogun: svg('<path d="M9.5 9.2h11M9.5 12h11.5M9.5 14.8h11"/><rect x="3.4" y="8" width="6.6" height="8" rx="2"/><path d="M5.6 16v3.6"/>'),
   feed: svg('<path d="M3.5 10.5h12a6 6 0 0 1-12 0Z"/><path d="m15.5 10.5 5-6.2"/><path d="M8.4 6.6c0-1 .8-1.6.8-2.6M11.6 6.6c0-1 .8-1.6.8-2.6"/>'),
+  eyes: svg('<circle cx="7.6" cy="12" r="5"/><circle cx="16.4" cy="12" r="5"/><circle cx="8.4" cy="13.7" r="1.9" fill="currentColor"/><circle cx="17.2" cy="13.7" r="1.9" fill="currentColor"/>'),
   flour: svg('<circle cx="10" cy="8.5" r="5.5"/><path d="M15.4 7.4 21 5.6"/><path d="M5.6 7h8.8M5.2 10h9.6M7.4 4.5h5.2M8 13h4"/><circle cx="7.6" cy="17.6" r=".7"/><circle cx="11" cy="19.4" r=".7"/><circle cx="13.4" cy="16.6" r=".7"/><circle cx="9.2" cy="21.2" r=".55"/>'),
   acid: svg('<path d="M9.5 3h5M10.5 3v5.2L5.2 18.4A1.8 1.8 0 0 0 6.8 21h10.4a1.8 1.8 0 0 0 1.6-2.6L13.5 8.2V3"/><path d="M7.4 15.4h9.2"/><circle cx="10.6" cy="18" r=".8"/><circle cx="13.6" cy="17.2" r=".6"/>'),
   gelgun: svg('<path d="M3.5 11h10.5l2.6 1.4v2H11l-1.5 4.4H6.3l1.2-4.4h-4z"/><circle cx="8.6" cy="7.3" r="2.6"/><path d="M19.6 9.2c1.6.2 2.2 1.6 1.4 2.6-.7.9-2.4.8-2.8-.4-.3-1 .3-2.3 1.4-2.2Z"/>'),
@@ -69,6 +90,7 @@ export const TOOL_DEFS = [
   { id: 'torch', label: 'Torch', hint: 'Hold over the jelly to melt it · it runs off as liquid', key: '5' },
   { id: 'freeze', label: 'Cryo spray', hint: 'Hold to freeze it solid · spray a puddle to set it back into jelly', key: '6' },
   { id: 'acid', label: 'Acid', hint: 'Hold over the jelly to pour acid · it fizzes and eats in, melting the jelly to liquid', key: 'a' },
+  { id: 'eyes', label: 'Googly eyes', hint: 'Tap to stick on googly eyes · drag one to move it, off the cube to peel it off · tap one to change it below', key: 'y' },
   { id: 'flour', label: 'Sieve', hint: 'Hold to sift it on · roll a cube through it to coat it · Re-cube sweeps it up', key: 'u' },
   { id: 'baller', label: 'Melon baller', hint: 'Click to scoop out a ball', key: '7' },
   { id: 'cuber', label: 'Cube cuber', hint: 'Click to scoop out a cube', key: 'c' },
@@ -212,6 +234,30 @@ export class UI {
       this.powdersEl.appendChild(b);
     }
     root.appendChild(this.powdersEl);
+    // the googly eyes' row: their look, size, pairs or one at a time, undo, clear
+    this.eyeRow = document.createElement('div');
+    this.eyeRow.className = 'powders eye-row';
+    this.eyeRow.hidden = true;
+    this.eyeRow.setAttribute('aria-label', 'Googly eyes');
+    const eyeBtn = (html, title, run) => {
+      const b = document.createElement('button');
+      b.innerHTML = html;
+      b.title = title;
+      b.setAttribute('aria-label', title);
+      b.addEventListener('click', (e) => {
+        e.stopPropagation();
+        app.audio.ui();
+        run(app.tools?.eyes);
+      });
+      this.eyeRow.appendChild(b);
+      return b;
+    };
+    this.eyeStyleBtns = EYE_STYLES.map((st, i) => eyeBtn(eyeChip(st.id), st.name, (t) => t?.setStyle(i)));
+    this.eyeSizeBtn = eyeBtn(eyeSizeChip(1), 'Size', (t) => t && t.setSize((t.size + 1) % 3));
+    this.eyePairBtn = eyeBtn(eyePairChip(true), 'Pairs', (t) => t && t.setPair(!t.pair));
+    this.eyeUndoBtn = eyeBtn('<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 7 4.5 11.5 9 16"/><path d="M5 11.5h9a5 5 0 0 1 0 10h-2"/></svg>', 'Undo', (t) => t?.undo());
+    this.eyeClearBtn = eyeBtn('<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M5 7h14M9.5 7V4.5h5V7M7 7l1 13h8l1-13"/></svg>', 'Take its eyes off', (t) => t?.clear());
+    root.appendChild(this.eyeRow);
     const chips = this.paletteEl.querySelector('.chips');
     for (const f of FLAVORS) {
       const b = document.createElement('button');
@@ -635,6 +681,19 @@ export class UI {
     this.muteEl.classList.toggle('off', m);
   }
 
+  // (the googly eyes' row, as the tool has it)
+  setEyeOpts({ style, size, pair, undo, picked = 0 }) {
+    this.eyeStyleBtns.forEach((b, i) => b.classList.toggle('on', i === style));
+    this.eyeSizeBtn.innerHTML = eyeSizeChip(size);
+    this.eyeSizeBtn.title = ['Small', 'Medium', 'Large'][size] + ' eyes';
+    this.eyePairBtn.innerHTML = eyePairChip(pair);
+    // (one picked: the pairing's theirs - split them, or give it a twin)
+    this.eyePairBtn.title = picked ? (pair ? 'A pair (tap to split them up)' : 'On its own (tap to give it a twin)') : pair ? 'In pairs (tap for one at a time)' : 'One at a time (tap for pairs)';
+    for (const b of [this.eyePairBtn, ...this.eyeStyleBtns, this.eyeSizeBtn]) b.setAttribute('aria-label', b.title);
+    this.eyePairBtn.classList.toggle('on', pair);
+    this.eyeUndoBtn.disabled = !undo;
+  }
+
   // (what's in the sieve: its chip on)
   setPowder(id) {
     for (const b of this.powdersEl.children) {
@@ -646,9 +705,10 @@ export class UI {
 
   setTool(id) {
     for (const k in this.buttons) this.buttons[k].classList.toggle('active', k === id);
-    // (the sieve in hand: what's in it, to pick from)
+    // (the sieve in hand: what's in it, to pick from; the googly eyes: theirs)
     this.powdersEl.hidden = id !== 'flour';
-    document.body.classList.toggle('powders-on', id === 'flour');
+    this.eyeRow.hidden = id !== 'eyes';
+    document.body.classList.toggle('powders-on', id === 'flour' || id === 'eyes');
     const d = TOOL_DEFS.find((t) => t.id === id);
     const touch = this.app.isTouch || window.matchMedia?.('(pointer: coarse)').matches;
     if (!d) return;

@@ -24,6 +24,7 @@
 // newer app still opens in an older one (without what's new), and old codes
 // open forever. Never change what a letter or a slider code means: add new ones.
 
+import { copyEyes, encodeEyes, decodeEyes, eyesWord } from './eyes.js';
 import { SETTINGS, resolveSettings } from './settings.js';
 import { FLAVORS, TEXTURES, EDGES, GLITTERS, MIN_LAYERS, MAX_LAYERS, MAX_REPEAT, DEFAULT_STYLE, GRAD_SHAPE_INDEX, copyLayers } from './styles.js';
 import { FREE_K_MIN, FREE_K_MAX } from './freeform.js';
@@ -97,6 +98,7 @@ export function captureCube(app, name = '') {
     tune,
     tear: app.tune.tear !== false,
     theme: app.theme,
+    eyes: copyEyes(s.eyes),
   };
 }
 
@@ -122,6 +124,8 @@ export function encodeCube(c) {
   if (c.glitter && c.glitter !== 'off') f.push('g' + c.glitter);
   if (c.theme) f.push('d' + c.theme);
   if (c.tear === false) f.push('w0');
+  // (its googly eyes: see eyes.js)
+  if (c.eyes && c.eyes.length) f.push('y' + encodeEyes(c.eyes));
   const t = Object.keys(c.tune || {})
     .filter((k) => TUNE_CODES[k] && Number.isFinite(c.tune[k]))
     .map((k) => TUNE_CODES[k] + num(c.tune[k]));
@@ -165,6 +169,7 @@ export function decodeCube(text) {
     tear: true,
     theme: null,
     rubik: 1,
+    eyes: [],
   };
   let flavor = null, custom = null, stops = null, nodes = null;
   for (const p of parts.slice(1)) {
@@ -189,6 +194,7 @@ export function decodeCube(text) {
     else if (k === 'd') c.theme = THEMES.includes(v) ? v : null;
     else if (k === 'w') c.tear = v !== '0';
     else if (k === 'k') c.rubik = Math.round(clamp(parseInt(v, 10), 0, 65535, 1));
+    else if (k === 'y') c.eyes = decodeEyes(v);
     else if (k === 't') {
       for (const pair of v.split(',')) {
         const m = pair.match(/^([a-z]{2})(-?(?:\d+\.?\d*|\.\d+)(?:e-?\d+)?)$/);
@@ -222,6 +228,7 @@ function clamp(x, a, b, fallback) {
 export function cubeSummary(c, withLook = false) {
   const bits = [TEXTURES[c.texture]?.name || c.texture, EDGES[c.edges]?.name || c.edges];
   if (c.glitter && c.glitter !== 'off') bits.push(`${GLITTERS.find((g) => g.id === c.glitter)?.name || c.glitter} glitter`);
+  if (c.eyes && c.eyes.length) bits.push(eyesWord(c.eyes));
   if (withLook && c.theme === 'dark') bits.push('Glow mode');
   return bits.join(' · ');
 }

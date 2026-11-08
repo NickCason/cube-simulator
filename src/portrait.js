@@ -5,6 +5,7 @@ import { CUBE_TEX_W } from './render/jellyView.js';
 import { GRAD_N } from './render/jellyMaterials.js';
 import { DEFAULT_STYLE, TEXTURES, EDGES, resolveFlavor, copyLayers } from './styles.js';
 import { resolveSettings } from './settings.js';
+import { copyEyes } from './eyes.js';
 
 // A cube's portrait - its card in the Cubby, the picture it's shared as: a
 // fresh one of it, whole and at rest, alone in the studio (lit up, if it was
@@ -16,7 +17,7 @@ import { resolveSettings } from './settings.js';
 // room: for a frame the jelly is this cube, the room the studio and the
 // camera the portrait's; then everything's put back and the room drawn
 // again, before the screen shows any of it. (Not the bubbles: they're
-// anchored in the room's jelly.)
+// anchored in the room's jelly. Its googly eyes, though: held on afresh.)
 
 const THETA = 0.62, PHI = 0.4; // (the view: round from the front, up from the floor)
 const SPAN = 24; // degrees the picture takes in, side to side
@@ -59,7 +60,7 @@ export class Portraits {
     const urls = [];
     try {
       // the room emptied: the floor and the lights (and, of the effects, the glitter)
-      for (const o of app.scene.children) if (o !== app.floor && !o.isLight && o !== app.keyLight?.target) o.visible = false;
+      for (const o of app.scene.children) if (o !== app.floor && !o.isLight && o !== app.keyLight?.target && !o.userData.inPortrait) o.visible = false;
       for (const o of app.fxScene.children) if (o !== G?.mesh && o !== G?.meshCube) o.visible = false;
       // nothing else going on: no rings of light, no hollows (the room's
       // cut-open bubbles), no fire, no flash, no dimming between looks, no
@@ -116,7 +117,9 @@ export class Portraits {
       fx.selCol.value.w = S.selA;
       app.scene.children.forEach((o, k) => (o.visible = S.vis[k] ?? o.visible));
       app.fxScene.children.forEach((o, k) => (o.visible = S.fxVis[k] ?? o.visible));
-      // (and the room drawn again, so the screen never sees the studio)
+      // (and the room drawn again, so the screen never sees the studio - its
+      // eyes back on its cubes)
+      app.eyes?.update(0);
       try {
         app.render();
       } catch (e) {
@@ -138,6 +141,7 @@ export class Portraits {
       edges: EDGES[c.edges] ? c.edges : DEFAULT_STYLE.edges,
       glitter: c.glitter || 'off',
       rubik: Number.isFinite(c.rubik) ? c.rubik : 1,
+      eyes: copyEyes(c.eyes),
     };
     const tex = TEXTURES[style.texture], st = resolveSettings(c.tune || {}, tex);
     const size = st.size, A = app.constructor;
@@ -175,6 +179,8 @@ export class Portraits {
     cam.updateProjectionMatrix();
     cam.updateMatrixWorld();
     app.camera = cam;
+    // (its googly eyes on it, still)
+    app.eyes?.pose(sb, app.cubes);
     app.render();
     // the middle square of what's drawn, as a picture
     const cv = app.renderer.domElement, s = Math.min(cv.width, cv.height);

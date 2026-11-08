@@ -4168,3 +4168,30 @@ body.powders-on .hint {
     bottom: calc(max(18px, calc(env(safe-area-inset-bottom) + 8px)) + 104px);
   }
 }
+
+/* (the googly eyes' row: little drawn eyes for chips) */
+.eye-row button svg {
+  width: 24px;
+  height: 24px;
+  color: #1c1c1f;
+}
+
+.eye-row button[disabled] {
+  opacity: 0.3;
+  cursor: default;
+}
+
+@media (max-width: 720px) {
+  .eye-row {
+    gap: 2px;
+    padding: 4px 5px;
+  }
+  .eye-row button {
+    width: 31px;
+    height: 31px;
+  }
+  .eye-row button svg {
+    width: 22px;
+    height: 22px;
+  }
+}

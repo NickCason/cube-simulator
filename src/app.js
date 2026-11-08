@@ -20,6 +20,9 @@ import { FeedTool } from './tools/feed.js';
 import { AutoGunTool } from './tools/autogun.js';
 import { GelGunTool } from './tools/gelgun.js';
 import { FlourTool } from './tools/flour.js';
+import { EyesTool } from './tools/eyes.js';
+import { Eyes } from './world/eyes.js';
+import { copyEyes } from './eyes.js';
 import { AcidTool } from './tools/acid.js';
 import { Cubiplication } from './cubiplication.js';
 import { makeMaterials, makeBomb } from './world/models.js';
@@ -193,6 +196,7 @@ export class App {
     this.anchorProviders = [() => this.nails.anchors()];
     this.bubbles = new Bubbles(this);
     this.flour = new Flour(this); // (on the floor, and on the jelly: see FlourTool)
+    this.eyes = new Eyes(this); // (googly: see EyesTool, eyes.js)
     this.glitter = new Glitter(this);
     this.portraits = new Portraits(this); // (a cube's picture, taken properly: see portrait.js)
     this.cubiplication = new Cubiplication(this); // (fed jelly, a cube cubiplies - see tools/feed.js)
@@ -243,6 +247,7 @@ export class App {
       gelgun: new GelGunTool(this),
       acid: new AcidTool(this),
       flour: new FlourTool(this),
+      eyes: new EyesTool(this),
       mallet: new MalletTool(this),
       torch: new TorchTool(this),
       freeze: new FreezeTool(this),
@@ -352,6 +357,7 @@ export class App {
       saved = {};
     }
     const st = { ...DEFAULT_STYLE, ...saved };
+    st.eyes = copyEyes(saved.eyes);
     st.layers = { ...DEFAULT_STYLE.layers, ...(saved.layers || {}) };
     st.layers.colors = [...st.layers.colors];
     if (opts.flavor) st.flavor = opts.flavor;
@@ -1244,6 +1250,8 @@ export class App {
       'wheel',
       (e) => {
         e.preventDefault();
+        // (a tool may want it: the googly eyes', over an eye, sizes it)
+        if (this.tool?.wheel?.(e, this.rayFromClient(e.clientX, e.clientY))) return;
         this.orbitGoal.radius = Math.min(7.5, Math.max(2.4, this.orbitGoal.radius * Math.exp(e.deltaY * 0.0012)));
       },
       { passive: false },
@@ -1321,6 +1329,7 @@ export class App {
       this.flour.update(sdt);
       this.strands.update(sdt);
       this.bubbles.update();
+      this.eyes.update(sdt);
       for (const k in this.tools) if (this.tools[k] !== this.tool && this.tools[k].background) this.tools[k].update(sdt, dt);
       this.particles.update(sdt);
       this._impactSounds();
@@ -1585,8 +1594,8 @@ export class App {
     while (used.has(slot)) slot++;
     const flavors = ['cherry', 'lime', 'blue', 'grape', 'orange', 'lemon', 'watermelon', 'cola'];
     const style = c
-      ? { flavor: c.flavor, layers: copyLayers(c.layers), texture: c.texture, edges: EDGES[c.edges] ? c.edges : DEFAULT_STYLE.edges, glitter: c.glitter, rubik: Number.isFinite(c.rubik) ? c.rubik : 1 }
-      : { flavor: flavors[Math.floor(Math.random() * flavors.length)], layers: copyLayers(DEFAULT_STYLE.layers), texture: 'jello', edges: DEFAULT_STYLE.edges, glitter: 'off' };
+      ? { flavor: c.flavor, layers: copyLayers(c.layers), texture: c.texture, edges: EDGES[c.edges] ? c.edges : DEFAULT_STYLE.edges, glitter: c.glitter, rubik: Number.isFinite(c.rubik) ? c.rubik : 1, eyes: copyEyes(c.eyes) }
+      : { flavor: flavors[Math.floor(Math.random() * flavors.length)], layers: copyLayers(DEFAULT_STYLE.layers), texture: 'jello', edges: DEFAULT_STYLE.edges, glitter: 'off', eyes: [] };
     // (its own material sliders; the world's as everyone's)
     const tune = {};
     for (const k of Object.keys(this.tune)) if (!PER_CUBE(k)) tune[k] = this.tune[k];
@@ -1858,7 +1867,7 @@ export class App {
     const more = [];
     for (const [j, c] of sc.cubes.entries()) {
       if (j === keepSel || 1 + more.length >= MAX_CUBES || !c || !c.style || !TEXTURES[c.style.texture]) continue;
-      const style = { ...DEFAULT_STYLE, ...c.style, layers: copyLayers({ ...DEFAULT_STYLE.layers, ...(c.style.layers || {}) }) };
+      const style = { ...DEFAULT_STYLE, ...c.style, layers: copyLayers({ ...DEFAULT_STYLE.layers, ...(c.style.layers || {}) }), eyes: copyEyes(c.style.eyes) };
       if (!EDGES[style.edges]) style.edges = DEFAULT_STYLE.edges;
       const tune = {};
       for (const k of Object.keys(this.tune)) if (!PER_CUBE(k)) tune[k] = this.tune[k];
@@ -1892,6 +1901,8 @@ export class App {
     s.texture = c.texture;
     s.glitter = c.glitter;
     if (Number.isFinite(c.rubik)) s.rubik = c.rubik;
+    // (its googly eyes come with it - or none)
+    s.eyes = copyEyes(c.eyes);
     const tune = { ...c.tune };
     for (const k of ['volume', 'impacts', 'wobble']) if (this.tune[k] !== undefined) tune[k] = this.tune[k];
     if (c.tear === false) tune.tear = false;
@@ -2104,6 +2115,7 @@ export class App {
     this.droplets.setGlow(e);
     this.fluid.setGlow(e);
     this.strands.setGlow(e);
+    this.eyes?.setGlow(e);
   }
 
   _themeTick(dt) {

@@ -28,6 +28,7 @@ import { cubeStats } from './cubecode.js';
 import { punsFor } from './puns.js';
 import { TEXTURES, LAYER_PRESETS } from './styles.js';
 import { THEMES } from './themes.js';
+import { EYE_STYLES, copyEyes } from './eyes.js';
 import { freeNodes, freePower } from './freeform.js';
 
 // ---------------------------------------------------------------- random
@@ -832,6 +833,21 @@ export function cubeTraits(c, rec = null, ctx = {}) {
   else if (size > 1.12) feel.push([['Big', 'Jumbo', 'Grand', 'Hulking'], ['Whopper', 'Big Bopper', 'Jumbo'], 0.5]);
   const edgeKey = EDGE_WORDS[c.edges] ? c.edges : null;
   if (edgeKey === 'sharp' || edgeKey === 'pillow') feel.push([EDGE_WORDS[edgeKey], edgeKey === 'sharp' ? ['Edgelord', 'Razor', 'Corner'] : ['Pillow', 'Cushion', 'Beanbag'], 0.45]);
+  // its googly eyes: how many, what kind (see eyes.js)
+  const eyeList = copyEyes(c.eyes);
+  let eyes = null;
+  if (eyeList.length) {
+    const n = eyeList.length, kinds = new Set(eyeList.map((e) => EYE_STYLES[e.s].id));
+    const adj = n === 1 ? ['Cyclops', 'One-Eyed', 'Winking'] : n === 2 ? ['Googly', 'Goggle-Eyed', 'Bug-Eyed', 'Wide-Eyed'] : n === 3 ? ['Three-Eyed', 'Third-Eye'] : ['Many-Eyed', 'All-Seeing', 'Hundred-Eyed'];
+    const noun = n === 1 ? ['Cyclops', 'Peeper', 'Monocle'] : n === 2 ? ['Peepers', 'Lookout', 'Gawker', 'Goggler'] : n === 3 ? ['Oracle', 'Seer', 'Lookout'] : ['Argus', 'Spider', 'Watcher'];
+    if (kinds.has('lashes')) adj.push('Fluttery', 'Glamorous', 'Lash-Batting'), noun.push('Flutterby');
+    if (kinds.has('angry')) adj.push('Grumpy', 'Cross', 'Scowling'), noun.push('Grump', 'Grouch');
+    if (kinds.has('sleepy')) adj.push('Sleepy', 'Drowsy', 'Heavy-Lidded'), noun.push('Snoozer', 'Sleepyhead');
+    if (kinds.has('big')) adj.push('Puppy-Eyed', 'Saucer-Eyed');
+    if (kinds.has('tiny')) adj.push('Beady-Eyed', 'Shifty');
+    eyes = { n, kinds, adj, noun };
+    sal.eyes = 0.95;
+  }
   const tearless = c.tear === false;
   if (tearless) feel.push([['Untearable', 'Indestructible', 'Rip-Proof'], ['Tank', 'Kevlar'], 0.5]);
   // the stats: how strongly it's each thing (an extreme, all the more)
@@ -860,7 +876,7 @@ export function cubeTraits(c, rec = null, ctx = {}) {
     edges: EDGE_WORDS[c.edges] || [], edgeKey, glitterKey, glitter: words.glitter || [],
     small: size < 0.88, big: size > 1.12, lowG: grav !== null && grav < 6, highG: grav !== null && grav > 30,
     dark, tearless, rec: rec || null, storied, place: placeKey, time, gen, parent, twin: ctx.twin || '', pairing: !!ctx.pairing, changes, sal,
-    themes, colours, L: flavor === 'layers' ? L : null,
+    themes, colours, L: flavor === 'layers' ? L : null, eyes,
   };
 }
 
@@ -1052,6 +1068,7 @@ function make(tr, rnd) {
     if (tr.palette && tr.palette.adj.length) opts.push([['palette', () => pick(rnd, tr.palette.adj), 'palette'], sal.palette * 2]);
     if (tr.glitter.length) opts.push([['glitter', () => pick(rnd, tr.glitter), 'glitter'], 1.8]);
     tr.themes.forEach((m, i) => m.th.a.length && opts.push([['theme', () => pick(rnd, m.th.a), 'theme' + i], (sal['theme' + i] || 0) * 1.6]));
+    if (tr.eyes) opts.push([['eyes', () => pick(rnd, tr.eyes.adj), 'eyes'], 2.2]);
     tr.finish.forEach(([a, , s], i) => opts.push([['finish', () => pick(rnd, a), 'finish' + i], s * 2]));
     tr.feel.forEach(([a, , s], i) => opts.push([['feel', () => pick(rnd, a), 'feel' + i], s * 2]));
     if (tr.place) opts.push([['place', () => pick(rnd, PLACE[tr.place].adj), 'place'], 1]);
@@ -1071,6 +1088,7 @@ function make(tr, rnd) {
     if (tr.pattern) opts.push([[() => pick(rnd, tr.pattern.noun), 'pattern'], tr.pattern.salience * 2]);
     if (tr.palette && tr.palette.noun.length) opts.push([[() => pick(rnd, tr.palette.noun), 'palette'], sal.palette * 2]);
     tr.themes.forEach((m, i) => m.th.k.length && opts.push([[() => pick(rnd, m.th.k), 'theme' + i], (sal['theme' + i] || 0) * 1.6]));
+    if (tr.eyes) opts.push([[() => pick(rnd, tr.eyes.noun), 'eyes'], 1.8]);
     tr.finish.forEach(([, nn, s], i) => opts.push([[() => pick(rnd, nn), 'finish' + i], s * 1.6]));
     tr.feel.forEach(([, nn, s], i) => opts.push([[() => pick(rnd, nn), 'feel' + i], s * 1.6]));
     if (tr.place) opts.push([[() => pick(rnd, PLACE[tr.place].noun), 'place'], 0.7]);
@@ -1120,7 +1138,7 @@ function make(tr, rnd) {
     ['paint', tr.main ? 1.6 : tr.palette && tr.palette.named && tr.palette.named.length <= 2 ? 1.2 : 0], ['gem', gemlike ? 2.2 : 0.2], ['combo', tr.palette && tr.palette.named && tr.palette.named.length >= 2 ? (tr.palette.named.length <= 3 ? 2.4 : 0.8) * (tr.themes.length ? 0.4 : 1) : 0],
     ['palette', tr.palette && tr.palette.noun.length ? 2.4 : 0], ['pattern', tr.pattern ? 2.4 : 0], ['shot', tr.palette && tr.flavor !== 'rubik' ? 1.2 : 0],
     ['horse', 0.6], ['place', tr.place ? 1.8 : 0], ['season', tr.time ? (tr.time.holiday ? 0.6 + 1.4 * tr.time.strength : 0.5) : 0],
-    ['theme', tr.themes.length ? 6.5 : 0], ['describe', tr.L && tr.colours.length > 1 ? 2.4 : 0],
+    ['theme', tr.themes.length ? 6.5 : 0], ['eyes', tr.eyes ? 4 : 0], ['describe', tr.L && tr.colours.length > 1 ? 2.4 : 0],
     ['heir', fam ? 6 : 0], ['twin', tr.twin ? (pairOf(tr.twin) ? 60 : 5) : 0], ['pairHalf', tr.pairing ? 1 : 0], ['mutant', tr.changes.length ? 2.2 : 0], ['monster', tr.mat.monster || tr.dark ? 1 : 0.15],
   ];
   const kind = choose(rnd, kinds);
@@ -1316,6 +1334,26 @@ function make(tr, rnd) {
         [th.k.length && matAdj ? { t: `${matAdj} ${pick(rnd, th.k)}`, u: [u, 'material'], k: 0.3 } : null, 1],
         [th.a.length ? { t: `${pick(rnd, th.a)} ${N.w}`, u: U(u, N.u), k: 0.25 } : null, 0.9],
       ].filter(([x]) => x));
+    }
+    case 'eyes': {
+      // its googly eyes, named for
+      const E = tr.eyes, ea = pick(rnd, E.adj), en = pick(rnd, E.noun);
+      const own = [
+        E.n === 1 ? pick(rnd, ['Cyclops', 'Polyphemus', 'Eye of the Storm', 'Monocle Mike']) : null,
+        E.n === 3 ? pick(rnd, ['Third Eye', 'The Oracle', 'Three-Eyed Raven']) : null,
+        E.n >= 4 ? pick(rnd, ['Argus', 'All-Seeing Cube', 'Spider Cube', 'Eyes Everywhere']) : null,
+        E.kinds.has('angry') ? pick(rnd, ['Grumpy Guts', 'Mister Grumpy', 'Cross Patch']) : null,
+        E.kinds.has('sleepy') ? pick(rnd, ['Sleepyhead', 'Forty Winks', 'Snooze Button']) : null,
+        E.kinds.has('lashes') ? pick(rnd, ['Flutterby', 'Lash Out', 'Batting Lashes']) : null,
+        tr.mat.sweet || tr.texture === 'gummy' || tr.texture === 'candy' ? 'Eye Candy' : null,
+        pick(rnd, ['Eye Spy', 'Here’s Looking at You', 'Keeping an Eye Out', 'Googly McGoogleface', 'The Watcher', 'Peekaboo']),
+      ].filter(Boolean);
+      return choose(rnd, [
+        [{ t: `${ea} ${N.w}`, u: U('eyes', N.u), k: 0.25 }, 3],
+        [{ t: `${A.w} ${en}`, u: U('eyes', A.u), k: 0.25 }, 2],
+        [{ t: `${ea} ${tr.flavorWord}`, u: ['eyes', colourU], k: 0.2 }, 1.5],
+        [{ t: pick(rnd, own), u: ['eyes'], k: 0.5 }, 2.5],
+      ]);
     }
     case 'describe': {
       // its colours and its pattern, said: "Lemon-Hearted Grape", "Mint with
