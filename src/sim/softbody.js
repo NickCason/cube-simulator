@@ -41,12 +41,19 @@ const DEFAULTS = {
 export const MAX_CUBES = 8;
 export const REST_STEP = 10;
 
-// How soft, at the least, each tet's shape and volume terms stay - as a
-// share of hard (a full correction in one substep): see _solveTets. (The
-// shape's at 3, a still cube of light rubber settled ribbed - its edges
-// scalloped, its faces dented, 5 mm deep; at 12 it's as smooth as jelly,
-// and as firm as it was to within a tenth.)
+// How soft, at the least, the tets' shape and volume terms stay - as a share
+// of hard (a full correction in one substep): see _solveTets. A tet of the
+// cube as it was made (its bevels' squashed ones are up to ~3x as hard as a
+// typical one of it) at least DEV_SOFT of its own hard: else light, stiff
+// stuff settled ribbed - edges scalloped, faces dented, 5 mm deep. Harder
+// ones - the slivers cuts leave - no softer than DEV_CAP times a typical
+// tet of the cube's own (cHardTyp), and at least DEV_SOFT_MIN of their own:
+// held to 12 of their own hard, the tets round a few bullet holes went to
+// mush and the hand couldn't lift the cube; at under 3, they crush
+// themselves inside out and diced pieces blow up into spikes.
 const DEV_SOFT = 12;
+const DEV_CAP = 60;
+const DEV_SOFT_MIN = 3;
 const VOL_SOFT = 0.25;
 
 function growArr(a, n, C) {
@@ -938,6 +945,26 @@ export class SoftBody {
     }
     const kRef = 4.5 / (this.hCell * this.hCell);
     for (let t = 0; t < this.nT; t++) if (vol0[t] > 0) tKs[t] = tKs[t] > kRef ? kRef / tKs[t] : 1;
+    // ...and each cube's typical tet's hard, at rest (the median over its
+    // whole-sized tets - a cut's small ones left out): see DEV_SOFT_CUBE
+    const HT = this.cHardTyp || (this.cHardTyp = new Float64Array(MAX_CUBES)), lists = Array.from({ length: MAX_CUBES }, () => []);
+    for (let t = 0; t < this.nT; t++) {
+      if (!(vol0[t] > 0)) continue;
+      const k = tCube[t], h = this.cH[k] || this.hCell, v6 = (h * h * h) / 6;
+      if (vol0[t] < 0.6 * v6 || vol0[t] > 2.4 * v6) continue;
+      const o = t * 9, q = t * 4;
+      const b1 = B[o] * B[o] + B[o + 1] * B[o + 1] + B[o + 2] * B[o + 2];
+      const b2 = B[o + 3] * B[o + 3] + B[o + 4] * B[o + 4] + B[o + 5] * B[o + 5];
+      const b3 = B[o + 6] * B[o + 6] + B[o + 7] * B[o + 7] + B[o + 8] * B[o + 8];
+      const s0 = B[o] + B[o + 3] + B[o + 6], s1 = B[o + 1] + B[o + 4] + B[o + 7], s2 = B[o + 2] + B[o + 5] + B[o + 8];
+      lists[k].push((w[T[q]] * (s0 * s0 + s1 * s1 + s2 * s2) + w[T[q + 1]] * b1 + w[T[q + 2]] * b2 + w[T[q + 3]] * b3) / 3);
+    }
+    for (let k = 0; k < MAX_CUBES; k++) {
+      const L = lists[k];
+      if (!L.length) continue; // (none whole: as it was)
+      L.sort((a, b) => a - b);
+      HT[k] = L[L.length >> 1];
+    }
   }
 
   _buildAdjacency() {
@@ -1557,6 +1584,7 @@ export class SoftBody {
 
   _solveTets(h) {
     const { T, B, vol0, x, w, tMu, tVS, tKs, tDmg, tCube } = this;
+    const HT = this.cHardTyp || (this.cHardTyp = new Float64Array(MAX_CUBES));
     // (each cube its own stiffness) frozen tets stiffen, but only up to what
     // these substeps can hold (beyond it jagged shards ring at the speed limit)
     const sr = 1 / (h * 720);
@@ -1615,7 +1643,7 @@ export class SoftBody {
         // and only while it's soft. Too stiff for the tet's mass and size - a
         // sliver a cut left, light stiff jelly - it went hard, crushed it
         // inside out, and diced rubber blew up into spikes.)
-        const alpha = Math.max(ih2 / (mu * V), DEV_SOFT * hard);
+        const alpha = Math.max(ih2 / (mu * V), DEV_SOFT_MIN * hard, Math.min(DEV_SOFT * hard, DEV_CAP * HT[kc]));
         const dl = -C / (hard + alpha);
         let s = w0 * dl; x[i0] += g0x * s; x[i0 + 1] += g0y * s; x[i0 + 2] += g0z * s;
         s = w1 * dl; x[i1] += g1x * s; x[i1 + 1] += g1y * s; x[i1 + 2] += g1z * s;
@@ -3440,7 +3468,10 @@ export class SoftBody {
       if (this._glue && this._glue.has(own * 65536 + tPiece[ct.t])) continue;
       WT[key] = ct.t;
       WF[key] = ct.f;
-      if (GP && (GP[own] || GP[tPiece[ct.t]])) {
+      // (pressed into another piece - not its own walls touching inside it: a
+      // tunnel through soft jelly sags shut against itself, and that had the
+      // hand all but let go of a cube a few bullets had been through)
+      if (GP && own !== tPiece[ct.t] && (GP[own] || GP[tPiece[ct.t]])) {
         if (ct.depth > press) press = ct.depth;
         // (per held piece: each hand eases off on its own)
         if (GP[own] && ct.depth > PP[own]) PP[own] = ct.depth;
@@ -3527,6 +3558,62 @@ export class SoftBody {
   }
 
   // ---------------------------------------------------------------- queries
+  // The jelly a line of sight passes close by, though it doesn't hit it (a
+  // hole shot through along the line of sight: it passes clean through) - the
+  // surface nearest it within maxD of it, in a piece whose box the line goes
+  // through; the nearest of those along it. Shaped as raycast's hit; null if
+  // none.
+  pickNear(ox, oy, oz, dx, dy, dz, maxD) {
+    const { x, sTri } = this, P = this.pieces, NP = P.length;
+    const inBox = this._nearBox && this._nearBox.length >= NP ? this._nearBox : (this._nearBox = new Uint8Array(Math.max(NP, 64)));
+    for (let k = 0; k < NP; k++) {
+      const b = P[k].bbox;
+      let t0 = 0, t1 = Infinity;
+      for (let c = 0; c < 3 && t0 <= t1; c++) {
+        const o = c === 0 ? ox : c === 1 ? oy : oz, d = c === 0 ? dx : c === 1 ? dy : dz;
+        const lo = b[c] + 0.25 * maxD, hi = b[c + 3] - 0.25 * maxD;
+        if (Math.abs(d) < 1e-12) {
+          if (o < lo || o > hi) t0 = 1, t1 = 0;
+          continue;
+        }
+        let a = (lo - o) / d, e = (hi - o) / d;
+        if (a > e) [a, e] = [e, a];
+        t0 = Math.max(t0, a);
+        t1 = Math.min(t1, e);
+      }
+      inBox[k] = t0 <= t1 ? 1 : 0;
+    }
+    const m2 = maxD * maxD;
+    let best = -1, bt = Infinity;
+    for (let f = 0; f < this.nF; f++) {
+      if (!inBox[this.tPiece[this.sTet[f]]]) continue;
+      const a = sTri[f * 3] * 3, b = sTri[f * 3 + 1] * 3, c = sTri[f * 3 + 2] * 3;
+      const cx = (x[a] + x[b] + x[c]) / 3 - ox, cy = (x[a + 1] + x[b + 1] + x[c + 1]) / 3 - oy, cz = (x[a + 2] + x[b + 2] + x[c + 2]) / 3 - oz;
+      const t = cx * dx + cy * dy + cz * dz;
+      if (t <= 0 || t >= bt) continue;
+      const px = cx - dx * t, py = cy - dy * t, pz = cz - dz * t;
+      if (px * px + py * py + pz * pz > m2) continue;
+      best = f;
+      bt = t;
+    }
+    if (best < 0) return null;
+    const a = sTri[best * 3] * 3, b = sTri[best * 3 + 1] * 3, c = sTri[best * 3 + 2] * 3;
+    const ux = x[b] - x[a], uy = x[b + 1] - x[a + 1], uz = x[b + 2] - x[a + 2];
+    const vx = x[c] - x[a], vy = x[c + 1] - x[a + 1], vz = x[c + 2] - x[a + 2];
+    let nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx;
+    const l = Math.hypot(nx, ny, nz) || 1;
+    return {
+      t: bt,
+      point: [(x[a] + x[b] + x[c]) / 3, (x[a + 1] + x[b + 1] + x[c + 1]) / 3, (x[a + 2] + x[b + 2] + x[c + 2]) / 3],
+      normal: [nx / l, ny / l, nz / l],
+      face: best,
+      piece: this.tPiece[this.sTet[best]],
+      tet: this.sTet[best],
+      bary: [1 / 3, 1 / 3, 1 / 3],
+      near: true,
+    };
+  }
+
   // (skip: a piece to look straight through)
   raycast(ox, oy, oz, dx, dy, dz, maxT = Infinity, skip = -1) {
     const { x, sTri } = this;

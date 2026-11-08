@@ -21,7 +21,7 @@ import { AutoGunTool } from './tools/autogun.js';
 import { GelGunTool } from './tools/gelgun.js';
 import { FlourTool } from './tools/flour.js';
 import { EyesTool } from './tools/eyes.js';
-import { Eyes } from './world/eyes.js';
+import { Eyes, LATE_LAYER } from './world/eyes.js';
 import { copyEyes } from './eyes.js';
 import { SURFACE } from './surfaces.js';
 import { AcidTool } from './tools/acid.js';
@@ -147,12 +147,14 @@ export class App {
     key.shadow.radius = 4;
     this.scene.add(key);
     this.scene.add(key.target);
+    key.layers.enable(LATE_LAYER); // (the late pass's light too: see render)
 
     this.jelly = new JellyView(renderer, this.env, this.lightDir);
     if (this.coarse) this.jelly.maxLayers = 4;
     // warm dynamic light for flames and blasts (lights the floor and the jelly)
     this.fireLight = new THREE.PointLight(0xff8a3c, 0, 3.5, 2);
     this.fireLight.position.set(0, 1, 0);
+    this.fireLight.layers.enable(LATE_LAYER);
     this.scene.add(this.fireLight);
     this.fireLevel = 0;
     this.fireGoal = 0;
@@ -1186,6 +1188,15 @@ export class App {
     return this.sb.raycast(o.x, o.y, o.z, d.x, d.y, d.z);
   }
 
+  // ...or, missing it, the jelly it passes close by - down a hole shot
+  // through it along the line of sight, a hand still takes hold of its wall
+  pickJellyNear(ray) {
+    const hit = this.pickJelly(ray);
+    if (hit) return hit;
+    const o = ray.origin, d = ray.direction, sb = this.sb;
+    return sb.pickNear(o.x, o.y, o.z, d.x, d.y, d.z, Math.max(0.09 * sb.p.size, 1.1 * sb.hCell));
+  }
+
   _bindInput() {
     const el = this.canvas;
     const pointers = new Map();
@@ -1209,7 +1220,7 @@ export class App {
         // cancelling the tool's gesture
         if (mode === 'tool' && this.tool?.multiTouch) {
           const ray = this.rayFromClient(e.clientX, e.clientY);
-          const hit = this.pickJelly(ray);
+          const hit = this.tool.id === 'hand' ? this.pickJellyNear(ray) : this.pickJelly(ray);
           if (hit && this.tool.down(e, ray, hit)) return;
         }
         if (mode === 'tool') this.tool?.up?.(e, this.rayFromClient(e.clientX, e.clientY));
@@ -2334,6 +2345,13 @@ export class App {
       r.autoClear = false;
       r.setRenderTarget(this.rtScene);
       r.render(this.fxScene, this.camera);
+      // (and last, the googly eyes in front of the jelly: over its glitter and
+      // bubbles - drawn as though out in front of its skin, their glints
+      // showed through an eye that's on it - in the room's light)
+      const L = this.camera.layers.mask;
+      this.camera.layers.set(LATE_LAYER);
+      r.render(this.scene, this.camera);
+      this.camera.layers.mask = L;
       r.autoClear = auto;
     }
 

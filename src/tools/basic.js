@@ -41,10 +41,13 @@ export class HandTool {
     const now = performance.now();
     if (now - (this._ht || 0) < 40) return;
     this._ht = now;
-    this.app.setCursor(this.app.pickJelly(ray) ? 'grab' : 'default');
+    this.app.setCursor(this.app.pickJellyNear(ray) ? 'grab' : 'default');
   }
 
   down(e, ray, hit) {
+    // (down a hole shot through it, the line of sight misses it: the wall
+    // round it, then)
+    if (!hit) hit = this.app.pickJellyNear(ray);
     if (!hit) return false;
     const app = this.app;
     const p = hit.point;

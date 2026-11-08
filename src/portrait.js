@@ -62,7 +62,7 @@ export class Portraits {
     try {
       // the room emptied: the floor and the lights (and, of the effects, the glitter)
       for (const o of app.scene.children) if (o !== app.floor && !o.isLight && o !== app.keyLight?.target && !o.userData.inPortrait) o.visible = false;
-      for (const o of app.fxScene.children) if (o !== G?.mesh && o !== G?.meshCube) o.visible = false;
+      for (const o of app.fxScene.children) if (o !== G?.mesh && o !== G?.meshCube && !o.userData.inPortrait) o.visible = false;
       // nothing else going on: no rings of light, no hollows (the room's
       // cut-open bubbles), no fire, no flash, no dimming between looks, no
       // ring round a selected cube

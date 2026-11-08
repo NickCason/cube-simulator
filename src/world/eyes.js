@@ -25,6 +25,9 @@ const FLY_IN = 0.6; // (a re-cube: off the cube and out into the swirl, s)
 const LAND = 0.3; // (sucked back on, s)
 const LAND_GAP = 0.085; // (one after another, s)
 const smooth01 = (u) => (u <= 0 ? 0 : u >= 1 ? 1 : u * u * (3 - 2 * u));
+// (the layer the eyes in front of the jelly are drawn on - a pass of their own,
+// after the jelly and its glitter and bubbles: see App.render)
+export const LATE_LAYER = 1;
 
 const _m = new THREE.Matrix4(), _m2 = new THREE.Matrix4(), _q = new THREE.Quaternion(), _s = new THREE.Vector3(), _p = new THREE.Vector3();
 const _u = new THREE.Vector3(), _v = new THREE.Vector3(), _n = new THREE.Vector3(), _c = new THREE.Color();
@@ -49,24 +52,45 @@ export class Eyes {
     const half = new THREE.CircleGeometry(1, 36, 0, Math.PI);
     const box = new THREE.BoxGeometry(1, 1, 1);
     const black = new THREE.MeshStandardMaterial({ color: 0x0a0a0c, roughness: 0.28, envMap: env, envMapIntensity: 0.7 });
-    this.white = mk(disc, new THREE.MeshStandardMaterial({ color: 0xfbfaf6, roughness: 0.42, envMap: env, envMapIntensity: 0.85 }));
-    this.pupil = mk(disc, black);
+    const whiteMat = new THREE.MeshStandardMaterial({ color: 0xfbfaf6, roughness: 0.42, envMap: env, envMapIntensity: 0.85 });
     // (the dome: clear plastic - only what it reflects, added on: a white one
     // greyed the pupil)
-    this.dome = mk(dome, new THREE.MeshStandardMaterial({ color: 0x000000, roughness: 0.05, metalness: 0, transparent: true, blending: THREE.AdditiveBlending, envMap: env, envMapIntensity: 1.5, depthWrite: false }));
-    this.dome.renderOrder = 2;
+    const domeMat = new THREE.MeshStandardMaterial({ color: 0x000000, roughness: 0.05, metalness: 0, transparent: true, blending: THREE.AdditiveBlending, envMap: env, envMapIntensity: 1.5, depthWrite: false });
     // (a lid: its jelly's colour - and, in the dark, lit up with it: its
     // glow takes the colour too)
     const lidMat = new THREE.MeshStandardMaterial({ roughness: 0.45, envMap: env, envMapIntensity: 0.5, side: THREE.DoubleSide, emissive: 0xffffff, emissiveIntensity: 0 });
     lidMat.onBeforeCompile = (sh) => {
       sh.fragmentShader = sh.fragmentShader.replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\n#ifdef USE_COLOR\n  totalEmissiveRadiance *= vColor.rgb;\n#endif');
     };
-    this.lid = mk(half, lidMat);
-    this.lid.setColorAt(0, new THREE.Color(1, 1, 1));
-    this.brow = mk(box, black);
-    this.lash = mk(box, black, MAXI * 5); // (five an eye)
-    // (in a cube's portrait too: see Portraits)
-    for (const m of [this.white, this.pupil, this.dome, this.lid, this.brow, this.lash]) m.userData.inPortrait = true;
+    this.whiteMat = whiteMat;
+    this.lidMat = lidMat;
+    // Two of every part: the eyes on the far side of a cube (in the room,
+    // drawn before the jelly - so seen through it, bent) and those facing the
+    // camera (drawn after the jelly, with the effects, after its glitter and
+    // bubbles: those are drawn pulled out in front of the jelly's skin, and
+    // their glints showed through an eye that's on it).
+    // (the front ones: in the room, but on a layer of their own - drawn in a
+    // pass of their own after the jelly and its effects, with the room's
+    // light: see App.render)
+    const parts = (front) => {
+      const P = {
+        white: mk(disc, whiteMat),
+        pupil: mk(disc, black),
+        dome: mk(dome, domeMat),
+        lid: mk(half, lidMat),
+        brow: mk(box, black),
+        lash: mk(box, black, MAXI * 5), // (five an eye)
+      };
+      P.lid.setColorAt(0, new THREE.Color(1, 1, 1));
+      for (const k in P) {
+        if (k === 'dome') P[k].renderOrder = 2;
+        if (front) P[k].layers.set(LATE_LAYER);
+        P[k].userData.inPortrait = true; // (in a cube's portrait too: see Portraits)
+      }
+      return P;
+    };
+    this.back = parts(false);
+    this.front = parts(true);
     // (the ones being placed - see-through, red where they can't go - and a
     // ring round the picked ones: over the jelly, drawn after it, with the
     // effects; in the room's pass, the jelly drew over all that didn't write
@@ -96,8 +120,8 @@ export class Eyes {
   // (a touch, always: a white that reads white), the lids glowing with their
   // jelly - so they still read.
   setGlow(e) {
-    this.white.material.emissive.setScalar(0.07 + 0.25 * e);
-    this.lid.material.emissiveIntensity = 0.5 * e;
+    this.whiteMat.emissive.setScalar(0.07 + 0.25 * e);
+    this.lidMat.emissiveIntensity = 0.5 * e;
   }
 
   // An eye just put on: it pops in.
@@ -444,33 +468,51 @@ export class Eyes {
   // Every eye's parts, posed: on the cubes (live) - and, in the room, the
   // falling ones, the one held, rings round the picked.
   _draw(live, room) {
-    let n = 0, nl = 0, nb = 0, nlash = 0, nr = 0;
-    const now = performance.now();
+    let nr = 0;
+    const N = { back: { n: 0, nl: 0, nb: 0, nlash: 0 }, front: { n: 0, nl: 0, nb: 0, nlash: 0 } };
+    const now = performance.now(), cam = this.app.camera.position;
     const put = (mesh, i, M, x, y, z, sx, sy, sz, rot = 0) => {
       _m2.makeRotationZ(rot);
       _m2.premultiply(_m.makeTranslation(x, y, z));
       _m2.multiply(_m.makeScale(sx, sy, sz));
       mesh.setMatrixAt(i, _m2.premultiply(M));
     };
-    const eye = (M, e, pp, scale, side, colorHex) => {
-      const st = EYE_STYLES[e.s] || EYE_STYLES[0];
+    // (an eye on the jelly facing the camera - or off it, in the air - is
+    // drawn after the jelly; one round the far side, before it)
+    const eye = (M, e, pp, scale, side, colorHex, front) => {
+      const st = EYE_STYLES[e.s] || EYE_STYLES[0], P = front ? this.front : this.back, c = front ? N.front : N.back;
+      if (c.n >= MAXI - 1) return;
       const M2 = M.clone();
       if (scale !== 1) M2.multiply(_m.makeScale(scale, scale, scale));
-      put(this.white, n, M2, 0, 0, 0.012, 1, 1, 0.024);
-      put(this.pupil, n, M2, pp[0], pp[1], 0.032, st.pupil, st.pupil, 0.02);
-      put(this.dome, n, M2, 0, 0, 0, 1.0, 1.0, 0.42);
-      n++;
+      put(P.white, c.n, M2, 0, 0, 0.012, 1, 1, 0.024);
+      put(P.pupil, c.n, M2, pp[0], pp[1], 0.032, st.pupil, st.pupil, 0.02);
+      put(P.dome, c.n, M2, 0, 0, 0, 1.0, 1.0, 0.42);
+      c.n++;
       if (st.lid) {
-        put(this.lid, nl, M2, 0, -0.06, 0.05, 1.02, 1.0, 1);
-        this.lid.setColorAt(nl, _c.set(colorHex).multiplyScalar(0.82));
-        nl++;
+        put(P.lid, c.nl, M2, 0, -0.06, 0.05, 1.02, 1.0, 1);
+        P.lid.setColorAt(c.nl, _c.set(colorHex).multiplyScalar(0.82));
+        c.nl++;
       }
-      if (st.brow) put(this.brow, nb++, M2, side * -0.05, 1.22, 0.03, 1.15, 0.22, 0.06, side > 0 ? 0.36 : -0.36);
-      if (st.lashes) for (const a of [0.42, 0.9, 1.57, 2.24, 2.72]) put(this.lash, nlash++, M2, Math.cos(a) * 1.1, Math.sin(a) * 1.1, 0.02, 0.07, 0.34, 0.03, a - Math.PI / 2);
+      if (st.brow) put(P.brow, c.nb++, M2, side * -0.05, 1.22, 0.03, 1.15, 0.22, 0.06, side > 0 ? 0.36 : -0.36);
+      if (st.lashes) for (const a of [0.42, 0.9, 1.57, 2.24, 2.72]) put(P.lash, c.nlash++, M2, Math.cos(a) * 1.1, Math.sin(a) * 1.1, 0.02, 0.07, 0.34, 0.03, a - Math.PI / 2);
+    };
+    // (in front: facing the camera, and with no jelly between it and the
+    // camera - looked for a few times a second, an eye at a time: behind
+    // another piece it's drawn with the room, seen through that)
+    const sb = this.app.sb, many = sb.pieces.length > 1;
+    this._tick = (this._tick || 0) + 1;
+    const facing = (pos, n, L = null) => {
+      const f = (cam.x - pos.x) * n.x + (cam.y - pos.y) * n.y + (cam.z - pos.z) * n.z > 0;
+      if (!f || !L || !many) return f;
+      if (L.clearAt === undefined || (this._tick + L.i * 3) % 8 === 0) {
+        const dx = pos.x - cam.x, dy = pos.y - cam.y, dz = pos.z - cam.z, d = Math.hypot(dx, dy, dz);
+        const hit = d > 1e-6 ? sb.raycast(cam.x, cam.y, cam.z, dx / d, dy / d, dz / d, d - 0.012) : null;
+        L.clearAt = hit ? 0 : 1;
+      }
+      return L.clearAt === 1;
     };
     const H = room ? this.held : null;
     for (const L of live) {
-      if (n >= MAXI - 1) break;
       if (H && H.e === L.e) continue;
       if (room && this.flights.has(L.e)) continue;
       _s.set(L.R * L.su, L.R * L.sv, L.R);
@@ -491,32 +533,35 @@ export class Eyes {
         else this.landed.delete(L.e);
       }
       const col = flavorMainHex(resolveFlavor(L.cb.style));
-      eye(M, L.e, L.pp, Math.max(0.05, sc), L.side >= 0 ? 1 : -1, col);
+      eye(M, L.e, L.pp, Math.max(0.05, sc), L.side >= 0 ? 1 : -1, col, room && facing(L.pos, L.n, L));
       if (room && nr < 16 && this.picked.has(L.e)) put(this.ring, nr++, M, 0, 0, 0.05, 1 + Math.sin(now * 0.006) * 0.03, 1 + Math.sin(now * 0.006) * 0.03, 1);
     }
     // (a re-cube's: flying round it)
     if (room)
       for (const F of this.flights.values()) {
-        if (n >= MAXI - 1) break;
         // (a touch bigger in the air, back to its size as it lands)
         const big = F.landFrom ? 1 + 0.15 * (1 - Math.min(1, F.landT / LAND)) : 1.15;
         const M = new THREE.Matrix4().compose(F.pos, F.q, _s.set(F.R * big, F.R * big, F.R * big));
-        eye(M, F.e, F.pp, 1, F.side >= 0 ? 1 : -1, flavorMainHex(resolveFlavor(F.cb.style)));
+        eye(M, F.e, F.pp, 1, F.side >= 0 ? 1 : -1, flavorMainHex(resolveFlavor(F.cb.style)), true);
       }
     if (H && H.show) {
       // (held up: a touch bigger, lifted off)
       _s.set(H.R * 1.08, H.R * 1.08, H.R * 1.08);
       const M = new THREE.Matrix4().makeBasis(H.u, H.v, H.n).scale(_s).setPosition(H.pos);
-      eye(M, H.e, H.pp, 1, H.side >= 0 ? 1 : -1, flavorMainHex(resolveFlavor(H.cb.style)));
+      eye(M, H.e, H.pp, 1, H.side >= 0 ? 1 : -1, flavorMainHex(resolveFlavor(H.cb.style)), true);
     }
     if (room)
       for (const f of this.falling) {
-        if (n >= MAXI - 1) break;
         const fade = f.life > 3.4 ? Math.max(0.01, 1 - (f.life - 3.4) / 0.6) : 1;
         const M = new THREE.Matrix4().compose(f.pos, f.q, _s.set(f.R * fade, f.R * fade, f.R * fade));
-        eye(M, f.e, f.pp, 1, f.side, f.col);
+        eye(M, f.e, f.pp, 1, f.side, f.col, true);
       }
-    for (const [mesh, c] of [[this.white, n], [this.pupil, n], [this.dome, n], [this.lid, nl], [this.brow, nb], [this.lash, nlash], [this.ring, nr]]) {
+    const counts = [[this.ring, nr]];
+    for (const k of ['back', 'front']) {
+      const P = this[k], c = N[k];
+      counts.push([P.white, c.n], [P.pupil, c.n], [P.dome, c.n], [P.lid, c.nl], [P.brow, c.nb], [P.lash, c.nlash]);
+    }
+    for (const [mesh, c] of counts) {
       mesh.count = c;
       mesh.instanceMatrix.needsUpdate = true;
       if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
