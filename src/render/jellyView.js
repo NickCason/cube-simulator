@@ -18,7 +18,7 @@ import {
   GRAD_N,
   GRAD_ROWS,
 } from './jellyMaterials.js';
-import { surfaceOf, surfaceFit } from '../surfaces.js';
+import { SURFACES, SURF_BAKE_GLSL, surfaceOf, surfaceFit, surfaceTile } from '../surfaces.js';
 
 const FLOOR_SPAN = 6.4;
 const CAUS_GAIN = 1.5; // (how bright the caustic light lands)
@@ -374,6 +374,15 @@ export class JellyView {
       rt: new THREE.WebGLRenderTarget(lvRes, lvRes, kind === 1 ? { ...lvOpts, type: THREE.HalfFloatType } : { ...lvOpts, count: kind === 2 ? 3 : 2 }),
       mat: createLightViewMaterial(kind),
     }));
+    // (the light's view of the surface maps: each cube's own)
+    this._bakeSurfaces();
+    for (const { mat } of this.lightView) {
+      mat.uniforms.uCubeTex.value = this.cubeTex;
+      mat.uniforms.uGradTex.value = this.gradTex;
+      mat.uniforms.uFreeTex.value = this.freeTex;
+      mat.uniforms.uSurfTex.value = this.surfTex;
+    }
+    this.frontMat.uniforms.uSurfTex.value = this.surfTex;
     this.causticMat.uniforms.tEntry.value = this.lightView[0].rt.texture;
     this.causticMat.uniforms.tNormal.value = this.lightView[1].rt.texture;
     this.causticMat.uniforms.tExit.value = this.lightView[2].rt.texture;
@@ -384,6 +393,8 @@ export class JellyView {
     // (on a desktop, the caustics drawn a colour at a time, each bent its own
     // amount: their edges split into rainbows)
     this.disperse = !coarse;
+    // (a surface map's depth: fewer steps down into it on a phone)
+    this.frontMat.uniforms.uSurfSteps.value = coarse ? 6 : 10;
     this.causticLevel = 1; // (0..1: faded out while a lot of bits re-cube - see App)
     this.layerCap = Infinity; // (and fewer refraction layers meanwhile)
     this.causticMat.uniforms.uDisperse.value = 1.5;
@@ -695,6 +706,44 @@ export class JellyView {
       }
     } else if (flavor.layers) this._gradStrip(k, flavor, abs, scs);
     this.lookVersion = (this.lookVersion || 0) + 1;
+  }
+
+  // The surface maps' face patterns, baked: a tile of each (a repeat of it,
+  // or eight cells of a random one) a layer of a texture, its height in red -
+  // once, at the start. The shaders read a height off it in one look; every
+  // pattern's code inlined at each of a dozen looks a pixel cost as much as
+  // the rest of the jelly. (Their holes, all through, are worked out as they
+  // go: there are only two of them, and they're three-dimensional.)
+  _bakeSurfaces() {
+    const r = this.renderer, N = SURFACES.length, px = 256;
+    const rt = new THREE.WebGLArrayRenderTarget(px, px, N, { type: THREE.HalfFloatType, depthBuffer: false });
+    const tex = rt.texture;
+    tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+    tex.minFilter = tex.magFilter = THREE.LinearFilter;
+    tex.generateMipmaps = false;
+    const mat = new THREE.ShaderMaterial({
+      uniforms: { uKind: { value: 0 }, uTile: { value: new THREE.Vector2(1, 1) } },
+      vertexShader: 'varying vec2 vUv; void main() { vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }',
+      fragmentShader: `uniform int uKind; uniform vec2 uTile; varying vec2 vUv;
+        ${SURF_BAKE_GLSL}
+        void main() { sfWrap = uTile; gl_FragColor = vec4(sfFaceProc(uKind, vUv * uTile), 0.0, 0.0, 1.0); }`,
+      depthTest: false,
+      depthWrite: false,
+    });
+    const scene = new THREE.Scene(), cam = new THREE.Camera();
+    scene.add(new THREE.Mesh(new THREE.PlaneGeometry(2, 2), mat));
+    const prev = r.getRenderTarget();
+    SURFACES.forEach((sf, k) => {
+      if (!sf.glsl || sf.through) return;
+      mat.uniforms.uKind.value = k;
+      mat.uniforms.uTile.value.fromArray(surfaceTile(sf));
+      r.setRenderTarget(rt, k);
+      r.render(scene, cam);
+    });
+    r.setRenderTarget(prev);
+    mat.dispose();
+    this.surfRT = rt;
+    this.surfTex = tex;
   }
 
   // A layered cube's gradient as its strip: absorption (its first row) and

@@ -2,7 +2,7 @@
 // handed down, and in its names
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { SURFACES, SURFACE, SURF_GLSL, surfaceFit, surfaceHeight, surfaceWord } from '../src/surfaces.js';
+import { SURFACES, SURFACE, SURF_GLSL, SURF_BAKE_GLSL, surfaceFit, surfaceHeight, surfaceWord, surfaceTile } from '../src/surfaces.js';
 import { encodeCube, decodeCube, cubeSummary } from '../src/cubecode.js';
 import { mutate } from '../src/genetics.js';
 import { nameCube, seeded } from '../src/namegen.js';
@@ -21,13 +21,17 @@ test('every surface has what it needs, and a height that stays in range', () => 
   }
 });
 
-test('the shader has every surface, by its place in the list', () => {
+test('the shaders have every surface, by its place in the list: face ones baked, holes worked out', () => {
   SURFACES.forEach((s, i) => {
     if (!s.glsl) return;
-    assert.ok(SURF_GLSL.includes(`if (k == ${i}) {`), s.id);
+    // (a face one's own code is in the bake; a through one's, in the shaders that draw it)
+    assert.ok((s.through ? SURF_GLSL : SURF_BAKE_GLSL).includes(`if (k == ${i}) {`), s.id);
   });
   for (const id of ['swiss', 'sponge']) assert.ok(SURF_GLSL.includes(`k == ${SURFACE[id].kind}`), id);
-  assert.ok(!/\?[^:;]*atan\(/.test(SURF_GLSL), 'no atan in a ternary (one GPU took the wrong side)');
+  // (each face one's tile: a whole repeat of a formed one)
+  assert.ok(SURF_GLSL.includes(`vec2[${SURFACES.length}](`));
+  for (const s of SURFACES.filter((x) => x.period)) assert.deepEqual(surfaceTile(s), [s.period[0], s.period[1] || s.period[0]], s.id);
+  for (const g of [SURF_GLSL, SURF_BAKE_GLSL]) assert.ok(!/\?[^:;]*atan\(/.test(g), 'no atan in a ternary (one GPU took the wrong side)');
 });
 
 test('a formed pattern fits a whole number of its repeats on a face', () => {

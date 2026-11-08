@@ -391,6 +391,8 @@ export function createJellyMaterial(env, layerUniforms) {
       // glow mode: how brightly it shines, and rings of light from knocks
       // (world centre + start time; strength)
       uEmit: { value: 0 },
+      uSurfSteps: { value: 10 },
+      uSurfTex: { value: null },
       uPulse: { value: Array.from({ length: MAX_PULSES }, () => new THREE.Vector4(0, 0, 0, -99)) },
       uPulseAmp: { value: new Array(MAX_PULSES).fill(0) },
     },
@@ -436,6 +438,7 @@ export function createJellyMaterial(env, layerUniforms) {
       uniform vec4 uCav[${MAX_CAVITIES}];
       uniform int uCavN;
       uniform float uEmit;
+      uniform int uSurfSteps; // (a surface map's parallax: steps down into it - 0 none)
       // the floor, for what the jelly mirrors below the horizon (shared with
       // the floor's own shader - see JellyView.fxUniforms)
       uniform sampler2D tCaustic;
@@ -764,51 +767,65 @@ export function createJellyMaterial(env, layerUniforms) {
                         vnoise(q + vec3(0, 0, e)) + 0.5 * vnoise((q + vec3(0, 0, e)) * 2.1 + 7.0) - n0) / e;
           N = normalize(N + (g - N * dot(g, N)) * 0.018);
         }
-        // Its surface map (surfaces.js): a relief in its skin - pits, treads,
-        // scales - bent into the normal by its slope here, worked out exactly
-        // across this pixel (Mikkelsen's surface gradient: no tangents
-        // needed), and faded out where it's finer than a few pixels (else it
-        // sparkles). A face one is moulded on the outside (a cut is bare);
-        // a through one (holes) is all through, cut faces too.
-        float surfAO = 1.0, surfRough = 0.0;
+        // Its surface map (surfaces.js): a relief moulded into its skin - pits,
+        // treads, scales. A face one is laid on the outside (a cut is bare):
+        // the line of sight is marched down into it to where it really meets
+        // it (its pits sink, what stands up hides what's behind it, seen
+        // slantwise), the normal there bent by its slope (exactly across this
+        // pixel: Mikkelsen's surface gradient - no tangents needed), its
+        // hollows darker and in the shade of its own walls, from the key
+        // light. A through one's holes are real hollows, all through the
+        // jelly, cut faces too: the line of sight goes on into one to its far
+        // wall, seen as a cut-open bubble's is. Finer than a few pixels, it
+        // fades into a little roughness (else it sparkles).
+        float surfAO = 1.0, surfRough = 0.0, surfShadow = 1.0;
         vec4 cq31 = cubeT(31);
-        int sK = int(cq31.x + 0.5);
-        if (sK > 0 && cavity < 0.5) {
-          bool thru = sfThrough(sK);
-          if (thru || fresh < 0.5) {
-            vec4 cq28s = cubeT(28);
-            float size = cq4.w;
-            // (its cells across a face and up it: whole repeats, each face
-            // starting where the next one ends - see surfaceFit)
-            vec2 NN = cq31.zw;
-            float cell = (thru ? size : size - cq28s.w * size * 0.4292037) / max(max(NN.x, NN.y), 0.25);
-            // (a pixel's patch of it, in cells - its geometric mean: seen at a
-            // glance, a long thin patch, and by its length the relief faded
-            // out of a whole face)
-            float fpc = 2.0 * sqrt(length(dRx) * length(dRy)) / cell;
+        if (cq31.x > 0.5 && cavity < 0.5) {
+          vec4 cq28s = cubeT(28);
+          SfInfo sf = sfInfo(cq31, cq28s, cq4.w);
+          if (sf.thru || fresh < 0.5) {
+            float fpc = 2.0 * sqrt(length(dRx) * length(dRy)) / sf.cell;
             float fade = 1.0 - smoothstep(0.1, 0.4, fpc);
-            // (it scatters the light a little besides - and what's too fine to
-            // show as relief shows as that: far off, knurling looks satin)
-            surfRough = cq28s.z + (1.0 - fade) * min(0.3, 2.0 * cq31.y / cell);
+            surfRough = cq28s.z + (1.0 - fade) * min(0.3, 2.0 * sf.depth / sf.cell);
             if (fade > 0.0) {
-              // (its height here and a pixel along each way, as the rest shape
-              // runs across the screen: how much it rises across this pixel,
-              // exactly, whatever the mapping - round a bevel too)
-              float hs = 0.5 * size, b = cq28s.w * size, L = size - b * (2.0 - 1.5707963);
-              float h0 = sfHeightAt(sK, thru, vRest, hs, b, L, NN);
-              float dBs = (sfHeightAt(sK, thru, vRest + dRx, hs, b, L, NN) - h0) * cq31.y * fade;
-              float dBt = (sfHeightAt(sK, thru, vRest + dRy, hs, b, L, NN) - h0) * cq31.y * fade;
-              // (into the world: Mikkelsen's surface gradient)
-              vec3 R1 = cross(dPy, N), R2 = cross(N, dPx);
-              float det = dot(dPx, R1);
-              if (abs(det) > 1e-20) {
-                vec3 sg = (dBs * R1 + dBt * R2) / det;
-                float sl = length(sg);
-                if (sl > 1.5) sg *= 1.5 / sl;
-                N = normalize(N - sg);
-              }
+              vec3 Nr = sfRestN(dRx, dRy, dPx, dPy, N);
+              vec4 sph;
+              float h = 1.0;
+              if (sf.thru && fade > 0.6 && sfHole(sf.k, vRest / sf.cell, sph)) {
+                vec3 Vr = normalize(sfToRest(V, dRx, dRy, dPx, dPy, N, Nr));
+                vec3 c = sph.xyz * sf.cell, d = vRest - c;
+                float rr = sph.w * sf.cell, bq = dot(-Vr, d), disc = bq * bq - dot(d, d) + rr * rr;
+                if (disc > 0.0) {
+                  vec3 far = vRest - Vr * (-bq + sqrt(disc));
+                  Pw = vWorldPos + sfToWorld(far - vRest, dRx, dRy, dPx, dPy, N, Nr);
+                  N = normalize(sfToWorld(c - far, dRx, dRy, dPx, dPy, N, Nr));
+                  Rp = far;
+                  V = normalize(cameraPosition - Pw);
+                  cavity = 1.0;
+                  cavDeep = clamp(dot(vRest - far, Nr) / (2.0 * rr), 0.0, 1.0);
+                  fresh = 0.0;
+                }
+              } else if (!sf.thru) {
+                // (round a rounded edge the faces' mapping turns the corner:
+                // the march into it and its shade fade out across it)
+                float deep = fade * (1.0 - sfOnEdge(sf, vRest));
+                // (as many steps down into it as it shifts pixels - a step
+                // each pixel and a half - and none where that's under one)
+                float pix = max(sqrt(length(dRx) * length(dRy)), 1e-6);
+                vec3 rp = vRest;
+                if (deep > 0.3 && uSurfSteps > 0) {
+                  vec3 Vr = normalize(sfToRest(V, dRx, dRy, dPx, dPy, N, Nr));
+                  float cv = max(dot(Vr, Nr), 0.25), shift = sf.depth * sqrt(max(1.0 - cv * cv, 0.0)) / cv / pix;
+                  int st = int(min(float(uSurfSteps), ceil(shift / 1.5)));
+                  if (st >= 2) rp = mix(vRest, sfParallax(sf, vRest, sfH(sf, vRest), Vr, Nr, st), smoothstep(0.3, 0.7, deep));
+                }
+                N = sfBend(sf, rp, dRx, dRy, dPx, dPy, N, fade, h);
+                vec3 Lr = normalize(sfToRest(normalize(uLightDir), dRx, dRy, dPx, dPy, N, Nr));
+                float cl = max(dot(Lr, Nr), 0.2);
+                if (sf.depth * sqrt(max(1.0 - cl * cl, 0.0)) / cl / pix > 1.0 && h < 0.999) surfShadow = mix(1.0, sfShadow(sf, rp, h, Lr, Nr), deep);
+              } else N = sfBend(sf, vRest, dRx, dRy, dPx, dPy, N, fade, h);
               // (its hollows a little darker: less of the room reaches in)
-              surfAO = 1.0 - cq29.w * (1.0 - clamp(h0, 0.0, 1.0)) * fade;
+              surfAO = 1.0 - cq29.w * (1.0 - clamp(h, 0.0, 1.0)) * fade;
             }
           }
         }
@@ -953,7 +970,7 @@ export function createJellyMaterial(env, layerUniforms) {
         haze = max(haze, max((cMilk + rkMilk) * 0.72, cHazeMin));
 
         // (the key light here: another cube may be in its way)
-        vec3 keyLight = uLightColor * cubeShadowAt(Pw);
+        vec3 keyLight = uLightColor * cubeShadowAt(Pw) * (0.3 + 0.7 * surfShadow);
         vec3 L = normalize(uLightDir);
         float NdL = dot(N, L);
         float wrap = max((NdL + 0.7) / 1.7, 0.0);
@@ -1306,7 +1323,7 @@ export function createJellyMaterial(env, layerUniforms) {
 export function createLightViewMaterial(kind) {
   return new THREE.ShaderMaterial({
     side: kind === 2 ? THREE.BackSide : THREE.FrontSide,
-    uniforms: { uOrigin: { value: new THREE.Vector3() } },
+    uniforms: { uOrigin: { value: new THREE.Vector3() }, uCubeTex: { value: null }, uGradTex: { value: null }, uFreeTex: { value: null }, uSurfTex: { value: null } },
     vertexShader: /* glsl */ `
       attribute vec3 aRest;
       attribute vec4 aData;
@@ -1317,8 +1334,10 @@ export function createLightViewMaterial(kind) {
       varying vec3 vRest3;
       varying float vTemp;
       varying float vCubeK;
+      varying float vFresh;
       void main() {
         vec4 wp = modelMatrix * vec4(position, 1.0);
+        vFresh = aData.z;
         vW = wp.xyz;
         vN = mat3(modelMatrix) * normal;
         vRestY = aRest.y;
@@ -1335,14 +1354,32 @@ export function createLightViewMaterial(kind) {
       varying vec3 vRest3;
       varying float vTemp;
       varying float vCubeK;
+      varying float vFresh;
       ${SAFE_GLSL}
+      ${kind === 0 ? '' : CUBE_GLSL + SURF_GLSL}
+      // (its surface map's relief, bending the light going in - and coming
+      // out - so the caustics carry its pattern: as the jelly's own shading
+      // does, but as the light sees it)
+      vec3 surfN(vec3 n) {
+        ${kind === 0 ? 'return n;' : `gK = int(vCubeK + 0.5);
+        vec4 q31 = cubeT(31);
+        if (q31.x < 0.5 || vFresh > 0.5) return n;
+        SfInfo sf = sfInfo(q31, cubeT(28), cubeT(4).w);
+        if (sf.thru) return n;
+        vec3 dRx = dFdx(vRest3), dRy = dFdy(vRest3), dPx = dFdx(vW), dPy = dFdy(vW);
+        float fade = 1.0 - smoothstep(0.1, 0.4, 2.0 * sqrt(length(dRx) * length(dRy)) / sf.cell), h;
+        // (half as hard as the jelly's shading bends it: bent fully, the
+        // caustics' rays scattered every which way - mottled, and their
+        // cells drawn over each other many times, the caustics' cost doubled)
+        return fade > 0.0 ? sfBend(sf, vRest3, dRx, dRy, dPx, dPy, n, 0.5 * fade, h) : n;`}
+      }
       ${kind === 1 ? '' : 'layout(location = 1) out highp vec4 oRest;'}
       ${kind === 2 ? 'layout(location = 2) out highp vec4 oNrm;' : ''}
       void main() {
         // (w: the rest height, + 10 so 0 is "nothing here", + 4 a cube -
         // see lightViewCube; and the rest point, for the gradients)
-        ${kind === 1 ? 'gl_FragColor = finite4(vec4(safeNormalize(vN), vTemp));' : 'gl_FragColor = finite4(vec4(vW - uOrigin, vRestY + 10.0 + 4.0 * floor(vCubeK + 0.5))); oRest = finite4(vec4(vRest3, 1.0));'}
-        ${kind === 2 ? 'oNrm = finite4(vec4(safeNormalize(vN), 1.0)); // (the far side: its outward normal, for the light leaving)' : ''}
+        ${kind === 1 ? 'gl_FragColor = finite4(vec4(surfN(safeNormalize(vN)), vTemp));' : 'gl_FragColor = finite4(vec4(vW - uOrigin, vRestY + 10.0 + 4.0 * floor(vCubeK + 0.5))); oRest = finite4(vec4(vRest3, 1.0));'}
+        ${kind === 2 ? 'oNrm = finite4(vec4(surfN(safeNormalize(vN)), 1.0)); // (the far side: its outward normal, for the light leaving)' : ''}
       }`,
   });
 }
