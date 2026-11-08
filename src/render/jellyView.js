@@ -245,6 +245,7 @@ function snapToShape(pos, nrm, mids, first, disp, shapes, cube) {
 }
 
 // (screen outlines, for the refraction layers: see renderPieces)
+const SURF_N = 128, HULL_STEP = 2; // (a piece's surface points sampled; its outline from every HULL_STEP-th)
 function convexHull(pts) {
   pts.sort((p, q) => p[0] - q[0] || p[1] - q[1]);
   const cr = (o, a, b) => (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]);
@@ -308,6 +309,7 @@ export class JellyView {
     this.layerOf = new Int8Array(0); // per piece: its layer last frame (-1: none)
     this.layerCount = new Int32Array(0); // per layer: indices in its mesh
     this.topoVersion = -1;
+    this._vp = new THREE.Matrix4();
     this.layerUniforms = createLayerUniforms();
     this.backMat = createBackMaterial();
     // (a gradient across, corner to corner or out from the middle wants the
@@ -1123,6 +1125,29 @@ export class JellyView {
     r.setClearColor(prevClear, prevAlpha);
   }
 
+  // Each piece's surface points (a sample, at most SURF_N), for telling which
+  // of two overlapping on screen is in front - see renderPieces
+  _surfacePoints(sb) {
+    const c = this._surfPts;
+    if (c && c.topo === sb.topoVersion && c.n === sb.pieces.length) return c.lists;
+    const NP = sb.pieces.length, seen = new Uint8Array(sb.nV), per = Array.from({ length: NP }, () => []);
+    for (let f = 0; f < sb.nF * 3; f++) {
+      const vi = sb.sTri[f];
+      if (seen[vi]) continue;
+      seen[vi] = 1;
+      const k = sb.vPiece[vi];
+      if (k >= 0 && k < NP) per[k].push(vi);
+    }
+    const lists = per.map((l) => {
+      if (l.length <= SURF_N) return Int32Array.from(l);
+      const st = l.length / SURF_N, out = new Int32Array(SURF_N);
+      for (let q = 0; q < SURF_N; q++) out[q] = l[Math.floor(q * st)];
+      return out;
+    });
+    this._surfPts = { topo: sb.topoVersion, n: NP, lists };
+    return lists;
+  }
+
   // Render pieces back-to-front in layers: pieces that don't overlap on
   // screen share a pass; a piece that overlaps one behind it goes in a later
   // layer so it refracts that piece.
@@ -1130,8 +1155,27 @@ export class JellyView {
     const r = this.renderer;
     const v = this._v;
     if (!this.allMesh) return;
-    const items = [];
     const NP = Math.min(sb.pieces.length, this.pieceIdx.length / 2);
+    const maxL = Math.min(this.maxLayers, this.layerMeshes.length);
+    // (the layers as last time, if nothing's changed: the camera still, the
+    // body the same and all of it asleep - or, only it moving, every other
+    // frame: telling who's in front costs a little, a piece)
+    const sig = this._layerSig || (this._layerSig = new Float64Array(34));
+    const me = camera.matrixWorld.elements, pe = camera.projectionMatrix.elements;
+    let same = sig[32] === sb.topoVersion && sig[33] === NP && this._layerMaxL === maxL;
+    this._layerMaxL = maxL;
+    for (let q = 0; q < 16 && same; q++) same = sig[q] === me[q] && sig[16 + q] === pe[q];
+    let awake = false;
+    for (let k = 0; k < NP && !awake; k++) awake = !!sb.pieces[k] && !sb.pieces[k].asleep;
+    this._layerTick = (this._layerTick || 0) + 1;
+    // (all at rest: one last full look - then that, until something moves)
+    let items = same && this._layerItems && ((!awake && this._layerItems.complete) || (awake && this._layerTick % 2)) ? this._layerItems : null;
+    const settled = same && !awake;
+    if (!items) {
+    for (let q = 0; q < 16; q++) { sig[q] = me[q]; sig[16 + q] = pe[q]; }
+    sig[32] = sb.topoVersion;
+    sig[33] = NP;
+    items = [];
     for (let k = 0; k < NP; k++) {
       const pc = sb.pieces[k];
       if (!pc || this.pieceIdx[k * 2 + 1] <= this.pieceIdx[k * 2]) continue;
@@ -1146,40 +1190,205 @@ export class JellyView {
         if (v.y < y0) y0 = v.y;
         if (v.y > y1) y1 = v.y;
       }
-      // (its outline on screen: the hull of its box's corners - or, a
-      // corner behind the camera, the box round them)
-      const hull = behind ? [[x0, y0], [x1, y0], [x1, y1], [x0, y1]] : convexHull(pts);
+      // (its outline on screen: the hull of its surface points, below - or,
+      // a corner of its box behind the camera, the box round them)
+      const hull = behind ? [[x0, y0], [x1, y0], [x1, y1], [x0, y1]] : null;
       const d = v.set(pc.com[0], pc.com[1], pc.com[2]).distanceToSquared(camera.position);
-      items.push({ k, d, x0, y0, x1, y1, hull, area: polyArea(hull), layer: 0 });
+      items.push({ k, d, x0, y0, x1, y1, hull, area: 0, layer: 0 });
     }
-    items.sort((a, b) => b.d - a.d);
     // Pieces overlapping on screen go into successive layers, so the nearer
     // refracts the farther. Overlap is by their outlines - by the boxes
     // round them, cubes stacked side by side chained up layer after layer
-    // just touching. Each layer costs two passes and a full-screen copy, so
-    // there are only so many (maxLayers); past that, layers are merged where
-    // the least overlaps: a nearer and a farther piece sharing a layer, the
-    // nearer can't show the farther (it vanishes behind it - a cube behind
-    // a cube, gone at some angles), so that's kept to the least screen.
-    const maxL = Math.min(this.maxLayers, this.layerMeshes.length);
-    const edges = [];
-    let depthN = 1;
-    for (let i = 0; i < items.length; i++) {
+    // just touching. Which of two is nearer is told where they overlap: by
+    // whose surface there is nearer the eye - by their middles' distance, a
+    // shard lying on a big slice was behind it seen from some angles, and
+    // the slice beneath vanished. Each layer costs two passes and a
+    // full-screen copy, so there are only so many (maxLayers); past that,
+    // layers are merged where the least overlaps: a nearer and a farther
+    // piece sharing a layer, the nearer can't show the farther (it vanishes
+    // behind it - a cube behind a cube, gone at some angles), so that's kept
+    // to the least screen.
+    const N = items.length, edges = [];
+    const surf = this._surfacePoints(sb), VP = this._vp.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse).elements;
+    // Each piece's outline on screen: the hull of (a third of) its surface
+    // points - for a shard, a convex piece, its very silhouette.
+    const x = sb.x;
+    const proj = (vi, out, o) => {
+      const X = x[vi * 3], Y = x[vi * 3 + 1], Z = x[vi * 3 + 2];
+      const w = VP[3] * X + VP[7] * Y + VP[11] * Z + VP[15];
+      if (!(w > 1e-4)) return false;
+      out[o] = (VP[0] * X + VP[4] * Y + VP[8] * Z + VP[12]) / w;
+      out[o + 1] = (VP[1] * X + VP[5] * Y + VP[9] * Z + VP[13]) / w;
+      out[o + 2] = w;
+      return true;
+    };
+    const tmp = [0, 0, 0];
+    for (let i = 0; i < N; i++) {
+      const it = items[i];
+      it.pi = i;
+      it.n = -1;
+      if (!it.hull) {
+        const list = surf[it.k] || [], pts = [];
+        for (let q = 0; q < list.length; q += HULL_STEP) if (proj(list[q], tmp, 0)) pts.push([tmp[0], tmp[1]]);
+        if (pts.length >= 3) {
+          it.hull = convexHull(pts);
+          it.x0 = Infinity; it.y0 = Infinity; it.x1 = -Infinity; it.y1 = -Infinity;
+          for (const p of it.hull) {
+            if (p[0] < it.x0) it.x0 = p[0];
+            if (p[0] > it.x1) it.x1 = p[0];
+            if (p[1] < it.y0) it.y0 = p[1];
+            if (p[1] > it.y1) it.y1 = p[1];
+          }
+        } else it.hull = [[it.x0, it.y0], [it.x1, it.y0], [it.x1, it.y1], [it.x0, it.y1]];
+      }
+      it.area = polyArea(it.hull);
+    }
+    // (all its surface points on screen - x, y, depth - when a vote wants them)
+    const scr = this._scr || (this._scr = []);
+    const pointsOf = (it) => {
+      if (it.n >= 0) return scr[it.pi];
+      const list = surf[it.k] || [];
+      const P3 = scr[it.pi] && scr[it.pi].length >= list.length * 3 ? scr[it.pi] : (scr[it.pi] = new Float32Array(Math.max(list.length, 16) * 3));
+      let n = 0;
+      for (let q = 0; q < list.length; q++) if (proj(list[q], P3, n * 3)) n++;
+      it.n = n;
+      return P3;
+    };
+    // Which is in front where two overlap: each one's points there vote -
+    // is it nearer the eye than the other's surface right beside it on
+    // screen? (Two that don't pass through each other: every point of the
+    // one in front is in front of the other there.) A's share of the votes,
+    // -1 if none; the other's points looked up in a little grid of cells.
+    const inP = (P, qx, qy) => {
+      for (let e = 0; e < P.length; e++) {
+        const A = P[e], B = P[(e + 1) % P.length];
+        if ((B[0] - A[0]) * (qy - A[1]) - (B[1] - A[1]) * (qx - A[0]) < 0) return false;
+      }
+      return true;
+    };
+    const selA = this._selA || (this._selA = new Int32Array(512)), selB = this._selB || (this._selB = new Int32Array(512));
+    const pick = (it, P, bx0, by0, bx1, by1, out) => {
+      const S = pointsOf(it);
+      let m = 0;
+      for (let q = 0; q < it.n && m < out.length; q++) {
+        const qx = S[q * 3], qy = S[q * 3 + 1];
+        if (qx >= bx0 && qx <= bx1 && qy >= by0 && qy <= by1 && inP(P, qx, qy)) out[m++] = q;
+      }
+      return m;
+    };
+    const cellHead = this._cellHead || (this._cellHead = new Int32Array(16 * 16)), cellNext = this._cellNext || (this._cellNext = new Int32Array(512));
+    const vote = (a, b, P, bx0, by0, bx1, by1, rad) => {
+      const na = pick(a, P, bx0, by0, bx1, by1, selA), nb = pick(b, P, bx0, by0, bx1, by1, selB);
+      if (!na || !nb) return -1;
+      const SA = scr[a.pi], SB = scr[b.pi], r2 = rad * rad;
+      const C = Math.max(1, Math.min(16, Math.floor(Math.max(bx1 - bx0, by1 - by0) / rad))), cw = Math.max(bx1 - bx0, 1e-6) / C, ch = Math.max(by1 - by0, 1e-6) / C;
+      let forA = 0, n = 0;
+      // (T's points into cells, then each of S's against T's in the cells round it)
+      const tally = (S, sel, ns, T, tsel, nt, mine) => {
+        cellHead.fill(-1, 0, C * C);
+        for (let k = 0; k < nt; k++) {
+          const q = tsel[k] * 3, c = Math.min(C - 1, Math.floor((T[q] - bx0) / cw)) + C * Math.min(C - 1, Math.floor((T[q + 1] - by0) / ch));
+          cellNext[k] = cellHead[c];
+          cellHead[c] = k;
+        }
+        const rx = Math.ceil(rad / cw), ry = Math.ceil(rad / ch);
+        for (let k = 0; k < ns; k++) {
+          const q = sel[k] * 3, sx = S[q], sy = S[q + 1];
+          const cx = Math.min(C - 1, Math.floor((sx - bx0) / cw)), cy = Math.min(C - 1, Math.floor((sy - by0) / ch));
+          let near = Infinity;
+          for (let yy = Math.max(0, cy - ry); yy <= Math.min(C - 1, cy + ry); yy++)
+            for (let xx = Math.max(0, cx - rx); xx <= Math.min(C - 1, cx + rx); xx++)
+              for (let t = cellHead[xx + C * yy]; t >= 0; t = cellNext[t]) {
+                const u = tsel[t] * 3, dx = T[u] - sx, dy = T[u + 1] - sy;
+                if (dx * dx + dy * dy < r2 && T[u + 2] < near) near = T[u + 2];
+              }
+          if (near === Infinity) continue;
+          n++;
+          if (S[q + 2] < near === mine) forA++;
+        }
+      };
+      tally(SA, selA, na, SB, selB, nb, true);
+      tally(SB, selB, nb, SA, selA, na, false);
+      return n ? forA / n : -1;
+    };
+    // (decisions kept from frame to frame, a few looked at again each frame
+    // in turn - a turning view changes them slowly; a pair not yet decided
+    // goes by their middles meanwhile)
+    if (this._pairTopo !== sb.topoVersion || !this._pairs) {
+      this._pairs = new Map();
+      this._pairTopo = sb.topoVersion;
+    }
+    const pairs = this._pairs, tick = this._layerTick;
+    let budget = settled ? Infinity : 24, complete = true;
+    const into = new Int32Array(N), inW = new Float64Array(N), outE = Array.from({ length: N }, () => []);
+    for (let i = 0; i < N; i++) {
       const a = items[i];
-      let dep = 0;
-      for (let j = 0; j < i; j++) {
+      for (let j = i + 1; j < N; j++) {
         const b = items[j];
         if (a.x0 > b.x1 || b.x0 > a.x1 || a.y0 > b.y1 || b.y0 > a.y1) continue;
-        const ov = polyArea(clipConvex(a.hull, b.hull));
+        const P = clipConvex(a.hull, b.hull), ov = polyArea(P);
         // (a sliver - stacked neighbours, seen a little from above - is
         // left out: it would cost a layer for next to nothing)
         if (!(ov > 0.01 * Math.min(a.area, b.area))) continue;
-        edges.push(j, i, ov);
-        dep = Math.max(dep, b.layer + 1);
+        const key = Math.min(a.k, b.k) * 65536 + Math.max(a.k, b.k);
+        let c = pairs.get(key);
+        if (budget > 0 && (!c || tick - c.tick > 6)) {
+          budget--;
+          let bx0 = Infinity, by0 = Infinity, bx1 = -Infinity, by1 = -Infinity;
+          for (const p of P) {
+            if (p[0] < bx0) bx0 = p[0];
+            if (p[0] > bx1) bx1 = p[0];
+            if (p[1] < by0) by0 = p[1];
+            if (p[1] > by1) by1 = p[1];
+          }
+          // (beside: within a little of the overlap's size)
+          const share = vote(a, b, P, bx0, by0, bx1, by1, 0.25 * Math.sqrt(ov) + 0.004);
+          c = { tick, front: share >= 0 ? (share > 0.5 ? a.k : b.k) : -1, sure: share >= 0 ? Math.max(0.1, Math.abs(2 * share - 1)) : 0.1 };
+          pairs.set(key, c);
+        }
+        if (!c || c.tick !== tick) complete = false;
+        // (no say either way: their middles)
+        const aFront = c && c.front >= 0 ? c.front === a.k : a.d < b.d;
+        const back = aFront ? j : i, front = aFront ? i : j;
+        edges.push(back, front, ov);
+        outE[back].push(front);
+        into[front]++;
+        // (how much it'd cost to get wrong, to break a loop: the overlap, as
+        // sure as the vote was)
+        inW[front] += ov * (c ? c.sure : 0.1);
       }
-      a.layer = dep;
+    }
+    // in order, behind before in front (the farthest first where it's free
+    // to choose). A loop - each in front of the next, by a vote that got a
+    // small overlap wrong - is broken where it costs least: the one whose
+    // remaining "behind me" overlaps are fewest and least sure goes first.
+    const done = new Uint8Array(N), order = [];
+    const byFar = items.map((_, i) => i).sort((p, q) => items[q].d - items[p].d);
+    while (order.length < N) {
+      let pick = -1;
+      for (const i of byFar) if (!done[i] && into[i] === 0) { pick = i; break; }
+      if (pick < 0) {
+        let best = Infinity;
+        for (const i of byFar) if (!done[i] && inW[i] < best) { best = inW[i]; pick = i; }
+      }
+      done[pick] = 1;
+      order.push(pick);
+      for (const f of outE[pick]) into[f]--;
+    }
+    // each one's layer: one past the deepest of those behind it
+    let depthN = 1;
+    const depth = new Int32Array(N), inEdges = Array.from({ length: N }, () => []);
+    for (let e = 0; e < edges.length; e += 3) inEdges[edges[e + 1]].push(edges[e]);
+    const pos = new Int32Array(N);
+    order.forEach((i, r) => (pos[i] = r));
+    for (const i of order) {
+      let dep = 0;
+      for (const b of inEdges[i]) if (pos[b] < pos[i]) dep = Math.max(dep, depth[b] + 1);
+      depth[i] = dep;
       depthN = Math.max(depthN, dep + 1);
     }
+    for (let i = 0; i < N; i++) items[i].layer = depth[i];
+    this._depthN = depthN; // (how many it'd take: ?stats, harnesses)
     if (depthN > maxL) {
       // merge the depths into maxL runs, in order, losing the least overlap:
       // W[x][y] = overlap between depth x (farther) and y; cost of a run =
@@ -1213,7 +1422,11 @@ export class JellyView {
       for (const it of items) it.layer = group[it.layer];
       depthN = maxL;
     }
-    let nLayers = depthN;
+    items.depthN = depthN;
+    items.complete = complete;
+    this._layerItems = items;
+    }
+    let nLayers = items.depthN;
     // each layer's mesh: its pieces' runs of the index (rewritten only when
     // a piece changes layer)
     let changed = false;
