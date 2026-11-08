@@ -1162,6 +1162,7 @@ export class App {
       generateMipmaps: true,
       minFilter: THREE.LinearMipmapLinearFilter,
     });
+    this.strands?.mat.uniforms.uInvRes.value.set(1 / pw, 1 / ph);
     // the jelly's reflection in the floor (half size, blurred by mip level)
     this.rtRefl = new THREE.WebGLRenderTarget(Math.max(1, pw >> 1), Math.max(1, ph >> 1), {
       type: THREE.HalfFloatType,
@@ -2339,6 +2340,11 @@ export class App {
     const copy = () => this.post.copy(this.rtScene.texture, this.rtTrans);
     copy();
     if (!this.opts.nojelly) this.jelly.renderPieces(this.camera, this.sb, this.rtScene, this.rtTrans, copy);
+    // (the goo sees the jelly through itself: the room with the jelly in it)
+    if (this.strands.mesh.visible) {
+      copy();
+      this.strands.mat.uniforms.tBg.value = this.rtTrans.texture;
+    }
 
     this.glitter.update(this.clock.t);
     if (this.fxScene) {

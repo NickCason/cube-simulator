@@ -412,7 +412,7 @@ export class HandTool {
   _strands(pairs) {
     const app = this.app, sb = app.sb, g = app.st?.goo ?? 0.35;
     if (!(g > 0.02) || !app.strands || !pairs.length) return;
-    const want = Math.round(g * (1 + 2 * Math.random())), min2 = (0.1 * sb.p.size) ** 2, x = sb.x;
+    const want = Math.round(g * (2 + 3 * Math.random())), min2 = (0.07 * sb.p.size) ** 2, x = sb.x;
     const order = Array.from({ length: pairs.length / 2 }, (_, k) => k).sort(() => Math.random() - 0.5);
     const picked = [], col = new THREE.Color();
     for (const k of order) {
