@@ -618,6 +618,7 @@ export class Cubby {
     card.querySelector('.card-name').textContent = c.name;
     const main = card.querySelector('.card-main');
     main.setAttribute('aria-label', `Put on today's cube, ${c.name}`);
+    if (c.note) main.title = c.note;
     main.addEventListener('click', () => {
       this.app.audio.ui();
       this.tryDaily(c);
@@ -683,6 +684,7 @@ export class Cubby {
       const when = new Date().toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
       this.fighter.show(c, {
         kicker: `Cube of the day · ${when}`,
+        note: c.note || '',
         actions: [
           { label: 'Try it', run: () => this.tryDaily(c) },
           { label: 'Save', run: () => this.add(c, false) },

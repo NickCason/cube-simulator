@@ -27,6 +27,8 @@
 import { cubeStats } from './cubecode.js';
 import { punsFor } from './puns.js';
 import { TEXTURES, LAYER_PRESETS } from './styles.js';
+import { THEMES } from './themes.js';
+import { freeNodes, freePower } from './freeform.js';
 
 // ---------------------------------------------------------------- random
 // a small fast seeded generator (mulberry32) and a string hash for seeds
@@ -118,12 +120,30 @@ function nearest(hex, n = 3) {
     .sort((a, b) => a.d - b.d)
     .slice(0, n);
 }
+// (a colour's family by its hue alone - a pastel lilac the namer's nearest
+// name calls periwinkle is still purple to a theme)
+function hueFamily(L, chroma) {
+  if (chroma < 12) return L[0] > 85 ? 'white' : L[0] < 22 ? 'black' : 'grey';
+  const h = ((Math.atan2(L[2], L[1]) * 180) / Math.PI + 360) % 360;
+  if (h < 22 || h >= 345) return L[0] > 62 ? 'pink' : 'red';
+  if (h < 48) return L[0] < 45 && chroma < 50 ? 'brown' : 'red';
+  if (h < 72) return L[0] < 52 ? 'brown' : 'orange';
+  if (h < 106) return L[0] < 50 ? 'brown' : 'yellow';
+  if (h < 175) return 'green';
+  if (h < 235) return 'teal';
+  if (h < 295) return 'blue';
+  if (h < 325) return 'purple';
+  return 'pink';
+}
 // one colour, read: its names (nearest first), family, and how it looks
 function readColour(hex) {
   const near = nearest(hex, 3), { s, v } = hsvOf(hex), L = labOf(hex);
   const chroma = Math.hypot(L[1], L[2]);
   return {
     hex,
+    hue: ((Math.atan2(L[2], L[1]) * 180) / Math.PI + 360) % 360, // (Lab: red ~35, yellow ~90, green ~140, blue ~285)
+    lab: L,
+    fam2: hueFamily(L, chroma),
     names: near.map((x) => x.c.name),
     foods: near.filter((x) => x.c.food).map((x) => x.c.name),
     fam: near[0].c.fam,
@@ -188,6 +208,176 @@ const PRESET_WORDS = {
 const RUBIK_WORDS = ['Rubik', 'Scrambled', 'Puzzling', 'Twisty', 'Speedcubed', 'Six-Colour', 'Unsolved', 'Shuffled'];
 const RUBIK_NOUNS = ['Puzzle', 'Speedcube', 'Brain-Teaser', 'Twisty Puzzle', 'Enigma', 'Rubik'];
 
+// ---------------------------------------------------------------- themes
+// (see themes.js) A role, filled by colour c or not.
+const FAM = (c, ...f) => f.includes(c.fam);
+function roleOk(spec, c) {
+  for (const alt of spec.split('|')) {
+    const [base, mod] = alt.split(':');
+    let ok;
+    switch (base) {
+      case 'any': ok = true; break;
+      case 'warm': ok = FAM(c, 'red', 'orange', 'yellow', 'pink'); break;
+      case 'cool': ok = FAM(c, 'blue', 'teal', 'green', 'purple'); break;
+      case 'neutral': ok = FAM(c, 'white', 'grey', 'black', 'brown') || c.chroma < 15; break;
+      case 'bright': ok = c.chroma >= 55; break;
+      case 'cream': ok = c.light >= 84 && c.chroma <= 40 && FAM(c, 'white', 'yellow', 'orange', 'brown'); break;
+      case 'gold': ok = c.light >= 50 && c.light <= 90 && c.chroma >= 35 && c.hue >= 55 && c.hue <= 102 && FAM(c, 'yellow', 'orange', 'brown'); break;
+      case 'navy': ok = c.light <= 32 && c.lab[2] < -8 && FAM(c, 'blue', 'purple', 'black'); break;
+      case 'mint': ok = c.light >= 75 && FAM(c, 'green', 'teal'); break;
+      case 'sky': ok = c.light >= 65 && FAM(c, 'blue', 'teal'); break;
+      case 'tan': ok = c.light >= 58 && c.light <= 87 && c.chroma >= 10 && c.chroma <= 50 && c.hue >= 45 && c.hue <= 100 && FAM(c, 'brown', 'yellow', 'orange', 'white'); break;
+      case 'rust': ok = c.light >= 26 && c.light <= 60 && c.chroma >= 35 && FAM(c, 'orange', 'red', 'brown'); break;
+      case 'olive': ok = c.light >= 28 && c.light <= 64 && c.chroma >= 16 && c.chroma <= 62 && c.hue >= 92 && c.hue <= 130; break;
+      default: ok = c.fam === base || (c.fam2 === base && (c.chroma < 40 || c.light > 78));
+    }
+    if (ok && mod) {
+      if (mod === 'L') ok = c.light >= 70;
+      else if (mod === 'D') ok = c.light <= 38;
+      else if (mod === 'M') ok = c.light > 38 && c.light < 70;
+      else if (mod === 'V') ok = c.chroma >= 55;
+      else if (mod === 'P') ok = c.light >= 78 && c.chroma <= 45 && c.chroma >= 6;
+    }
+    if (ok) return true;
+  }
+  return false;
+}
+
+// How much of the cube each of its colours is (by hex, shares 1 in all).
+// Freeform: what the field gives over its surface, a few points a face; the
+// rest: the bands' share each (repeats don't change it).
+function colourShares(L) {
+  const cols = L.colors.map((h) => String(h).toLowerCase()), out = {};
+  if ((L.shape || 'up') === 'free') {
+    const nodes = freeNodes({ layers: cols, nodes: L.nodes }), g = freePower(L.blur);
+    let W = 0;
+    for (let f = 0; f < 6; f++)
+      for (let i = 0; i < 4; i++)
+        for (let j = 0; j < 4; j++) {
+          const u = (i + 0.5) / 4 - 0.5, v = (j + 0.5) / 4 - 0.5, ax = f >> 1, sgn = f & 1 ? -0.5 : 0.5;
+          const p = ax === 0 ? [sgn, u, v] : ax === 1 ? [u, sgn, v] : [u, v, sgn];
+          const w = nodes.map((q) => q.k * Math.pow((p[0] - q.x) ** 2 + (p[1] - q.y) ** 2 + (p[2] - q.z) ** 2 + 0.0025, -g));
+          const sw = w.reduce((a, b) => a + b, 0);
+          w.forEach((x, k) => (out[cols[k]] = (out[cols[k]] || 0) + x / sw));
+          W++;
+        }
+    for (const k in out) out[k] /= W;
+  } else for (const h of cols) out[h] = (out[h] || 0) + 1 / cols.length;
+  return out;
+}
+
+const ORDERED = new Set(['up', 'core', 'shell', 'rings', 'across', 'corner']);
+// (the colours in order, each run of one colour once: can the roles, in
+// order, each take a run of them - every colour its role's, or one of the
+// extras it may have?)
+function inOrder(seq, roles, opt) {
+  const n = seq.length, m = roles.length;
+  // dp[i][j]: the first i colours taken by the first j roles, the j-th's run
+  // with one of its own in it (h) or not yet
+  let cur = new Map([['0,0,1', true]]);
+  for (let i = 0; i < n; i++) {
+    const c = seq[i], next = new Map();
+    for (const key of cur.keys()) {
+      const [, j, h] = key.split(',').map(Number);
+      // (on in the same role's run)
+      if (j > 0 && (roleOk(roles[j - 1], c) || opt.some((o) => roleOk(o, c)))) next.set(`${i + 1},${j},${h || (roleOk(roles[j - 1], c) ? 1 : 0)}`, true);
+      // (the next role's run starts here - the last one had one of its own)
+      if (j < m && h && roleOk(roles[j], c)) next.set(`${i + 1},${j + 1},1`, true);
+    }
+    cur = next;
+  }
+  return cur.has(`${n},${m},1`);
+}
+
+// (each role a colour of its own - a matching - and the rest each some role's
+// or an extra's: the colours left unexplained, or -1 if the roles can't be)
+function assign(uniq, roles, opt) {
+  const m = roles.length, owner = new Array(uniq.length).fill(-1), of = new Array(m).fill(-1);
+  const tryRole = (r, seen) => {
+    for (let k = 0; k < uniq.length; k++) {
+      if (seen[k] || !roleOk(roles[r], uniq[k])) continue;
+      seen[k] = true;
+      if (owner[k] < 0 || tryRole(owner[k], seen)) {
+        owner[k] = r;
+        of[r] = k;
+        return true;
+      }
+    }
+    return false;
+  };
+  for (let r = 0; r < m; r++) if (!tryRole(r, new Array(uniq.length).fill(false))) return { left: -1 };
+  let left = 0;
+  const roleOfCol = owner.slice();
+  uniq.forEach((c, k) => {
+    if (owner[k] >= 0) return;
+    const r = roles.findIndex((x) => roleOk(x, c));
+    if (r >= 0) roleOfCol[k] = r;
+    else if (!opt.some((o) => roleOk(o, c))) left++;
+  });
+  return { left, roleOfCol, of };
+}
+
+// The themes a gradient is (see themes.js), the likeliest first: { th,
+// score } - how much of it it is (more roles, its order, its blend, the
+// material, all count; colours it doesn't account for count against).
+function matchThemes(cols, L, texture) {
+  if (!cols.length) return [];
+  const tiles = Math.max(1, Math.round(L.tiles || 1)), raw = L.shape || 'up', blur = L.blur ?? 0;
+  // (tiled, a little cube of the gradient each: radial or cubial ones are
+  // polka dots; bands, as many again; freeform or rings, a repeated motif)
+  const stripy = raw === 'up' || raw === 'across' || raw === 'corner';
+  const shape = tiles > 1 ? (raw === 'core' || raw === 'shell' ? 'dots' : stripy ? raw : 'tiles') : raw;
+  const rep = Math.max(1, Math.round(L.repeat || 1)) * (tiles > 1 && stripy ? tiles : 1);
+  const uniq = [], seen = new Set();
+  for (const c of cols) if (!seen.has(c.hex.toLowerCase())) seen.add(c.hex.toLowerCase()), uniq.push(c);
+  const seq = cols.filter((c, i) => i === 0 || c.hex.toLowerCase() !== cols[i - 1].hex.toLowerCase());
+  let shares = null;
+  const out = [];
+  for (const th of THEMES) {
+    const any = th.s.includes('any');
+    if (!any && !th.s.includes(shape)) continue;
+    if (th.t && tiles < th.t) continue;
+    if (th.b && (blur < th.b[0] - 1e-6 || blur > th.b[1] + 1e-6)) continue;
+    const byOrder = th.o && (ORDERED.has(shape) || shape === 'dots');
+    // (in order, it's its bands once through - unless it says)
+    const repOk = th.rep || (byOrder ? [1, 1] : null);
+    if (repOk && (rep < repOk[0] || rep > repOk[1])) continue;
+    if (th.cn && (uniq.length < th.cn[0] || uniq.length > th.cn[1])) continue;
+    if (th.muted && uniq.some((c) => c.chroma > 62)) continue;
+    const pastels = uniq.filter((c) => c.pastel || (c.light >= 80 && c.chroma <= 45)).length;
+    if (th.pastel && pastels < uniq.length * 0.6) continue;
+    if (th.bold && pastels > uniq.length * 0.4) continue;
+    const opt = th.opt || [];
+    // (in order - up it, from the middle out, side to side either way - a
+    // run of its colours each role, a colour more than once if it comes
+    // round again: black, orange, black; else each role a colour of its own)
+    let ordered = false, a = { left: 0, roleOfCol: [] };
+    if (byOrder) {
+      const flip = th.f || shape === 'across' || shape === 'corner';
+      ordered = inOrder(seq, th.r, opt) || (flip && inOrder([...seq].reverse(), th.r, opt));
+      if (!ordered) continue;
+    } else {
+      a = assign(uniq, th.r, opt);
+      if (a.left < 0 || a.left > (th.x || 0)) continue;
+    }
+    // (most of it one colour, or little of it another)
+    if (th.dom !== undefined || th.few !== undefined) {
+      shares = shares || colourShares(L);
+      const roleShare = (r) => uniq.reduce((t, c, k) => t + (a.roleOfCol[k] === r ? shares[c.hex.toLowerCase()] || 0 : 0), 0);
+      if (th.dom !== undefined && roleShare(th.dom) < 0.42) continue;
+      if (th.few !== undefined && roleShare(th.few) > 0.32) continue;
+    }
+    // (its colours its optional ones explain, too)
+    const optHit = byOrder ? 0 : uniq.filter((c, k) => a.roleOfCol[k] < 0 && opt.some((o) => roleOk(o, c))).length;
+    const score = 1 + th.r.length * 0.35 + optHit * 0.15 + (ordered ? 0.45 : 0) + (th.b ? 0.15 : 0) + (th.rep ? 0.25 : 0) + (th.t ? 0.2 : 0)
+      + (th.dom !== undefined ? 0.3 : 0) + (th.few !== undefined ? 0.2 : 0) + (th.pastel || th.bold ? 0.1 : 0) + (any ? -0.35 : th.s.length === 1 ? 0.25 : 0)
+      + (th.m && th.m.includes(texture) ? 0.5 : 0) - a.left * 0.25;
+    out.push({ th, score });
+  }
+  out.sort((p, q) => q.score - p.score);
+  return out.slice(0, 3);
+}
+
 // ---------------------------------------------------------------- patterns
 // a gradient's look, by its shape (and blend, repeats, tiles)
 const PATTERN = {
@@ -198,11 +388,11 @@ const PATTERN = {
   core: { adj: ['Bullseye', 'Ringed', 'Haloed', 'Targeted'], noun: ['Bullseye', 'Target', 'Iris', 'Eye of the Storm', 'Halo'] },
   shell: { adj: ['Nested', 'Concentric', 'Onion-Skinned', 'Russian-Doll'], noun: ['Jawbreaker', 'Gobstopper', 'Matryoshka', 'Onion', 'Nesting Doll'] },
   rings: { adj: ['Ringed', 'Rippled', 'Contoured', 'Growth-Ringed'], noun: ['Tree Ring', 'Agate', 'Ripple', 'Contour Map', 'Fingerprint'] },
-  free: { adj: ['Marbled', 'Swirled', 'Splotchy', 'Painted', 'Mottled'], noun: ['Marble', 'Swirl', 'Watercolour', 'Lava Lamp', 'Splodge'] },
-  freeLoud: { adj: ['Tie-Dyed', 'Psychedelic', 'Groovy', 'Kaleidoscopic'], noun: ['Tie-Dye', 'Lava Lamp', 'Kaleidoscope', 'Woodstock'] },
+  free: { adj: ['Marbled', 'Swirled', 'Splotchy', 'Painted', 'Mottled'], noun: ['Marble', 'Swirl', 'Watercolour', 'Splodge'] },
+  freeLoud: { adj: ['Psychedelic', 'Kaleidoscopic', 'Swirly'], noun: ['Kaleidoscope', 'Swirl'] },
   freeCamo: { adj: ['Camouflaged', 'Dappled'], noun: ['Camo', 'Ghillie Suit'] },
-  tiles: { adj: ['Checkered', 'Tiled', 'Patchwork', 'Pixelated', 'Quilted'], noun: ['Checkerboard', 'Patchwork', 'Quilt', 'Mosaic', 'Pixel'] },
-  gingham: { adj: ['Gingham', 'Picnic-Checked'], noun: ['Gingham', 'Tablecloth', 'Picnic Blanket'] },
+  tiles: { adj: ['Tiled', 'Patchwork', 'Pixelated', 'Printed', 'Repeating'], noun: ['Patchwork', 'Quilt', 'Mosaic', 'Pixel', 'Wallpaper'] },
+  dots: { adj: ['Polka-Dot', 'Spotty', 'Dotty', 'Spotted', 'Dappled'], noun: ['Polka Dot', 'Spots', 'Dots', 'Dalmatian', 'Domino'] },
   geode: { adj: ['Geode', 'Crystalline'], noun: ['Geode', 'Thunderegg', 'Agate Slice'] },
 };
 
@@ -445,7 +635,7 @@ const GEM_BY_FAM = {
 // jello shots and layered drinks, for layered jelly
 const SHOTS = ['{P} Jello Shot', '{C} Shooter', 'Pousse-Café', 'B-52', 'Layer Shot', '{C} Slammer', 'Rainbow Shot', '{P} Sunrise', '{C} Cosmo', 'Jelly Bomb', 'Tiki {C}', '{C} Daiquiri'];
 // racehorse names (two words run together, often a pun)
-const HORSE = ['{A}{N} Express', 'Wobble On By', 'Jiggle Me Timbers', '{F} Flyer', 'Gel Runner', 'Cubist Lad', 'Square Deal', '{A} Dancer', 'Nothing But {N}', 'Hold My {N}', 'Seabiscube', 'Wibbledon'];
+const HORSE = ['{A} {N} Express', 'Wobble On By', 'Jiggle Me Timbers', '{F} Flyer', 'Gel Runner', 'Cubist Lad', 'Square Deal', '{A} Dancer', 'Nothing But {N}', 'Hold My {N}', 'Seabiscube', 'Wibbledon'];
 // places: words and where it reigns
 const PLACE = {
   diner: { adj: ['Diner', 'Short-Order', 'Blue-Plate', 'Bottomless', 'Jukebox'], of: ['of the Diner', 'of Booth Seven', 'of the Milkshake Bar', 'of the Jukebox'], noun: ['Milkshake', 'Jukebox', 'Blue Plate Special', 'Short Stack'] },
@@ -567,7 +757,7 @@ export function cubeTraits(c, rec = null, ctx = {}) {
   const sal = {};
   const words = {}; // (each feature's adjectives/nouns)
   // -- colour
-  let colours = [], palette = null, pattern = null;
+  let colours = [], palette = null, pattern = null, themes = [];
   if (flavor === 'rubik') {
     palette = { name: 'Rubik', adj: RUBIK_WORDS, noun: RUBIK_NOUNS, named: ['Red', 'Green', 'Blue', 'Yellow', 'Orange', 'White'], fams: ['red', 'green', 'blue', 'yellow', 'orange', 'white'], rainbow: true };
     sal.palette = 0.95;
@@ -577,6 +767,16 @@ export function cubeTraits(c, rec = null, ctx = {}) {
     sal.palette = palette.preset ? 0.8 : palette.known ? 0.95 : 0.7;
     pattern = readPattern(colours, L, texture);
     if (pattern) sal.pattern = pattern.salience;
+    // (what its colours and pattern, together, look like: see themes.js)
+    themes = matchThemes(colours, L, texture);
+    // (the likeliest most; the others as far behind it as they are)
+    themes.forEach((m, i) => (sal['theme' + i] = Math.max(0.2, Math.min(1.25, 0.6 + m.score * 0.17 - (themes[0].score - m.score) * 0.6))));
+    if (themes.length) {
+      sal.palette = Math.min(sal.palette, 0.45);
+      // (a preset's own words stay: it was made to be that)
+      palette.adj = [...palette.presetAdj, ...themes[0].th.a, ...palette.desc];
+      palette.noun = [...palette.presetNoun, ...themes[0].th.k];
+    }
   } else {
     const hex = flavor.startsWith('#') ? flavor : null;
     const own = FLAVOR_WORDS[flavor];
@@ -660,6 +860,7 @@ export function cubeTraits(c, rec = null, ctx = {}) {
     edges: EDGE_WORDS[c.edges] || [], edgeKey, glitterKey, glitter: words.glitter || [],
     small: size < 0.88, big: size > 1.12, lowG: grav !== null && grav < 6, highG: grav !== null && grav > 30,
     dark, tearless, rec: rec || null, storied, place: placeKey, time, gen, parent, twin: ctx.twin || '', pairing: !!ctx.pairing, changes, sal,
+    themes, colours, L: flavor === 'layers' ? L : null,
   };
 }
 
@@ -674,6 +875,7 @@ function readPalette(cols, L) {
     adj.push(...(PRESET_WORDS[preset.id] || [preset.name]).map(unhyphen));
     noun.push(preset.name);
   }
+  const presetAdj = adj.slice(), presetNoun = noun.slice();
   // a named palette: all of its families there, not too many others
   const light = cols.every((c) => c.light > 70);
   for (const P of PALETTES) {
@@ -688,7 +890,9 @@ function readPalette(cols, L) {
     adj.push(P.name.replace(/ & /, '-and-'));
     break;
   }
-  // described
+  // described (and kept apart: a theme's reading of the colours outranks
+  // a palette's name for them, not what they're like)
+  const named0 = adj.length;
   const pastel = cols.filter((c) => c.pastel).length >= cols.length * 0.6;
   const neon = cols.filter((c) => c.neon).length >= Math.max(1, cols.length * 0.5);
   const dark = cols.filter((c) => c.dark).length >= cols.length * 0.5;
@@ -706,7 +910,7 @@ function readPalette(cols, L) {
   if (!adj.length) adj.push(cols.length > 2 ? 'Layered' : 'Two-Tone');
   // the colours, two of them by name ("Coral & Teal")
   const named = [...new Set(cols.map((c) => c.names[0]))];
-  return { name, preset: preset ? preset.id : null, known, adj, noun, named, fams, rainbow, pastel, neon, dark, earthy, jewel };
+  return { name, preset: preset ? preset.id : null, known, adj, desc: adj.slice(named0), presetAdj, presetNoun, noun, named, fams, rainbow, pastel, neon, dark, earthy, jewel };
 }
 
 // a gradient's pattern: its shape, blend, repeats, tiles
@@ -714,13 +918,14 @@ function readPattern(cols, L, texture) {
   const shape = L.shape || 'up', blur = L.blur || 0, rep = L.repeat || 1, tiles = L.tiles || 1;
   const parts = [];
   let salience = 0.4;
-  if (tiles > 1) {
-    const two = new Set(cols.map((c) => c.names[0])).size === 2;
-    const white = cols.some((c) => c.fam === 'white');
-    parts.push(two && white && blur < 0.3 ? PATTERN.gingham : PATTERN.tiles);
+  if (tiles > 1 && (shape === 'core' || shape === 'shell')) {
+    // (a little cube each, radial: polka dots)
+    parts.push(PATTERN.dots);
+    salience = 0.9;
+  } else if (tiles > 1 && (shape === 'free' || shape === 'rings')) {
+    parts.push(PATTERN.tiles);
     salience = 0.85;
-  }
-  if (shape === 'free') {
+  } else if (shape === 'free') {
     const loud = cols.filter((c) => c.chroma > 55).length >= 3;
     const camo = cols.every((c) => ['green', 'brown', 'yellow', 'grey', 'black'].includes(c.fam) && c.chroma < 55);
     parts.push(camo ? PATTERN.freeCamo : loud ? PATTERN.freeLoud : PATTERN.free);
@@ -768,6 +973,8 @@ export function nameCube(c, { taken = [], rnd = Math.random, rec = null, ...ctx 
       // (a word twice: "Bunny Chocolate Bunny" - not a name)
       const lw = text.toLowerCase().split(/[\s-]+/).map((x) => x.replace(/[^a-z]/g, '')).filter((x) => x.length > 2);
       if (new Set(lw).size < lw.length) continue;
+      // (or the same word near enough: Rippled Ripple, Planetary Planet)
+      if (lw.some((x, i) => lw.some((y, j) => j > i && nearSame(x, y)))) continue;
       cands.push({ text, score: scoreName(text, n, tr) - echo(text, takenWords, famWords) });
     }
     if (cands.length) {
@@ -791,6 +998,16 @@ function echo(text, words, skip) {
   let e = 0;
   for (const w of text.toLowerCase().split(/[\s,&-]+/)) if (w.length > 3 && words.has(w) && !skip.has(w)) e += 0.45 * words.get(w);
   return e;
+}
+
+// (two words the same near enough: Rippled Ripple, Spotty Spots, Planetary
+// Planet - a long shared start, the rest of either little more than an ending)
+function nearSame(x, y) {
+  if (x === y) return true;
+  if (Math.min(x.length, y.length) < 4) return false;
+  let p = 0;
+  while (p < x.length && p < y.length && x[p] === y[p]) p++;
+  return p >= 3 && Math.min(x.length, y.length) <= p + 2;
 }
 
 function tidy(s) {
@@ -834,6 +1051,7 @@ function make(tr, rnd) {
     if (tr.pattern) opts.push([['pattern', () => pick(rnd, tr.pattern.adj), 'pattern'], tr.pattern.salience * 2.4]);
     if (tr.palette && tr.palette.adj.length) opts.push([['palette', () => pick(rnd, tr.palette.adj), 'palette'], sal.palette * 2]);
     if (tr.glitter.length) opts.push([['glitter', () => pick(rnd, tr.glitter), 'glitter'], 1.8]);
+    tr.themes.forEach((m, i) => m.th.a.length && opts.push([['theme', () => pick(rnd, m.th.a), 'theme' + i], (sal['theme' + i] || 0) * 1.6]));
     tr.finish.forEach(([a, , s], i) => opts.push([['finish', () => pick(rnd, a), 'finish' + i], s * 2]));
     tr.feel.forEach(([a, , s], i) => opts.push([['feel', () => pick(rnd, a), 'feel' + i], s * 2]));
     if (tr.place) opts.push([['place', () => pick(rnd, PLACE[tr.place].adj), 'place'], 1]);
@@ -852,6 +1070,7 @@ function make(tr, rnd) {
     ];
     if (tr.pattern) opts.push([[() => pick(rnd, tr.pattern.noun), 'pattern'], tr.pattern.salience * 2]);
     if (tr.palette && tr.palette.noun.length) opts.push([[() => pick(rnd, tr.palette.noun), 'palette'], sal.palette * 2]);
+    tr.themes.forEach((m, i) => m.th.k.length && opts.push([[() => pick(rnd, m.th.k), 'theme' + i], (sal['theme' + i] || 0) * 1.6]));
     tr.finish.forEach(([, nn, s], i) => opts.push([[() => pick(rnd, nn), 'finish' + i], s * 1.6]));
     tr.feel.forEach(([, nn, s], i) => opts.push([[() => pick(rnd, nn), 'feel' + i], s * 1.6]));
     if (tr.place) opts.push([[() => pick(rnd, PLACE[tr.place].noun), 'place'], 0.7]);
@@ -898,9 +1117,10 @@ function make(tr, rnd) {
     ['pun', 1.8], ['adjNoun', 3], ['adjAdjNoun', 0.9], ['titleName', 2], ['nameEpithet', 2], ['fullName', 1.2], ['regal', 0.9],
     ['wrestler', 0.8], ['robot', tr.texture === 'chrome' || tr.texture === 'holo' ? 2.4 : 0.5], ['band', 0.8], ['latin', 0.9],
     ['dessert', tr.mat.sweet ? 1.8 : 0.5], ['ship', 0.5], ['portmanteau', 1.2], ['phrase', 1.5], ['superhero', 0.9],
-    ['paint', tr.main ? 1.6 : tr.palette && tr.palette.named && tr.palette.named.length <= 2 ? 1.2 : 0], ['gem', gemlike ? 2.2 : 0.2], ['combo', tr.palette && tr.palette.named && tr.palette.named.length >= 2 ? (tr.palette.named.length <= 3 ? 2.4 : 0.8) : 0],
+    ['paint', tr.main ? 1.6 : tr.palette && tr.palette.named && tr.palette.named.length <= 2 ? 1.2 : 0], ['gem', gemlike ? 2.2 : 0.2], ['combo', tr.palette && tr.palette.named && tr.palette.named.length >= 2 ? (tr.palette.named.length <= 3 ? 2.4 : 0.8) * (tr.themes.length ? 0.4 : 1) : 0],
     ['palette', tr.palette && tr.palette.noun.length ? 2.4 : 0], ['pattern', tr.pattern ? 2.4 : 0], ['shot', tr.palette && tr.flavor !== 'rubik' ? 1.2 : 0],
     ['horse', 0.6], ['place', tr.place ? 1.8 : 0], ['season', tr.time ? (tr.time.holiday ? 0.6 + 1.4 * tr.time.strength : 0.5) : 0],
+    ['theme', tr.themes.length ? 6.5 : 0], ['describe', tr.L && tr.colours.length > 1 ? 2.4 : 0],
     ['heir', fam ? 6 : 0], ['twin', tr.twin ? (pairOf(tr.twin) ? 60 : 5) : 0], ['pairHalf', tr.pairing ? 1 : 0], ['mutant', tr.changes.length ? 2.2 : 0], ['monster', tr.mat.monster || tr.dark ? 1 : 0.15],
   ];
   const kind = choose(rnd, kinds);
@@ -1084,6 +1304,56 @@ function make(tr, rnd) {
         { t: `The ${word} Anomaly`, u: ['mutation'], k: 0.1 },
         { t: `${A.w} Mutation`, u: U('mutation', A.u) },
       ]);
+    }
+    case 'theme': {
+      // what its colours and pattern, together, are (see themes.js): one
+      // of its names, or its thing with a word of the cube's own
+      const i = choose(rnd, tr.themes.map((m, k) => [k, Math.exp((m.score - tr.themes[0].score) * 3)]));
+      const th = tr.themes[i].th, u = 'theme' + i, matAdj = tr.mat.plain ? null : pick(rnd, tr.mat.adj);
+      return choose(rnd, [
+        [{ t: pick(rnd, th.n), u: [u], k: 0.55 }, 3],
+        [th.k.length ? { t: `${A.w} ${pick(rnd, th.k)}`, u: U(u, A.u), k: 0.3 } : null, 1.4],
+        [th.k.length && matAdj ? { t: `${matAdj} ${pick(rnd, th.k)}`, u: [u, 'material'], k: 0.3 } : null, 1],
+        [th.a.length ? { t: `${pick(rnd, th.a)} ${N.w}`, u: U(u, N.u), k: 0.25 } : null, 0.9],
+      ].filter(([x]) => x));
+    }
+    case 'describe': {
+      // its colours and its pattern, said: "Lemon-Hearted Grape", "Mint with
+      // Cocoa Flecks", "Teal & Coral Swirl", "Cream-Topped Cherry"
+      const Lr = tr.L, shape = Lr.shape || 'up', blur = Lr.blur ?? 0, rep = Lr.repeat || 1, tiles = Lr.tiles || 1;
+      const seen = new Set(), cs = [];
+      for (const c of tr.colours) if (!seen.has(c.hex.toLowerCase())) seen.add(c.hex.toLowerCase()), cs.push(c);
+      // (a word a colour: a food's, often, for a sweet or a jelly one)
+      const foodie = tr.mat.sweet || tr.texture === 'jello' || tr.texture === 'gummy' || tr.texture === 'sour';
+      const used = new Set();
+      const word = (c) => {
+        const l = [...(foodie && rnd() < 0.6 ? c.foods : []), ...c.names].filter((w) => !used.has(w));
+        const w = l.length ? pick(rnd, l.slice(0, 2)) : c.names[0];
+        used.add(w);
+        return w;
+      };
+      const W = cs.map(word), a = W[0], b = W[1], c3 = W[2], first = W[0], last = W[W.length - 1];
+      const opts = [];
+      if (tiles > 1 && (shape === 'core' || shape === 'shell')) opts.push(`${last} with ${first} Dots`, `${first}-Spotted ${last}`, `${first} on ${last} Polka`);
+      else if (tiles > 1 && (shape === 'free' || shape === 'rings')) opts.push(`${a} & ${b} Tiles`, `${a}-${b} Mosaic`, `${a} & ${b} Print`);
+      else if (tiles > 1) opts.push(`${a} & ${b} Stripes`, `${a}-${b} Stripe`);
+      else if (shape === 'free') {
+        const sh = colourShares(Lr), dom = cs.find((c) => (sh[c.hex.toLowerCase()] || 0) >= 0.5);
+        const bits = blur < 0.3 ? pick(rnd, ['Patches', 'Splodges', 'Spots', 'Flecks']) : pick(rnd, ['Swirls', 'Ripples', 'Streaks', 'Clouds']);
+        if (dom) opts.push(`${W[cs.indexOf(dom)]} with ${W[cs.indexOf(dom) === 0 ? 1 : 0]} ${bits}`);
+        const mix = blur < 0.3 ? pick(rnd, ['Splash', 'Splodge', 'Patchwork']) : pick(rnd, ['Swirl', 'Marble', 'Ripple', 'Whirl']);
+        opts.push(cs.length >= 3 ? `${a}, ${b} & ${c3} ${mix}` : `${a} & ${b} ${mix}`, `${a}-${b} ${mix}`);
+      } else if (shape === 'core' || shape === 'shell') {
+        // (from the middle out)
+        opts.push(`${first}-Hearted ${last}`, `${last} with a ${first} Heart`, `${first}-Core ${last}`);
+        if (shape === 'shell') opts.push(`${last}-Wrapped ${first}`);
+      } else if (shape === 'rings') opts.push(`${a} & ${b} Rings`, `${first}-Ringed ${last}`, `${a} & ${b} Ripples`);
+      else if (shape === 'across') opts.push(`Half ${a}, Half ${b}`, `${a} Meets ${b}`, `${a}/${b} Split`);
+      else if (shape === 'corner') opts.push(`${a}-and-${b} Diagonal`, `${first} to ${last} Slant`);
+      else if (rep >= 2 && blur < 0.35) opts.push(`${a} & ${b} Stripes`, `${a}-${b} Stripe`);
+      else if (blur > 0.55) opts.push(`${first}-to-${last} Fade`, `${first} & ${last} Ombré`);
+      else opts.push(`${last}-Topped ${first}`, cs.length >= 3 ? `${a}, ${b} & ${c3} Layers` : `${a} & ${b} Layers`, `${first} Under ${last}`);
+      return { t: pick(rnd, opts), u: ['palette', 'pattern'], k: 0.35 };
     }
     case 'monster':
       return { t: pick(rnd, [`The ${N.w} From Beyond`, `It Came From the ${pick(rnd, ['Fridge', 'Lab', 'Bowl', 'Deep'])}`, `The ${A.w} Horror`, `Creature of the ${pick(rnd, ['Black Lagoon', 'Night', 'Jelly Mould'])}`, `${N.w}zilla`]), u: U(N.u, A.u, 'material'), k: 0.2 };

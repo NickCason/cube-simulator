@@ -143,3 +143,29 @@ test('holidays are where they are: Bonfire Night in Britain, Thanksgiving in the
   assert.ok(share(many(c, { now: new Date(2027, 2, 28, 12) }), egg) > 0.05);
   assert.equal(share(many(c, { now: new Date(2026, 3, 20, 12) }), egg), 0);
 });
+
+// ---- themes: what a gradient's colours and pattern, together, are (2026-11-08)
+const grad = (shape, colors, o = {}) => ({ flavor: 'layers', layers: { colors, shape, blur: o.blur ?? 0.5, repeat: o.rep ?? 1, tiles: o.tiles ?? 1 }, texture: o.mat || 'jello', tune: {} });
+const theme = (c) => cubeTraits(c, null, {}).themes.map((m) => m.th.n[0]);
+
+test('a gradient is named for what it looks like: its colours, in their order, and its pattern', () => {
+  assert.equal(theme(grad('up', ['#d50000', '#ff6d00', '#ffd600'], { blur: 0.8 }))[0], 'Tequila Sunrise');
+  // (the same colours the other way up aren't a sunrise)
+  assert.notEqual(theme(grad('up', ['#ffd600', '#ff6d00', '#d50000'], { blur: 0.8 }))[0], 'Tequila Sunrise');
+  assert.equal(theme(grad('core', ['#ffc107', '#ffffff'], { blur: 0.2 }))[0], 'Fried Egg');
+  assert.equal(theme(grad('core', ['#000000', '#ff9800', '#000000'], { blur: 0.4 }))[0], 'Black Hole');
+  assert.equal(theme(grad('free', ['#1565c0', '#2e7d32', '#ffffff', '#1e88e5']))[0], 'Blue Marble');
+  assert.equal(theme(grad('free', ['#d50000', '#ffffff', '#d50000', '#d50000'], { blur: 0.1 }))[0], 'Toadstool');
+  assert.equal(theme(grad('up', ['#111111', '#fafafa'], { rep: 4, blur: 0 }))[0], 'Zebra');
+  // tiled, radial: polka dots
+  assert.equal(theme(grad('core', ['#fff3c4', '#ffc107'], { tiles: 3, blur: 0.1 }))[0], 'Swiss Cheese');
+  // (and the names come from it)
+  const rnd = seeded(3), names = Array.from({ length: 40 }, () => nameCube(grad('core', ['#ffc107', '#ffffff'], { blur: 0.2 }), { rnd }));
+  assert.ok(names.filter((n) => /Egg|Sunny|Yolk|Over Easy|Full English/.test(n)).length >= 6, names.join(' / '));
+});
+
+test('a gradient no theme fits is described: its colours and its pattern', () => {
+  const rnd = seeded(5), names = Array.from({ length: 60 }, () => nameCube(grad('core', ['#ffeb3b', '#6a1b9a'], { blur: 0.3 }), { rnd }));
+  assert.ok(names.some((n) => /-Hearted|Heart|-Core/.test(n)), names.join(' / '));
+  for (const n of names) assert.ok(!/\b(\w{4,})\w* \1/i.test(n), n);
+});

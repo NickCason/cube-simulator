@@ -2845,6 +2845,9 @@ html.dark .modal .linkish {
 
 .f-rec .f-fresh {
   font-style: italic;
+  /* (the cube of the day's line about it: it wraps) */
+  white-space: normal;
+  line-height: 1.3;
 }
 
 .f-acts {

@@ -36,8 +36,9 @@ export class FighterCard {
   }
 
   // c: a decoded cube; kicker: the line above the name; rec: its record (null:
-  // not in the Cubby); actions: [{ label, run }] (Undo, Save)
-  show(c, { kicker = 'Cube select', rec = null, actions = [], ms = 0 } = {}) {
+  // not in the Cubby); note: a line about it (the cube of the day's);
+  // actions: [{ label, run }] (Undo, Save)
+  show(c, { kicker = 'Cube select', rec = null, note = '', actions = [], ms = 0 } = {}) {
     const app = this.app, el = this.el;
     this._clear();
     const f = resolveFlavor({ flavor: c.flavor, layers: c.layers });
@@ -64,7 +65,7 @@ export class FighterCard {
     if (!rec) {
       const s = document.createElement('span');
       s.className = 'f-fresh';
-      s.textContent = 'Fresh out of the box';
+      s.textContent = note || 'Fresh out of the box';
       recEl.appendChild(s);
     } else {
       for (const [k, label] of RECORD) {
