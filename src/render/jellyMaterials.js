@@ -572,7 +572,10 @@ export function createJellyMaterial(env, layerUniforms) {
         vec2 fuv = (xz - uFloorRect.xy) * uFloorRect.zw;
         float mask = 0.0, contact = 0.0;
         vec3 caus = vec3(0.0), glowF = vec3(0.0), tint = uTint;
-        float lod = 1.0 + 4.0 * rough;
+        // (as blurred as it's rough - and as the patch of floor one pixel
+        // takes in: round an edge, a wide one; the shadow's edge was a line)
+        vec2 fwF = fwidth(fuv) * vec2(textureSize(tFloorFx, 0));
+        float lod = max(1.0 + 4.0 * rough, log2(max(max(fwF.x, fwF.y), 1.0)));
         if (all(greaterThan(fuv, vec2(0.0))) && all(lessThan(fuv, vec2(1.0)))) {
           vec2 cuv = (xz - uCausRect.xy) * uCausRect.zw;
           if (all(greaterThan(cuv, vec2(0.0))) && all(lessThan(cuv, vec2(1.0)))) caus = textureLod(tCaustic, cuv, lod + 0.4).rgb;
@@ -662,6 +665,18 @@ export function createJellyMaterial(env, layerUniforms) {
             if (dist < best) { best = dist; id = hash13(c3 + 4.4); }
           }
         return vec2(id, 1.0 - smoothstep(0.24, 0.3, best));
+      }
+
+      // (where the line of sight through lands on the room behind - the
+      // middle channel's, as sampleThrough finds it: for how big a patch of
+      // the room one pixel sees through it)
+      vec2 throughUV(vec3 P, vec3 V, vec3 N, vec3 Nb, float thick, float ior) {
+        vec3 r1 = refract(-V, N, 1.0 / ior);
+        vec3 Pexit = P + r1 * thick;
+        vec3 r2 = refract(r1, -Nb, ior);
+        float D = 1.2;
+        if (r2.y < -0.02) D = min(D, max(Pexit.y, 0.0) / -r2.y);
+        return toScreen(Pexit + r2 * D);
       }
 
       vec3 sampleThrough(vec3 P, vec3 V, vec3 N, vec3 Nb, float thick, float ior, float lod, float rough, int ch) {
@@ -800,6 +815,13 @@ export function createJellyMaterial(env, layerUniforms) {
         float a2 = rough * rough * rough * rough + min(0.5 * (dot(dNx, dNx) + dot(dNy, dNy)), 0.18);
         rough = max(rough, sqrt(sqrt(min(a2, 1.0))));
         float lod = clamp(rough * 9.0 + frost * 2.5 + thick * 1.6 + exitCoat * 1.8, 0.0, uSceneLodMax);
+        // (and no sharper than a pixel can show: where the surface bends the
+        // view hard - its edges, its corners - one pixel sees a wide patch of
+        // the room behind, and a point of it (a checker floor's lines)
+        // aliased into jagged ribs; the room's taken blurred to the patch)
+        vec2 uvT = throughUV(Pw, V, N, Nb, thick, cIor);
+        vec2 duT = dFdx(uvT) * resolution, dvT = dFdy(uvT) * resolution;
+        lod = clamp(max(lod, 0.5 * log2(max(max(dot(duT, duT), dot(dvT, dvT)), 1.0))), 0.0, uSceneLodMax);
 
         vec3 trans;
         trans.r = sampleThrough(Pw, V, N, Nb, thick, cIor - disp, lod, rough, 0).r;
@@ -905,10 +927,17 @@ export function createJellyMaterial(env, layerUniforms) {
         // the jelly's own coloured shadow and caustics, its glow pool - not
         // the studio map's flat grey (which beside a strong colour reads as
         // its opposite: red edges looked green)
-        if (Rv.y < 0.0) {
-          vec3 H = Pw + Rv * (max(Pw.y, 0.0) / max(-Rv.y, 1e-3));
-          refl = mix(refl, floorAt(H.xz, rough) * envIntensity, 1.0 - smoothstep(-0.12, 0.0, Rv.y));
-        }
+        // (Worked out at every pixel, not just those looking down: the floor's
+        // pattern and its shadow are filtered by how fast the point moves
+        // across the screen, and that's only known if the pixels round this
+        // one work it out too - in a branch some skip, it's garbage, and a
+        // checker floor reflected round an edge tore into jagged shards. And
+        // the change from the room above to the floor below no sharper than
+        // a couple of pixels: round an edge it was a hard line along it.)
+        vec3 Hf = Pw + Rv * (max(Pw.y, 0.0) / max(-Rv.y, 0.02));
+        vec3 flr = floorAt(Hf.xz, rough) * envIntensity;
+        float hzw = clamp(2.0 * fwidth(Rv.y), 0.12, 0.6);
+        refl = mix(refl, flr, 1.0 - smoothstep(-hzw, 0.0, Rv.y));
 
         vec3 H = normalize(L + V);
         float NdH = max(dot(N, H), 0.0);

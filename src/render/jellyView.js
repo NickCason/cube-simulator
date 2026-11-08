@@ -20,6 +20,7 @@ import {
 } from './jellyMaterials.js';
 
 const FLOOR_SPAN = 6.4;
+const CAUS_GAIN = 1.5; // (how bright the caustic light lands)
 // (how milky jelly of that opacity looks: see setStyle)
 // a row of the cube-look texture: 7 texels of looks, 10 + 10 of layers, the
 // colour of its light, a freeform gradient's depth
@@ -382,6 +383,8 @@ export class JellyView {
     // (on a desktop, the caustics drawn a colour at a time, each bent its own
     // amount: their edges split into rainbows)
     this.disperse = !coarse;
+    this.causticLevel = 1; // (0..1: faded out while a lot of bits re-cube - see App)
+    this.layerCap = Infinity; // (and fewer refraction layers meanwhile)
     this.causticMat.uniforms.uDisperse.value = 1.5;
     // (and the jelly, for one cube's shadow on another - see cubeShadowAt)
     this.frontMat.uniforms.tLightEntry.value = this.lightView[0].rt.texture;
@@ -506,7 +509,7 @@ export class JellyView {
       bg: { value: new THREE.Color(0.86, 0.85, 0.83) },
       texel: { value: new THREE.Vector2(1 / 512, 1 / 512) },
       causRect: { value: new THREE.Vector4(-3.2, -3.2, 1 / 6.4, 1 / 6.4) }, // (the caustics' texture: fitted round the jelly)
-      causGain: { value: 1.5 }, // (how bright the caustic light lands)
+      causGain: { value: CAUS_GAIN }, // (how bright the caustic light lands)
       penumbra: { value: 0.06 }, // (the key light's softness: its shadow's edge widens this much a metre from what casts it)
       tint: { value: new THREE.Color(1, 0.2, 0.2) },
       refl: { value: null }, // the jelly mirrored in the floor (App's rtRefl)
@@ -1078,8 +1081,12 @@ export class JellyView {
     const prevClear = r.getClearColor(new THREE.Color());
     const prevAlpha = r.getClearAlpha();
     r.setClearColor(0x000000, 0);
-    // caustics: the light's view of the jelly, then its grid of rays
-    const lit = sb && this.allMesh && this._fitLightView(sb);
+    // caustics: the light's view of the jelly, then its grid of rays (the
+    // light's view is the cubes' shadows on each other too - faded out,
+    // only that)
+    const caus = this.causticLevel > 0.01;
+    this.fxUniforms.causGain.value = CAUS_GAIN * this.causticLevel;
+    const lit = sb && this.allMesh && (caus || this.multiCube) && this._fitLightView(sb);
     if (lit) {
       for (const { rt, mat } of this.lightView) {
         mat.uniforms.uOrigin.value.copy(this.lightOrigin);
@@ -1099,7 +1106,7 @@ export class JellyView {
     }
     r.setRenderTarget(this.rtCaustic);
     r.clear(true, false, false);
-    if (lit) {
+    if (lit && caus) {
       const ch = this.causticMat.uniforms.uChannel;
       if (this.disperse) {
         const auto = r.autoClear;
@@ -1119,12 +1126,12 @@ export class JellyView {
     this.blurMat.uniforms.tSrc.value = this.rtCaustic.texture;
     this.blurMat.uniforms.uStep.value.set(cst, 0);
     r.setRenderTarget(this.rtCausticT);
-    if (lit) r.render(this.blurScene, this.fxCam);
+    if (lit && caus) r.render(this.blurScene, this.fxCam);
     else r.clear(true, false, false);
     this.blurMat.uniforms.tSrc.value = this.rtCausticT.texture;
     this.blurMat.uniforms.uStep.value.set(0, cst);
     r.setRenderTarget(this.rtCausticB);
-    if (lit) r.render(this.blurScene, this.fxCam);
+    if (lit && caus) r.render(this.blurScene, this.fxCam);
     else r.clear(true, false, false);
     this._fitFloorFx(sb);
     r.setRenderTarget(this.rtFloorFx);
@@ -1192,7 +1199,7 @@ export class JellyView {
     const v = this._v;
     if (!this.allMesh) return;
     const NP = Math.min(sb.pieces.length, this.pieceIdx.length / 2);
-    const maxL = Math.min(this.maxLayers, this.layerMeshes.length);
+    const maxL = Math.min(this.maxLayers, this.layerCap, this.layerMeshes.length);
     // (the layers as last time, if nothing's changed: the camera still, the
     // body the same and all of it asleep - or, only it moving, every other
     // frame: telling who's in front costs a little, a piece)

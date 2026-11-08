@@ -1338,6 +1338,14 @@ export class App {
     }
     this._themeTick(dt);
     this._placeTick(dt);
+    // (a re-cube of a lot of bits: the caustics fade out while it lasts - a
+    // swarm of pieces spread their light thin and wild, and their passes cost
+    // the most just then - and come back after; and pieces are seen through
+    // pieces only two deep, the rest of the refraction layers' passes saved)
+    const swarm = this.healer.active && this.sb.pieces.length > 6;
+    const causGoal = swarm ? 0 : 1, cl = this.jelly.causticLevel;
+    this.jelly.causticLevel = cl + (causGoal - cl) * Math.min(1, dt * (causGoal < cl ? 6 : 2.5));
+    this.jelly.layerCap = swarm ? 2 : Infinity;
     this._updateCamera(dt);
     this.overlay.draw(dt);
     const r0 = performance.now();

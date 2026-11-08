@@ -41,6 +41,14 @@ const DEFAULTS = {
 export const MAX_CUBES = 8;
 export const REST_STEP = 10;
 
+// How soft, at the least, each tet's shape and volume terms stay - as a
+// share of hard (a full correction in one substep): see _solveTets. (The
+// shape's at 3, a still cube of light rubber settled ribbed - its edges
+// scalloped, its faces dented, 5 mm deep; at 12 it's as smooth as jelly,
+// and as firm as it was to within a tenth.)
+const DEV_SOFT = 12;
+const VOL_SOFT = 0.25;
+
 function growArr(a, n, C) {
   const b = new C(n);
   if (a) b.set(a.length > n ? a.subarray(0, n) : a);
@@ -1600,10 +1608,15 @@ export class SoftBody {
         const g2x = (f00 * b10 + f01 * b11 + f02 * b12) * ic, g2y = (f10 * b10 + f11 * b11 + f12 * b12) * ic, g2z = (f20 * b10 + f21 * b11 + f22 * b12) * ic;
         const g3x = (f00 * b20 + f01 * b21 + f02 * b22) * ic, g3y = (f10 * b20 + f11 * b21 + f12 * b22) * ic, g3z = (f20 * b20 + f21 * b21 + f22 * b22) * ic;
         const g0x = -g1x - g2x - g3x, g0y = -g1y - g2y - g3y, g0z = -g1z - g2z - g3z;
-        const alpha = ih2 / (mu * V);
-        const den = w0 * (g0x * g0x + g0y * g0y + g0z * g0z) + w1 * (g1x * g1x + g1y * g1y + g1z * g1z) +
-          w2 * (g2x * g2x + g2y * g2y + g2z * g2z) + w3 * (g3x * g3x + g3y * g3y + g3z * g3z) + alpha;
-        const dl = -C / den;
+        const hard = w0 * (g0x * g0x + g0y * g0y + g0z * g0z) + w1 * (g1x * g1x + g1y * g1y + g1z * g1z) +
+          w2 * (g2x * g2x + g2y * g2y + g2z * g2z) + w3 * (g3x * g3x + g3y * g3y + g3z * g3z);
+        // (no harder than a substep can hold: this term on its own pulls the
+        // tet to a point - it's held at its size only by the volume's push,
+        // and only while it's soft. Too stiff for the tet's mass and size - a
+        // sliver a cut left, light stiff jelly - it went hard, crushed it
+        // inside out, and diced rubber blew up into spikes.)
+        const alpha = Math.max(ih2 / (mu * V), DEV_SOFT * hard);
+        const dl = -C / (hard + alpha);
         let s = w0 * dl; x[i0] += g0x * s; x[i0 + 1] += g0y * s; x[i0 + 2] += g0z * s;
         s = w1 * dl; x[i1] += g1x * s; x[i1 + 1] += g1y * s; x[i1 + 2] += g1z * s;
         s = w2 * dl; x[i2] += g2x * s; x[i2 + 1] += g2y * s; x[i2 + 2] += g2z * s;
@@ -1636,8 +1649,11 @@ export class SoftBody {
           const q = Math.max(J / 0.35, 0.25);
           alpha *= q * q;
         }
-        const den = w0 * (g0x * g0x + g0y * g0y + g0z * g0z) + w1 * (g1x * g1x + g1y * g1y + g1z * g1z) +
-          w2 * (g2x * g2x + g2y * g2y + g2z * g2z) + w3 * (g3x * g3x + g3y * g3y + g3z * g3z) + alpha;
+        const hard = w0 * (g0x * g0x + g0y * g0y + g0z * g0z) + w1 * (g1x * g1x + g1y * g1y + g1z * g1z) +
+          w2 * (g2x * g2x + g2y * g2y + g2z * g2z) + w3 * (g3x * g3x + g3y * g3y + g3z * g3z);
+        // (nor its volume past hard: a sliver's overshot, back and forth)
+        alpha = Math.max(alpha, VOL_SOFT * hard);
+        const den = hard + alpha;
         if (den > 1e-12) {
           const dl = -C / den;
           let s = w0 * dl; x[i0] += g0x * s; x[i0 + 1] += g0y * s; x[i0 + 2] += g0z * s;

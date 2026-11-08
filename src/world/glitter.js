@@ -4,7 +4,6 @@ import { roundBoxSDF } from '../sim/mesh.js';
 import { REST_STEP } from '../sim/softbody.js';
 
 const MAX = 9000;
-const MAXBB = 24;
 export const GLITTER_MODES = { off: -1, silver: 0, gold: 1, holo: 2, rose: 3, cubic: 4 };
 
 // Glitter suspended in the jelly. Each flake is anchored barycentrically in a
@@ -72,6 +71,7 @@ export class Glitter {
 
     this.posW = 128;
     this._allocPosTex(4096);
+    this._allocBBTex(64);
     const F = app.jelly.frontMat.uniforms;
     this.uniforms = {
       uCubeTex: { value: app.jelly.cubeTex },
@@ -82,8 +82,7 @@ export class Glitter {
       uSize: { value: 0.0055 },
       uPxScale: { value: 800 },
       uMinPx: { value: 1.6 },
-      uBBMin: { value: Array.from({ length: MAXBB }, () => new THREE.Vector3()) },
-      uBBMax: { value: Array.from({ length: MAXBB }, () => new THREE.Vector3()) },
+      uBB: { value: this.bbTex },
       uTime: { value: 0 },
       uLight: { value: app.lightDir },
       uLightColor: F.uLightColor,
@@ -99,14 +98,12 @@ export class Glitter {
       depthTest: true,
       blending: THREE.AdditiveBlending,
       vertexShader: /* glsl */ `
-        #define MAXBB ${MAXBB}
         uniform sampler2D uPos;
         uniform int uPosW;
         uniform float uSize;
         uniform float uPxScale;
         uniform float uMinPx;
-        uniform vec3 uBBMin[MAXBB];
-        uniform vec3 uBBMax[MAXBB];
+        uniform highp sampler2D uBB; // (each piece's bounding box: its low corner, row 0; its high, row 1)
         uniform float uTime;
         ${CUBE_GLSL}
         attribute vec4 aTet;
@@ -171,9 +168,9 @@ export class Glitter {
           d /= len;
           int pi = int(aInfo.y + 0.5);
           float tEntry = 0.0;
-          if (pi < MAXBB) {
+          if (pi < textureSize(uBB, 0).x) {
             vec3 dd = vec3(abs(d.x) < 1e-6 ? 1e-6 : d.x, abs(d.y) < 1e-6 ? 1e-6 : d.y, abs(d.z) < 1e-6 ? 1e-6 : d.z);
-            vec3 ta = (uBBMin[pi] - o) / dd, tb = (uBBMax[pi] - o) / dd;
+            vec3 ta = (texelFetch(uBB, ivec2(pi, 0), 0).xyz - o) / dd, tb = (texelFetch(uBB, ivec2(pi, 1), 0).xyz - o) / dd;
             vec3 tm = min(ta, tb);
             tEntry = clamp(max(max(tm.x, tm.y), tm.z), 0.0, len);
           }
@@ -265,6 +262,19 @@ export class Glitter {
     if (this.uniforms) this.uniforms.uPos.value = this.posTex;
   }
 
+  // (the pieces' bounding boxes, room for n of them)
+  _allocBBTex(n) {
+    if (this.bbTex && this.bbTex.image.width >= n) return;
+    let w = 64;
+    while (w < n) w *= 2;
+    if (this.bbTex) this.bbTex.dispose();
+    this.bbData = new Float32Array(w * 2 * 4);
+    this.bbTex = new THREE.DataTexture(this.bbData, w, 2, THREE.RGBAFormat, THREE.FloatType);
+    this.bbTex.minFilter = this.bbTex.magFilter = THREE.NearestFilter;
+    this.bbTex.needsUpdate = true;
+    if (this.uniforms) this.uniforms.uBB.value = this.bbTex;
+  }
+
   configure({ mode, count, size, sparkle }) {
     if (mode !== undefined) this.mode = mode;
     if (count !== undefined) this.count = Math.max(0, Math.min(MAX, Math.round(count)));
@@ -348,11 +358,17 @@ export class Glitter {
     this.posTex.needsUpdate = true;
     const U = this.uniforms;
     U.uPosW.value = this.posW;
-    for (let k = 0; k < Math.min(MAXBB, sb.pieces.length); k++) {
+    // (every piece's: in a texture, not a uniform array - that held 24, and
+    // a cube diced into 27 had three pieces whose glitter was seen through
+    // all the way from the camera, as if it were all jelly: black)
+    this._allocBBTex(sb.pieces.length);
+    const BB = this.bbData, W = this.bbTex.image.width;
+    for (let k = 0; k < sb.pieces.length; k++) {
       const bb = sb.pieces[k].bbox;
-      U.uBBMin.value[k].set(bb[0], bb[1], bb[2]);
-      U.uBBMax.value[k].set(bb[3], bb[4], bb[5]);
+      BB[k * 4] = bb[0]; BB[k * 4 + 1] = bb[1]; BB[k * 4 + 2] = bb[2];
+      BB[(W + k) * 4] = bb[3]; BB[(W + k) * 4 + 1] = bb[4]; BB[(W + k) * 4 + 2] = bb[5];
     }
+    this.bbTex.needsUpdate = true;
     U.uTime.value = time;
     const cam = app.camera;
     U.uPxScale.value = app.size.ph / (2 * Math.tan((cam.fov * Math.PI) / 360));
