@@ -392,7 +392,7 @@ export function createJellyMaterial(env, layerUniforms) {
       // (world centre + start time; strength)
       uEmit: { value: 0 },
       uSurfSteps: { value: 10 },
-      uSurfTex: { value: null },
+      uSurfAtlas: { value: null },
       uPulse: { value: Array.from({ length: MAX_PULSES }, () => new THREE.Vector4(0, 0, 0, -99)) },
       uPulseAmp: { value: new Array(MAX_PULSES).fill(0) },
     },
@@ -813,16 +813,17 @@ export function createJellyMaterial(env, layerUniforms) {
                 // each pixel and a half - and none where that's under one)
                 float pix = max(sqrt(length(dRx) * length(dRy)), 1e-6);
                 vec3 rp = vRest;
+                SfFace F = sfFaceAt(sf, vRest);
                 if (deep > 0.3 && uSurfSteps > 0) {
                   vec3 Vr = normalize(sfToRest(V, dRx, dRy, dPx, dPy, N, Nr));
                   float cv = max(dot(Vr, Nr), 0.25), shift = sf.depth * sqrt(max(1.0 - cv * cv, 0.0)) / cv / pix;
                   int st = int(min(float(uSurfSteps), ceil(shift / 1.5)));
-                  if (st >= 2) rp = mix(vRest, sfParallax(sf, vRest, sfH(sf, vRest), Vr, Nr, st), smoothstep(0.3, 0.7, deep));
+                  if (st >= 2) rp = mix(vRest, sfParallax(sf, F, vRest, sfHf(sf, F, vec3(0.0)), Vr, Nr, st), smoothstep(0.3, 0.7, deep));
                 }
                 N = sfBend(sf, rp, dRx, dRy, dPx, dPy, N, fade, h);
                 vec3 Lr = normalize(sfToRest(normalize(uLightDir), dRx, dRy, dPx, dPy, N, Nr));
                 float cl = max(dot(Lr, Nr), 0.2);
-                if (sf.depth * sqrt(max(1.0 - cl * cl, 0.0)) / cl / pix > 1.0 && h < 0.999) surfShadow = mix(1.0, sfShadow(sf, rp, h, Lr, Nr), deep);
+                if (deep > 0.0 && sf.depth * sqrt(max(1.0 - cl * cl, 0.0)) / cl / pix > 1.0 && h < 0.999) surfShadow = mix(1.0, sfShadow(sf, F, rp - vRest, h, Lr, Nr), deep);
               } else N = sfBend(sf, vRest, dRx, dRy, dPx, dPy, N, fade, h);
               // (its hollows a little darker: less of the room reaches in)
               surfAO = 1.0 - cq29.w * (1.0 - clamp(h, 0.0, 1.0)) * fade;
@@ -1328,7 +1329,7 @@ export function createJellyMaterial(env, layerUniforms) {
 export function createLightViewMaterial(kind) {
   return new THREE.ShaderMaterial({
     side: kind === 2 ? THREE.BackSide : THREE.FrontSide,
-    uniforms: { uOrigin: { value: new THREE.Vector3() }, uCubeTex: { value: null }, uGradTex: { value: null }, uFreeTex: { value: null }, uSurfTex: { value: null } },
+    uniforms: { uOrigin: { value: new THREE.Vector3() }, uCubeTex: { value: null }, uGradTex: { value: null }, uFreeTex: { value: null }, uSurfAtlas: { value: null } },
     vertexShader: /* glsl */ `
       attribute vec3 aRest;
       attribute vec4 aData;

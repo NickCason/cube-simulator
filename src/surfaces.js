@@ -13,10 +13,17 @@
 // rough (how much it scatters the light besides: frosted's mostly that),
 // grip (how much better it holds on - the floor, other cubes: knurled and
 // tread plate are made to - a share of the material's own),
-// period (one that has a form - a grid, hexes, rows - repeats this often
-// across and up, in cells: a face holds a whole number of repeats, each
-// face's start where the next one's ends, so a hex cut by an edge meets its
-// other half round it - see surfaceFit), through, glsl (its height at vec2 p
+// fam (how it's laid on the cube, seamless on every edge and corner, for
+// every rounding: see SURF_BAKE_GLSL) - sites: round points spread over the
+// cube's own surface (relax: evened out into near-hexagonal cells, as on a
+// golf ball; else at random, minD apart, a share of their spacing); grid:
+// each face a whole number of square cells, the same both ways (only a
+// pattern as symmetric as a square's meets itself round every edge); rings:
+// round the four sides as one band, over the top and bottom edges and mitred
+// in to their middles; noise: in the jelly's own space; holes: all through
+// it, not baked. period (a grid or rings one: repeats this often across and
+// up, in cells: a face holds a whole number of them - see surfaceFit),
+// through, glsl (its height at vec2 p
 // - or, through, vec3 p), js (the same, for its swatch), holes (a through
 // one's: its chance of a hole a cell, and their smallest and largest radius
 // - real hollows, see SURF_GLSL), words (for names: adjectives, nouns).
@@ -100,14 +107,14 @@ const holes = (prob, r0, r1) => (x, y, z) => {
 export const SURFACES = [
   { id: 'none', name: 'Smooth' },
   {
-    id: 'swiss', name: 'Swiss cheese', density: 3.4, depth: 0.03, ao: 0.6, through: true, grip: 1.0,
+    id: 'swiss', name: 'Swiss cheese', density: 3.4, depth: 0.03, ao: 0.6, through: true, grip: 1.0, fam: 'holes',
     words: [['Holey', 'Swiss', 'Cheesy', 'Pitted'], ['Cheese', 'Emmental', 'Swiss', 'Holes']],
     glsl: 'return sfHoles(p, 0.72, 0.16, 0.46);',
     js: holes(0.72, 0.16, 0.46),
     holes: [0.72, 0.16, 0.46],
   },
   {
-    id: 'diamond', name: 'Diamond plate', density: 6, depth: 0.01, rough: 0.04, period: [2, 2], grip: 1.45,
+    id: 'diamond', name: 'Diamond plate', density: 6, depth: 0.01, rough: 0.04, period: [2, 2], grip: 1.45, fam: 'grid',
     words: [['Plated', 'Treaded', 'Industrial', 'Steel-Toed'], ['Treadplate', 'Plate', 'Deck', 'Tread']],
     glsl: `vec2 c = floor(p), f = fract(p) - 0.5;
       float s = mod(c.x + c.y, 2.0) < 0.5 ? 1.0 : -1.0;
@@ -120,75 +127,78 @@ export const SURFACES = [
     },
   },
   {
-    id: 'hammered', name: 'Hammered', density: 6, depth: 0.011, ao: 0.25, rough: 0.03, grip: 1.1,
+    id: 'hammered', name: 'Hammered', density: 7, depth: 0.02, ao: 0.25, rough: 0.03, grip: 1.1, fam: 'sites', minD: 0.42,
     words: [['Hammered', 'Beaten', 'Dimpled', 'Forged'], ['Pewter', 'Anvil', 'Smithy', 'Tankard']],
-    glsl: 'vec2 v = sfVor(p); return min(1.0, v.x * v.x * 2.4);',
+    glsl: `return bowl;`,
+    each: `float r = 0.55 + 0.4 * S.w, u = d / r; if (u < 1.0) bowl = min(bowl, 1.0 - 0.9 * (1.0 - u * u));`,
     js: (x, y) => Math.min(1, vor(x, y)[0] ** 2 * 2.4),
   },
   {
-    id: 'waffle', name: 'Waffle', density: 5, depth: 0.012, ao: 0.45, period: [1, 1], grip: 1.25,
+    id: 'waffle', name: 'Waffle', density: 5, depth: 0.012, ao: 0.45, period: [1, 1], grip: 1.25, fam: 'grid',
     words: [['Waffled', 'Gridded', 'Toasted', 'Syrupy'], ['Waffle', 'Griddle', 'Brunch', 'Grid']],
     glsl: 'vec2 f = abs(fract(p) - 0.5); return smoothstep(0.3, 0.4, max(f.x, f.y));',
     js: (x, y) => sstep(0.3, 0.4, Math.max(Math.abs(fract(x) - 0.5), Math.abs(fract(y) - 0.5))),
   },
   {
-    id: 'bubblewrap', name: 'Bubble wrap', density: 6, depth: 0.016, period: [1, SQRT3], grip: 1.15,
+    id: 'bubblewrap', name: 'Bubble wrap', density: 6, depth: 0.016, grip: 1.15, fam: 'sites', relax: true,
     words: [['Poppable', 'Bubbly', 'Padded', 'Fragile'], ['Bubble Wrap', 'Popper', 'Parcel', 'Packing']],
-    glsl: 'float d = length(sfHex(p)) / 0.36; return d < 1.0 ? sqrt(1.0 - d * d) : 0.0;',
+    glsl: `float u = F1 / 0.38; return u < 1.0 ? sqrt(1.0 - u * u) : 0.0;`,
     js: (x, y) => {
       const d = Math.hypot(...hexOff(x, y)) / 0.36;
       return d < 1 ? Math.sqrt(1 - d * d) : 0;
     },
   },
   {
-    id: 'scales', name: 'Scales', density: 6, depth: 0.014, ao: 0.3, period: [1, 4 / 3], grip: 0.92,
+    id: 'scales', name: 'Scales', density: 6, depth: 0.014, ao: 0.3, period: [1, 4 / 3], grip: 0.92, fam: 'rings',
     words: [['Scaly', 'Draconic', 'Armoured', 'Fishy'], ['Dragon', 'Wyrm', 'Mermaid', 'Scales']],
-    // (rows of discs, each covering the top of the row below: the highest one
-    // here is on top; its lower edge stands proud)
+    // (rows of discs, each covering the top of the row below - laid from the
+    // bottom row up, so the highest one here is on top; its lower edge
+    // stands proud, a steep step but not a sheer one, so it's smooth close up)
     glsl: `vec2 q = vec2(p.x, p.y * 1.5);
-      float row = floor(q.y);
-      for (int r = 1; r >= -1; r--) {
+      float row = floor(q.y), h = 0.0;
+      for (int r = -1; r <= 1; r++) {
         float j = row + float(r), sx = q.x + 0.5 * mod(j, 2.0), cx = floor(sx) + 0.5;
         float d = min(length(vec2(sx - cx, q.y - j - 1.05)), length(vec2(sx - cx - sign(sx - cx), q.y - j - 1.05)));
-        if (d < 0.72) return 0.25 + 0.75 * d / 0.72;
+        h = mix(h, 0.25 + 0.75 * min(d, 0.72) / 0.72, smoothstep(0.72, 0.68, d));
       }
-      return 0.0;`,
+      return h;`,
     js: (x, y) => {
       const qy = y * 1.5, row = Math.floor(qy);
-      for (let r = 1; r >= -1; r--) {
+      let h = 0;
+      for (let r = -1; r <= 1; r++) {
         const j = row + r, sx = x + 0.5 * (((j % 2) + 2) % 2), cx = Math.floor(sx) + 0.5;
         const d = Math.min(Math.hypot(sx - cx, qy - j - 1.05), Math.hypot(sx - cx - Math.sign(sx - cx), qy - j - 1.05));
-        if (d < 0.72) return 0.25 + (0.75 * d) / 0.72;
+        h += (0.25 + (0.75 * Math.min(d, 0.72)) / 0.72 - h) * sstep(0.72, 0.68, d);
       }
-      return 0;
+      return h;
     },
   },
   {
-    id: 'honeycomb', name: 'Honeycomb', density: 5, depth: 0.01, ao: 0.4, period: [1, SQRT3], grip: 1.2,
+    id: 'honeycomb', name: 'Honeycomb', density: 5, depth: 0.01, ao: 0.4, grip: 1.2, fam: 'sites', relax: true,
     words: [['Honeycombed', 'Waxy', 'Hexed', 'Buzzing'], ['Hive', 'Honeycomb', 'Comb', 'Apiary']],
-    glsl: 'vec2 o = abs(sfHex(p)); return smoothstep(0.4, 0.47, max(dot(o, vec2(0.5, 0.8660254)), o.x));',
+    glsl: `return 1.0 - smoothstep(0.05, 0.13, F2 - F1);`,
     js: (x, y) => {
       const [ox, oy] = hexOff(x, y).map(Math.abs);
       return sstep(0.4, 0.47, Math.max(ox * 0.5 + oy * 0.8660254, ox));
     },
   },
   {
-    id: 'studs', name: 'Brick studs', density: 4, depth: 0.016, period: [1, 1], grip: 1.3,
+    id: 'studs', name: 'Brick studs', density: 4, depth: 0.016, period: [1, 1], grip: 1.3, fam: 'grid',
     words: [['Studded', 'Snap-Together', 'Toy', 'Clicky'], ['Brick', 'Block', 'Studs', 'Builder']],
     glsl: 'return smoothstep(0.33, 0.3, length(fract(p) - 0.5));',
     js: (x, y) => sstep(0.33, 0.3, Math.hypot(fract(x) - 0.5, fract(y) - 0.5)),
   },
   {
-    id: 'golf', name: 'Golf ball', density: 9, depth: 0.005, ao: 0.3, period: [1, SQRT3], grip: 0.95,
+    id: 'golf', name: 'Golf ball', density: 9, depth: 0.005, ao: 0.3, grip: 0.95, fam: 'sites', relax: true,
     words: [['Dimpled', 'Teed-Up', 'Fore', 'Clubhouse'], ['Golf Ball', 'Birdie', 'Tee', 'Hole-in-One']],
-    glsl: 'float d = length(sfHex(p)) / 0.47; return d < 1.0 ? 1.0 - sqrt(1.0 - d * d) : 1.0;',
+    glsl: `float u = F1 / 0.5; return u < 1.0 ? 1.0 - sqrt(1.0 - u * u) : 1.0;`,
     js: (x, y) => {
       const d = Math.hypot(...hexOff(x, y)) / 0.47;
       return d < 1 ? 1 - Math.sqrt(1 - d * d) : 1;
     },
   },
   {
-    id: 'quilted', name: 'Quilted', density: 8, depth: 0.018, ao: 0.4, period: [2, 2], grip: 1.15,
+    id: 'quilted', name: 'Quilted', density: 8, depth: 0.018, ao: 0.4, period: [2, 2], grip: 1.15, fam: 'grid',
     words: [['Quilted', 'Tufted', 'Puffy', 'Cosy'], ['Quilt', 'Duvet', 'Pillow', 'Eiderdown']],
     glsl: `vec2 f = fract(vec2(p.x + p.y, p.x - p.y) * 0.5);
       return sqrt(max(sin(3.14159265 * f.x) * sin(3.14159265 * f.y), 0.0));`,
@@ -198,16 +208,10 @@ export const SURFACES = [
     },
   },
   {
-    id: 'ripples', name: 'Ripples', density: 2.5, depth: 0.035, grip: 1.0,
+    id: 'ripples', name: 'Ripples', density: 2.5, depth: 0.035, grip: 1.0, fam: 'sites', minD: 0.7,
     words: [['Rippled', 'Rain-Dropped', 'Pond', 'Splashy'], ['Puddle', 'Pond', 'Raindrop', 'Ripple']],
-    glsl: `vec2 c = floor(p), f = fract(p);
-      float h = 0.0;
-      for (int j = -1; j <= 1; j++) for (int i = -1; i <= 1; i++) {
-        vec2 o = vec2(float(i), float(j)), r = sfH22(sfW(c + o));
-        float d = length(o + r - f);
-        h += sin(d * 25.0 - r.x * 6.2831853) * exp(-d * 2.6) * (0.5 + r.y);
-      }
-      return 0.5 + 0.22 * h;`,
+    glsl: `return 0.5 + 0.22 * wave;`,
+    each: `wave += sin(d * 25.0 - S.w * 6.2831853) * exp(-d * 2.6) * (0.5 + fract(S.w * 7.3));`,
     js: (x, y) => {
       const cx = Math.floor(x), cy = Math.floor(y), fx = x - cx, fy = y - cy;
       let h = 0;
@@ -220,48 +224,41 @@ export const SURFACES = [
     },
   },
   {
-    id: 'corrugated', name: 'Corrugated', density: 9, depth: 0.007, ao: 0.2, period: [1, 0], grip: 1.3,
+    id: 'corrugated', name: 'Corrugated', density: 9, depth: 0.007, ao: 0.2, period: [1, 0], grip: 1.3, fam: 'rings',
     words: [['Corrugated', 'Ridged', 'Fluted', 'Sheet-Metal'], ['Shed', 'Roof', 'Washboard', 'Ridge']],
-    glsl: 'return 0.5 + 0.5 * sin(6.2831853 * p.x);',
-    js: (x) => 0.5 + 0.5 * Math.sin(TAU * x),
+    // (a crest on every whole cell: mirrored about it, as the top's mitres need)
+    glsl: 'return 0.5 + 0.5 * cos(6.2831853 * p.x);',
+    js: (x) => 0.5 + 0.5 * Math.cos(TAU * x),
   },
   {
-    id: 'knurled', name: 'Knurled', density: 14, depth: 0.004, ao: 0.25, rough: 0.05, period: [1, 1], grip: 1.6,
+    id: 'knurled', name: 'Knurled', density: 14, depth: 0.004, ao: 0.25, rough: 0.05, period: [1, 1], grip: 1.6, fam: 'grid',
     words: [['Knurled', 'Grippy', 'Machined', 'Cross-Hatched'], ['Grip', 'Knurl', 'Handle', 'Dial']],
     glsl: 'return min(abs(fract(p.x + p.y) - 0.5), abs(fract(p.x - p.y) - 0.5)) * 2.0;',
     js: (x, y) => Math.min(Math.abs(fract(x + y) - 0.5), Math.abs(fract(x - y) - 0.5)) * 2,
   },
   {
-    id: 'crackle', name: 'Crackle', density: 5, depth: 0.006, ao: 0.5, grip: 1.1,
+    id: 'crackle', name: 'Crackle', density: 5, depth: 0.006, ao: 0.5, grip: 1.1, fam: 'sites', minD: 0.5,
     words: [['Crackled', 'Crazed', 'Parched', 'Antique'], ['Glaze', 'Mudflat', 'Desert', 'Relic']],
-    glsl: 'vec2 v = sfVor(p); return smoothstep(0.0, 0.07, v.y - v.x);',
+    glsl: `return smoothstep(0.0, 0.07, F2 - F1);`,
     js: (x, y) => {
       const v = vor(x, y);
       return sstep(0, 0.07, v[1] - v[0]);
     },
   },
   {
-    id: 'pebbled', name: 'Pebbled', density: 8, depth: 0.009, ao: 0.35, rough: 0.06, grip: 1.35,
+    id: 'pebbled', name: 'Pebbled', density: 8, depth: 0.009, ao: 0.35, rough: 0.06, grip: 1.35, fam: 'sites', minD: 0.55,
     words: [['Pebbled', 'Leathery', 'Gnarly', 'Swampy'], ['Croc', 'Gator', 'Pebble', 'Leather']],
-    glsl: 'vec2 v = sfVor(p); return sqrt(clamp((v.y - v.x) * 2.8, 0.0, 1.0));',
+    glsl: `return sqrt(clamp((F2 - F1) * 2.8, 0.0, 1.0));`,
     js: (x, y) => {
       const v = vor(x, y);
       return Math.sqrt(clamp((v[1] - v[0]) * 2.8, 0, 1));
     },
   },
   {
-    id: 'craters', name: 'Moon craters', density: 4.5, depth: 0.016, ao: 0.4, rough: 0.06, grip: 1.2,
+    id: 'craters', name: 'Moon craters', density: 4.5, depth: 0.016, ao: 0.4, rough: 0.06, grip: 1.2, fam: 'sites', minD: 0.6,
     words: [['Cratered', 'Lunar', 'Pockmarked', 'Asteroid'], ['Moon', 'Crater', 'Meteor', 'Luna']],
-    glsl: `vec2 c = floor(p), f = fract(p);
-      float bowl = 1.0, rim = 0.0;
-      for (int j = -1; j <= 1; j++) for (int i = -1; i <= 1; i++) {
-        vec2 o = vec2(float(i), float(j)), r = sfH22(sfW(c + o) + 7.3);
-        if (r.y > 0.75) continue;
-        float rad = 0.16 + 0.3 * r.y / 0.75, u = length(o + 0.25 + 0.5 * sfH22(sfW(c + o) + 1.7) - f) / rad;
-        if (u < 1.0) bowl = min(bowl, 0.12 + 0.88 * u * u);
-        else rim += exp(-pow((u - 1.0) / 0.22, 2.0));
-      }
-      return clamp((bowl + 0.3 * min(rim, 1.0)) / 1.3, 0.0, 1.0);`,
+    glsl: `return clamp((bowl + 0.3 * min(rims, 1.0)) / 1.3, 0.0, 1.0);`,
+    each: `if (S.w < 0.75) { float r = 0.2 + 0.3 * S.w / 0.75, u = d / r; if (u < 1.0) bowl = min(bowl, 0.12 + 0.88 * u * u); else rims += exp(-pow((u - 1.0) / 0.22, 2.0)); }`,
     js: (x, y) => {
       const cx = Math.floor(x), cy = Math.floor(y), fx = x - cx, fy = y - cy;
       let bowl = 1, rim = 0;
@@ -277,19 +274,20 @@ export const SURFACES = [
     },
   },
   {
-    id: 'woven', name: 'Basket weave', density: 4, depth: 0.008, ao: 0.35, period: [2, 2], grip: 1.25,
+    id: 'woven', name: 'Basket weave', density: 4, depth: 0.008, ao: 0.35, period: [2, 2], grip: 1.25, fam: 'grid',
     words: [['Woven', 'Wicker', 'Plaited', 'Basketed'], ['Basket', 'Hamper', 'Wicker', 'Weave']],
+    // (each strand dips at its ends, under the ones across it)
     glsl: `vec2 c = floor(p), f = fract(p);
       bool across = mod(c.x + c.y, 2.0) < 0.5;
       float t = across ? f.y : f.x, s = across ? f.x : f.y;
-      return sin(3.14159265 * fract(t * 3.0)) * (0.7 + 0.3 * sin(3.14159265 * s));`,
+      return sin(3.14159265 * fract(t * 3.0)) * (0.7 + 0.3 * sin(3.14159265 * s)) * smoothstep(0.0, 0.07, min(s, 1.0 - s));`,
     js: (x, y) => {
       const across = (Math.floor(x) + Math.floor(y)) % 2 === 0, t = across ? fract(y) : fract(x), s = across ? fract(x) : fract(y);
-      return Math.sin(Math.PI * fract(t * 3)) * (0.7 + 0.3 * Math.sin(Math.PI * s));
+      return Math.sin(Math.PI * fract(t * 3)) * (0.7 + 0.3 * Math.sin(Math.PI * s)) * sstep(0, 0.07, Math.min(s, 1 - s));
     },
   },
   {
-    id: 'bricks', name: 'Bricks', density: 4, depth: 0.007, ao: 0.45, period: [1, 1], grip: 1.2,
+    id: 'bricks', name: 'Bricks', density: 4, depth: 0.007, ao: 0.45, period: [1, 1], grip: 1.2, fam: 'rings',
     words: [['Bricked', 'Brick-Built', 'Mortared', 'Walled'], ['Wall', 'Brickwork', 'Chimney', 'Mason']],
     glsl: `vec2 q = vec2(p.x, p.y * 2.0);
       q.x += 0.5 * mod(floor(q.y), 2.0);
@@ -301,36 +299,34 @@ export const SURFACES = [
     },
   },
   {
-    id: 'stars', name: 'Stars', density: 4, depth: 0.011, period: [1, 1], grip: 1.1,
+    id: 'stars', name: 'Stars', density: 4, depth: 0.011, grip: 1.1, fam: 'sites', relax: true,
     words: [['Starry', 'Star-Spangled', 'Twinkly', 'Stellar'], ['Star', 'Starlight', 'Twinkle', 'Comet']],
-    glsl: 'return clamp(-sfStar(fract(p) - 0.5, 0.36, 0.42) / 0.05, 0.0, 1.0);',
+    glsl: `vec3 nS = sfBoxN(S1.xyz), up, rt; sfFrame(nS, up, rt); vec3 dd = (P - S1.xyz) / uSp; vec2 q = vec2(dot(dd, rt), dot(dd, up)); return clamp(-sfStar(q, 0.36, 0.42) / 0.05, 0.0, 1.0);`,
     js: (x, y) => clamp(-sdStar(fract(x) - 0.5, fract(y) - 0.5, 0.36, 0.42) / 0.05, 0, 1),
   },
   {
-    id: 'hearts', name: 'Hearts', density: 4, depth: 0.011, period: [1, 1], grip: 1.1,
+    id: 'hearts', name: 'Hearts', density: 4, depth: 0.011, grip: 1.1, fam: 'sites', relax: true,
     words: [['Lovey', 'Sweetheart', 'Smitten', 'Adoring'], ['Heart', 'Sweetheart', 'Valentine', 'Crush']],
-    glsl: 'vec2 q = (fract(p) - vec2(0.5, 0.2)) * 1.65; return clamp(-sfHeart(q) / 0.08, 0.0, 1.0);',
+    glsl: `vec3 nS = sfBoxN(S1.xyz), up, rt; sfFrame(nS, up, rt); vec3 dd = (P - S1.xyz) / uSp; vec2 q = vec2(dot(dd, rt), dot(dd, up)); return clamp(-sfHeart((q + vec2(0.0, 0.3)) * 1.65) / 0.08, 0.0, 1.0);`,
     js: (x, y) => clamp(-sdHeart((fract(x) - 0.5) * 1.65, (fract(y) - 0.2) * 1.65) / 0.08, 0, 1),
   },
   {
-    id: 'swirl', name: 'Swirls', density: 4, depth: 0.006, period: [1, 1], grip: 1.05,
+    id: 'swirl', name: 'Swirls', density: 4, depth: 0.006, grip: 1.05, fam: 'sites', relax: true,
     words: [['Swirly', 'Whorled', 'Hypnotic', 'Spiralling'], ['Whorl', 'Swirl', 'Spiral', 'Fingerprint']],
-    glsl: `vec2 o = fract(p) - 0.5;
-      float d = length(o);
-      return 0.5 + 0.5 * sin(d * 40.0 + atan(o.y, o.x) * 2.0) * smoothstep(0.5, 0.36, d);`,
+    glsl: `vec3 nS = sfBoxN(S1.xyz), up, rt; sfFrame(nS, up, rt); vec3 dd = (P - S1.xyz) / uSp; vec2 q = vec2(dot(dd, rt), dot(dd, up)); float r = length(q); return 0.5 + 0.5 * sin(r * 40.0 + atan(q.y, q.x) * 2.0) * smoothstep(0.5, 0.36, r);`,
     js: (x, y) => {
       const ox = fract(x) - 0.5, oy = fract(y) - 0.5, d = Math.hypot(ox, oy);
       return 0.5 + 0.5 * Math.sin(d * 40 + Math.atan2(oy, ox) * 2) * sstep(0.5, 0.36, d);
     },
   },
   {
-    id: 'frosted', name: 'Frosted', density: 22, depth: 0.004, rough: 0.28, grip: 1.2,
+    id: 'frosted', name: 'Frosted', density: 22, depth: 0.004, rough: 0.28, grip: 1.2, fam: 'noise',
     words: [['Frosted', 'Sandblasted', 'Misty', 'Matte'], ['Frost', 'Mist', 'Sandglass', 'Haze']],
-    glsl: 'return sfNoise(p) * 0.6 + sfNoise(p * 2.0 + 7.0) * 0.4;',
+    glsl: `return sfNoise3(p) * 0.6 + sfNoise3(p * 2.0 + 7.0) * 0.4;`,
     js: (x, y) => vnoise(x, y) * 0.6 + vnoise(x * 2.3 + 9, y * 2.3 + 4) * 0.4,
   },
   {
-    id: 'sponge', name: 'Sponge', density: 7, depth: 0.012, ao: 0.5, through: true, grip: 1.15,
+    id: 'sponge', name: 'Sponge', density: 7, depth: 0.012, ao: 0.5, through: true, grip: 1.15, fam: 'holes',
     words: [['Spongy', 'Aerated', 'Porous', 'Bubbly'], ['Sponge', 'Aero', 'Pumice', 'Coral']],
     glsl: 'return sfHoles(p, 0.85, 0.12, 0.32);',
     js: holes(0.85, 0.12, 0.32),
@@ -339,14 +335,6 @@ export const SURFACES = [
 ];
 export const SURFACE = Object.fromEntries(SURFACES.map((s, i) => [s.id, { ...s, kind: i }]));
 export const surfaceOf = (id) => SURFACE[id] || SURFACE.none;
-
-// A face one's tile, baked (in cells, across and up): one repeat of a
-// formed one; eight cells each way of a random one (its hashes wrapped).
-export function surfaceTile(s) {
-  if (!s || !s.glsl || s.through) return [1, 1];
-  if (!s.period) return [8, 8];
-  return [s.period[0], s.period[1] || s.period[0]];
-}
 
 // Its cells across a face and up it, for a density (cells across): a whole
 // number of its repeats each way, if it has a form (one that's the same both
@@ -360,44 +348,212 @@ export function surfaceFit(s, density) {
   return [nu, !pv ? nu : pv === pu ? nu : fit(pv)];
 }
 
-// The shader's side: every surface's height, by its kind (its place in the
-// list), the face ones and the through ones apart; and the helpers they share.
-// The face ones' heights as their own GLSL, for baking (see JellyView: a
-// tile of each, once - the shaders that draw them read the tile, one look-up
-// a height, not every pattern's code inlined at every look). Their random
-// ones' hashes wrapped (sfWrap: the tile, in cells), so a tile repeats
-// seamlessly.
-export const SURF_BAKE_GLSL = /* glsl */ `
-  vec2 sfWrap = vec2(100000.0);
-  vec2 sfW(vec2 c) { return mod(c, sfWrap); }
+// ---------------------------------------------------------------- the sites
+// Points spread over a rounded cube's own surface (half its size hs, its
+// rounding b), spacing sp apart: thrown at random, evenly by area, no two
+// nearer than minD of it; relaxed, pushed apart till they're evened out into
+// cells all but every one six-sided, flat faces and rounded edges and
+// corners alike: a honeycomb, a golf ball's dimples, a sheet of bubble wrap,
+// all the way round. Seeded:
+// the same cube, the same pattern. Float32Array [x, y, z, a random 0..1] a
+// site.
+function mulberry(seed) {
+  return () => {
+    seed = (seed + 0x6d2b79f5) | 0;
+    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+// (a point on the surface, uniform by area; and the nearest point on it to p)
+function boxSurface(hs, b) {
+  const fl = hs - b, aF = 4 * fl * fl, aE = (Math.PI * b) / 2 * 2 * fl, aC = (Math.PI * b * b) / 2;
+  const tot = 6 * aF + 12 * aE + 8 * aC;
+  const sample = (rnd, o) => {
+    let r = rnd() * tot;
+    if (r < 6 * aF) {
+      const f = Math.min(5, Math.floor(r / aF)), a = f >> 1, sg = f & 1 ? -1 : 1;
+      o[a] = sg * hs;
+      o[(a + 1) % 3] = (rnd() * 2 - 1) * fl;
+      o[(a + 2) % 3] = (rnd() * 2 - 1) * fl;
+      return o;
+    }
+    r -= 6 * aF;
+    if (r < 12 * aE) {
+      const e = Math.min(11, Math.floor(r / aE)), c = e % 3, q = e / 3 | 0, a = (c + 1) % 3, a2 = (c + 2) % 3;
+      const th = rnd() * Math.PI * 0.5;
+      o[a] = (q & 1 ? -1 : 1) * (fl + b * Math.cos(th));
+      o[a2] = (q & 2 ? -1 : 1) * (fl + b * Math.sin(th));
+      o[c] = (rnd() * 2 - 1) * fl;
+      return o;
+    }
+    const k = Math.floor(rnd() * 8), z = rnd(), ph = rnd() * Math.PI * 0.5, rr = Math.sqrt(1 - z * z);
+    const n = [rr * Math.cos(ph), rr * Math.sin(ph), z];
+    for (let c = 0; c < 3; c++) o[c] = (k & (1 << c) ? -1 : 1) * (fl + b * n[c]);
+    return o;
+  };
+  const project = (p, o) => {
+    const q = [0, 1, 2].map((c) => Math.max(-fl, Math.min(fl, p[c])));
+    const d = [p[0] - q[0], p[1] - q[1], p[2] - q[2]], l = Math.hypot(...d);
+    if (l > 1e-9 && b > 1e-9) {
+      for (let c = 0; c < 3; c++) o[c] = q[c] + (d[c] / l) * b;
+      return o;
+    }
+    // (inside the core: out the nearest face)
+    let a = 0;
+    for (let c = 1; c < 3; c++) if (Math.abs(p[c]) > Math.abs(p[a])) a = c;
+    for (let c = 0; c < 3; c++) o[c] = c === a ? Math.sign(p[a] || 1) * hs : Math.max(-fl, Math.min(fl, p[c]));
+    return o;
+  };
+  return { sample, project, area: tot };
+}
+
+// (the point of face f - 0 +x, 1 -x, 2 +y, 3 -y, 4 +z, 5 -z - at (u, v) on
+// it, unfolded: as the bake's sfUnfoldInv has it)
+export function unfoldInv(hs, b, f, u, v, o = [0, 0, 0]) {
+  const fl = hs - b, eu = Math.abs(u) - fl, ev = Math.abs(v) - fl, bb = Math.max(b, 1e-6);
+  const tu = eu > 0 ? Math.tan(Math.min(eu / bb, Math.PI / 4)) : 0, tv = ev > 0 ? Math.tan(Math.min(ev / bb, Math.PI / 4)) : 0;
+  const nx = Math.sign(u) * tu, ny = Math.sign(v) * tv, l = Math.hypot(nx, ny, 1);
+  const px = (eu > 0 ? Math.sign(u) * fl : u) + (b * nx) / l, py = (ev > 0 ? Math.sign(v) * fl : v) + (b * ny) / l, pz = fl + b / l;
+  // (local: u, v, out - into the cube's own axes, face by face)
+  if (f === 0) (o[0] = pz), (o[1] = py), (o[2] = -px);
+  else if (f === 1) (o[0] = -pz), (o[1] = py), (o[2] = px);
+  else if (f === 2) (o[0] = px), (o[1] = pz), (o[2] = -py);
+  else if (f === 3) (o[0] = px), (o[1] = -pz), (o[2] = py);
+  else if (f === 4) (o[0] = px), (o[1] = py), (o[2] = pz);
+  else (o[0] = -px), (o[1] = py), (o[2] = -pz);
+  return o;
+}
+
+const siteCache = new Map();
+export function surfaceSites(hs, b, sp, { relax = false, minD = 0.5, seed = 1, iters = 24, step0 = 0.25, step1 = 0.04 } = {}) {
+  const key = [hs, b, sp, relax, minD, seed, iters, step0, step1].map((v) => (typeof v === 'number' ? v.toFixed(5) : v)).join('|');
+  if (siteCache.has(key)) return siteCache.get(key);
+  const rnd = mulberry(seed * 9973 + 17), S = boxSurface(hs, Math.max(b, 1e-5));
+  // (as many as there's room for: one to a hexagon of the spacing, or a square of it)
+  const want = Math.max(4, Math.round(S.area / (sp * sp * (relax ? 0.866 : 1))));
+  const md = (relax ? 0.72 : minD) * sp, md2 = md * md, cell = Math.max(md, 0.56 * sp);
+  const grid = new Map(), key3 = (x, y, z) => `${Math.floor(x / cell)},${Math.floor(y / cell)},${Math.floor(z / cell)}`;
+  const pts = [], p = [0, 0, 0];
+  const near = (x, y, z, r2) => {
+    const ci = Math.floor(x / cell), cj = Math.floor(y / cell), ck = Math.floor(z / cell);
+    for (let i = -1; i <= 1; i++)
+      for (let j = -1; j <= 1; j++)
+        for (let k = -1; k <= 1; k++)
+          for (const q of grid.get(`${ci + i},${cj + j},${ck + k}`) || []) {
+            const dx = pts[q * 4] - x, dy = pts[q * 4 + 1] - y, dz = pts[q * 4 + 2] - z;
+            if (dx * dx + dy * dy + dz * dz < r2) return true;
+          }
+    return false;
+  };
+  const add = (p) => {
+    const id = pts.length / 4, k = key3(p[0], p[1], p[2]);
+    (grid.get(k) || grid.set(k, []).get(k)).push(id);
+    pts.push(p[0], p[1], p[2], rnd());
+  };
+  if (relax) {
+    // a honeycomb's start: each face a hexagonal lattice, a whole number of
+    // cells across, in rows along it (the four sides one unbroken band of
+    // it), and where faces meet, any too near one already there left out -
+    // evened out below, so the cells carry on round every edge and corner
+    const bb = Math.max(b, 1e-5), L = 2 * hs - bb * (2 - Math.PI / 2);
+    const m = Math.max(1, Math.round(L / sp)), au = L / m, r = Math.max(1, Math.round(L / (au * SQRT3 * 0.5))), av = L / r;
+    for (let f = 0; f < 6; f++)
+      for (let j = 0; j < r; j++)
+        for (let i = 0; i < m; i++) {
+          unfoldInv(hs, bb, f, -L / 2 + (i + 0.5 + 0.5 * (j & 1)) * au, -L / 2 + (j + 0.5) * av, p);
+          if (!near(p[0], p[1], p[2], 0.3 * sp * sp)) add(p);
+        }
+  } else
+    for (let tries = 0; tries < want * 30 && pts.length / 4 < want; tries++) {
+      S.sample(rnd, p);
+      if (!near(p[0], p[1], p[2], md2)) add(p);
+    }
+  const n = pts.length / 4;
+  if (relax && n > 3) {
+    // evened out: each pushed off its neighbours a little at a time (only
+    // the nearest ring reaches), back onto the surface, the pushes easing
+    // off - settled into all but hexagons, the few that can't be (a cube's
+    // corners need their pentagons, as a football's do) where they fall
+    const R = 1.25 * sp, cell = R, g0 = -hs - cell, G = Math.ceil((2 * hs + 2 * cell) / cell) + 1, G3 = G * G * G;
+    const start = new Int32Array(G3 + 1), idx = new Int32Array(n), cid = new Int32Array(n);
+    const P = new Float64Array(n * 3), N = new Float64Array(n * 3), q3 = [0, 0, 0];
+    for (let i = 0; i < n; i++) for (let c = 0; c < 3; c++) P[i * 3 + c] = pts[i * 4 + c];
+    const cof = (x) => Math.min(G - 1, Math.max(0, Math.floor((x - g0) / cell)));
+    for (let it = 0; it < iters; it++) {
+      const step = sp * (step0 + ((step1 - step0) * it) / Math.max(1, iters - 1));
+      start.fill(0);
+      for (let i = 0; i < n; i++) start[(cid[i] = (cof(P[i * 3 + 2]) * G + cof(P[i * 3 + 1])) * G + cof(P[i * 3])) + 1]++;
+      for (let c = 0; c < G3; c++) start[c + 1] += start[c];
+      const at = start.slice(0, G3);
+      for (let i = 0; i < n; i++) idx[at[cid[i]]++] = i;
+      for (let i = 0; i < n; i++) {
+        const x = P[i * 3], y = P[i * 3 + 1], z = P[i * 3 + 2], cx = cof(x), cy = cof(y), cz = cof(z);
+        let fx = 0, fy = 0, fz = 0;
+        for (let c = Math.max(0, cz - 1); c <= Math.min(G - 1, cz + 1); c++)
+          for (let bb = Math.max(0, cy - 1); bb <= Math.min(G - 1, cy + 1); bb++)
+            for (let a = Math.max(0, cx - 1); a <= Math.min(G - 1, cx + 1); a++) {
+              const cc = (c * G + bb) * G + a;
+              for (let t = start[cc]; t < start[cc + 1]; t++) {
+                const q = idx[t];
+                if (q === i) continue;
+                const dx = x - P[q * 3], dy = y - P[q * 3 + 1], dz = z - P[q * 3 + 2], d2 = dx * dx + dy * dy + dz * dz;
+                if (d2 >= R * R || d2 < 1e-18) continue;
+                const d = Math.sqrt(d2), w = (1 - d / R) ** 2 / d;
+                fx += dx * w; fy += dy * w; fz += dz * w;
+              }
+            }
+        // (never more than a quarter of the spacing a step)
+        const m = Math.hypot(fx, fy, fz) * step, k = m > 0.25 * sp ? (0.25 * sp) / m : 1;
+        S.project([x + fx * step * k, y + fy * step * k, z + fz * step * k], q3);
+        N[i * 3] = q3[0]; N[i * 3 + 1] = q3[1]; N[i * 3 + 2] = q3[2];
+      }
+      P.set(N);
+    }
+    for (let i = 0; i < n; i++) for (let c = 0; c < 3; c++) pts[i * 4 + c] = P[i * 3 + c];
+  }
+  const out = Float32Array.from(pts);
+  siteCache.set(key, out);
+  if (siteCache.size > 24) siteCache.delete(siteCache.keys().next().value);
+  return out;
+}
+
+// ---------------------------------------------------------------- the bake
+// Every surface map but the holes is baked, a cube at a time, onto that
+// cube's own surface: six squares of it, a face each, each running from the
+// middle of the rounded edge on one side to the middle of the one opposite
+// (L across; see sfFaceUV) - its height at every point of it, worked out
+// where that point really is on the rounded cube (P, its normal n). What's
+// drawn reads it back: one look a height, seamless, whatever the rounding.
+// (uniforms: see JellyView._bakeCube. A cube's bake has only its own
+// pattern in it - surfaceBakeGLSL(its kind) - a small shader, quick to
+// compile; SURF_BAKE_GLSL has them all.)
+export function surfaceBakeGLSL(only = -1) {
+  const has = (i) => only < 0 || i === only;
+  return /* glsl */ `
+  uniform int uKind;
+  uniform float uHS, uB, uL, uSp;
+  uniform vec2 uNN;
+  uniform highp sampler2D uSites;
+  uniform highp sampler2D uGrid;
+  uniform int uSitesW, uGridW;
+  uniform vec3 uGridMin;
+  uniform float uGridCell;
+  uniform ivec3 uGridDim;
   vec2 sfH22(vec2 p) {
     vec3 p3 = fract(vec3(p.xyx) * vec3(0.1031, 0.1030, 0.0973));
     p3 += dot(p3, p3.yzx + 33.33);
     return fract((p3.xx + p3.yz) * p3.zy);
   }
-  // (smooth value noise, its own: the surface maps are drawn by shaders that
-  // haven't the jelly's)
-  float sfNoise(vec2 p) {
-    vec2 i = floor(p), f = fract(p), u = f * f * (3.0 - 2.0 * f);
-    float a = sfH22(sfW(i)).x, b = sfH22(sfW(i + vec2(1.0, 0.0))).x, c = sfH22(sfW(i + vec2(0.0, 1.0))).x, d = sfH22(sfW(i + 1.0)).x;
-    return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
+  float sfH31(vec3 p) {
+    p = fract(p * 0.1031);
+    p += dot(p, p.zyx + 31.32);
+    return fract((p.x + p.y) * p.z);
   }
-  // (from the nearest centre of a hex grid, centres a cell apart)
-  vec2 sfHex(vec2 p) {
-    const vec2 s = vec2(1.0, 1.7320508);
-    vec2 a = mod(p, s) - s * 0.5, b = mod(p - s * 0.5, s) - s * 0.5;
-    return dot(a, a) < dot(b, b) ? a : b;
-  }
-  // (the nearest two of a point a cell, jittered: their distances)
-  vec2 sfVor(vec2 p) {
-    vec2 c = floor(p), f = fract(p);
-    float d1 = 8.0, d2 = 8.0;
-    for (int j = -1; j <= 1; j++) for (int i = -1; i <= 1; i++) {
-      vec2 o = vec2(float(i), float(j)), q = o + 0.15 + 0.7 * sfH22(sfW(c + o)) - f;
-      float d = dot(q, q);
-      if (d < d1) { d2 = d1; d1 = d; } else if (d < d2) d2 = d;
-    }
-    return sqrt(vec2(d1, d2));
+  float sfNoise3(vec3 p) {
+    vec3 i = floor(p), f = fract(p), u = f * f * (3.0 - 2.0 * f);
+    return mix(mix(mix(sfH31(i), sfH31(i + vec3(1, 0, 0)), u.x), mix(sfH31(i + vec3(0, 1, 0)), sfH31(i + vec3(1, 1, 0)), u.x), u.y),
+               mix(mix(sfH31(i + vec3(0, 0, 1)), sfH31(i + vec3(1, 0, 1)), u.x), mix(sfH31(i + vec3(0, 1, 1)), sfH31(i + vec3(1, 1, 1)), u.x), u.y), u.z);
   }
   float sfStar(vec2 p, float r, float rf) {
     const vec2 k1 = vec2(0.809016994375, -0.587785252292), k2 = vec2(-0.809016994375, -0.587785252292);
@@ -416,15 +572,114 @@ export const SURF_BAKE_GLSL = /* glsl */ `
     vec2 m = p - 0.5 * max(p.x + p.y, 0.0);
     return sqrt(min(dot(p - vec2(0.0, 1.0), p - vec2(0.0, 1.0)), dot(m, m))) * sign(p.x - p.y);
   }
-  float sfFaceProc(int k, vec2 p) {
-    ${SURFACES.map((s, i) => (s.glsl && !s.through ? `if (k == ${i}) { ${s.glsl} }` : '')).filter(Boolean).join('\n    ')}
+  // (the point of face f - 0 +x, 1 -x, 2 +y, 3 -y, 4 +z, 5 -z - at (u, v) on
+  // it, unfolded, and the way out there: as sfFaceUV has them, the other way)
+  void sfUnfoldInv(int f, vec2 uv, out vec3 P, out vec3 n) {
+    float fl = uHS - uB;
+    float eu = abs(uv.x) - fl, ev = abs(uv.y) - fl;
+    float tu = eu > 0.0 ? tan(min(eu / max(uB, 1e-6), 0.785398)) : 0.0, tv = ev > 0.0 ? tan(min(ev / max(uB, 1e-6), 0.785398)) : 0.0;
+    vec3 nl = normalize(vec3(sign(uv.x) * tu, sign(uv.y) * tv, 1.0));
+    vec3 cl = vec3(eu > 0.0 ? sign(uv.x) * fl : uv.x, ev > 0.0 ? sign(uv.y) * fl : uv.y, fl);
+    vec3 pl = cl + uB * nl;
+    // (local: u, v, out - into the cube's own axes, face by face)
+    if (f == 0) { P = vec3(pl.z, pl.y, -pl.x); n = vec3(nl.z, nl.y, -nl.x); }
+    else if (f == 1) { P = vec3(-pl.z, pl.y, pl.x); n = vec3(-nl.z, nl.y, nl.x); }
+    else if (f == 2) { P = vec3(pl.x, pl.z, -pl.y); n = vec3(nl.x, nl.z, -nl.y); }
+    else if (f == 3) { P = vec3(pl.x, -pl.z, pl.y); n = vec3(nl.x, -nl.z, nl.y); }
+    else if (f == 4) { P = vec3(pl.x, pl.y, pl.z); n = vec3(nl.x, nl.y, nl.z); }
+    else { P = vec3(-pl.x, pl.y, -pl.z); n = vec3(-nl.x, nl.y, -nl.z); }
+  }
+  // (the rings' way round: s round the four sides - front, right, back,
+  // left, 4L - and t up them; over the top and bottom edges t carries on in
+  // to their middles, each quarter of them its own side's - mitred)
+  vec2 sfRing(int f, vec2 uv) {
+    float L = uL;
+    if (f == 4) return uv;
+    if (f == 0) return vec2(L + uv.x, uv.y);
+    if (f == 5) return vec2(2.0 * L + uv.x, uv.y);
+    if (f == 1) return vec2(3.0 * L + uv.x, uv.y);
+    float m = max(abs(uv.x), abs(uv.y)), t = L - m, s;
+    bool top = f == 2;
+    if (abs(uv.y) >= abs(uv.x)) {
+      bool front = top ? uv.y < 0.0 : uv.y > 0.0;
+      s = front ? uv.x : 2.0 * L - uv.x;
+    } else {
+      bool right = uv.x > 0.0;
+      s = right ? (top ? L + uv.y : L - uv.y) : (top ? 3.0 * L - uv.y : 3.0 * L + uv.y);
+    }
+    return vec2(s, top ? t : -t);
+  }
+  // (a site's own way up and across: up the cube on its sides, away from the
+  // front on its top, toward it underneath - as a googly eye's)
+  void sfFrame(vec3 n, out vec3 up, out vec3 right) {
+    up = abs(n.y) > 0.8 ? vec3(0.0, 0.0, n.y > 0.0 ? -1.0 : 1.0) : vec3(0.0, 1.0, 0.0);
+    up = normalize(up - n * dot(up, n));
+    right = cross(up, n);
+  }
+  vec3 sfBoxN(vec3 p) {
+    float fl = uHS - uB;
+    vec3 d = p - clamp(p, -fl, fl);
+    if (dot(d, d) > 1e-12) return normalize(d);
+    vec3 a = abs(p);
+    return a.x > a.y && a.x > a.z ? vec3(sign(p.x), 0.0, 0.0) : a.y > a.z ? vec3(0.0, sign(p.y), 0.0) : vec3(0.0, 0.0, sign(p.z));
+  }
+  float sfGrid(int k, vec2 p) {
+    ${SURFACES.map((x, i) => (x.fam === 'grid' && has(i) ? `if (k == ${i}) { ${x.glsl} }` : '')).filter(Boolean).join('\n    ')}
+    return 1.0;
+  }
+  float sfRings(int k, vec2 p) {
+    ${SURFACES.map((x, i) => (x.fam === 'rings' && has(i) ? `if (k == ${i}) { ${x.glsl} }` : '')).filter(Boolean).join('\n    ')}
+    return 1.0;
+  }
+  // The sites near P (the grid of them: a cell the spacing a side, up to 8
+  // sites a cell) - the nearest two, and what each pattern makes of them
+  float sfSites(int k, vec3 P) {
+    vec3 g = (P - uGridMin) / uGridCell;
+    ivec3 c0 = ivec3(floor(g));
+    float F1 = 9.0, F2 = 9.0, bowl = 1.0, rims = 0.0, wave = 0.0;
+    vec4 S1 = vec4(0.0);
+    for (int dz = -1; dz <= 1; dz++)
+      for (int dy = -1; dy <= 1; dy++)
+        for (int dx = -1; dx <= 1; dx++) {
+          ivec3 c = c0 + ivec3(dx, dy, dz);
+          if (any(lessThan(c, ivec3(0))) || any(greaterThanEqual(c, uGridDim))) continue;
+          int ci = ((c.z * uGridDim.y + c.y) * uGridDim.x + c.x) * 2;
+          for (int t = 0; t < 2; t++) {
+            int ti = ci + t;
+            vec4 ids = texelFetch(uGrid, ivec2(ti % uGridW, ti / uGridW), 0);
+            for (int q = 0; q < 4; q++) {
+              float id = ids[q];
+              if (id < 0.0) break;
+              int si = int(id + 0.5);
+              vec4 S = texelFetch(uSites, ivec2(si % uSitesW, si / uSitesW), 0);
+              float d = length(P - S.xyz) / uSp;
+              if (d < F1) { F2 = F1; F1 = d; S1 = S; } else if (d < F2) F2 = d;
+              ${SURFACES.map((x, i) => (x.fam === 'sites' && x.each && has(i) ? `if (k == ${i}) { ${x.each} }` : '')).filter(Boolean).join('\n              ')}
+            }
+          }
+        }
+    ${SURFACES.map((x, i) => (x.fam === 'sites' && has(i) ? `if (k == ${i}) { ${x.glsl} }` : '')).filter(Boolean).join('\n    ')}
+    return 1.0;
+  }
+  float sfNoiseK(int k, vec3 p) {
+    ${SURFACES.map((x, i) => (x.fam === 'noise' && has(i) ? `if (k == ${i}) { ${x.glsl} }` : '')).filter(Boolean).join('\n    ')}
+    return 1.0;
+  }
+  // its height at (u, v) of face f
+  float sfBake(int k, int f, vec2 uv) {
+    vec3 P, n;
+    sfUnfoldInv(f, uv, P, n);
+    ${SURFACES.map((x, i) => (!has(i) ? '' : x.fam === 'grid' ? `if (k == ${i}) return sfGrid(k, (uv / uL + 0.5) * uNN);` : x.fam === 'rings' ? `if (k == ${i}) return sfRings(k, sfRing(f, uv) * (uNN.x / uL));` : x.fam === 'sites' ? `if (k == ${i}) return sfSites(k, P);` : x.fam === 'noise' ? `if (k == ${i}) return sfNoiseK(k, P * (uNN.x / uL));` : '')).filter(Boolean).join('\n    ')}
     return 1.0;
   }
 `;
+}
+export const SURF_BAKE_GLSL = surfaceBakeGLSL();
 
 export const SURF_GLSL = /* glsl */ `
-  uniform highp sampler2DArray uSurfTex; // (each face one's height, baked: a tile of it a layer)
-  const vec2 SF_TILE[${SURFACES.length}] = vec2[${SURFACES.length}](${SURFACES.map((x) => `vec2(${surfaceTile(x).map((v) => v.toFixed(6)).join(', ')})`).join(', ')});
+  // (every cube's surface map, baked onto it: six layers a cube, a face each
+  // - see JellyView._bakeCube)
+  uniform highp sampler2DArray uSurfAtlas;
   vec4 sfH34(vec3 p) {
     vec4 p4 = fract(vec4(p.xyzx) * vec4(0.1031, 0.1030, 0.0973, 0.1099));
     p4 += dot(p4, p4.wzxy + 33.33);
@@ -455,7 +710,7 @@ export const SURF_GLSL = /* glsl */ `
     float ac = abs(c), arc = fl + b * atan(abs(nc), max(abs(nf), 1e-6));
     return sign(c) * mix(ac, arc, step(fl, ac));
   }
-  vec2 sfFaceUV(vec3 r, float hs, float b) {
+  vec3 sfFaceUV(vec3 r, float hs, float b) {
     float fl = hs - b;
     vec3 n = sign(r) * max(abs(r) - fl, 0.0);
     if (dot(n, n) < 1e-14) {
@@ -464,23 +719,19 @@ export const SURF_GLSL = /* glsl */ `
     }
     vec3 an = abs(n);
     // (each face its own way up: up the cube on its sides, away from the
-    // front on its top)
-    if (an.x >= an.y && an.x >= an.z) return vec2(-sign(n.x) * sfUnf(r.z, n.z, n.x, fl, b), sfUnf(r.y, n.y, n.x, fl, b));
-    if (an.y >= an.z) return vec2(sfUnf(r.x, n.x, n.y, fl, b), -sign(n.y) * sfUnf(r.z, n.z, n.y, fl, b));
-    return vec2(sign(n.z) * sfUnf(r.x, n.x, n.z, fl, b), sfUnf(r.y, n.y, n.z, fl, b));
+    // front on its top; faces 0 +x, 1 -x, 2 +y, 3 -y, 4 +z, 5 -z - the third)
+    if (an.x >= an.y && an.x >= an.z) return vec3(-sign(n.x) * sfUnf(r.z, n.z, n.x, fl, b), sfUnf(r.y, n.y, n.x, fl, b), n.x > 0.0 ? 0.0 : 1.0);
+    if (an.y >= an.z) return vec3(sfUnf(r.x, n.x, n.y, fl, b), -sign(n.y) * sfUnf(r.z, n.z, n.y, fl, b), n.y > 0.0 ? 2.0 : 3.0);
+    return vec3(sign(n.z) * sfUnf(r.x, n.x, n.z, fl, b), sfUnf(r.y, n.y, n.z, fl, b), n.z > 0.0 ? 4.0 : 5.0);
   }
-  float sfFace(int k, vec2 p);
   float sfVolume(int k, vec3 p);
-  // Its height at rest point r: a through one in the jelly's own space, a
-  // face one on the cube unfolded - its cells (NN, across and up) counted
-  // from the middle of one bevel to the middle of the next (L: that stretch).
+  // Its height at rest point r: a through one in the jelly's own space;
+  // else off the cube's baked map - the face it's on, and where on it (L: a
+  // face's stretch, bevel middle to bevel middle)
   float sfHeightAt(int k, bool thru, vec3 r, float hs, float b, float L, vec2 NN) {
     if (thru) return sfVolume(k, r * (NN.x / (2.0 * hs)));
-    return sfFace(k, (sfFaceUV(r, hs, b) / L + 0.5) * NN);
-  }
-  // (a face one: off its baked tile - see SURF_BAKE_GLSL)
-  float sfFace(int k, vec2 p) {
-    return textureLod(uSurfTex, vec3(p / SF_TILE[k], float(k)), 0.0).r;
+    vec3 f = sfFaceUV(r, hs, b);
+    return textureLod(uSurfAtlas, vec3(f.xy / L + 0.5, float(gK * 6) + f.z), 0.0).r;
   }
   float sfVolume(int k, vec3 p) {
     ${SURFACES.map((s, i) => (s.glsl && s.through ? `if (k == ${i}) { ${s.glsl} }` : '')).filter(Boolean).join('\n    ')}
@@ -531,6 +782,20 @@ export const SURF_GLSL = /* glsl */ `
   }
   float sfH(SfInfo s, vec3 r) { return sfHeightAt(s.k, s.thru, r, s.hs, s.b, s.L, s.NN); }
 
+  // The face rest point r is on (its index, its place on it) and that
+  // face's own axes in the rest space - a march straight across a flat face
+  // is one along them, so it finds its face just the once (it's only made
+  // on the flat: across a rounded edge it fades out - see sfOnEdge)
+  struct SfFace { vec3 f; };
+  SfFace sfFaceAt(SfInfo s, vec3 r) { return SfFace(sfFaceUV(r, s.hs, s.b)); }
+  // (its height a short way d from there, across that face: d along the
+  // face's own two ways, as sfFaceUV lays them)
+  float sfHf(SfInfo s, SfFace F, vec3 d) {
+    float f = F.f.z;
+    vec2 a = f < 1.5 ? vec2(f < 0.5 ? -d.z : d.z, d.y) : f < 3.5 ? vec2(d.x, f < 2.5 ? -d.z : d.z) : vec2(f < 4.5 ? d.x : -d.x, d.y);
+    return textureLod(uSurfAtlas, vec3((F.f.xy + a) / s.L + 0.5, float(gK * 6) + f), 0.0).r;
+  }
+
   // Its relief bent into normal N: how much it rises across this pixel, both
   // ways (its height here, and a pixel along each way - r the rest point, d*
   // how the rest point and the world point run across the pixel), into the
@@ -578,7 +843,7 @@ export const SURF_GLSL = /* glsl */ `
   // meets the relief - its top's at the surface - marched down into it in
   // steps, and the crossing between the last two narrowed down; the rest
   // point there. (Too grazing to go far: held to four times its depth across.)
-  vec3 sfParallax(SfInfo s, vec3 r, float h0, vec3 Vr, vec3 Nr, int steps) {
+  vec3 sfParallax(SfInfo s, SfFace F, vec3 r, float h0, vec3 Vr, vec3 Nr, int steps) {
     if (h0 > 0.999) return r;
     float cv = max(dot(Vr, Nr), 0.25);
     vec3 dir = -(Vr - Nr * dot(Vr, Nr)) / cv - Nr;
@@ -589,7 +854,7 @@ export const SURF_GLSL = /* glsl */ `
       if (i > steps) break;
       float z = dd * float(i);
       vec3 p = r + dir * z;
-      float gap = z - (1.0 - sfH(s, p)) * s.depth;
+      float gap = z - (1.0 - sfHf(s, F, dir * z)) * s.depth;
       if (gap >= 0.0) return mix(prev, p, prevGap / (prevGap - gap));
       prev = p;
       prevGap = gap;
@@ -605,16 +870,17 @@ export const SURF_GLSL = /* glsl */ `
     return smoothstep(0.0, 0.35 * s.b + 1e-5, mid);
   }
 
-  // ...and whether the key light (Lr, rest space) reaches p there, h its
-  // height, past the relief round it: 1 lit, toward 0 in its shadow.
-  float sfShadow(SfInfo s, vec3 p, float h, vec3 Lr, vec3 Nr) {
+  // ...and whether the key light (Lr, rest space) reaches the point o from
+  // where F was found, h its height, past the relief round it: 1 lit,
+  // toward 0 in its shadow.
+  float sfShadow(SfInfo s, SfFace F, vec3 o, float h, vec3 Lr, vec3 Nr) {
     float cl = dot(Lr, Nr), z0 = (1.0 - h) * s.depth;
     if (cl <= 0.02 || z0 < 1e-5) return 1.0;
     vec3 dir = (Lr - Nr * cl) / max(cl, 0.2);
     float lit = 1.0;
     for (int i = 1; i <= 4; i++) {
       float z = z0 * (1.0 - float(i) / 4.5);
-      float gap = z - (1.0 - sfH(s, p + dir * (z0 - z))) * s.depth;
+      float gap = z - (1.0 - sfHf(s, F, o + dir * (z0 - z))) * s.depth;
       lit = min(lit, 1.0 - smoothstep(0.0, 0.25 * s.depth, gap));
     }
     return lit;

@@ -18,7 +18,7 @@ import {
   GRAD_N,
   GRAD_ROWS,
 } from './jellyMaterials.js';
-import { SURFACES, SURF_BAKE_GLSL, surfaceOf, surfaceFit, surfaceTile } from '../surfaces.js';
+import { SURFACES, surfaceBakeGLSL, surfaceOf, surfaceFit, surfaceSites } from '../surfaces.js';
 
 const FLOOR_SPAN = 6.4;
 const CAUS_GAIN = 1.5; // (how bright the caustic light lands)
@@ -375,14 +375,14 @@ export class JellyView {
       mat: createLightViewMaterial(kind),
     }));
     // (the light's view of the surface maps: each cube's own)
-    this._bakeSurfaces();
+    this._makeSurfaceAtlas();
     for (const { mat } of this.lightView) {
       mat.uniforms.uCubeTex.value = this.cubeTex;
       mat.uniforms.uGradTex.value = this.gradTex;
       mat.uniforms.uFreeTex.value = this.freeTex;
-      mat.uniforms.uSurfTex.value = this.surfTex;
+      mat.uniforms.uSurfAtlas.value = this.surfAtlas;
     }
-    this.frontMat.uniforms.uSurfTex.value = this.surfTex;
+    this.frontMat.uniforms.uSurfAtlas.value = this.surfAtlas;
     this.causticMat.uniforms.tEntry.value = this.lightView[0].rt.texture;
     this.causticMat.uniforms.tNormal.value = this.lightView[1].rt.texture;
     this.causticMat.uniforms.tExit.value = this.lightView[2].rt.texture;
@@ -689,7 +689,8 @@ export class JellyView {
     // ...and its surface map (surfaces.js): its kind, how deep (m), its cells
     // across a face and up it (whole repeats: see surfaceFit) - its hollows'
     // shade, how much it scatters, and the cube's rounding (row 28)
-    const sf = surfaceOf(m.surface), [nu, nv] = surfaceFit(sf, (sf.density || 1) / (m.surfScale ?? 1));
+    const sf = surfaceOf(m.surface), dens = (sf.density || 1) / (m.surfScale ?? 1), [nu, nv] = surfaceFit(sf, dens);
+    this._bakeCube(k, sf, size, m.bevelRatio ?? 0.13, dens);
     put(29, m.dust || 0, m.skin || 0, m.through ? 1 : 0, sf.ao || 0);
     put(31, sf.kind, (sf.depth || 0) * (m.surfDepth ?? 1) * size, nu, nv);
     this.cubeTex.needsUpdate = true;
@@ -708,42 +709,157 @@ export class JellyView {
     this.lookVersion = (this.lookVersion || 0) + 1;
   }
 
-  // The surface maps' face patterns, baked: a tile of each (a repeat of it,
-  // or eight cells of a random one) a layer of a texture, its height in red -
-  // once, at the start. The shaders read a height off it in one look; every
-  // pattern's code inlined at each of a dozen looks a pixel cost as much as
-  // the rest of the jelly. (Their holes, all through, are worked out as they
-  // go: there are only two of them, and they're three-dimensional.)
-  _bakeSurfaces() {
-    const r = this.renderer, N = SURFACES.length, px = 256;
-    const rt = new THREE.WebGLArrayRenderTarget(px, px, N, { type: THREE.HalfFloatType, depthBuffer: false });
-    const tex = rt.texture;
-    tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  // Every cube's surface map, baked onto it (see surfaces.js SURF_BAKE_GLSL):
+  // six layers a cube - a face each, bevel middle to bevel middle - its
+  // height at each point, worked out where that point really is on the
+  // rounded cube. Baked again only when the cube's map, size, rounding or
+  // scale change.
+  _makeSurfaceAtlas() {
+    const R = 512;
+    this.surfRT = new THREE.WebGLArrayRenderTarget(R, R, MAX_CUBES * 6, { format: THREE.RedFormat, type: THREE.HalfFloatType, depthBuffer: false });
+    const tex = (this.surfAtlas = this.surfRT.texture);
     tex.minFilter = tex.magFilter = THREE.LinearFilter;
+    tex.wrapS = tex.wrapT = THREE.ClampToEdgeWrapping;
     tex.generateMipmaps = false;
-    const mat = new THREE.ShaderMaterial({
-      uniforms: { uKind: { value: 0 }, uTile: { value: new THREE.Vector2(1, 1) } },
+    const blank = () => {
+      const t = new THREE.DataTexture(new Float32Array([-1, -1, -1, -1]), 1, 1, THREE.RGBAFormat, THREE.FloatType);
+      t.minFilter = t.magFilter = THREE.NearestFilter;
+      t.needsUpdate = true;
+      return t;
+    };
+    // (one set of numbers for every pattern's bake)
+    this.bakeU = {
+      uFace: { value: 0 }, uKind: { value: 0 }, uHS: { value: 0.5 }, uB: { value: 0.1 }, uL: { value: 1 }, uSp: { value: 0.1 },
+      uNN: { value: new THREE.Vector2(4, 4) }, uSites: { value: blank() }, uGrid: { value: blank() }, uSitesW: { value: 1 }, uGridW: { value: 1 },
+      // (an ivec3: three takes it as a plain array)
+      uGridMin: { value: new THREE.Vector3() }, uGridCell: { value: 1 }, uGridDim: { value: [1, 1, 1] },
+    };
+    this.bakeMats = [];
+    this.bakeQuad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2));
+    this.bakeScene = new THREE.Scene();
+    this.bakeScene.add(this.bakeQuad);
+    this.bakeCam = new THREE.Camera();
+    this._surfKey = new Array(MAX_CUBES).fill('');
+    this._surfArgs = [];
+    this._surfLater = new Map();
+    // (each pattern's bake made ready a while after the start, out of the
+    // way - so the first cube with one doesn't stop to build it)
+    setTimeout(() => this._readyBakes(), 2500);
+  }
+
+  // (a pattern's bake: a shader with only its own pattern in it)
+  _bakeMat(kind) {
+    return (this.bakeMats[kind] ||= new THREE.ShaderMaterial({
+      uniforms: this.bakeU,
       vertexShader: 'varying vec2 vUv; void main() { vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }',
-      fragmentShader: `uniform int uKind; uniform vec2 uTile; varying vec2 vUv;
-        ${SURF_BAKE_GLSL}
-        void main() { sfWrap = uTile; gl_FragColor = vec4(sfFaceProc(uKind, vUv * uTile), 0.0, 0.0, 1.0); }`,
+      fragmentShader: `uniform int uFace; varying vec2 vUv;
+        ${surfaceBakeGLSL(kind)}
+        void main() { gl_FragColor = vec4(sfBake(uKind, uFace, (vUv - 0.5) * uL), 0.0, 0.0, 1.0); }`,
       depthTest: false,
       depthWrite: false,
-    });
-    const scene = new THREE.Scene(), cam = new THREE.Camera();
-    scene.add(new THREE.Mesh(new THREE.PlaneGeometry(2, 2), mat));
-    const prev = r.getRenderTarget();
-    SURFACES.forEach((sf, k) => {
-      if (!sf.glsl || sf.through) return;
-      mat.uniforms.uKind.value = k;
-      mat.uniforms.uTile.value.fromArray(surfaceTile(sf));
-      r.setRenderTarget(rt, k);
-      r.render(scene, cam);
-    });
+    }));
+  }
+  async _readyBakes() {
+    const r = this.renderer;
+    if (!r.compileAsync) return;
+    for (const sf of SURFACES) {
+      if (!sf.fam || sf.fam === 'holes' || this.bakeMats[SURFACES.indexOf(sf)]) continue;
+      this.bakeQuad.material = this._bakeMat(SURFACES.indexOf(sf));
+      try {
+        await r.compileAsync(this.bakeScene, this.bakeCam);
+      } catch {
+        return;
+      }
+    }
+  }
+
+  // (what slot k's map was baked from, and baked back from that - for a
+  // portrait, which borrows a slot and then puts its look back)
+  surfaceOfSlot(k) {
+    return this._surfArgs?.[k];
+  }
+  restoreSurface(k, args) {
+    if (args) this._bakeCube(k, ...args.slice(0, 4), true);
+  }
+
+  // (cube k's map baked onto it: sf its surface, size its size, br its
+  // rounding a share of that, dens its cells a face. A new pattern's baked
+  // at once; the same one rescaled or rounded off - a slider dragged -
+  // when it's been still a moment: see bakeLater)
+  _bakeCube(k, sf, size, br, dens, now = false) {
+    if (!this.surfRT) return;
+    this._surfArgs[k] = [sf, size, br, dens];
+    this._surfLater.delete(k);
+    if (!sf || !sf.fam || sf.fam === 'holes') return;
+    const hs = size / 2, b = Math.min(0.45, br) * size, L = size - b * (2 - Math.PI / 2);
+    const [nu, nv] = surfaceFit(sf, dens);
+    const key = [sf.kind, size.toFixed(4), b.toFixed(5), nu.toFixed(4), nv.toFixed(4)].join('|');
+    const was = this._surfKey[k];
+    if (was === key) return;
+    if (!now && was.split('|')[0] === String(sf.kind)) {
+      this._surfLater.set(k, performance.now());
+      return;
+    }
+    this._surfKey[k] = key;
+    const U = this.bakeU;
+    U.uKind.value = sf.kind;
+    U.uHS.value = hs;
+    U.uB.value = Math.max(b, 1e-5);
+    U.uL.value = L;
+    U.uNN.value.set(nu, nv);
+    if (sf.fam === 'sites') {
+      // the sites, spread over its surface - and a grid of them, a cell the
+      // spacing a side, up to 8 a cell, for the bake to find the nearest
+      const sp = L / nu, S = surfaceSites(hs, b, sp, { relax: !!sf.relax, minD: sf.minD ?? 0.5, seed: sf.kind * 7 + 3 });
+      const n = S.length / 4, SW = 128, SH = Math.max(1, Math.ceil(n / SW));
+      const sd = new Float32Array(SW * SH * 4);
+      sd.set(S);
+      const cell = sp, g0 = -hs - sp, G = Math.max(1, Math.ceil((2 * hs + 2 * sp) / cell));
+      const GW = 512, cells = G * G * G, GH = Math.max(1, Math.ceil((cells * 2) / GW));
+      const gd = new Float32Array(GW * GH * 4).fill(-1), fill = new Uint8Array(cells);
+      for (let i = 0; i < n; i++) {
+        const cx = Math.min(G - 1, Math.max(0, Math.floor((S[i * 4] - g0) / cell)));
+        const cy = Math.min(G - 1, Math.max(0, Math.floor((S[i * 4 + 1] - g0) / cell)));
+        const cz = Math.min(G - 1, Math.max(0, Math.floor((S[i * 4 + 2] - g0) / cell)));
+        const c = (cz * G + cy) * G + cx;
+        if (fill[c] >= 8) continue;
+        gd[c * 8 + fill[c]++] = i;
+      }
+      const put = (u, data, w, h) => {
+        if (u.value && u.value.image && u.value.image.width === w && u.value.image.height === h) {
+          u.value.image.data.set(data);
+          u.value.needsUpdate = true;
+          return;
+        }
+        u.value?.dispose?.();
+        const t = new THREE.DataTexture(data, w, h, THREE.RGBAFormat, THREE.FloatType);
+        t.minFilter = t.magFilter = THREE.NearestFilter;
+        t.needsUpdate = true;
+        u.value = t;
+      };
+      put(U.uSites, sd, SW, SH);
+      put(U.uGrid, gd, GW, GH);
+      U.uSitesW.value = SW;
+      U.uGridW.value = GW;
+      U.uGridMin.value.set(g0, g0, g0);
+      U.uGridCell.value = cell;
+      U.uGridDim.value = [G, G, G];
+      U.uSp.value = sp;
+    }
+    this.bakeQuad.material = this._bakeMat(sf.kind);
+    const r = this.renderer, prev = r.getRenderTarget();
+    for (let f = 0; f < 6; f++) {
+      U.uFace.value = f;
+      r.setRenderTarget(this.surfRT, k * 6 + f);
+      r.render(this.bakeScene, this.bakeCam);
+    }
     r.setRenderTarget(prev);
-    mat.dispose();
-    this.surfRT = rt;
-    this.surfTex = tex;
+  }
+  // (the ones put off: baked once they've been still a moment - each frame)
+  bakeLater() {
+    if (!this._surfLater?.size) return;
+    const t = performance.now();
+    for (const [k, t0] of this._surfLater) if (t - t0 > 140) this._bakeCube(k, ...this._surfArgs[k], true);
   }
 
   // A layered cube's gradient as its strip: absorption (its first row) and
@@ -945,6 +1061,7 @@ export class JellyView {
   // (the GPU choked on it). Thawing alone - temperatures creeping, nothing
   // moving - goes 5 times a second, and only its temperatures.
   update(sb) {
+    this.bakeLater();
     const topo = this.syncTopology(sb);
     const n = sb.nV, x = sb.x, temp = sb.temp, glow = sb.glow, dust = sb.dust, coat = sb.coat;
     let ps = 0, ts = 0, gs = 0, ds = 0;

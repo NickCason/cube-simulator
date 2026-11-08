@@ -50,7 +50,7 @@ export class Portraits {
     // what's put back after
     const S = {
       sb: app.sb, cubes: app.cubes, order: app._order, camera: app.camera, sel: app.sel,
-      multi: J.multiCube, needRest: J.needRest, tintLocal: fx.tintLocal.value, row: J.cubeData.slice(0, CUBE_TEX_W * 4),
+      multi: J.multiCube, needRest: J.needRest, tintLocal: fx.tintLocal.value, row: J.cubeData.slice(0, CUBE_TEX_W * 4), surf: J.surfaceOfSlot(0),
       grad: J.gradData.slice(0, GRAD_N * 2 * 4), free: J.freeData.slice(0, J.freeSlab),
       emit: F.uEmit.value, pulse: F.uPulseAmp.value.slice(), cavN: F.uCavN.value, fire: [app.fireLevel, app.fireGoal], flash: app.flash,
       dim: C.uDim.value, wash: C.uWash.value, selA: fx.selCol.value.w,
@@ -92,6 +92,8 @@ export class Portraits {
       J.topoVersion = -1;
       J.cubeData.set(S.row, 0);
       J.cubeTex.needsUpdate = true;
+      // (and its surface map baked back onto it)
+      J.restoreSurface(0, S.surf);
       J.gradData.set(S.grad, 0);
       J.gradTex.needsUpdate = true;
       J.freeData.set(S.free, 0);
@@ -151,6 +153,8 @@ export class Portraits {
     sb.loadCube(0, 0, 0, 0);
     const flavor = resolveFlavor(style), m = { ...tex, ...st, surface: style.surface, bevelRatio: EDGES[style.edges].bevel };
     J.setCubeLook(0, flavor, m, size);
+    // (its surface map baked now, not when a slider's been let go)
+    J.restoreSurface(0, J.surfaceOfSlot(0));
     J.setStyle(flavor, m, size);
     J.needRest = !!flavor.layers && flavor.shape !== 'up';
     J.fxUniforms.tintLocal.value = flavor.layers ? 1 : 0;
