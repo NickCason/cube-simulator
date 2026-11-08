@@ -14,6 +14,7 @@ import { encodeCube, decodeCube } from './cubecode.js';
 import { seeded, hashString } from './namegen.js';
 import { freeNodesDefault, FREE_K_MIN, FREE_K_MAX } from './freeform.js';
 import { EYE_FACES, copyEyes } from './eyes.js';
+import { SURFACE } from './surfaces.js';
 
 // (today, where you are: 2026-11-07)
 export function dayKey(d = new Date()) {
@@ -123,7 +124,7 @@ export function specialCube(sp, rnd) {
     flavor = 'layers';
     layers = L;
   }
-  return { name: one(sp.names), flavor, layers, texture, edges, glitter, tune: { ...(sp.tune || {}) }, tear: true, rubik, eyes: copyEyes(EYE_FACES[sp.eyes]) };
+  return { name: one(sp.names), flavor, layers, texture, edges, glitter, tune: { ...(sp.tune || {}) }, tear: true, rubik, eyes: copyEyes(EYE_FACES[sp.eyes]), surface: SURFACE[sp.surface] ? sp.surface : 'none' };
 }
 
 export function cubeOfTheDay(d = new Date()) {

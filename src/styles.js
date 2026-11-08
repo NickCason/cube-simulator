@@ -288,6 +288,7 @@ export const DEFAULT_STYLE = {
   layers: { colors: [...LAYER_PRESETS[0].colors], blur: 0, repeat: 1, bias: 0, stops: null, shape: 'up' },
   rubik: 0, // (0: solved - picking Rubik scrambles it)
   eyes: [], // (googly eyes: see eyes.js - always a new array, never this one)
+  surface: 'none', // (its surface map: see surfaces.js)
 };
 
 export function flavorById(id) {

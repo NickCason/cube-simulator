@@ -8,6 +8,7 @@ import { FreeEditor } from './freeedit.js';
 import { CubipliedCard } from './cubiplied.js';
 import { POWDERS } from '../world/powders.js';
 import { EYE_STYLES } from '../eyes.js';
+import { SURFACES, surfaceSwatch } from '../surfaces.js';
 
 // (the googly eyes' chips: a little eye of each kind, its size, one or two)
 const EYE_PUPIL = { classic: 4, big: 5.6, tiny: 2.3, lashes: 3.8, angry: 3.6, sleepy: 3.4 };
@@ -183,6 +184,7 @@ export class UI {
         <div class="sec"><span class="lbl">Material</span><div class="mats" role="group" aria-label="Material"></div></div>
         <div class="sec"><span class="lbl">Glitter</span><div class="seg glit"></div></div>
         <div class="sec"><span class="lbl">Edges</span><div class="seg edges"></div></div>
+        <div class="sec"><span class="lbl">Surface <em>depth and scale in Settings</em></span><div class="mats surfs" role="group" aria-label="Surface"></div></div>
       </div>
       <div class="palette tune" hidden>
         <div class="tune-scroll"></div>
@@ -369,6 +371,22 @@ export class UI {
         app.setEdges(id);
       });
       edgeSeg.appendChild(b);
+    }
+
+    // its surface map: a tile of each (drawn when the panel first opens - see
+    // _paintSurfaces)
+    this.surfsEl = this.paletteEl.querySelector('.surfs');
+    for (const sf of SURFACES) {
+      const b = document.createElement('button');
+      b.className = 'mat';
+      b.dataset.surf = sf.id;
+      b.innerHTML = `<i class="msw"></i><span>${sf.name}</span>`;
+      b.setAttribute('aria-label', `${sf.name} surface`);
+      b.addEventListener('click', () => {
+        app.audio.ui();
+        app.setSurface(sf.id);
+      });
+      this.surfsEl.appendChild(b);
     }
 
     // ---- settings panel
@@ -602,7 +620,23 @@ export class UI {
     this.cubby?.render();
   }
 
+  // The surface tiles: each drawn once, in grey relief, the first time
+  // they're seen; the jelly's colour laid over in the page (a new colour
+  // costs nothing).
+  _paintSurfaces() {
+    if (!this._surfsPainted) {
+      this._surfsPainted = true;
+      for (const b of this.surfsEl.children) if (b.dataset.surf !== 'none') b.firstChild.style.backgroundImage = `url(${surfaceSwatch(b.dataset.surf, '#ffffff')})`;
+    }
+    this._tintSurfaces();
+  }
+
+  _tintSurfaces() {
+    for (const b of this.surfsEl.children) b.firstChild.style.backgroundColor = this._surfHex || '#d4102a';
+  }
+
   openPalette() {
+    this._paintSurfaces();
     this.closeTune();
     this.cubby?.close();
     this.stack?.close();
@@ -775,6 +809,9 @@ export class UI {
     }
     for (const b of this.matsEl.children) b.classList.toggle('active', b.dataset.tex === style.texture);
     for (const b of this.paletteEl.querySelectorAll('.opt[data-edges]')) b.classList.toggle('active', b.dataset.edges === style.edges);
+    for (const b of this.surfsEl.children) b.classList.toggle('active', b.dataset.surf === (style.surface || 'none'));
+    this._surfHex = hex;
+    if (this._surfsPainted) this._tintSurfaces();
     for (const b of this.paletteEl.querySelectorAll('.opt[data-glit]')) b.classList.toggle('active', b.dataset.glit === style.glitter);
   }
 

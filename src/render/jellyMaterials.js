@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { FREE_N } from '../freeform.js';
 import { FLOOR_PATTERN_GLSL } from './floorpattern.js';
+import { SURF_GLSL } from '../surfaces.js';
 
 const NOISE = /* glsl */ `
   float hash13(vec3 p) {
@@ -467,6 +468,7 @@ export function createJellyMaterial(env, layerUniforms) {
 
       ${CUBE_GLSL}
       ${FLOOR_PATTERN_GLSL}
+      ${SURF_GLSL}
       varying float vCube;
       uniform sampler2D tLightEntry;
       uniform sampler2D tLightExit;
@@ -696,6 +698,10 @@ export function createJellyMaterial(env, layerUniforms) {
       }
 
       void main() {
+        // (how the rest shape and the world run across this pixel - here,
+        // where every pixel works them out: in a branch some skip they're
+        // garbage)
+        vec3 dRx = dFdx(vRest), dRy = dFdy(vRest), dPx = dFdx(vWorldPos), dPy = dFdy(vWorldPos);
         // (this cube's look)
         gK = int(vCube + 0.5);
         vec4 cq0 = cubeT(0), cq1 = cubeT(1), cq2 = cubeT(2), cq3 = cubeT(3), cq4 = cubeT(4), cq5 = cubeT(5), cq6 = cubeT(6);
@@ -758,6 +764,54 @@ export function createJellyMaterial(env, layerUniforms) {
                         vnoise(q + vec3(0, 0, e)) + 0.5 * vnoise((q + vec3(0, 0, e)) * 2.1 + 7.0) - n0) / e;
           N = normalize(N + (g - N * dot(g, N)) * 0.018);
         }
+        // Its surface map (surfaces.js): a relief in its skin - pits, treads,
+        // scales - bent into the normal by its slope here, worked out exactly
+        // across this pixel (Mikkelsen's surface gradient: no tangents
+        // needed), and faded out where it's finer than a few pixels (else it
+        // sparkles). A face one is moulded on the outside (a cut is bare);
+        // a through one (holes) is all through, cut faces too.
+        float surfAO = 1.0, surfRough = 0.0;
+        vec4 cq31 = cubeT(31);
+        int sK = int(cq31.x + 0.5);
+        if (sK > 0 && cavity < 0.5) {
+          bool thru = sfThrough(sK);
+          if (thru || fresh < 0.5) {
+            vec4 cq28s = cubeT(28);
+            float size = cq4.w;
+            // (its cells across a face and up it: whole repeats, each face
+            // starting where the next one ends - see surfaceFit)
+            vec2 NN = cq31.zw;
+            float cell = (thru ? size : size - cq28s.w * size * 0.4292037) / max(max(NN.x, NN.y), 0.25);
+            // (a pixel's patch of it, in cells - its geometric mean: seen at a
+            // glance, a long thin patch, and by its length the relief faded
+            // out of a whole face)
+            float fpc = 2.0 * sqrt(length(dRx) * length(dRy)) / cell;
+            float fade = 1.0 - smoothstep(0.1, 0.4, fpc);
+            // (it scatters the light a little besides - and what's too fine to
+            // show as relief shows as that: far off, knurling looks satin)
+            surfRough = cq28s.z + (1.0 - fade) * min(0.3, 2.0 * cq31.y / cell);
+            if (fade > 0.0) {
+              // (its height here and a pixel along each way, as the rest shape
+              // runs across the screen: how much it rises across this pixel,
+              // exactly, whatever the mapping - round a bevel too)
+              float hs = 0.5 * size, b = cq28s.w * size, L = size - b * (2.0 - 1.5707963);
+              float h0 = sfHeightAt(sK, thru, vRest, hs, b, L, NN);
+              float dBs = (sfHeightAt(sK, thru, vRest + dRx, hs, b, L, NN) - h0) * cq31.y * fade;
+              float dBt = (sfHeightAt(sK, thru, vRest + dRy, hs, b, L, NN) - h0) * cq31.y * fade;
+              // (into the world: Mikkelsen's surface gradient)
+              vec3 R1 = cross(dPy, N), R2 = cross(N, dPx);
+              float det = dot(dPx, R1);
+              if (abs(det) > 1e-20) {
+                vec3 sg = (dBs * R1 + dBt * R2) / det;
+                float sl = length(sg);
+                if (sl > 1.5) sg *= 1.5 / sl;
+                N = normalize(N - sg);
+              }
+              // (its hollows a little darker: less of the room reaches in)
+              surfAO = 1.0 - cq29.w * (1.0 - clamp(h0, 0.0, 1.0)) * fade;
+            }
+          }
+        }
         // sugar coating (sour gummies): only on the moulded outside (a sugar
         // cube's all sugar: its cuts too)
         float coat = cSugar * (1.0 - fresh * (1.0 - cThrough)) * (1.0 - cavity);
@@ -806,7 +860,7 @@ export function createJellyMaterial(env, layerUniforms) {
         // createBackMaterial)
         float exitCoat = back.r > 0.0 && (uBackRest > 0.5 || cLayers <= 0) ? clamp(back.a, 0.0, 1.0) : 0.0;
 
-        float rough = clamp(cRough + fresh * 0.02 + frost * 0.5 - melt * 0.02 + coat * 0.18 + dust * 0.45, 0.015, 1.0);
+        float rough = clamp(cRough + fresh * 0.02 + frost * 0.5 - melt * 0.02 + coat * 0.18 + dust * 0.45 + surfRough, 0.015, 1.0);
         // (specular anti-aliasing: where the surface turns faster than a
         // pixel can show - bevels and corners, on a small or low-resolution
         // screen - its reflections blur as if it were rougher, instead of the
@@ -982,7 +1036,7 @@ export function createJellyMaterial(env, layerUniforms) {
           body = mix(body, body * mix(vec3(1.0), deep2, 0.95) + iri2 * irr * 0.06, cIrid * (1.0 - 0.6 * cMilk));
         }
 
-        vec3 col = body * (1.0 - F) + refl * F + spec;
+        vec3 col = body * (1.0 - F) * (0.4 + 0.6 * surfAO) + (refl * F + spec) * surfAO;
 
         // Metal: a mirror tinted by its own colour (cherry: red chrome; lemon:
         // gold), no light through it, its edges going white (Schlick, with

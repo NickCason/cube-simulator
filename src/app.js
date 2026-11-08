@@ -23,6 +23,7 @@ import { FlourTool } from './tools/flour.js';
 import { EyesTool } from './tools/eyes.js';
 import { Eyes } from './world/eyes.js';
 import { copyEyes } from './eyes.js';
+import { SURFACE } from './surfaces.js';
 import { AcidTool } from './tools/acid.js';
 import { Cubiplication } from './cubiplication.js';
 import { makeMaterials, makeBomb } from './world/models.js';
@@ -48,7 +49,7 @@ const SETTING_BY_KEY = Object.fromEntries(SETTINGS.map((s) => [s.key, s]));
 // each cube's own settings: its material's, and its size (the rest - gravity,
 // the sound, the tools - are the room's, the same in every cube)
 // (its own: its material's sliders, its size, its bubbles)
-const PER_CUBE = (k) => !!SETTING_BY_KEY[k]?.mat || k === 'size' || k === 'bubbles' || k === 'bubbleSize';
+const PER_CUBE = (k) => !!SETTING_BY_KEY[k]?.mat || k === 'size' || k === 'bubbles' || k === 'bubbleSize' || k === 'surfDepth' || k === 'surfScale';
 import { Tilt } from './tilt.js';
 import { nameCube } from './namegen.js';
 
@@ -358,6 +359,7 @@ export class App {
     }
     const st = { ...DEFAULT_STYLE, ...saved };
     st.eyes = copyEyes(saved.eyes);
+    st.surface = SURFACE[saved.surface] ? saved.surface : 'none';
     st.layers = { ...DEFAULT_STYLE.layers, ...(saved.layers || {}) };
     st.layers.colors = [...st.layers.colors];
     if (opts.flavor) st.flavor = opts.flavor;
@@ -447,7 +449,7 @@ export class App {
         damping: cs.damping, lambdaRatio: cs.lambda, bounce: cs.bounce, friction: cs.grip,
         rigidity: cs.rigidity, density: cs.weight, airDrag: cs.airDrag,
       });
-      this.jelly.setCubeLook(cb.slot, resolveFlavor(cb.style), { ...ct, ...cs }, sb.cSize[cb.slot]);
+      this.jelly.setCubeLook(cb.slot, resolveFlavor(cb.style), { ...ct, ...cs, surface: cb.style.surface, bevelRatio: (EDGES[cb.style.edges] || EDGES[DEFAULT_STYLE.edges]).bevel }, sb.cSize[cb.slot]);
     }
     this.jelly.multiCube = this.cubes.length > 1; // (their shadows on each other)
     // (a gradient across, corner to corner or out from the middle: the jelly
@@ -705,6 +707,14 @@ export class App {
     this.style.layers.bias = Math.min(1, Math.max(-1, b));
     this.style.flavor = 'layers';
     this.applyStyle();
+  }
+
+  // its surface map (surfaces.js): moulded into its skin - a jiggle to show it off
+  setSurface(id) {
+    if (!SURFACE[id] || this.style.surface === id) return;
+    this.style.surface = id;
+    this.applyStyle();
+    if (id !== 'none') this.sb.impulse(0, 0.6, 0, 0, -1, 0, 3, 0.6);
   }
 
   setGlitter(id) {
@@ -1602,8 +1612,8 @@ export class App {
     while (used.has(slot)) slot++;
     const flavors = ['cherry', 'lime', 'blue', 'grape', 'orange', 'lemon', 'watermelon', 'cola'];
     const style = c
-      ? { flavor: c.flavor, layers: copyLayers(c.layers), texture: c.texture, edges: EDGES[c.edges] ? c.edges : DEFAULT_STYLE.edges, glitter: c.glitter, rubik: Number.isFinite(c.rubik) ? c.rubik : 1, eyes: copyEyes(c.eyes) }
-      : { flavor: flavors[Math.floor(Math.random() * flavors.length)], layers: copyLayers(DEFAULT_STYLE.layers), texture: 'jello', edges: DEFAULT_STYLE.edges, glitter: 'off', eyes: [] };
+      ? { flavor: c.flavor, layers: copyLayers(c.layers), texture: c.texture, edges: EDGES[c.edges] ? c.edges : DEFAULT_STYLE.edges, glitter: c.glitter, rubik: Number.isFinite(c.rubik) ? c.rubik : 1, eyes: copyEyes(c.eyes), surface: SURFACE[c.surface] ? c.surface : 'none' }
+      : { flavor: flavors[Math.floor(Math.random() * flavors.length)], layers: copyLayers(DEFAULT_STYLE.layers), texture: 'jello', edges: DEFAULT_STYLE.edges, glitter: 'off', eyes: [], surface: 'none' };
     // (its own material sliders; the world's as everyone's)
     const tune = {};
     for (const k of Object.keys(this.tune)) if (!PER_CUBE(k)) tune[k] = this.tune[k];
@@ -1875,7 +1885,7 @@ export class App {
     const more = [];
     for (const [j, c] of sc.cubes.entries()) {
       if (j === keepSel || 1 + more.length >= MAX_CUBES || !c || !c.style || !TEXTURES[c.style.texture]) continue;
-      const style = { ...DEFAULT_STYLE, ...c.style, layers: copyLayers({ ...DEFAULT_STYLE.layers, ...(c.style.layers || {}) }), eyes: copyEyes(c.style.eyes) };
+      const style = { ...DEFAULT_STYLE, ...c.style, layers: copyLayers({ ...DEFAULT_STYLE.layers, ...(c.style.layers || {}) }), eyes: copyEyes(c.style.eyes), surface: SURFACE[c.style.surface] ? c.style.surface : 'none' };
       if (!EDGES[style.edges]) style.edges = DEFAULT_STYLE.edges;
       const tune = {};
       for (const k of Object.keys(this.tune)) if (!PER_CUBE(k)) tune[k] = this.tune[k];
@@ -1911,6 +1921,7 @@ export class App {
     if (Number.isFinite(c.rubik)) s.rubik = c.rubik;
     // (its googly eyes come with it - or none)
     s.eyes = copyEyes(c.eyes);
+    s.surface = SURFACE[c.surface] ? c.surface : 'none';
     const tune = { ...c.tune };
     for (const k of ['volume', 'impacts', 'wobble']) if (this.tune[k] !== undefined) tune[k] = this.tune[k];
     if (c.tear === false) tune.tear = false;

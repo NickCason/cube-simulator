@@ -14,6 +14,7 @@ import { SETTINGS, resolveSettings, settingWord } from './settings.js';
 import { TEXTURES, EDGES, GLITTERS, MIN_LAYERS, MAX_LAYERS, MAX_REPEAT, resolveFlavor, flavorMainHex, gradStops, copyLayers } from './styles.js';
 import { freeNodes } from './freeform.js';
 import { EYE_STYLES, EYE_SIZES, EYE_R_MIN, EYE_R_MAX, MAX_EYES, copyEyes, onSurface, eyeFrame, mirrorEye } from './eyes.js';
+import { SURFACES, SURFACE } from './surfaces.js';
 
 export const TIER = { DRIFT: 0, MUTATION: 1, MAJOR: 2, LEGENDARY: 3 };
 
@@ -225,7 +226,26 @@ export function mutate(style, tune, { rnd = Math.random, gen = 0 } = {}) {
   for (let k = 0; k < nudges; k++) add(moveSlider(style, tune, pick(rnd, DRIFT_KEYS), (rnd() - 0.5) * 0.3, 0));
   if (style.layers) style.layers = copyLayers(style.layers);
   mutateEyes(style, rnd, chance, add);
+  mutateSurface(style, rnd, chance, add);
   return changes;
+}
+
+// Its surface map (surfaces.js): handed down as it is - now and then another
+// moulded into it, or worn smooth; one born smooth, once in a long while, has
+// one of its own.
+function mutateSurface(style, rnd, chance, add) {
+  const cur = SURFACE[style.surface] ? style.surface : 'none';
+  const others = SURFACES.map((s) => s.id).filter((id) => id !== 'none' && id !== cur);
+  if (cur !== 'none' && chance(0.035)) {
+    style.surface = pick(rnd, others);
+    add({ tier: 2, label: `${SURFACE[style.surface].name}!`, kind: 'surface' });
+  } else if (cur !== 'none' && chance(0.012)) {
+    style.surface = 'none';
+    add({ tier: 1, label: 'Worn smooth', kind: 'surface' });
+  } else if (cur === 'none' && chance(0.008)) {
+    style.surface = pick(rnd, others);
+    add({ tier: 3, label: `Born ${SURFACE[style.surface].name.toLowerCase()}!`, kind: 'surface' });
+  } else style.surface = cur;
 }
 
 // Its googly eyes (a family's: every child has its parent's): now and then a

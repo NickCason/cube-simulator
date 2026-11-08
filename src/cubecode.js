@@ -25,6 +25,7 @@
 // open forever. Never change what a letter or a slider code means: add new ones.
 
 import { copyEyes, encodeEyes, decodeEyes, eyesWord } from './eyes.js';
+import { SURFACE, surfaceWord } from './surfaces.js';
 import { SETTINGS, resolveSettings } from './settings.js';
 import { FLAVORS, TEXTURES, EDGES, GLITTERS, MIN_LAYERS, MAX_LAYERS, MAX_REPEAT, DEFAULT_STYLE, GRAD_SHAPE_INDEX, copyLayers } from './styles.js';
 import { FREE_K_MIN, FREE_K_MAX } from './freeform.js';
@@ -43,6 +44,7 @@ export const TUNE_CODES = {
   mu: 'fm', damping: 'vs', weight: 'dn', lambda: 'sq', bounce: 'bo', grip: 'gp', rigidity: 'rg', tough: 'tf', goo: 'go',
   opacity: 'op', glow: 'tl', depth: 'cd', rough: 'gl', ior: 'rf', irid: 'ir', metal: 'mt', opal: 'ol',
   bubbles: 'bc', bubbleSize: 'bs', glitterAmount: 'ga', glitterSize: 'gs', glitterSparkle: 'gk',
+  surfDepth: 'sd', surfScale: 'sk',
   gravity: 'gv', size: 'sz',
   grabSize: 'hs', handPull: 'hp', poke: 'pk',
   knifePush: 'kp', nailPower: 'nl', gunPower: 'gn', malletForce: 'ml', torchHeat: 'th', boilOff: 'bf', cryoCold: 'cc',
@@ -99,6 +101,7 @@ export function captureCube(app, name = '') {
     tear: app.tune.tear !== false,
     theme: app.theme,
     eyes: copyEyes(s.eyes),
+    surface: SURFACE[s.surface] ? s.surface : 'none',
   };
 }
 
@@ -126,6 +129,8 @@ export function encodeCube(c) {
   if (c.tear === false) f.push('w0');
   // (its googly eyes: see eyes.js)
   if (c.eyes && c.eyes.length) f.push('y' + encodeEyes(c.eyes));
+  // (its surface map: see surfaces.js)
+  if (c.surface && c.surface !== 'none' && SURFACE[c.surface]) f.push('s' + c.surface);
   const t = Object.keys(c.tune || {})
     .filter((k) => TUNE_CODES[k] && Number.isFinite(c.tune[k]))
     .map((k) => TUNE_CODES[k] + num(c.tune[k]));
@@ -170,6 +175,7 @@ export function decodeCube(text) {
     theme: null,
     rubik: 1,
     eyes: [],
+    surface: 'none',
   };
   let flavor = null, custom = null, stops = null, nodes = null;
   for (const p of parts.slice(1)) {
@@ -195,6 +201,7 @@ export function decodeCube(text) {
     else if (k === 'w') c.tear = v !== '0';
     else if (k === 'k') c.rubik = Math.round(clamp(parseInt(v, 10), 0, 65535, 1));
     else if (k === 'y') c.eyes = decodeEyes(v);
+    else if (k === 's') c.surface = SURFACE[v] ? v : 'none';
     else if (k === 't') {
       for (const pair of v.split(',')) {
         const m = pair.match(/^([a-z]{2})(-?(?:\d+\.?\d*|\.\d+)(?:e-?\d+)?)$/);
@@ -227,6 +234,7 @@ function clamp(x, a, b, fallback) {
 // "Gummy · Round · Holo" (and the look, if asked)
 export function cubeSummary(c, withLook = false) {
   const bits = [TEXTURES[c.texture]?.name || c.texture, EDGES[c.edges]?.name || c.edges];
+  if (surfaceWord(c.surface)) bits.push(surfaceWord(c.surface));
   if (c.glitter && c.glitter !== 'off') bits.push(`${GLITTERS.find((g) => g.id === c.glitter)?.name || c.glitter} glitter`);
   if (c.eyes && c.eyes.length) bits.push(eyesWord(c.eyes));
   if (withLook && c.theme === 'dark') bits.push('Glow mode');

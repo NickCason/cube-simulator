@@ -13,6 +13,7 @@
 // piday paddy fools easter earthday midsummer chocolate coffee diwali
 // midwinter friday13), when it's only on then. eyes: a face it comes with
 // (EYE_FACES, in eyes.js: pair boo cross beady sleepy monster cyclops).
+// surface: its surface map (surfaces.js).
 
 const S = (id, names, note, look, mat, x = {}) => ({ id, names, note, look, mat, ...x });
 
@@ -70,7 +71,7 @@ export const SPECIALS = [
   S('sour-belt', ['Sour Rainbow Belt', 'Sour Strip'], 'Every colour in stripes, sugared and sour.', 'up 0 #e8102e #ff7a00 #ffd23f #33c24d #1572ff #8e2de2', 'sour', { edges: 'soft' }),
   S('confetti-cake', ['Confetti Cake', 'Funfetti'], 'Vanilla sponge with sprinkles baked right in.', 'free 0.02 #fffaf0*3 #ff2d95*0.3 #00c2ff*0.3 #ffd60a*0.3 #7cff4f*0.3 #b04dff*0.3 #fffaf0*3', 'tofu', { edges: 'soft' }),
   S('strawberry-milk', ['Strawberry Milk', 'Pink Polka'], 'Pink spots on milky white, like a summer dress.', 'core 0 t3 #ff6f91 #fff6f0', 'creamy', { edges: 'soft' }),
-  S('swiss-cheese', ['Swiss Cheese', 'Holey Moley'], 'Golden and full of holes. Mice adore it.', 'core 0.05 t3 #fff3c4 #ffc72c', 'gummy', { edges: 'soft', tune: { depth: 1.5, opacity: 0.85 } }),
+  S('swiss-cheese', ['Swiss Cheese', 'Emmental', 'Holey Moley'], 'Golden, nutty and full of holes. Mice adore it.', '#ffc72c', 'gummy', { edges: 'soft', tune: { depth: 1.5, opacity: 0.85 }, surface: 'swiss' }),
   S('cookie-dough', ['Cookie Dough', 'Choc-Chip Cookie'], 'Golden dough, dark chips, eaten straight from the bowl.', 'core 0 t4 #3b2314 #e2b071', 'gummy', { edges: 'pillow', tune: { depth: 2 } }),
 
   // ---------------------------------------------------------------- fruit and food
@@ -106,6 +107,20 @@ export const SPECIALS = [
   S('thunderstorm', ['Thunderstorm', 'Storm Front'], 'Slate cloud and a crack of electric blue.', 'free 0.5 #37474f #5c6bc0 #263238 #e3f2fd*0.5', 'water', { tune: { bubbles: 60 } }),
   S('cloud-nine', ['Cloud Nine', 'Head in the Clouds'], 'Blue sky and the fluffiest clouds in it.', 'free 0.8 #5fb4ff #ffffff*1.4 #9fd3ff', 'creamy', { edges: 'pillow' }),
   S('whitecaps', ['Whitecaps', 'Surf’s Up'], 'Deep blue rollers breaking into foam.', 'free 0.35 #0d47a1*1.5 #ffffff #1976d2*1.5 #e3f2fd', 'water'),
+
+  // ---------------------------------------------------------------- moulded (surface maps)
+  S('golf-ball', ['Golf Ball', 'Hole in One', 'Fore!'], 'Dimpled for distance. Shout before you throw it.', '#f4f4ef', 'rubber', { edges: 'pillow', surface: 'golf' }),
+  S('waffle', ['Waffle', 'Brunch Stack', 'Golden Grid'], 'Crisp squares, every one made to hold syrup.', '#e0a050', 'gummy', { edges: 'soft', surface: 'waffle' }),
+  S('toy-brick', ['Toy Brick', 'Snap Block', 'Ouch Underfoot'], 'Clicks onto every other one. Never step on it barefoot.', '#e3000b', 'candy', { edges: 'sharp', surface: 'studs' }),
+  S('honeycomb', ['Honeycomb', 'The Hive', 'Busy Bee'], 'Waxy cells brimming with amber honey.', '#ffb300', 'syrup', { surface: 'honeycomb' }),
+  S('moon-rock', ['Moon Rock', 'Lunar Sample', 'Sea of Tranquility'], 'Pocked by a billion years of meteors. Handle with gloves.', '#b8b8c0', 'putty', { edges: 'soft', surface: 'craters' }),
+  S('dragon-egg', ['Dragon Egg', 'Wyrm Hatchling', 'Something Stirs'], 'Warm to the touch. Something inside is moving.', 'core 0.5 #1b5e20 #69f0ae', 'gummy', { edges: 'pillow', surface: 'scales', tune: { opal: 0.5 } }),
+  S('bubble-wrap', ['Bubble Wrap', 'Fragile Parcel', 'Pop Pop Pop'], 'Pop. Pop. Pop. Just one more.', '#dcefff', 'water', { surface: 'bubblewrap' }),
+  S('tread-plate', ['Tread Plate', 'Steel Deck', 'Mind the Step'], 'Industrial grade. Non-slip, if you’re wearing boots.', '#b0bec5', 'jello', { edges: 'sharp', surface: 'diamond', tune: { metal: 0.85 } }),
+  S('patchwork-quilt', ['Patchwork Quilt', 'Duvet Day', 'Eiderdown'], 'Puffy, stitched and impossibly cosy.', '#f8bbd0', 'marshmallow', { edges: 'pillow', surface: 'quilted' }),
+  S('pineapple', ['Pineapple', 'Piña', 'Tropical Crown'], 'Golden and scaly, sweet as anything under the armour.', '#ffca28', 'gummy', { surface: 'scales', when: 'summer' }),
+  S('brick-wall', ['Brick Wall', 'Garden Wall', 'Up Against It'], 'Laid course by course, running bond.', '#b5543c', 'gummy', { edges: 'sharp', surface: 'bricks' }),
+  S('frosted-glass', ['Frosted Glass', 'Bathroom Window', 'Misty Pane'], 'Light comes through. Nothing else does.', '#e8f4f8', 'glass', { surface: 'frosted' }),
 
   // ---------------------------------------------------------------- creatures and patterns
   S('ladybird', ['Ladybird', 'Lucky Bug'], 'Shiny red, black spots. Make a wish.', 'core 0 t3 #141414 #e8102e', 'candy', { edges: 'round' }),

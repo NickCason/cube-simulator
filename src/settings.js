@@ -52,6 +52,9 @@ export const SETTINGS = [
   { id: 'glitterAmount', group: 'Glitter', label: 'Amount', key: 'glitterAmount', def: 2600, ...logMap(300, 9000), word: (v) => (v < 900 ? 'Sprinkle' : v < 2200 ? 'Dusting' : v < 4500 ? 'Sparkly' : v < 7000 ? 'Loaded' : 'Galaxy') },
   { id: 'glitterSize', group: 'Glitter', label: 'Size', key: 'glitterSize', def: 1, ...logMap(0.4, 2.8), words: ['Dust', 'Fine', 'Classic', 'Chunky', 'Sequins'] },
   { id: 'glitterSparkle', group: 'Glitter', label: 'Sparkle', key: 'glitterSparkle', def: 1, ...logMap(0.3, 3), words: ['Subtle', 'Soft', 'Bright', 'Dazzling', 'Blinding'] },
+  // its surface map's (see surfaces.js): how deep its relief, how big its cells
+  { id: 'surfDepth', group: 'Surface', label: 'Depth', key: 'surfDepth', def: 1, ...logMap(0.25, 3), words: ['Faint', 'Soft', 'Moulded', 'Deep', 'Carved'] },
+  { id: 'surfScale', group: 'Surface', label: 'Scale', key: 'surfScale', def: 1, ...logMap(0.4, 2.5), words: ['Fine', 'Small', 'Medium', 'Large', 'Bold'] },
   {
     id: 'gravity', group: 'World', label: 'Gravity', key: 'gravity', def: 22, ...logMap(4, 60),
     word: (g) => (g < 7 ? 'Moon' : g < 13 ? 'Mars' : g < 32 ? 'Earth' : g < 45 ? 'Heavy' : 'Jupiter'),

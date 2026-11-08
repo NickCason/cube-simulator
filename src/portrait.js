@@ -6,6 +6,7 @@ import { GRAD_N } from './render/jellyMaterials.js';
 import { DEFAULT_STYLE, TEXTURES, EDGES, resolveFlavor, copyLayers } from './styles.js';
 import { resolveSettings } from './settings.js';
 import { copyEyes } from './eyes.js';
+import { SURFACE } from './surfaces.js';
 
 // A cube's portrait - its card in the Cubby, the picture it's shared as: a
 // fresh one of it, whole and at rest, alone in the studio (lit up, if it was
@@ -142,12 +143,13 @@ export class Portraits {
       glitter: c.glitter || 'off',
       rubik: Number.isFinite(c.rubik) ? c.rubik : 1,
       eyes: copyEyes(c.eyes),
+      surface: SURFACE[c.surface] ? c.surface : 'none',
     };
     const tex = TEXTURES[style.texture], st = resolveSettings(c.tune || {}, tex);
     const size = st.size, A = app.constructor;
     const sb = new SoftBody({ size, bevel: EDGES[style.edges].bevel * size, res: A.resAt(size, A.cellFor([size])) });
     sb.loadCube(0, 0, 0, 0);
-    const flavor = resolveFlavor(style), m = { ...tex, ...st };
+    const flavor = resolveFlavor(style), m = { ...tex, ...st, surface: style.surface, bevelRatio: EDGES[style.edges].bevel };
     J.setCubeLook(0, flavor, m, size);
     J.setStyle(flavor, m, size);
     J.needRest = !!flavor.layers && flavor.shape !== 'up';

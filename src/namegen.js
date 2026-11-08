@@ -29,6 +29,7 @@ import { punsFor } from './puns.js';
 import { TEXTURES, LAYER_PRESETS } from './styles.js';
 import { THEMES } from './themes.js';
 import { EYE_STYLES, copyEyes } from './eyes.js';
+import { SURFACE } from './surfaces.js';
 import { freeNodes, freePower } from './freeform.js';
 
 // ---------------------------------------------------------------- random
@@ -848,6 +849,9 @@ export function cubeTraits(c, rec = null, ctx = {}) {
     eyes = { n, kinds, adj, noun };
     sal.eyes = 0.95;
   }
+  // its surface map: what it's moulded like (see surfaces.js)
+  const surfWords = c.surface && c.surface !== 'none' ? SURFACE[c.surface]?.words : null;
+  if (surfWords) feel.push([surfWords[0], surfWords[1], 0.95]);
   const tearless = c.tear === false;
   if (tearless) feel.push([['Untearable', 'Indestructible', 'Rip-Proof'], ['Tank', 'Kevlar'], 0.5]);
   // the stats: how strongly it's each thing (an extreme, all the more)

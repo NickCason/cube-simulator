@@ -18,13 +18,14 @@ import {
   GRAD_N,
   GRAD_ROWS,
 } from './jellyMaterials.js';
+import { surfaceOf, surfaceFit } from '../surfaces.js';
 
 const FLOOR_SPAN = 6.4;
 const CAUS_GAIN = 1.5; // (how bright the caustic light lands)
 // (how milky jelly of that opacity looks: see setStyle)
 // a row of the cube-look texture: 7 texels of looks, 10 + 10 of layers, the
 // colour of its light, a freeform gradient's depth
-export const CUBE_TEX_W = 31; // (the last row: the powder on it - Flour writes it)
+export const CUBE_TEX_W = 32; // (30: the powder on it - Flour writes it; 31: its surface map)
 
 const hazeMinOf = (o) => 0.92 * Math.min(1, Math.max(0, (Math.min(1, Math.max(0, o)) - 0.45) / 0.55)) ** 2;
 
@@ -663,10 +664,15 @@ export class JellyView {
     const cloud = Math.max(m.milk || 0, hazeMinOf(o));
     if (cloud) tint.lerp(new THREE.Color(1, 1, 1), 0.35 * cloud).multiplyScalar(1 - 0.35 * cloud);
     put(27, tint.r, tint.g, tint.b, 9 * o * o + (m.milk || 0) * 3);
-    put(28, 1 / ref, Math.max(1, Math.round(flavor.tiles || 1)), 0, 0);
+    put(28, 1 / ref, Math.max(1, Math.round(flavor.tiles || 1)), surfaceOf(m.surface).rough || 0, Math.min(0.45, m.bevelRatio ?? 0.13));
     // its coats and skins: a dusting on the outside, iridescence and metal only
     // on the outside (a film, a foil), sugar all through
-    put(29, m.dust || 0, m.skin || 0, m.through ? 1 : 0, 0);
+    // ...and its surface map (surfaces.js): its kind, how deep (m), its cells
+    // across a face and up it (whole repeats: see surfaceFit) - its hollows'
+    // shade, how much it scatters, and the cube's rounding (row 28)
+    const sf = surfaceOf(m.surface), [nu, nv] = surfaceFit(sf, (sf.density || 1) / (m.surfScale ?? 1));
+    put(29, m.dust || 0, m.skin || 0, m.through ? 1 : 0, sf.ao || 0);
+    put(31, sf.kind, (sf.depth || 0) * (m.surfDepth ?? 1) * size, nu, nv);
     this.cubeTex.needsUpdate = true;
     if (flavor.layers && flavor.shape === 'free') {
       bakeFree(flavor, this.freeData.subarray(k * this.freeSlab, (k + 1) * this.freeSlab));
