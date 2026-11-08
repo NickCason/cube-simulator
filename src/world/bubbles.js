@@ -11,16 +11,21 @@ export class Bubbles {
   constructor(app) {
     this.app = app;
     const geo = new THREE.SphereGeometry(1, 14, 10);
-    // Air bubbles read as bright rims and glints. They are drawn after the
-    // jelly at their true positions (refracting them through the screen-space
-    // approximation smears them), tinted/dimmed by the jelly in front, with
-    // their depth pulled to the jelly surface so tools in front still hide them.
+    // Air bubbles: clear in the middle, silvery round the edge (light turned
+    // back at a grazing angle - total internal reflection), a fine dark line
+    // at the very edge where it bends the view away, and the light's glint -
+    // with a fainter one opposite, as a real bubble has. Laid over what's
+    // behind (not added on: added on, they read as more glitter), after the
+    // glitter. Drawn after the jelly at their true positions (refracting them
+    // through the screen-space approximation smears them), tinted/dimmed by
+    // the jelly in front, depth pulled to the jelly surface so tools in front
+    // still hide them.
     const mat = new THREE.ShaderMaterial({
       uniforms: { uLight: { value: app.lightDir } },
       transparent: true,
       depthWrite: false,
       depthTest: true,
-      blending: THREE.AdditiveBlending,
+      blending: THREE.NormalBlending,
       vertexShader: /* glsl */ `
         attribute float aEntryZ;
         varying vec3 vN;
@@ -44,11 +49,16 @@ export class Bubbles {
         varying vec3 vTint;
         void main() {
           vec3 N = normalize(vN);
-          float ndv = clamp(dot(N, vV), 0.0, 1.0);
-          float rim = pow(1.0 - ndv, 2.5);
-          float spec = pow(max(dot(reflect(-normalize(uLight), N), vV), 0.0), 50.0);
-          vec3 c = vTint * (rim * 1.6 + 0.06) + vec3(6.0) * spec * (vTint + 0.2);
-          gl_FragColor = vec4(c, 1.0);
+          float ndv = clamp(dot(N, vV), 0.0, 1.0), edge = 1.0 - ndv;
+          vec3 L = normalize(uLight);
+          float silver = smoothstep(0.3, 0.92, edge), line = smoothstep(0.86, 0.99, edge);
+          float spec = pow(max(dot(reflect(-L, N), vV), 0.0), 70.0);
+          float spec2 = pow(max(dot(reflect(vec3(-L.x, L.y * 0.4, -L.z), N), vV), 0.0), 40.0) * 0.35;
+          float lum = max(vTint.r, max(vTint.g, vTint.b));
+          vec3 sil = mix(vec3(lum), vTint, 0.55) * 1.25 + 0.06;
+          vec3 c = mix(sil, sil * 0.18, line) + vec3(5.0) * (spec + spec2) * (vTint + 0.25);
+          float a = clamp(silver * 0.8 + (spec + spec2) * 2.0, 0.0, 1.0) * clamp(lum * 2.5, 0.0, 1.0);
+          gl_FragColor = vec4(c, a);
         }`,
     });
     this.mesh = new THREE.InstancedMesh(geo, mat, MAX);
@@ -59,7 +69,7 @@ export class Bubbles {
     this.mesh.instanceColor.setUsage(THREE.DynamicDrawUsage);
     this.entryZ = new THREE.InstancedBufferAttribute(new Float32Array(MAX), 1).setUsage(THREE.DynamicDrawUsage);
     geo.setAttribute('aEntryZ', this.entryZ);
-    this.mesh.renderOrder = 3;
+    this.mesh.renderOrder = 5; // (after the glitter: see above)
     app.fxScene.add(this.mesh);
     let seed = 7;
     const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;

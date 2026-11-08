@@ -292,14 +292,31 @@ export class Glitter {
   }
 
   _key() {
-    const sb = this.app.sb;
-    return `${this.count}|${this.groups.map((g) => g.slot + ':' + g.mode + ':' + sb.cSize[g.slot].toFixed(4)).join(',')}`;
+    const sb = this.app.sb, B = this.app.bubbles;
+    // (and where the bubbles are: the flakes keep out of them)
+    return `${this.count}|${this.size.toFixed(3)}|${this.groups.map((g) => g.slot + ':' + g.mode + ':' + sb.cSize[g.slot].toFixed(4)).join(',')}|${B ? B._wantKey + ':' + B._cubeVer : ''}`;
+  }
+
+  // The bubbles, cube by cube, in a grid of their rest places - for the
+  // flakes to keep out of: { slot: { cell, map: Map(cell key -> [x, y, z, r]) } }
+  _bubbleGrid() {
+    const sb = this.app.sb, B = this.app.bubbles, out = {};
+    if (!B) return out;
+    for (const b of B.items) {
+      const half = sb.cSize[b.slot] / 2, m = Math.min(0.07, half * 0.15);
+      const g = out[b.slot] || (out[b.slot] = { cell: 0.08 * sb.cSize[b.slot], map: new Map() });
+      const x = b.u[0] * (half - m), y = b.u[1] * (half - m), z = b.u[2] * (half - m), r = b.r * b.scale * sb.cSize[b.slot];
+      const key = `${Math.floor(x / g.cell)},${Math.floor(y / g.cell)},${Math.floor(z / g.cell)}`;
+      (g.map.get(key) || g.map.set(key, []).get(key)).push([x, y, z, r]);
+    }
+    return out;
   }
 
   // (Re)anchor flakes at their rest positions in the current mesh.
   _anchor() {
     const sb = this.app.sb;
     const X = sb.X, T = sb.T;
+    const grid = this._bubbleGrid();
     const out = { tet: -1, b0: 0, b1: 0, b2: 0, b3: 0 };
     const n = this.count, G = this.groups.length ? this.groups : [{ slot: 0, mode: 0 }];
     for (let k = 0; k < n; k++) {
@@ -307,7 +324,40 @@ export class Glitter {
       const grp = G[k % G.length];
       // (each cube its own size)
       const half = sb.cSize[grp.slot] / 2, m = Math.min(0.03, half * 0.06);
-      const px = this.u[k * 3] * (half - m), py = this.u[k * 3 + 1] * (half - m), pz = this.u[k * 3 + 2] * (half - m);
+      let px = this.u[k * 3] * (half - m), py = this.u[k * 3 + 1] * (half - m), pz = this.u[k * 3 + 2] * (half - m);
+      // (not in a bubble, nor touching one: a flake that would be is moved -
+      // to the first of a few other places, in its own sequence, clear of
+      // them all - or, none clear, it's left out)
+      const bg = grid[grp.slot];
+      if (bg) {
+        const fr = 0.0072 * this.size * sb.cSize[grp.slot] * this.seed[k * 3] * 1.4 + 0.004;
+        const clear = (x, y, z) => {
+          const ci = Math.floor(x / bg.cell), cj = Math.floor(y / bg.cell), ck = Math.floor(z / bg.cell);
+          for (let di = -2; di <= 2; di++)
+            for (let dj = -2; dj <= 2; dj++)
+              for (let dk = -2; dk <= 2; dk++) {
+                const L = bg.map.get(`${ci + di},${cj + dj},${ck + dk}`);
+                if (!L) continue;
+                for (const [bx, by, bz, br] of L) {
+                  const rr = br + fr;
+                  if ((x - bx) ** 2 + (y - by) ** 2 + (z - bz) ** 2 < rr * rr) return false;
+                }
+              }
+          return true;
+        };
+        if (!clear(px, py, pz)) {
+          let ok = false;
+          for (let j = 1; j <= 6 && !ok; j++) {
+            const qx = (((this.u[k * 3] + 1) / 2 + j * 0.6180339) % 1) * 2 - 1, qy = (((this.u[k * 3 + 1] + 1) / 2 + j * 0.4142135) % 1) * 2 - 1, qz = (((this.u[k * 3 + 2] + 1) / 2 + j * 0.7320508) % 1) * 2 - 1;
+            const x = qx * (half - m), y = qy * (half - m), z = qz * (half - m);
+            if (clear(x, y, z)) (px = x), (py = y), (pz = z), (ok = true);
+          }
+          if (!ok) {
+            this.aSeed.array[k * 3] = 0;
+            continue;
+          }
+        }
+      }
       this.aMode.array[k] = grp.mode;
       let r = null;
       if (roundBoxSDF(px, py, pz, half, sb.cBevel[grp.slot]) < -m * 0.5) r = sb.locateRestFast(px + grp.slot * REST_STEP, py, pz, out);
