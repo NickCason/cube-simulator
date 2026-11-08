@@ -42,7 +42,8 @@ import { SETTINGS, resolveSettings } from './settings.js';
 const SETTING_BY_KEY = Object.fromEntries(SETTINGS.map((s) => [s.key, s]));
 // each cube's own settings: its material's, and its size (the rest - gravity,
 // the sound, the tools - are the room's, the same in every cube)
-const PER_CUBE = (k) => !!SETTING_BY_KEY[k]?.mat || k === 'size';
+// (its own: its material's sliders, its size, its bubbles)
+const PER_CUBE = (k) => !!SETTING_BY_KEY[k]?.mat || k === 'size' || k === 'bubbles' || k === 'bubbleSize';
 import { Tilt } from './tilt.js';
 import { nameCube } from './namegen.js';
 
@@ -426,9 +427,11 @@ export class App {
     const st = this.settings;
     this.jelly.setStyle(f, { ...tex, ...st }, this.sb.p.size);
     const sb = this.sb;
-    // every cube its own material and look
+    // every cube its own material and look (and bubbles)
+    const fizz = [];
     for (const cb of this.cubes) {
       const ct = TEXTURES[cb.style.texture], cs = resolveSettings(cb.tune, ct);
+      fizz.push({ slot: cb.slot, count: cs.bubbles, scale: cs.bubbleSize });
       sb.setCube(cb.slot, {
         mu: App.safeMu(cs.mu, cs.weight, sb.cSize[cb.slot], cs.lambda, cs.gravity),
         damping: cs.damping, lambdaRatio: cs.lambda, bounce: cs.bounce, friction: cs.grip,
@@ -459,7 +462,7 @@ export class App {
     sb.p.density = st.weight; // (each cube's own mass: setCube)
     sb.wakeAll();
     this.audio.setLevels(st.volume, st.impacts, st.wobble);
-    this.bubbles?.configure(st.bubbles, st.bubbleSize);
+    this.bubbles?.configure(fizz);
     this.glitter?.configure({ mode: this.style.glitter, count: st.glitterAmount, size: st.glitterSize, sparkle: st.glitterSparkle });
     this.flavor = f;
     this.color = flavorMainHex(f);
@@ -1632,7 +1635,6 @@ export class App {
       last.slot = 0;
     }
     this.sb.rebuild();
-    if (last) this.stackOrder = [0];
     this._resolution();
     this._arena(this.cubes.length);
     this.stackOrder = this.stackOrder.filter((s) => s !== slot);
@@ -1696,6 +1698,22 @@ export class App {
     if (this.cubes.length < 2) return false;
     this._arena();
     return this.heal({ layout: this.stackLayout() });
+  }
+
+  // The stack's order (bottom to top), always every cube in the room and
+  // only those: whatever came and went (a cube out, the last one left
+  // made cube 0 again, a twin born), each once - a cube left out of it
+  // was left behind by a stack, and lost when it re-formed.
+  get stackOrder() {
+    const have = this.cubes.map((c) => c.slot), here = new Set(have);
+    const o = [...new Set((this._order || []).filter((s) => here.has(s)))];
+    for (const s of have) if (!o.includes(s)) o.push(s);
+    this._order = o;
+    return o;
+  }
+
+  set stackOrder(order) {
+    this._order = [...order];
   }
 
   setStackOrder(order) {

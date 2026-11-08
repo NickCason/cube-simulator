@@ -521,6 +521,19 @@ export class Healer {
     const homes = new Map();
     if (layout) {
       for (const L of layout) homes.set(L.slot, { cx: L.x, cy: L.y, cz: L.z, yaw: L.yaw || 0 });
+      // (any cube the layout hasn't a place for re-forms where it is: every
+      // cube in the room is built afresh, and one with no home would be lost)
+      for (const cb of app.cubes) {
+        if (homes.has(cb.slot)) continue;
+        let M = 0, cx = 0, cz = 0;
+        for (const pc of sb.pieces) {
+          if (pc.cube !== cb.slot) continue;
+          M += pc.mass;
+          cx += pc.com[0] * pc.mass;
+          cz += pc.com[2] * pc.mass;
+        }
+        homes.set(cb.slot, { cx: M > 0 ? cx / M : 0, cy: 0, cz: M > 0 ? cz / M : 0, yaw: 0 });
+      }
     } else {
       for (const cb of app.cubes) {
         let M = 0, cx = 0, cz = 0, main = null;

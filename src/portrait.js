@@ -47,7 +47,7 @@ export class Portraits {
     const G = app.glitter;
     // what's put back after
     const S = {
-      sb: app.sb, cubes: app.cubes, camera: app.camera, sel: app.sel,
+      sb: app.sb, cubes: app.cubes, order: app._order, camera: app.camera, sel: app.sel,
       multi: J.multiCube, needRest: J.needRest, tintLocal: fx.tintLocal.value, row: J.cubeData.slice(0, CUBE_TEX_W * 4),
       grad: J.gradData.slice(0, GRAD_N * 2 * 4), free: J.freeData.slice(0, J.freeSlab),
       emit: F.uEmit.value, pulse: F.uPulseAmp.value.slice(), cavN: F.uCavN.value, fire: [app.fireLevel, app.fireGoal], flash: app.flash,
@@ -84,6 +84,7 @@ export class Portraits {
       // all put back: the jelly, its look, the room's look, the effects
       app.sb = S.sb;
       app.cubes = S.cubes;
+      app._order = S.order;
       app.sel = S.sel;
       app.camera = S.camera;
       J.topoVersion = -1;

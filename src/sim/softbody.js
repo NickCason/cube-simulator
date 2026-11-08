@@ -118,6 +118,10 @@ export class SoftBody {
     this.collisionsEnabled = true;
     this.selfQuietUntil = 0; // (sim time) no self-contact before this: see radialImpulse
     this.topoVersion = 0;
+    // (bumped when whole cubes - or pieces - come and go and the tets are
+    // renumbered: what's anchored by tet index, and not in embeds, re-finds
+    // its place - see Bubbles)
+    this.cubeVersion = 0;
     this.pieces = [];
     this.time = 0;
     this.hCell = this.p.size / this.p.res;
@@ -337,6 +341,7 @@ export class SoftBody {
 
   // ---------------------------------------------------------------- setup
   loadCube(ox = 0, oy = 0, oz = 0, yaw = 0) {
+    this.cubeVersion++;
     this.cBevel[0] = this.p.bevel;
     const mesh = buildCubeMesh(this.p.res, this.p.size, this.p.bevel);
     this.cN[0] = mesh.nV;
@@ -367,6 +372,7 @@ export class SoftBody {
   // what's there (rebuild() after). Its rest shape is offset k * REST_STEP.
   // (size, res: its own - see cSize)
   addCube(k, ox = 0, oy = 0, oz = 0, yaw = 0, bevel = this.p.bevel, size = this.p.size, res = this.p.res) {
+    this.cubeVersion++;
     this.cBevel[k] = bevel;
     const mesh = buildCubeMesh(res, size, bevel);
     this.cN[k] = mesh.nV;
@@ -452,6 +458,7 @@ export class SoftBody {
   // (the vertices drop(i) says, and the tets on them - every tet's corners
   // must all go or all stay: a cube's, or a piece's)
   _removeVerts(drop) {
+    this.cubeVersion++;
     const nV = this.nV, nT = this.nT, map = new Int32Array(nV).fill(-1);
     let n = 0;
     const vArr3 = [this.x, this.px, this.v, this.X];
@@ -496,6 +503,7 @@ export class SoftBody {
   // Cube k becomes cube j (a free slot): its rest shape moves over with it,
   // and its stuff. rebuild() after.
   moveCube(k, j) {
+    this.cubeVersion++;
     const d = (j - k) * REST_STEP;
     for (let i = 0; i < this.nV; i++) {
       if (this.vCube[i] !== k) continue;
