@@ -755,6 +755,14 @@ export class AudioEngine {
     this._noise(t, 0.008, 'highpass', 6000, 6000, 0.7, 0.06 * amount, 0.0004, out);
   }
 
+  // (a re-cube's: one sucked back onto the cube - a slurp, then a thwop)
+  eyeSuck(amount = 1) {
+    if (!this._ok('eyeSuck', 0.035)) return;
+    const t = this.ctx.currentTime, f = rnd(0.85, 1.2);
+    this._noise(t, 0.05, 'bandpass', 2600 * f, 700 * f, 4, 0.16 * amount, 0.002);
+    this._tone(t + 0.035, 'sine', 720 * f, 170 * f, 0.075, 0.26 * amount, 0.002);
+  }
+
   eyePeel(amount = 1) {
     if (!this._ok('eyePeel', 0.05)) return;
     const t = this.ctx.currentTime;

@@ -7,7 +7,10 @@
 // rattles round the rim as the jelly moves. Where its jelly's gone (cut
 // away, melted, eaten - or cut through under it) the eye pops off and falls;
 // a re-cube puts it back. One being peeled off (see EyesTool) is held up
-// under the pointer, facing you, and falls where it's let go.
+// under the pointer, facing you, and falls where it's let go. A re-cube
+// takes them off: they swirl round the cube coming back together, then -
+// the cube made again - are sucked back on one after another, each to its
+// own place, with a thwop and a rattle of the pupil.
 
 import * as THREE from 'three';
 import { REST_STEP } from '../sim/softbody.js';
@@ -18,6 +21,10 @@ const MAXI = 128; // (eye instances: on the cubes, and falling)
 const SINKS = [0.004, 0.02, 0.05]; // (how far under the skin each hold is tried: shares of the side)
 const LIFT = 0.004; // (and how far out of it the eye sits: the drawn surface is rounder than the jelly's)
 const G = 9.8; // (the pupil's gravity)
+const FLY_IN = 0.6; // (a re-cube: off the cube and out into the swirl, s)
+const LAND = 0.3; // (sucked back on, s)
+const LAND_GAP = 0.085; // (one after another, s)
+const smooth01 = (u) => (u <= 0 ? 0 : u >= 1 ? 1 : u * u * (3 - 2 * u));
 
 const _m = new THREE.Matrix4(), _m2 = new THREE.Matrix4(), _q = new THREE.Quaternion(), _s = new THREE.Vector3(), _p = new THREE.Vector3();
 const _u = new THREE.Vector3(), _v = new THREE.Vector3(), _n = new THREE.Vector3(), _c = new THREE.Color();
@@ -75,6 +82,10 @@ export class Eyes {
     this.ghosts = [];
     this.picked = new Set();
     this.held = null; // (one being peeled off: see hold)
+    this.flights = new Map(); // (a re-cube: each eye flying, by the eye - see _healStart)
+    this.landed = new WeakMap(); // (just sucked back on: when, for its squash)
+    app.onHealStart.push(() => this._healStart());
+    app.onHealEnd.push(() => this._healEnd());
     this.born = new WeakMap(); // (an eye's arrival, for its pop)
     this._sig = '';
     app.anchorProviders.push(() => this.live.flatMap((L) => L.anchors));
@@ -186,6 +197,7 @@ export class Eyes {
       if (t > 0) this._pupil(L, t, gy);
     }
     if (this.held && t > 0) this._pupil(this.held, t, gy);
+    if (this.flights.size) this._fly(t, gy);
     this._fall(t);
     this._draw(this.live.filter((L) => L.ok), true);
     this._ghosts(sb);
@@ -284,6 +296,120 @@ export class Eyes {
     this._drop(H, H.pos, H.u, H.v, H.n, vel);
   }
 
+  // A re-cube starting: the eyes of the cubes re-cubing come off - each from
+  // where it is (one lying on the floor, from there) - and swirl round its
+  // home, each on its own tilted circle.
+  _healStart() {
+    const H = this.app.healer, only = H.only;
+    for (const L of this.live) {
+      if (only >= 0 && L.k !== only) continue;
+      const was = this.flights.get(L.e);
+      const fi = this.falling.findIndex((f) => f.e === L.e);
+      let from = was ? was.pos.clone() : L.ok ? L.pos.clone() : null;
+      if (fi >= 0) {
+        from = this.falling[fi].pos.clone();
+        this.falling.splice(fi, 1);
+      }
+      const size = this.app.sb.cSize[L.k] || 1;
+      if (!from) from = this._home(L.k).clone().add(new THREE.Vector3(Math.random() - 0.5, Math.random() - 0.5, Math.random() - 0.5).setLength(0.5 * size));
+      // (its circle: level, tipped up to 40 degrees about a level axis)
+      const tilt = (Math.random() - 0.5) * 1.4, spin = Math.random() * Math.PI * 2;
+      const ax = new THREE.Vector3(Math.cos(spin), 0, Math.sin(spin));
+      const a1 = new THREE.Vector3(-ax.z, 0, ax.x).applyAxisAngle(ax, tilt), a2 = ax.clone();
+      const q = was ? was.q.clone() : new THREE.Quaternion().setFromRotationMatrix(_m.makeBasis(L.u.lengthSq() ? L.u : _u.set(1, 0, 0), L.v.lengthSq() ? L.v : _v.set(0, 1, 0), L.n.lengthSq() ? L.n : _n.set(0, 0, 1)));
+      this.flights.set(L.e, {
+        e: L.e, k: L.k, cb: L.cb, R: L.R, side: L.side, start: from, out: L.ok && L.n.lengthSq() ? L.n.clone() : new THREE.Vector3(0, 1, 0),
+        pos: from.clone(), q, u: new THREE.Vector3(), v: new THREE.Vector3(), n: new THREE.Vector3(), su: 1, sv: 1,
+        t: 0, phase: Math.random() * Math.PI * 2, speed: (2.3 + Math.random() * 1.7) * (Math.random() < 0.5 ? -1 : 1),
+        radius: (0.8 + Math.random() * 0.22) * size, bob: 2 + Math.random() * 2, a1, a2,
+        landAt: -1, waitFrom: 0, landT: 0, landFrom: null, landQ: null, pp: was ? was.pp : [...L.pp], pv: was ? was.pv : [...L.pv], last: null, lastV: null,
+      });
+    }
+    if (this.flights.size) this.app.audio?.eyePeel?.(0.6);
+  }
+
+  // ...and the cube made again: each sucked back on, one after another.
+  _healEnd() {
+    let i = 0;
+    for (const F of this.flights.values()) F.landAt = F.t + 0.1 + i++ * LAND_GAP;
+  }
+
+  // (where a cube re-cubing comes back together)
+  _home(k) {
+    const H = this.app.healer, h = H.multi && H.homes ? H.homes.get(k) : null;
+    return h ? h.cW : H.cW;
+  }
+
+  _fly(t, gy) {
+    const H = this.app.healer, size0 = this.app.sb.p.size;
+    for (const [e, F] of this.flights) {
+      F.t += t;
+      // (stopped part way - a swap: back on now)
+      if (F.landAt < 0 && !H.active) F.landAt = F.t;
+      const flying = F.landAt < 0 || F.t < F.landAt;
+      const L = flying ? null : this.live.find((x) => x.e === e && x.ok);
+      // (its cube gone, or wearing other eyes now - a swap - or still nowhere
+      // to land a good while after: it drops)
+      if (!flying && !L && (!this.app.cubes.some((cb) => (cb.style.eyes || []).includes(e)) || F.t > (F.waitFrom || F.landAt) + 2.5)) {
+        this.flights.delete(e);
+        this._drop(F, F.pos, F.u.lengthSq() ? F.u : _u.set(1, 0, 0), F.v.lengthSq() ? F.v : _v.set(0, 1, 0), F.n.lengthSq() ? F.n : _n.set(0, 0, 1));
+        continue;
+      }
+      if (flying || !L) {
+        // round its home on its circle, bobbing - out there off the cube
+        // first, popping out along its face
+        const c = this._home(F.k), size = this.app.sb.cSize[F.k] || size0;
+        // (out past the pieces as they fly apart, in close as they come back)
+        const r = F.radius * (1 + 0.55 * Math.sin(Math.PI * Math.min(1, Math.max(0, H.t / 2.4))));
+        const a = F.phase + F.speed * F.t;
+        _p.copy(F.a1).multiplyScalar(Math.cos(a) * r).addScaledVector(F.a2, Math.sin(a) * r).add(c);
+        _p.y = Math.max(F.R * 1.3, _p.y + Math.sin(F.t * F.bob + F.phase) * 0.06 * size + 0.08 * size);
+        const k = smooth01(F.t / FLY_IN);
+        F.pos.lerpVectors(F.start, _p, k).addScaledVector(F.out, Math.sin(Math.PI * k) * 0.3 * size);
+        // (facing mostly you, a little out from the cube, as it goes round:
+        // straight out, at the sides of its circle it was seen edge on)
+        _n.copy(F.pos).sub(c);
+        if (_n.lengthSq() < 1e-8) _n.set(0, 0, 1);
+        _n.normalize().multiplyScalar(0.3).add(_p.copy(this.app.camera.position).sub(F.pos).normalize().multiplyScalar(0.7)).normalize();
+        _v.set(0, 1, 0).addScaledVector(_n, -_n.y);
+        if (_v.lengthSq() < 1e-6) _v.set(0, 0, 1);
+        _v.normalize();
+        _u.crossVectors(_v, _n);
+        _q.setFromRotationMatrix(_m.makeBasis(_u, _v, _n));
+        F.q.slerp(_q, Math.min(1, t * 6));
+        if (!flying && !F.waitFrom) F.waitFrom = F.landAt; // (nowhere to go yet: round again)
+      } else {
+        // sucked back on: faster and faster to its own place, turning to
+        // lie on it
+        if (!F.landFrom) {
+          F.landFrom = F.pos.clone();
+          F.landQ = F.q.clone();
+          F.landT = 0;
+        }
+        F.landT += t;
+        const u = Math.min(1, F.landT / LAND);
+        F.pos.lerpVectors(F.landFrom, L.pos, u * u * u);
+        _q.setFromRotationMatrix(_m.makeBasis(L.u, L.v, L.n));
+        F.q.slerpQuaternions(F.landQ, _q, Math.min(1, u * 1.5));
+        if (u >= 1) {
+          // on: a squash, a thwop - and its pupil sent rattling
+          this.flights.delete(e);
+          this.landed.set(e, performance.now());
+          const ang = Math.random() * Math.PI * 2, kick = 35 + Math.random() * 25;
+          L.pp = [...F.pp];
+          L.pv = [Math.cos(ang) * kick, Math.sin(ang) * kick];
+          L.last = L.lastV = null;
+          this.app.audio?.eyeSuck?.(0.8);
+          continue;
+        }
+      }
+      F.u.set(1, 0, 0).applyQuaternion(F.q);
+      F.v.set(0, 1, 0).applyQuaternion(F.q);
+      F.n.set(0, 0, 1).applyQuaternion(F.q);
+      if (t > 0) this._pupil(F, t, gy);
+    }
+  }
+
   // The picked ones (see EyesTool): ringed.
   setPicked(list) {
     this.picked = new Set(list || []);
@@ -344,6 +470,7 @@ export class Eyes {
     for (const L of live) {
       if (n >= MAXI - 1) break;
       if (H && H.e === L.e) continue;
+      if (room && this.flights.has(L.e)) continue;
       _s.set(L.R * L.su, L.R * L.sv, L.R);
       const M = new THREE.Matrix4().makeBasis(L.u, L.v, L.n).scale(_s).setPosition(L.pos);
       // (just put on: it pops in, with a bounce)
@@ -354,10 +481,26 @@ export class Eyes {
         if (a < 0.45) sc = 1 + Math.sin(a * 14) * Math.exp(-a * 9) * 0.35 - Math.exp(-a * 30) * 0.9;
         else this.born.delete(L.e);
       }
+      // (just sucked back on: squashed flat, then a wobble)
+      const ld = room ? this.landed.get(L.e) : undefined;
+      if (ld !== undefined) {
+        const a = (now - ld) / 1000;
+        if (a < 0.6) sc *= 1 - 0.3 * Math.exp(-a * 14) * Math.cos(a * 26);
+        else this.landed.delete(L.e);
+      }
       const col = flavorMainHex(resolveFlavor(L.cb.style));
       eye(M, L.e, L.pp, Math.max(0.05, sc), L.side >= 0 ? 1 : -1, col);
       if (room && nr < 16 && this.picked.has(L.e)) put(this.ring, nr++, M, 0, 0, 0.05, 1 + Math.sin(now * 0.006) * 0.03, 1 + Math.sin(now * 0.006) * 0.03, 1);
     }
+    // (a re-cube's: flying round it)
+    if (room)
+      for (const F of this.flights.values()) {
+        if (n >= MAXI - 1) break;
+        // (a touch bigger in the air, back to its size as it lands)
+        const big = F.landFrom ? 1 + 0.15 * (1 - Math.min(1, F.landT / LAND)) : 1.15;
+        const M = new THREE.Matrix4().compose(F.pos, F.q, _s.set(F.R * big, F.R * big, F.R * big));
+        eye(M, F.e, F.pp, 1, F.side >= 0 ? 1 : -1, flavorMainHex(resolveFlavor(F.cb.style)));
+      }
     if (H && H.show) {
       // (held up: a touch bigger, lifted off)
       _s.set(H.R * 1.08, H.R * 1.08, H.R * 1.08);
