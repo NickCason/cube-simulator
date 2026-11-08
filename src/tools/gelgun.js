@@ -14,7 +14,6 @@ import { HoleGunTool } from './basic.js';
 import { REST_STEP } from '../sim/softbody.js';
 
 const RATE = 3.5; // globs a second, held (each one's a rebuild of the body)
-const SPEED = 6.5; // m/s out of the nozzle
 const GLOB = 0.008; // a glob's jelly, as a share of the cube's volume
 const MAX_BLOBS = 16; // (more: the oldest goes)
 const WELDS = 10; // (nails a glob's stuck on with)
@@ -74,11 +73,13 @@ export class GelGunTool extends HoleGunTool {
     this.gelMat.color.set(this.app.color || '#d4102a');
   }
 
-  // (a glob only - no shot on the way down)
+  // (a glob only - no bullet: the hole gun's down shoots one - and it goes
+  // the moment it's pressed: left to the next frame, a quick tap - a press
+  // let go before that frame came - fired nothing at all)
   down(e, ray) {
     this.firing = true;
     this.ray.copy(ray);
-    this.cool = 0;
+    if (this.cool <= 0) this.fire();
     return true;
   }
 
@@ -112,18 +113,54 @@ export class GelGunTool extends HoleGunTool {
     if (sb.nT > 30000 || app.healer?.active) return;
     const k = app.cube?.slot ?? 0, size = sb.cSize[k] || sb.p.size;
     const muzzle = this.model.localToWorld(new THREE.Vector3(0, 0.005, -0.22));
-    // aimed to land on what's under the cursor: lobbed - the arc that gets
-    // there at this speed (the flatter of the two), else straight at it
+    // aimed to land on what's under the cursor (missing the jelly: the floor
+    // there): lobbed - a flight time for the distance, and the throw that
+    // lands it there in that time, under this world's gravity. (At one set
+    // speed the gun reached under two metres - the room's gravity is 2.2 g
+    // - and a cube further off it fell short of, or flew straight at and
+    // dropped under.)
+    // (how big: the Cubicle's glob size - its radius - held to what a place
+    // of its own beside the cube has room for)
+    const gs = Math.min(1.7, Math.max(0.6, app.st?.globSize ?? 1));
+    const r = Math.cbrt((3 * GLOB) / (4 * Math.PI)) * size * gs * (0.8 + Math.random() * 0.4);
     const hit = app.pickJelly(this.ray);
-    const goal = hit ? new THREE.Vector3(...hit.point) : this.ray.origin.clone().addScaledVector(this.ray.direction, 4);
-    const g = -(sb.p.gravity || 22), d = goal.clone().sub(muzzle), h = Math.hypot(d.x, d.z), v2 = SPEED * SPEED;
-    const disc = v2 * v2 - g * (g * h * h + 2 * d.y * v2);
-    let v;
-    if (h > 1e-3 && disc > 0) {
-      const ang = Math.atan2(v2 - Math.sqrt(disc), g * h);
-      v = new THREE.Vector3(d.x / h, 0, d.z / h).multiplyScalar(SPEED * Math.cos(ang));
-      v.y = SPEED * Math.sin(ang);
-    } else v = d.normalize().multiplyScalar(SPEED);
+    let goal;
+    // (its middle aimed a radius out from the spot: it's the glob's front
+    // that's to land there, not its middle)
+    if (hit) goal = new THREE.Vector3(...hit.point).addScaledVector(new THREE.Vector3(...hit.normal), r * 0.85);
+    else {
+      const r = this.ray, t = r.direction.y < -1e-3 ? -r.origin.y / r.direction.y : 4;
+      goal = r.origin.clone().addScaledVector(r.direction, Math.min(t, 8));
+    }
+    const g = -(sb.p.gravity || -22) * (sb.gravityScale ?? 1), d = goal.clone().sub(muzzle), dist = d.length();
+    const T = 0.16 + 0.085 * dist; // (s: a lob, flatter close up)
+    const v = d.multiplyScalar(1 / T);
+    v.y += 0.5 * g * T;
+    this.aimT = T;
+    // The gun's held out in front of the camera - often beyond the arena's
+    // edge, where the world keeps everything in: a glob born out there was
+    // shoved back in, hard, the instant it was made, and flew off into the
+    // middle of the cube or over its top, wherever it was aimed. It's made
+    // instead at the first point of its arc inside the edge, going as fast
+    // as it would be by then.
+    const P = sb.p, edge = Math.max(0.2, P.arenaRadius - 0.04 - 0.3 * size);
+    const inside = (t) => {
+      const px = muzzle.x + v.x * t, pz = muzzle.z + v.z * t;
+      return P.box ? Math.abs(px) < edge && Math.abs(pz) < edge : px * px + pz * pz < edge * edge;
+    };
+    let t0 = 0;
+    if (!inside(0)) {
+      for (let k = 1; k <= 40; k++) {
+        if (inside((T * k) / 40)) {
+          t0 = (T * k) / 40;
+          break;
+        }
+      }
+    }
+    if (t0 > 0) {
+      muzzle.set(muzzle.x + v.x * t0, muzzle.y + v.y * t0 - 0.5 * g * t0 * t0, muzzle.z + v.z * t0);
+      v.y -= g * t0;
+    }
     // (the oldest goes, past the most there can be)
     this._sync();
     const drop = new Set();
@@ -133,10 +170,6 @@ export class GelGunTool extends HoleGunTool {
     // cube - its rest shape off to one side of the cube's (a place of its
     // own, so nothing else's rest shape overlaps it), at a height on it
     // picked at random: a layered cube's globs come in its colours.
-    // (how big: the Cubicle's glob size - its radius - held to what a place
-    // of its own beside the cube has room for)
-    const gs = Math.min(1.7, Math.max(0.6, app.st?.globSize ?? 1));
-    const r = Math.cbrt((3 * GLOB) / (4 * Math.PI)) * size * gs * (0.8 + Math.random() * 0.4);
     const used = new Set(this.blobs.filter((b) => b.cube === k).map((b) => b.slot));
     let slot = 0;
     while (used.has(slot)) slot++;
@@ -155,6 +188,10 @@ export class GelGunTool extends HoleGunTool {
   }
 
   update(dt, rdt) {
+    // (the time till the next glob runs down held or not: it only ran while
+    // the trigger was held, so a click after a glob found it still waiting,
+    // got 60 ms nearer, and fired nothing - most clicks did nothing)
+    if (!this.firing) this.cool = Math.max(0, this.cool - (rdt || dt));
     super.update(dt, rdt);
     const t = rdt || dt;
     // (the tank: wobbling as it's pumped)
