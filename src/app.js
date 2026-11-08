@@ -405,6 +405,12 @@ export class App {
     return resolveSettings(this.tune, TEXTURES[this.style.texture]);
   }
 
+  // what's round a cube as it's named (see namegen): the place, glow mode,
+  // the date and time, and where in the world (for its holidays and seasons)
+  nameCtx() {
+    return { place: this.place, theme: this.theme, now: new Date(), locale: navigator.language || '' };
+  }
+
   // the room as it is (its cubes, their looks, names and families) for next time
   saveScene() {
     try {
@@ -1584,8 +1590,8 @@ export class App {
     // (a plain one gets a name of its own, made out of what it is - and so
     // does the one already here, if it hasn't one)
     const taken = () => this.cubes.map((x) => x.name || '');
-    for (const x of this.cubes) if (!x.name) x.name = nameCube({ ...x.style, tune: x.tune }, { taken: taken() });
-    const named = c ? c.name || '' : nameCube({ ...style, tune }, { taken: taken() });
+    for (const x of this.cubes) if (!x.name) x.name = nameCube({ ...x.style, tune: x.tune }, { taken: taken(), ...this.nameCtx() });
+    const named = c ? c.name || '' : nameCube({ ...style, tune }, { taken: taken(), ...this.nameCtx() });
     const cb = { slot, style, tune, name: named };
     sb.addCube(slot, x, y, z, (Math.random() - 0.5) * 0.8, this.bevelOf(cb), size, this.resOf(cb));
     sb.rebuild();

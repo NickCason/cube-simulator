@@ -59,7 +59,7 @@ export function cubeOfTheDay(d = new Date()) {
     tune[key] = S.to(Math.min(0.95, Math.max(0.05, t0 + (rnd() - 0.5) * 0.6)));
   }
   const c = { name: '', flavor, layers, texture, edges, glitter, tune, tear: true, rubik: flavor === 'rubik' ? 1 + Math.floor(rnd() * 65535) : 1 };
-  c.name = nameCube(c, { rnd });
+  c.name = nameCube(c, { rnd, now: new Date(d.getFullYear(), d.getMonth(), d.getDate(), 12) });
   // (through its code and back: exactly what a link to it would open)
   const out = decodeCube(encodeCube(c)) || c;
   out.day = day;

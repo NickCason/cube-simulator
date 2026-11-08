@@ -3,7 +3,7 @@
 // code (a link and a QR code), and open the codes other people send - from a
 // link, or pasted in (an installed iPhone app doesn't get links: Safari does).
 
-import { linOf, touchMember } from '../family.js';
+import { linOf, touchMember, loadFamily } from '../family.js';
 import { FamilyView, TREE_ICON } from './family.js';
 import { captureCube, encodeCube, decodeCube, cubeLink, cubeSummary, cleanName } from '../cubecode.js';
 import { nameCube } from '../namegen.js';
@@ -265,6 +265,8 @@ export class Cubby {
       d.classList.remove('roll');
       void d.offsetWidth;
       d.classList.add('roll');
+      // (the last few rolled not rolled again)
+      this._rolled = [...(this._rolled || []), this.nameInput.value].slice(-10);
       this.nameInput.value = this._suggest(this.nameInput.value);
     });
     this.newForm.querySelector('.cancel').addEventListener('click', () => this.endSave());
@@ -489,8 +491,17 @@ export class Cubby {
   // a name made out of what it is (and what it's been through)
   _suggest(not = '') {
     const c = captureCube(this.app);
-    const taken = [...this.names, not];
-    return nameCube(c, { taken, rec: this.active ? this.active.rec : this.loose });
+    const room = this.app.cubes.filter((x) => x !== this.app.cube).map((x) => x.name || '');
+    const taken = [...this.names, ...room, ...(this._rolled || []), not];
+    // (its family, as the tree has it: its parent's name, its generation,
+    // its twin's name, what mutated in it when it was born)
+    const lin = this.app.cube?.lin, fam = lin?.id ? loadFamily() : null;
+    const me = fam?.[lin.id], parent = lin?.parent ? fam?.[lin.parent] : null;
+    const twin = parent ? Object.values(fam).find((r) => r.parent === parent.id && r.id !== lin.id) : null;
+    return nameCube(c, {
+      taken, rec: this.active ? this.active.rec : this.loose, ...this.app.nameCtx(),
+      gen: lin?.gen | 0, parentName: parent?.name || '', twin: twin?.name || '', changes: me?.changes || [],
+    });
   }
 
   open() {
@@ -734,6 +745,7 @@ export class Cubby {
     this._shot = shot;
     // (its own name, if it has one - a cubiplied cube's, as in its family
     // tree - else a new one; the die rolls others)
+    this._rolled = [];
     this.nameInput.value = cleanName(this.app.cube?.name || '') || this._suggest();
     this.newForm.hidden = false;
     this.emptyEl.hidden = true;

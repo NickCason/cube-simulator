@@ -260,6 +260,7 @@ export class GelGunTool extends HoleGunTool {
     }
     b.state = 'stuck';
     b.st = 0;
+    app.tally?.('gelled');
     b.n = [nx, ny, nz];
     sb.wake(own);
     // the splat: a few drops off it, a wet slap, a glow where it landed

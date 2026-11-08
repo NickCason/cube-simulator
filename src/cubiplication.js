@@ -247,7 +247,7 @@ export class Cubiplication {
     const c = Math.min(MAX_SIZE, m.size0 * m.g * Math.cbrt(0.5));
     const rnd = Math.random, as = (x) => ({ name: x.name, flavor: x.style.flavor, layers: x.style.layers, texture: x.style.texture, edges: x.style.edges, glitter: x.style.glitter || 'off', rubik: x.style.rubik, tune: { ...x.tune }, tear: x.tune.tear !== false, theme: app.theme });
     // (a cube with no name yet gets one now: it's going in the family tree)
-    if (!cb.name) cb.name = nameCube({ ...cb.style, tune: cb.tune }, { taken: app.cubes.map((x) => x.name || '') });
+    if (!cb.name) cb.name = nameCube({ ...cb.style, tune: cb.tune }, { taken: app.cubes.map((x) => x.name || ''), ...app.nameCtx(), gen: cb.lin?.gen | 0 });
     const pl = { ...linOf(cb) }, parent = as(cb);
     const kid = (base) => {
       const style = JSON.parse(JSON.stringify(base.style)), tune = { ...base.tune, size: c };
@@ -261,10 +261,14 @@ export class Cubiplication {
     const taken = () => app.cubes.map((x) => x.name || '');
     cb.style = A.style;
     cb.tune = A.tune;
-    cb.name = nameCube({ ...A.style, tune: A.tune }, { taken: taken() });
+    // (named for what they are, and as their parent's children - the
+    // second as the first's twin, the pair of them now and then a pair of
+    // names - and for what mutated in them)
+    const ctx = { ...app.nameCtx(), gen: pl.gen + 1, parentName: parent.name };
+    cb.name = nameCube({ ...A.style, tune: A.tune }, { taken: taken(), ...ctx, changes: A.changes, pairing: true });
     cb.lin = { id: newId(), parent: pl.id, gen: pl.gen + 1 };
     const cbB = { slot: slotB, style: B.style, tune: B.tune, name: '', lin: { id: newId(), parent: pl.id, gen: pl.gen + 1 } };
-    cbB.name = nameCube({ ...B.style, tune: B.tune }, { taken: [...taken(), cb.name] });
+    cbB.name = nameCube({ ...B.style, tune: B.tune }, { taken: [...taken(), cb.name], ...ctx, changes: B.changes, twin: cb.name });
     if (app.cube === cb) {
       app.style = cb.style;
       app.tune = cb.tune;

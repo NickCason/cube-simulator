@@ -143,6 +143,7 @@ export class CuberTool {
       app.ui?.hint('That is a lot of jelly bits — hit Re-cube first');
       return;
     }
+    app.tally?.('scooped');
     const { c, hs, q, w } = a;
     const res = cutBody(sb, boxField(c.x, c.y, c.z, [q.x, q.y, q.z, q.w], hs[0], hs[1], hs[2], sb.hCell * 0.15), { separate: 0, snap: 0.15, anchors: app.allAnchors() });
     if (!res.changed) return;

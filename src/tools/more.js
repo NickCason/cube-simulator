@@ -232,6 +232,7 @@ export class MalletTool {
     const p = a.tg.point, d = a.d;
     app.shake(0.035);
     if (a.tg.jelly) {
+      app.tally?.('smashed');
       // frozen jelly shatters - and so do brittle things (sugar, ice, glass,
       // hard candy) as they are: the one hit's stuff, with several cubes
       const hp = sb.pieces[a.tg.hit.piece];
@@ -654,6 +655,7 @@ export class TorchTool extends NozzleTool {
 
   start() {
     this.app.audio.loop('torch', true, { type: 'bandpass', freq: 520, q: 0.6, gain: 0.32, lfo: 13, flicker: 0.35 });
+    this.tallied = false;
   }
 
   stop() {
@@ -690,6 +692,11 @@ export class TorchTool extends NozzleTool {
         this.meltClock = 0;
         this._liquefy(melt);
         melt.clear();
+        // (for its record: melted, once a go)
+        if (!this.tallied) {
+          this.tallied = true;
+          app.tally?.('melted');
+        }
       }
       this.sizzle += dt;
       if (this.sizzle > 0.07) {
@@ -938,6 +945,7 @@ export class FreezeTool extends NozzleTool {
   }
 
   start() {
+    this.tallied = false;
     this.app.audio.loop('freeze', true, { type: 'highpass', freq: 3800, q: 0.5, gain: 0.22, lfo: 23, flicker: 0.12 });
   }
 
@@ -960,6 +968,10 @@ export class FreezeTool extends NozzleTool {
       }
     }
     if (tg.jelly) {
+      if (!this.tallied) {
+        this.tallied = true;
+        app.tally?.('frozen');
+      }
       app.sb.addHeat(tg.point.x, tg.point.y, tg.point.z, 0.3, -1.5 * dt * cold, 1.5, -1.3);
       this.crackle += dt;
       if (this.crackle > 0.05) {
@@ -1033,6 +1045,7 @@ export class BallerTool {
     }
     const res = cutBody(sb, sphereField(a.c.x, a.c.y, a.c.z, a.r), { separate: 0, snap: 0.38, anchors: app.allAnchors() });
     if (!res.changed) return;
+    app.tally?.('scooped');
     app.onTopologyChanged();
     // the ball is the piece whose centre of mass sits inside the sphere
     let best = -1, bd = Infinity;

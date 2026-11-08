@@ -77,6 +77,7 @@ export class AcidTool {
 
   down(e, ray) {
     this.on = true;
+    this.tallied = false;
     this.hovering = true;
     this.ray.copy(ray);
     this.app.audio.loop('acid-pour', true, { type: 'lowpass', freq: 520, q: 5, gain: 0.22, lfo: 7, flicker: 0.7 });
@@ -288,6 +289,11 @@ export class AcidTool {
       for (const tt of this.melt) if (tt >= sb.nT || !(sb.vol0[tt] > 0)) this.melt.delete(tt);
       if (this.melt.size) {
         const VS = sb.tVS;
+        // (for its record: eaten by acid, once a pour)
+        if (!this.tallied) {
+          this.tallied = true;
+          app.tally?.('acid');
+        }
         liquefy(app, this.melt, {
           full: true,
           // (a sliver it's eaten round - two faces bare, mostly dissolved;
