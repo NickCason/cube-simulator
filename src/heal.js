@@ -356,11 +356,13 @@ export class Healer {
     this.multi = app.cubes.length > 1 || !!opts.layout;
     if (this.multi) return this._startMulti(opts);
     if (!sb.pieces.length || sb.nT === 0) {
-      // everything was blasted away: grow a fresh cube
+      // everything was blasted away (or melted - its liquid comes home into
+      // it): grow a fresh cube
       this.cx = 0;
       this.cz = 0;
       this.yaw = 0;
       this.plan = [];
+      app.fluid?.recall?.((out) => out.set(0, LIFT_FUSE + sb.p.size * 0.6, 0), 0.1);
       this._fuse();
       return;
     }
@@ -409,6 +411,10 @@ export class Healer {
     }
     // blasted-off blobs stream home to arrive as the pieces meet
     app.droplets.heal(this.cW.clone(), TL.flyStart - 0.35, 1.15);
+    // ...and the jelly that melted (and any that set again: melted back -
+    // see Fluid._healStart) flows home after them, into the holes (once
+    // they're known: _sendDroplets) - pouring in as they fill
+    app.fluid?.recall?.((out) => out.set(this.cx, LIFT_FUSE + sb.p.size * 0.75, this.cz), TL.flyStart + 0.35);
     app.audio?.healStart();
   }
 
@@ -848,11 +854,13 @@ export class Healer {
     for (let i = 0; i < f.d.length; i++) if (f.d[i] >= 0) pts.push(i);
     const half = this.app.sb.p.size / 2, c = Math.cos(this.yaw), s = Math.sin(this.yaw);
     const tpl = this.fillTemplate;
-    this.app.droplets.retarget((out) => {
+    const into = (out) => {
       const i = pts[Math.floor(Math.random() * pts.length)];
       const X = tpl[i * 3], Y = tpl[i * 3 + 1], Z = tpl[i * 3 + 2];
       out.set(this.cx + c * X + s * Z, LIFT_FUSE + Y + half, this.cz - s * X + c * Z);
-    });
+    };
+    this.app.droplets.retarget(into);
+    this.app.fluid?.retarget?.(into);
   }
 
 
@@ -931,20 +939,27 @@ export class Healer {
     this.fillField = null;
     sb.attract = null;
     sb.loadCube(this.cx, LIFT_FUSE, this.cz, this.yaw);
-    // what was missing starts where its holes' walls were and rises to fill
-    // them, glowing, as the seams weld (JellyView moves it, from sb.fill)
+    // what was missing fills back in like a liquid poured into its holes: a
+    // level rising from the bottom of them to the top, flat (a ripple on
+    // it), what's above it lying on it or on the hole's wall under it - as
+    // the liquid it melted into comes home into it (see Fluid.recall) and
+    // the seams weld (JellyView moves it, from sb.fill)
     sb.fill = null;
     if (fill && fill.n && fill.d.length === sb.nV) {
       const off = new Float32Array(sb.nV * 3), c = Math.cos(this.yaw), s = Math.sin(this.yaw);
-      let dmax = 0;
+      let dmax = 0, ylo = Infinity, yhi = -Infinity;
       for (let i = 0; i < sb.nV; i++) {
         if (fill.d[i] < 0) continue;
         dmax = Math.max(dmax, fill.d[i]);
+        ylo = Math.min(ylo, sb.X[i * 3 + 1]);
+        yhi = Math.max(yhi, sb.X[i * 3 + 1]);
         // (rest -> world: turned by the yaw, as loadCube places it)
         const ox = fill.wall[i * 3] - sb.X[i * 3], oy = fill.wall[i * 3 + 1] - sb.X[i * 3 + 1], oz = fill.wall[i * 3 + 2] - sb.X[i * 3 + 2];
         off[i * 3] = c * ox + s * oz; off[i * 3 + 1] = oy; off[i * 3 + 2] = -s * ox + c * oz;
       }
-      sb.fill = { d: fill.d, off, dmax, t: 0, dur: Math.min(1.25, Math.max(0.7, 0.55 + dmax * 2.2)), topo: sb.topoVersion };
+      // (as long as it takes to pour that high - a second and a bit to two and a half)
+      const span = (yhi - ylo) / sb.p.size, dur = Math.min(2.6, Math.max(1.2, 1.1 + span * 1.8));
+      sb.fill = { d: fill.d, off, dmax, ylo: ylo - 0.02 * sb.p.size, yhi: yhi + 0.01 * sb.p.size, size: sb.p.size, t: 0, dur, topo: sb.topoVersion };
     }
     sb.collisionsEnabled = true;
     sb.dampBoost = 1;
@@ -963,8 +978,8 @@ export class Healer {
       sb.weld = null;
       sb.glow.fill(0.25, 0, sb.nV);
     }
-    // (the new jelly comes in glowing like liquid light, the rest of the cube a little)
-    if (sb.fill) for (let i = 0; i < sb.nV; i++) if (sb.fill.d[i] >= 0) sb.glow[i] = 2.4;
+    // (the new jelly comes in warm and glowing a little, the rest of the cube less)
+    if (sb.fill) for (let i = 0; i < sb.nV; i++) if (sb.fill.d[i] >= 0) sb.glow[i] = 1.3;
     this.weldT = field ? 0 : undefined;
     app.jelly.frontMat.uniforms.uWeldT.value = field ? 0 : 99;
     this.fused = true;

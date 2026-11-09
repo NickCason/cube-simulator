@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { edgeTable, triTable } from 'three/examples/jsm/objects/MarchingCubes.js';
+import { removeTets } from '../sim/cutting.js';
 
 // Molten jelly. The torch turns the hottest jelly to liquid (see
 // TorchTool): its tets go, and particles carry their volume on - position-
@@ -141,7 +142,8 @@ export class Fluid {
     app.scene.add(this.mesh);
     this.drainT = 0; // (s) left of draining away (the heal)
     this._setClock = 0;
-    app.onHealStart?.push(() => this.drain());
+    app.onHealStart?.push(() => this._healStart());
+    this.rc = null; // (called home by a heal: see recall)
   }
 
   setGlow(e) {
@@ -230,6 +232,110 @@ export class Fluid {
     if (this.n) this.drainT = 0.6;
   }
 
+  // A re-cube: the jelly that set from it melted back into it first (a
+  // re-cube makes the cube again from all it was, this included), then it
+  // drains away - unless the heal calls it home (recall: a cube on its own).
+  _healStart() {
+    this._meltSet();
+    this.drain();
+  }
+
+  // The jelly that set from it (_toJelly: its corners marked 2 in sb.melt)
+  // as liquid again, where it lies.
+  _meltSet() {
+    const app = this.app, sb = app.sb, T = sb.T, pcs = new Set();
+    for (const pc of sb.pieces) {
+      let n2 = 0;
+      for (const i of pc.verts) if (sb.melt[i] === 2) n2++;
+      if (n2 >= 0.6 * pc.verts.length) pcs.add(pc.id);
+    }
+    if (!pcs.size) return;
+    const set = new Set(), col = new THREE.Color();
+    for (let t = 0; t < sb.nT; t++) {
+      if (!(sb.vol0[t] > 0) || !pcs.has(sb.tPiece[t])) continue;
+      set.add(t);
+      let cx = 0, cy = 0, cz = 0;
+      for (let k = 0; k < 4; k++) {
+        const o = T[t * 4 + k] * 3;
+        cx += sb.x[o] / 4; cy += sb.x[o + 1] / 4; cz += sb.x[o + 2] / 4;
+      }
+      col.set(app.flavorColorAtVertex(T[t * 4]));
+      this.add(cx, cy, cz, sb.vol0[t], 0, 0, 0, col.r, col.g, col.b, 0.01);
+    }
+    removeTets(sb, (t) => set.has(t), app.allAnchors());
+    app.onTopologyChanged();
+  }
+
+  // The heal (see Healer.start): it flows home - each drop off on its own
+  // arc, after a wait (delay, give or take - the nearest first), drawn as
+  // it goes, gone into the cube as it gets there. target(out): somewhere to
+  // go; retarget (the cube's holes known: see Healer._sendDroplets) sends
+  // those still to go into them.
+  recall(target, delay = 1) {
+    this.drainT = 0;
+    if (!this.n) return;
+    const n = this.n, P = new THREE.Vector3(), x = this.x;
+    this.rc = { t: 0, p0: Float32Array.from(x.subarray(0, n * 3)), p1: new Float32Array(this.max * 3), t0: new Float32Array(this.max), T: new Float32Array(this.max), h: new Float32Array(this.max) };
+    for (let i = 0; i < n; i++) {
+      target(P);
+      this.rc.p1.set([P.x, P.y, P.z], i * 3);
+      const d = Math.hypot(P.x - x[i * 3], P.z - x[i * 3 + 2]);
+      this.rc.t0[i] = delay * (0.75 + 0.35 * Math.random()) + Math.min(0.5, d * 0.12);
+      this.rc.T[i] = 0.7 + 0.25 * Math.random() + Math.min(0.5, d * 0.15);
+      this.rc.h[i] = 0.15 + 0.25 * Math.min(1.5, d);
+    }
+    this.asleep = false;
+    this.mesh.visible = true;
+  }
+
+  retarget(target) {
+    if (!this.rc) return;
+    const P = new THREE.Vector3();
+    for (let i = 0; i < this.n; i++) {
+      target(P);
+      this.rc.p1.set([P.x, P.y, P.z], i * 3);
+    }
+  }
+
+  // (a frame of it flowing home: along its arc, eased; there - gone)
+  _recallStep(dt) {
+    const R = this.rc, x = this.x;
+    R.t += dt;
+    let w = 0;
+    for (let i = 0; i < this.n; i++) {
+      const u = (R.t - R.t0[i]) / R.T[i];
+      if (u >= 1) continue;
+      if (u > 0) {
+        const e = u * u * (3 - 2 * u), lift = R.h[i] * 4 * u * (1 - u);
+        for (let c = 0; c < 3; c++) x[i * 3 + c] = R.p0[i * 3 + c] + (R.p1[i * 3 + c] - R.p0[i * 3 + c]) * e + (c === 1 ? lift : 0);
+      }
+      if (w !== i) {
+        for (let c = 0; c < 3; c++) {
+          x[w * 3 + c] = x[i * 3 + c];
+          this.col[w * 3 + c] = this.col[i * 3 + c];
+          R.p0[w * 3 + c] = R.p0[i * 3 + c];
+          R.p1[w * 3 + c] = R.p1[i * 3 + c];
+        }
+        this.temp[w] = this.temp[i];
+        this.age[w] = this.age[i];
+        this.acid[w] = this.acid[i];
+        this.acidTet[w] = this.acidTet[i];
+        R.t0[w] = R.t0[i];
+        R.T[w] = R.T[i];
+        R.h[w] = R.h[i];
+      }
+      w++;
+    }
+    this.n = w;
+    this.v.fill(0, 0, w * 3);
+    if (!w) {
+      this.rc = null;
+      this.clear();
+      return;
+    }
+    this._remesh();
+  }
+
   // Particles gone where drop(i) says (spent acid fuming off: see AcidTool).
   removeWhere(drop) {
     let w = 0;
@@ -259,12 +365,14 @@ export class Fluid {
     this.n = 0;
     this.bank = 0;
     this.drainT = 0;
+    this.rc = null;
     this.geo.setDrawRange(0, 0);
     this.mesh.visible = false;
   }
 
   update(dt) {
     if (!this.n) return;
+    if (this.rc) return this._recallStep(dt);
     if (this.drainT > 0) {
       // (the heal: it sinks away into the floor)
       this.drainT -= dt;
@@ -1002,8 +1110,9 @@ export class Fluid {
         sb.x[o + 1] = sb.X[o + 1] = sb.px[o + 1] = y;
       }
     }
-    // (a set puddle's a smooth thing: see TAG_MELT)
-    for (const id of cid.values()) sb.melt[id] = 1;
+    // (a set puddle's a smooth thing: see TAG_MELT - and marked 2, as set
+    // from the liquid: a re-cube melts it back - see _meltSet)
+    for (const id of cid.values()) sb.melt[id] = 2;
     const nT0 = sb.nT, nT = nT0 + tets.length / 4;
     sb.ensureT(nT);
     sb.T.set(tets, nT0 * 4);

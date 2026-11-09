@@ -1202,17 +1202,27 @@ export class JellyView {
   // to where it belongs, like a level rising at one speed everywhere (a
   // part twice as far from the wall takes twice as long), easing in at the
   // end. The surface's normals follow the moving shape.
+  // The heal's fill (see Healer._fuse): what was missing filled like a
+  // liquid poured into its holes - a level rising from their bottom to
+  // their top, flat but for a ripple. Above it, each vertex is on its hole's
+  // wall (the hole as it was) - lifted onto the level where the wall's under
+  // it; past it, back where it belongs (a band of a few cm between).
   _fill(sb, F) {
-    const pos = this.pos, nrm = this.nrm, rSim = sb.rSim, nB = this.nBase;
+    const pos = this.pos, nrm = this.nrm, rSim = sb.rSim, nB = this.nBase, X = sb.X;
+    const u = Math.min(1, F.t / Math.max(1e-3, F.dur)), e = u * u * (3 - 2 * u);
+    const lv = F.ylo + (F.yhi - F.ylo) * e, amp = 0.005 * F.size * (1 - u), band = 0.035 * F.size, tt = F.t;
     let moved = false;
     for (let r = 0; r < nB; r++) {
-      const i = rSim[r], d = F.d[i];
-      if (d < 0) continue;
-      const u = Math.min(1, F.t / Math.max(1e-3, (F.dur * d) / F.dmax));
-      const g = 1 - (1 - u) * (1 - u);
-      if (g >= 1) continue;
-      const o = r * 3, k = (1 - g);
-      pos[o] += F.off[i * 3] * k; pos[o + 1] += F.off[i * 3 + 1] * k; pos[o + 2] += F.off[i * 3 + 2] * k;
+      const i = rSim[r];
+      if (F.d[i] < 0) continue;
+      const Y = X[i * 3 + 1], L = lv + amp * Math.sin(X[i * 3] * 11 + tt * 7) * Math.sin(X[i * 3 + 2] * 9 - tt * 6);
+      // (how far it's still to go: 1 at its wall, 0 home)
+      const q = Math.min(1, Math.max(0, (Y + band - L) / (2 * band))), k = q * q * (3 - 2 * q);
+      if (k <= 0) continue;
+      const o = r * 3;
+      pos[o] += F.off[i * 3] * k;
+      pos[o + 1] += Math.max(F.off[i * 3 + 1], L - Y) * k;
+      pos[o + 2] += F.off[i * 3 + 2] * k;
       moved = true;
     }
     if (!moved) return;
