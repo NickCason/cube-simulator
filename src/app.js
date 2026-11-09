@@ -2425,10 +2425,15 @@ export class App {
     // (no one touching anything, nothing moving: see JellyView.setFeatures)
     this.jelly.quiet = !this._held?.size && performance.now() - this._inputAt > 500 && this.sb.pieces.every((p) => p.asleep);
     if (!this.opts.nojelly && !skip.jelly) this.jelly.renderPieces(this.camera, this.sb, this.rtScene, this.rtTrans, copy);
-    // (the goo sees the jelly through itself: the room with the jelly in it)
-    if (this.strands.mesh.visible) {
+    // (the goo sees the jelly through itself: the room with the jelly in it -
+    // and so do the bubbles, bending it)
+    const bub = this.bubbles.mesh.count > 0 && this.fxScene && !skip.fx, BU = this.bubbles.mesh.material.uniforms;
+    BU.uBgOn.value = bub ? 1 : 0;
+    if (this.strands.mesh.visible || bub) {
       copy();
       this.strands.mat.uniforms.tBg.value = this.rtTrans.texture;
+      BU.tBg.value = this.rtTrans.texture;
+      BU.uRes.value.set(this.rtScene.width, this.rtScene.height);
     }
 
     this.glitter.update(this.clock.t);

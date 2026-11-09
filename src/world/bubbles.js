@@ -12,17 +12,18 @@ export class Bubbles {
   constructor(app) {
     this.app = app;
     const geo = new THREE.SphereGeometry(1, 14, 10);
-    // Air bubbles: clear in the middle, silvery round the edge (light turned
-    // back at a grazing angle - total internal reflection), a fine dark line
-    // at the very edge where it bends the view away, and the light's glint -
-    // with a fainter one opposite, as a real bubble has. Laid over what's
-    // behind (not added on: added on, they read as more glitter), after the
-    // glitter. Drawn after the jelly at their true positions (refracting them
-    // through the screen-space approximation smears them), tinted/dimmed by
-    // the jelly in front, depth pulled to the jelly surface so tools in front
-    // still hide them.
+    // Air bubbles in the jelly. An air bubble is a lens the other way round
+    // from the jelly about it: what's behind, seen through one, is shrunk
+    // and bent - the jelly behind it, small, in its middle (the room drawn
+    // with the jelly in it, sampled pulled out from the middle: see tBg). Its
+    // edge turns the light back inside it (total internal reflection) - a
+    // bright rim of the jelly's own light, its colour (they read as white
+    // beads on any colour, laid over it), a fine dark line where it bends
+    // the view away, and the light's glint, a fainter one opposite. Drawn
+    // after the jelly at their true positions, dimmed by the jelly in front,
+    // depth pulled to the jelly surface so tools in front still hide them.
     const mat = new THREE.ShaderMaterial({
-      uniforms: { uLight: { value: app.lightDir }, ...app.jelly.coverU },
+      uniforms: { uLight: { value: app.lightDir }, tBg: { value: null }, uBgOn: { value: 0 }, uRes: { value: new THREE.Vector2(1, 1) }, ...app.jelly.coverU },
       transparent: true,
       depthWrite: false,
       depthTest: true,
@@ -37,8 +38,16 @@ export class Bubbles {
         varying vec3 vN;
         varying vec3 vV;
         varying vec3 vTint;
+        varying vec3 vNv;
+        varying float vRad;
         void main() {
           vec4 wp = modelMatrix * instanceMatrix * vec4(position, 1.0);
+          // (its normal in view space, and its radius on screen - a share of
+          // the picture's height: how far to bend what's seen through it)
+          vNv = normalize(mat3(viewMatrix) * mat3(modelMatrix) * mat3(instanceMatrix) * normal);
+          vec4 cv = viewMatrix * modelMatrix * instanceMatrix * vec4(0.0, 0.0, 0.0, 1.0);
+          float R = length((modelMatrix * instanceMatrix * vec4(1.0, 0.0, 0.0, 0.0)).xyz);
+          vRad = R * projectionMatrix[1][1] / max(-cv.z, 0.05) * 0.5;
           vN = normalize(mat3(modelMatrix) * mat3(instanceMatrix) * normal);
           vV = normalize(cameraPosition - wp.xyz);
           vTint = instanceColor;
@@ -60,20 +69,44 @@ export class Bubbles {
         uniform sampler2D tCover;
         uniform float uCoverOn;
         uniform vec2 uCoverInv;
+        uniform sampler2D tBg;
+        uniform float uBgOn;
+        uniform vec2 uRes;
         varying vec3 vN;
         varying vec3 vV;
         varying vec3 vTint;
+        varying vec3 vNv;
+        varying float vRad;
         void main() {
           vec3 N = normalize(vN);
           float ndv = clamp(dot(N, vV), 0.0, 1.0), edge = 1.0 - ndv;
           vec3 L = normalize(uLight);
-          float silver = smoothstep(0.3, 0.92, edge), line = smoothstep(0.86, 0.99, edge);
+          float silver = smoothstep(0.3, 0.95, edge), line = smoothstep(0.88, 0.995, edge);
           float spec = pow(max(dot(reflect(-L, N), vV), 0.0), 70.0);
           float spec2 = pow(max(dot(reflect(vec3(-L.x, L.y * 0.4, -L.z), N), vV), 0.0), 40.0) * 0.35;
           float lum = max(vTint.r, max(vTint.g, vTint.b));
-          vec3 sil = mix(vec3(lum), vTint, 0.55) * 1.25 + 0.06;
-          vec3 c = mix(sil, sil * 0.18, line) + vec3(5.0) * (spec + spec2) * (vTint + 0.25);
-          float a = clamp(silver * 0.8 + (spec + spec2) * 2.0, 0.0, 1.0) * clamp(lum * 2.5, 0.0, 1.0);
+          // its rim: the jelly's own light, turned back - its colour, brighter
+          vec3 rim = vTint * (1.15 + 0.95 * silver) + 0.04;
+          vec3 c;
+          float a;
+          if (uBgOn > 0.5) {
+            // its middle: the jelly behind, shrunk and bent (sampled pulled
+            // out from the middle - it's a lens that spreads light), a little
+            // lighter (less jelly on the way through it)
+            vec2 uv = gl_FragCoord.xy / uRes;
+            vec2 bend = vNv.xy * vRad * vec2(uRes.y / uRes.x, 1.0) * 1.3;
+            vec3 bg = texture(tBg, uv + bend).rgb;
+            c = mix(bg * (1.0 + 0.25 * ndv) + vTint * 0.05, rim, silver * 0.85);
+            c = mix(c, c * 0.25, line);
+            a = clamp(lum * 3.0, 0.0, 1.0);
+          } else {
+            c = mix(rim, rim * 0.18, line);
+            a = clamp(silver * 0.8, 0.0, 1.0) * clamp(lum * 2.5, 0.0, 1.0);
+          }
+          // the glints: the light seen through the jelly - a little of its colour
+          vec3 gl = vec3(4.0) * (spec + spec2) * mix(vec3(1.0), vTint / max(lum, 1e-3), 0.35);
+          c += gl;
+          a = max(a, clamp((spec + spec2) * 2.0, 0.0, 1.0) * clamp(lum * 2.5, 0.0, 1.0));
           // (under flour, sugar, frost on the skin in front: hidden, as much as it covers)
           if (uCoverOn > 0.5) { float cv = 1.0 - texture(tCover, gl_FragCoord.xy * uCoverInv).r; a *= cv * cv; }
           gl_FragColor = vec4(c, a);

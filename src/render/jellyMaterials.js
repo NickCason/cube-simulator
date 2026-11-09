@@ -756,6 +756,45 @@ export function createJellyMaterial(env, layerUniforms) {
       }
       // Glitter at q (in the plane of the surface): a little hexagonal flake
       // a cell (as many as dens says) - (its id, how much of here it covers)
+      // Powder - flour, cocoa, matcha, holi, a starch dusting: a matte
+      // layer of fine grains, not a coat of paint. Its top is clumps a few
+      // mm across (a bump the light picks out - lit on their tops, shaded
+      // between), each grain its own shade (some a little darker: bran in
+      // flour, the dark in cocoa) - grains too small for the pixel fade to
+      // their average, not a shimmer - and where it's thin it's a scatter of
+      // specks with the jelly between, thickening into a felt. pc: its
+      // colour; a: how much; P: the rest point; Pw: the world point.
+      // Returns its colour, its cover in .a.
+      vec4 powderLayer(vec3 pc, float a, float uneven, vec3 P, vec3 Pw, vec3 N, vec3 V, vec3 L, vec3 irr, vec3 keyLight, vec3 emLit) {
+        // (how much of the rest shape a pixel spans: detail finer than that
+        // fades to its average - a shimmer of specks otherwise)
+        float fp = length(fwidth(P)) + 1e-6;
+        // thick and thin: a cloudy, uneven layer, soft at its edges - and
+        // where it's thin, a pale veil with the jelly through it
+        float cloud = fbm3(P * 26.0);
+        float d = a * (1.0 + uneven * (cloud - 0.5));
+        // specks at the thin edge, when they're big enough to see
+        float sk = vnoise(P * 150.0), skVis = 1.0 - smoothstep(0.25, 0.6, 150.0 * fp);
+        float cov = smoothstep(0.06, 0.62, d) * 0.9 + 0.1 * smoothstep(0.3, 0.7, d);
+        cov = max(cov, skVis * smoothstep(0.62, 0.7, sk + d * 0.6) * step(0.04, d));
+        // clumps (a few mm): a bump the light picks out, the hollows between darker
+        float cl = fbm3(P * 90.0), clVis = 1.0 - smoothstep(0.3, 0.8, 90.0 * fp);
+        float h = cl * clVis * clamp(d * 1.5, 0.0, 1.0);
+        vec3 dpx = dFdx(Pw), dpy = dFdy(Pw);
+        float dhx = dFdx(h), dhy = dFdy(h);
+        vec3 r1 = cross(dpy, N), r2 = cross(N, dpx);
+        float det = dot(dpx, r1);
+        vec3 Nb = normalize(abs(det) * N - sign(det) * (dhx * r1 + dhy * r2) * 0.006);
+        float ao = 1.0 - 0.22 * clVis * (1.0 - smoothstep(0.25, 0.75, cl)) * clamp(d * 1.5, 0.0, 1.0);
+        // matte: soft, wrapped light (powder scatters it), no shine
+        vec3 lit = irr * 0.78 * ao + keyLight * (max((dot(Nb, L) + 0.3) / 1.3, 0.0) * 0.55 + 0.05);
+        // its grains, close up: each its own shade, a few dark
+        vec3 qg = P * 420.0;
+        float gVis = 1.0 - smoothstep(0.3, 0.75, 420.0 * fp);
+        float shade = 1.0 + gVis * ((vnoise(qg) - 0.5) * 0.18 - 0.28 * step(0.94, hash13(floor(qg)))) + (cloud - 0.5) * 0.11 * uneven;
+        return vec4(pc * shade * lit + emLit * 0.3 * pc, clamp(cov, 0.0, 1.0));
+      }
+
       vec2 flakes(vec2 p, float dens) {
         vec2 q = p * 110.0, c0 = floor(q - 0.5);
         float best = 9.0, id = 0.0;
@@ -1349,8 +1388,9 @@ export function createJellyMaterial(env, layerUniforms) {
         if (dust > 0.0) {
           vec3 lit = irr * 0.72 + keyLight * (max(dot(N, L), 0.0) * 0.55 + 0.08);
           if (dustOwn > 0.0) {
-            float clump = fbm3(vRest * 64.0) * 0.65 + 0.35 * vnoise(vRest * 190.0);
-            col = mix(col, vec3(0.97, 0.955, 0.925) * lit + emLit * 0.35, clamp(dustOwn * (0.72 + 0.75 * (clump - 0.5)), 0.0, 1.0) * 0.9);
+            // (its own: an even dusting - sifted on, it's uneven)
+            vec4 pw = powderLayer(vec3(0.97, 0.955, 0.925), dustOwn * 0.85, 0.18, vRest, vWorldPos, N, V, L, irr, keyLight, emLit);
+            col = mix(col, pw.rgb, pw.a * 0.92);
           }
           if (dustFlour > 0.004) {
             float a = dustFlour, ia = 1.0 / max(vData.w, 1e-3);
@@ -1358,9 +1398,8 @@ export function createJellyMaterial(env, layerUniforms) {
             float ps = clamp(vCoat.a * ia, 0.0, 1.0), pm = clamp(vCoatM * ia, 0.0, 1.0);
             float wP = (1.0 - ps) * (1.0 - pm), wC = ps * (1.0 - pm), wS = pm * (1.0 - ps), wG = ps * pm;
             if (wP > 0.02) {
-              float n = fbm3(vRest * 46.0) * 0.6 + vnoise(vRest * 150.0) * 0.4;
-              float cov = smoothstep(n - 0.1, n + 0.1, a * 1.15 - 0.06);
-              col = mix(col, pc * lit + emLit * 0.3 * pc, cov * 0.92 * wP);
+              vec4 pw = powderLayer(pc, a, 0.56, vRest, vWorldPos, N, V, L, irr, keyLight, emLit);
+              col = mix(col, pw.rgb, pw.a * 0.97 * wP);
             }
             if (wC > 0.02) {
               vec2 w = worley(vRest * 64.0);
@@ -1795,7 +1834,10 @@ export function createCausticMaterial(layerUniforms) {
           // under the powdered patches in place of the bright lines, the
           // coat's own patches cast over the caustics
           float cvr = 1.0 - (1.0 - clamp(texelFetch(tEntryRest, ij, 0).w, 0.0, 1.0)) * (1.0 - (RB.w > 0.5 ? clamp(RB.w - 1.0, 0.0, 1.0) : 0.0));
-          vValid *= 1.0 - 0.7 * cvr;
+          // (a coat's all but opaque - flour, cocoa: a floured cube lit the
+          // floor red under it - and through metal, or opaque jelly, little
+          // or none gets through at all)
+          vValid *= (1.0 - 0.94 * cvr) * cubeT(16).a;
           vThrow = mix(vThrow, max(vThrow, 1.6), cvr);
           vNdL = dot(N, normalize(uLightDir));
           vTemp = Nt.w;
@@ -2057,9 +2099,12 @@ export function createTintMaterial() {
           float cloud = max(cubeT(3).y + a.a, cubeT(1).a);
           t = mix(exp(-a.rgb * 0.35), vec3(1.0), 0.35 * cloud) * (1.0 - 0.35 * cloud);
         }
-        // (through a coat - flour, sugar, frost - the light's scattered:
-        // its shadow greyer, paler of the jelly's colour)
-        t = mix(t, vec3(0.4), 0.85 * coatCover(vData, vCoat, vCoatM, vRest, cubeT(3), cubeT(29)));
+        // (how much gets through at all: none through metal, little through
+        // something milky or opaque - see setCubeLook: row 16's alpha)
+        t *= cubeT(16).a;
+        // (through a coat - flour, sugar, frost - next to none: its shadow
+        // a soft grey, not the jelly's colour)
+        t = mix(t, vec3(0.12), 0.9 * coatCover(vData, vCoat, vCoatM, vRest, cubeT(3), cubeT(29)));
         gl_FragColor = vec4(t, 1.0);
       }`,
   });

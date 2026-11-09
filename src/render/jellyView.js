@@ -31,6 +31,10 @@ const CAUS_GAIN = 1.5; // (how bright the caustic light lands)
 // colour of its light, a freeform gradient's depth
 export const CUBE_TEX_W = 32; // (30: the powder on it - Flour writes it; 31: its surface map)
 
+const smoothstep = (e0, e1, x) => {
+  const t = Math.min(1, Math.max(0, (x - e0) / (e1 - e0)));
+  return t * t * (3 - 2 * t);
+};
 const hazeMinOf = (o) => 0.92 * Math.min(1, Math.max(0, (Math.min(1, Math.max(0, o)) - 0.45) / 0.55)) ** 2;
 
 // One level of subdivision over an indexed triangle mesh: a midpoint per
@@ -706,6 +710,11 @@ export class JellyView {
     const cloud = Math.max(m.milk || 0, hazeMinOf(o));
     if (cloud) tint.lerp(new THREE.Color(1, 1, 1), 0.35 * cloud).multiplyScalar(1 - 0.35 * cloud);
     put(27, tint.r, tint.g, tint.b, 9 * o * o + (m.milk || 0) * 3);
+    // (how much light gets through it at all, for its shadow and caustics:
+    // none through metal - a chrome cube's shadow was pink - and through
+    // something milky or opaque little - a sugar cube cast a pink glow)
+    // (kept in row 16's alpha: the last layer colour's - free; 30 is the powder's)
+    D[r + 16 * 4 + 3] = (1 - Math.min(1, m.metal || 0)) * Math.pow(1 - smoothstep(0.3, 1, o), 1.2);
     put(28, 1 / ref, Math.max(1, Math.round(flavor.tiles || 1)), surfaceOf(m.surface).rough || 0, Math.min(0.45, m.bevelRatio ?? 0.13));
     // its coats and skins: a dusting on the outside, iridescence and metal only
     // on the outside (a film, a foil), sugar all through
