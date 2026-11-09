@@ -123,6 +123,7 @@ export class Droplets {
       frozen: !!opts?.frozen,
       ice: opts?.frozen ? 1 : 0, // (0 a blob .. 1 an ice cube: it morphs)
       cold: 0,
+      fade: opts?.fade ?? 0, // (s: then it dissolves away - goo shaken off - and no heal brings it home)
     });
   }
 
@@ -153,6 +154,7 @@ export class Droplets {
   // Fly home: wait `delay` seconds, then glide in over `travel` seconds.
   heal(target, delay = 0, travel = 0.8) {
     for (const d of this.items) {
+      if (d.fade) continue;
       d.frozen = false; // (they thaw on the way home)
       d.home = target.clone().add(new THREE.Vector3((Math.random() - 0.5) * 0.5, (Math.random() - 0.3) * 0.5, (Math.random() - 0.5) * 0.5));
       d.homeT = -(delay + Math.random() * 0.35);
@@ -190,6 +192,13 @@ export class Droplets {
         if (u > 0.75) d.r *= Math.exp(-dt * 9);
         if (u >= 1 || d.r < 0.002) this.items.splice(i, 1);
         continue;
+      }
+      if (d.fade && d.t > d.fade) {
+        d.r *= Math.exp(-dt * 5);
+        if (d.r < 0.002) {
+          this.items.splice(i, 1);
+          continue;
+        }
       }
       d.v.y += g * dt;
       d.p.addScaledVector(d.v, dt);
