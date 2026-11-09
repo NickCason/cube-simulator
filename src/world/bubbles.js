@@ -4,6 +4,7 @@ import { CUBE_TEX_W } from '../render/jellyView.js';
 import { TAG_FRESH } from '../sim/softbody.js';
 import { MAX_CAVITIES } from '../render/jellyMaterials.js';
 import { closestOnTriangle } from '../sim/geom.js';
+import { roundBoxSDF, roundBoxNormal } from '../sim/mesh.js';
 
 const MAX = 240;
 
@@ -90,6 +91,8 @@ export class Bubbles {
     // cube's bubble size), a (its anchor), open (cut open: a hollow in the
     // surface, not a bubble) } - every cube its own count and size
     this.items = [];
+    this.version = 0; // (bumped each reseed: the glitter keeps out of where they are)
+    this._shape = [];
     this.want = [{ slot: 0, count: 34, scale: 1 }];
     this._wantKey = '';
     this.reseed();
@@ -131,7 +134,7 @@ export class Bubbles {
     // own rest space); then each cut face once against the ones in reach
     let rMax = 0, big = 0;
     for (const b of items) {
-      rMax = Math.max(rMax, b.r * b.scale * sb.cSize[b.slot]);
+      rMax = Math.max(rMax, b.R);
       big = Math.max(big, sb.cSize[b.slot]);
     }
     const G = Math.max(0.05 * big, 2 * rMax), iG = 1 / G;
@@ -172,7 +175,7 @@ export class Bubbles {
               const pc = sb.tPiece[sTet[f]];
               // (one hollow per bubble per piece it opens into)
               if (done.has(n * 4096 + pc)) continue;
-              const bub = items[n], r = bub.r * bub.scale * sb.cSize[bub.slot];
+              const bub = items[n], r = bub.R;
               const cx = ctr[n * 3], cy = ctr[n * 3 + 1], cz = ctr[n * 3 + 2];
               if (closestOnTriangle(cx, cy, cz, X[ia], X[ia + 1], X[ia + 2], X[ib], X[ib + 1], X[ib + 2], X[ic], X[ic + 1], X[ic + 2], q) >= r * r) continue;
               done.add(n * 4096 + pc);
@@ -195,23 +198,49 @@ export class Bubbles {
   // Every cube's bubbles anchored afresh at their rest places (in the mesh
   // as it is): each cube its own count of them, its own draw of the pattern
   // (more than there's room for: each fewer, in proportion).
+  // Each bubble all of it inside its rounded cube - a box of places inset
+  // from the faces put the ones by the rounded edges and corners outside it,
+  // and a big one by a face stood out of it - and below its surface map's
+  // relief (see setCubeLook: row 31), with a little to spare: moved in from
+  // the skin as far as it needs, or, too big for where it fits, smaller.
   reseed() {
-    const sb = this.app.sb;
+    const sb = this.app.sb, D = this.app.jelly?.cubeData, nrm = [0, 0, 0];
     this._cubeVer = sb.cubeVersion;
     this._cavTopo = -1;
+    this.version++;
     this.items.length = 0;
     const total = this.want.reduce((t, w) => t + Math.max(0, Math.round(w.count)), 0);
     const f = total > MAX ? MAX / total : 1;
     for (const w of this.want) {
       const slot = w.slot, n = Math.floor(Math.max(0, Math.round(w.count)) * f);
       if (!(sb.cSize[slot] > 0)) continue;
-      const half = sb.cSize[slot] / 2, m = Math.min(0.07, half * 0.15);
+      const size = sb.cSize[slot], half = size / 2, m = Math.min(0.07, half * 0.15), bev = sb.cBevel[slot];
+      const relief = this._relief(slot);
+      this._shape[slot] = `${bev}:${relief}`;
+      const spare = relief + 0.006 * size;
       for (let j = 0; j < n; j++) {
         const P = this.pattern[(j + slot * 61) % MAX];
-        const r = sb.locateRest(P.u[0] * (half - m) + slot * REST_STEP, P.u[1] * (half - m), P.u[2] * (half - m));
-        this.items.push({ slot, u: P.u, r: P.r, scale: w.scale, a: r ? { tet: r.tet, b: r.bary, lost: false } : { tet: -1, b: [0, 0, 0, 0] }, open: false });
+        let R = P.r * w.scale * size, x = P.u[0] * (half - m), y = P.u[1] * (half - m), z = P.u[2] * (half - m);
+        for (let it = 0; it < 4; it++) {
+          const d = roundBoxSDF(x, y, z, half, bev);
+          if (d <= -(R + spare)) break;
+          roundBoxNormal(x, y, z, half, bev, nrm);
+          const mv = d + R + spare;
+          x -= nrm[0] * mv; y -= nrm[1] * mv; z -= nrm[2] * mv;
+        }
+        const d = roundBoxSDF(x, y, z, half, bev);
+        if (d > -(R + spare)) R = -d - spare;
+        if (!(R > 0.0015 * size)) continue; // (no room for it)
+        const r = sb.locateRest(x + slot * REST_STEP, y, z);
+        this.items.push({ slot, u: P.u, r: P.r, scale: w.scale, R, c: [x, y, z], a: r ? { tet: r.tet, b: r.bary, lost: false } : { tet: -1, b: [0, 0, 0, 0] }, open: false });
       }
     }
+  }
+
+  // (how deep a cube's surface map's hollows go, m)
+  _relief(slot) {
+    const D = this.app.jelly?.cubeData;
+    return D ? Math.max(0, D[slot * CUBE_TEX_W * 4 + 31 * 4 + 1] || 0) : 0;
   }
 
   update() {
@@ -222,6 +251,14 @@ export class Bubbles {
     // (cubes come or gone and the tets renumbered: every bubble re-finds
     // its place)
     if (this._cubeVer !== sb.cubeVersion) this.reseed();
+    // (a cube's rounding or its surface map's depth changed - once its new
+    // edges have finished forming: placed afresh, all inside it)
+    else if (!app._edgeMorph)
+      for (const w of this.want)
+        if (sb.cSize[w.slot] > 0 && this._shape[w.slot] !== `${sb.cBevel[w.slot]}:${this._relief(w.slot)}`) {
+          this.reseed();
+          break;
+        }
     // the cut-open ones are hollows in the jelly (its shader carves them)
     if (this._cavTopo !== sb.topoVersion) this.findCavities();
     let nc = 0;
@@ -278,7 +315,7 @@ export class Bubbles {
       );
       this.mesh.setColorAt(c, tint);
       this._p.set(px, py, pz);
-      this._s.setScalar(b.r * b.scale * sb.cSize[k]);
+      this._s.setScalar(b.R);
       this._m.compose(this._p, this._q, this._s);
       this.mesh.setMatrixAt(c++, this._m);
     }

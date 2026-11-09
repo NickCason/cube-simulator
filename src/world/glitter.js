@@ -300,7 +300,7 @@ export class Glitter {
   _key() {
     const sb = this.app.sb, B = this.app.bubbles;
     // (and where the bubbles are: the flakes keep out of them)
-    return `${this.count}|${this.size.toFixed(3)}|${this.groups.map((g) => g.slot + ':' + g.mode + ':' + sb.cSize[g.slot].toFixed(4)).join(',')}|${B ? B._wantKey + ':' + B._cubeVer : ''}`;
+    return `${this.count}|${this.size.toFixed(3)}|${this.groups.map((g) => g.slot + ':' + g.mode + ':' + sb.cSize[g.slot].toFixed(4)).join(',')}|${B ? B.version : ''}`;
   }
 
   // The bubbles, cube by cube, in a grid of their rest places - for the
@@ -309,9 +309,8 @@ export class Glitter {
     const sb = this.app.sb, B = this.app.bubbles, out = {};
     if (!B) return out;
     for (const b of B.items) {
-      const half = sb.cSize[b.slot] / 2, m = Math.min(0.07, half * 0.15);
       const g = out[b.slot] || (out[b.slot] = { cell: 0.08 * sb.cSize[b.slot], map: new Map() });
-      const x = b.u[0] * (half - m), y = b.u[1] * (half - m), z = b.u[2] * (half - m), r = b.r * b.scale * sb.cSize[b.slot];
+      const [x, y, z] = b.c, r = b.R;
       const key = `${Math.floor(x / g.cell)},${Math.floor(y / g.cell)},${Math.floor(z / g.cell)}`;
       (g.map.get(key) || g.map.set(key, []).get(key)).push([x, y, z, r]);
     }
