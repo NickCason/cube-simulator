@@ -15,6 +15,9 @@ import {
   createGlowMaterial,
   createLayerUniforms,
   absorptionFromColor,
+  jellyDefines,
+  JELLY_ALL,
+  JELLY_DEBUG,
   MAX_PULSES,
   GRAD_N,
   GRAD_ROWS,
@@ -1439,10 +1442,99 @@ export class JellyView {
     r.setClearColor(pc, pa);
   }
 
+  // The jelly's shader with only what's here compiled in (see jellyDefines):
+  // each part's code, there but unused, made every pixel of every cube
+  // slower - the shader too big for the GPU to keep in its registers. A
+  // plain cube drew in half the time without them, an iridescent one in a
+  // third. A set not drawn with before is compiled aside - a big shader took
+  // seconds, the screen frozen - and only while it's quiet (this.quiet:
+  // nothing held, nothing moving), as some GPUs stop drawing while they
+  // compile: one at a time, the one with everything first. Till it's ready,
+  // the one it's drawn with now stands in if that has all it needs, else
+  // the one with everything.
+  setFeatures(sb, camera) {
+    const want = this._wantFeatures(sb), all = JELLY_ALL | (want & JELLY_DEBUG);
+    if (this.frontMat.fragmentShader !== this._featSrc) {
+      // (its source changed - harnesses do that: none of those compiled fit)
+      for (const v of this._variants?.values() || []) v.m.dispose();
+      this._variants = new Map();
+      this._featUsed = new Set();
+      this._featSrc = this.frontMat.fragmentShader;
+      this._featKey = undefined;
+    }
+    if (this._featKey === undefined) return this._useFeatures(want); // (the first: compiled now)
+    if (this.quiet && !this.portraits && !this._warming()) this._warm(this._featReady(all) ? want : all, camera);
+    if (want === this._featKey) return;
+    if (this._featReady(want)) return this._useFeatures(want);
+    if ((this._featKey & want) === want) return;
+    // (nothing compiled has it all: the one with everything, or this one now)
+    this._useFeatures(this._featReady(all) ? all : want);
+  }
+
+  // what's here: the cubes' looks, any coat, glow mode, a weld or a flame
+  _wantFeatures(sb) {
+    const D = this.cubeData, f = this._featSeen || (this._featSeen = new Uint8Array(MAX_CUBES));
+    f.fill(0);
+    for (const pc of sb.pieces) f[pc.cube] = 1;
+    let key = 0;
+    for (let k = 0; k < MAX_CUBES; k++) {
+      if (!f[k]) continue;
+      const r = k * CUBE_TEX_W * 4;
+      if (D[r + 14] > 0) key |= 1; // iridescent
+      if (D[r + 15] > 0) key |= 2; // metal
+      if (D[r + 16] > 0) key |= 4; // opal fire
+      if (D[r + 31 * 4] > 0.5) key |= 8; // a surface map
+    }
+    const U = this.frontMat.uniforms, pl = U.uPLColor.value;
+    if (this.coverWanted) key |= 16; // (sugar, a dusting, flour, frost - see update)
+    if (U.uEmit.value > 0) key |= 32;
+    if (U.uWeldT.value < 5 || pl.r + pl.g + pl.b > 0.001) key |= 64;
+    if (this.debugShader) key |= JELLY_DEBUG;
+    return key;
+  }
+
+  _useFeatures(key) {
+    this._featKey = key;
+    this._featUsed.add(key);
+    this.frontMat.defines = jellyDefines(key);
+    this.frontMat.needsUpdate = true;
+  }
+
+  _featReady(key) {
+    if (this._featUsed.has(key)) return true;
+    const v = this._variants.get(key);
+    return !!v && v.prog.isReady();
+  }
+
+  // (one still compiling)
+  _warming() {
+    for (const v of this._variants.values()) if (!v.prog.isReady()) return true;
+    return false;
+  }
+
+  // a set compiled in the background: a stand-in material of its own, as the
+  // jelly's but for its parts - three shares one compiled program between
+  // materials alike, so the jelly's picks this one up when it's switched to
+  // it (compiled as it's drawn: into a target, from a mesh like its own)
+  _warm(key, camera) {
+    if (this._featUsed.has(key) || this._variants.has(key) || !this.rtBack) return;
+    const F = this.frontMat, r = this.renderer, prev = r.getRenderTarget();
+    const m = new THREE.ShaderMaterial({ side: F.side, uniforms: F.uniforms, vertexShader: F.vertexShader, fragmentShader: F.fragmentShader, defines: jellyDefines(key) });
+    const mesh = this._warmMesh || (this._warmMesh = new THREE.Mesh());
+    mesh.geometry = this.allMesh.geometry;
+    mesh.material = m;
+    const scene = this._warmScene || (this._warmScene = new THREE.Scene().add(mesh));
+    r.setRenderTarget(this.rtBack);
+    r.compile(scene, camera);
+    r.setRenderTarget(prev);
+    this._variants.set(key, { m, prog: r.properties.get(m).currentProgram });
+  }
+
   renderPieces(camera, sb, rtScene, rtTrans, copyFn) {
     const r = this.renderer;
     const v = this._v;
     if (!this.allMesh) return;
+    this.setFeatures(sb, camera);
     this.renderCover(camera);
     const NP = Math.min(sb.pieces.length, this.pieceIdx.length / 2);
     const maxL = Math.min(this.maxLayers, this.layerCap, this.layerMeshes.length);

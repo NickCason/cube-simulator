@@ -32,6 +32,32 @@ const NOISE = /* glsl */ `
         }
     return vec2(sqrt(d), id);
   }
+  // (three values at once, for a vector of noise: one hash a corner, not three)
+  vec3 hash33(vec3 p) {
+    p = fract(p * vec3(0.1031, 0.1030, 0.0973));
+    p += dot(p, p.yxz + 33.33);
+    return fract((p.xxy + p.yxx) * p.zyx);
+  }
+  vec3 vnoise3(vec3 p) {
+    vec3 i = floor(p), f = fract(p);
+    f = f * f * (3.0 - 2.0 * f);
+    return mix(mix(mix(hash33(i), hash33(i + vec3(1, 0, 0)), f.x), mix(hash33(i + vec3(0, 1, 0)), hash33(i + vec3(1, 1, 0)), f.x), f.y),
+               mix(mix(hash33(i + vec3(0, 0, 1)), hash33(i + vec3(1, 0, 1)), f.x), mix(hash33(i + vec3(0, 1, 1)), hash33(i + vec3(1, 1, 1)), f.x), f.y), f.z);
+  }
+  // cellular noise, cheaper: only the 2x2x2 cells nearest p (as worley), which
+  // nearly always hold its nearest point - a third of the work
+  vec2 worley2(vec3 p) {
+    vec3 i = floor(p), f = fract(p), s = step(0.5, f) - 1.0;
+    float d = 8.0;
+    vec3 best = i;
+    for (int n = 0; n < 8; n++) {
+      vec3 g = s + vec3(float(n & 1), float((n >> 1) & 1), float((n >> 2) & 1)), c = i + g;
+      vec3 r = g + hash33(c) * 0.8 + 0.1 - f;
+      float dd = dot(r, r);
+      if (dd < d) { d = dd; best = c; }
+    }
+    return vec2(sqrt(d), hash13(best + 3.3));
+  }
   float fbm3(vec3 p) {
     float a = 0.5, s = 0.0;
     for (int i = 0; i < 4; i++) { s += a * vnoise(p); p = p * 2.03 + 17.1; a *= 0.5; }
@@ -379,6 +405,20 @@ export function createBackMaterial(rest = false) {
         ${rest ? 'oRest = finite4(vec4(vRest, 1.0));' : ''}
       }`,
   });
+}
+
+// The jelly shader's parts not every cube needs, each compiled in only while
+// something on screen uses it (see JellyView.setFeatures): iridescence,
+// metal, opal fire, a surface map; a coat (sugar, a dusting, flour, frost);
+// glow mode; a weld's glow or a flame's light; and ?dbg's views.
+const JELLY_FEATURES = [['JELLY_IRID', 1], ['JELLY_METAL', 2], ['JELLY_OPAL', 4], ['JELLY_SURF', 8], ['JELLY_COAT', 16], ['JELLY_GLOW', 32], ['JELLY_DYN', 64], ['JELLY_DEBUG', 128]];
+export const JELLY_ALL = 127, JELLY_DEBUG = 128;
+// (always in this order: three tells its compiled shaders apart by them, in
+// the order they're listed)
+export function jellyDefines(key) {
+  const d = {};
+  for (const [name, bit] of JELLY_FEATURES) if (key & bit) d[name] = '';
+  return d;
 }
 
 export function createJellyMaterial(env, layerUniforms) {
@@ -776,7 +816,11 @@ export function createJellyMaterial(env, layerUniforms) {
         float cDust = cq29.x, cSkin = cq29.y, cThrough = cq29.z;
         cIrid *= 1.0 - cSkin * fresh;
         cMetal *= 1.0 - cSkin * fresh;
+        #ifdef JELLY_COAT // (only while something's coated or frozen: see JellyView.setFeatures)
         float frost = smoothstep(0.05, 0.7, -temp);
+        #else
+        const float frost = 0.0;
+        #endif
         float melt = smoothstep(0.3, 1.1, temp);
 
         vec3 N = normalize(vNormal);
@@ -829,6 +873,7 @@ export function createJellyMaterial(env, layerUniforms) {
         // fades into a little roughness (else it sparkles).
         float surfAO = 1.0, surfRough = 0.0, surfShadow = 1.0, surfH = 1.0, surfFade = 0.0;
         vec4 cq31 = cubeT(31);
+        #ifdef JELLY_SURF // (compiled in only while a cube has a surface map: see JellyView.setFeatures)
         if (cq31.x > 0.5 && cavity < 0.5) {
           vec4 cq28s = cubeT(28);
           SfInfo sf = sfInfo(cq31, cq28s, cq4.w);
@@ -881,6 +926,8 @@ export function createJellyMaterial(env, layerUniforms) {
             }
           }
         }
+        #endif
+        #ifdef JELLY_COAT
         // sugar coating (sour gummies): only on the moulded outside (a sugar
         // cube's all sugar: its cuts too)
         float coat = cSugar * (1.0 - fresh * (1.0 - cThrough)) * (1.0 - cavity);
@@ -891,6 +938,9 @@ export function createJellyMaterial(env, layerUniforms) {
         // (on a surface map, powder settles: deep in its hollows, thin on what
         // stands up - knocked off the tops, gathered in the pits)
         dust = clamp(dust * mix(1.0, mix(1.7, 0.45, surfH), surfFade), 0.0, 1.0);
+        #else
+        const float coat = 0.0, dustOwn = 0.0, dustFlour = 0.0, dust = 0.0;
+        #endif
         // (sprinkles and glitter lie flat on it: drawn in the rest-space plane
         // the surface here is nearest - its normal from how the rest point
         // runs across the pixel)
@@ -930,7 +980,11 @@ export function createJellyMaterial(env, layerUniforms) {
         if (cLayers > 0 && back.r > 0.0) exitR = uBackRest > 0.5 ? textureLod(tBackRest, uv, 0.0).xyz : vec3(Rp.x, back.a, Rp.z);
         // (and what it leaves through: the far side's coat, if any - see
         // createBackMaterial)
+        #ifdef JELLY_COAT
         float exitCoat = back.r > 0.0 && (uBackRest > 0.5 || cLayers <= 0) ? clamp(back.a, 0.0, 1.0) : 0.0;
+        #else
+        const float exitCoat = 0.0;
+        #endif
 
         float rough = clamp(cRough + fresh * 0.02 + frost * 0.5 - melt * 0.02 + coat * 0.18 + dust * 0.45 + surfRough, 0.015, 1.0);
         float roughMat = rough; // (the stuff's own - the anti-aliasing below only blurs)
@@ -1088,6 +1142,7 @@ export function createJellyMaterial(env, layerUniforms) {
         // colours swirl. The film reflects more than bare jelly, all over the
         // face, and the light through it picks up its colours too.
         vec3 iriSpec = vec3(1.0), iriGlow = vec3(1.0);
+        #ifdef JELLY_IRID // (only while a cube is iridescent)
         if (cIrid > 0.0) {
           // (the colour mostly by the angle - each face its own, the bevels
           // running through the rainbow - the film's thickness wandering a
@@ -1116,12 +1171,14 @@ export function createJellyMaterial(env, layerUniforms) {
           iriGlow = mix(vec3(1.0), pow(iri2, vec3(1.6)) * 1.5, cIrid * 0.85);
           body = mix(body, body * mix(vec3(1.0), deep2, 0.95) + iri2 * irr * 0.06, cIrid * (1.0 - 0.6 * cMilk));
         }
+        #endif
 
         vec3 col = body * (1.0 - F) * (0.4 + 0.6 * surfAO) + (refl * F + spec) * surfAO;
 
         // Metal: a mirror tinted by its own colour (cherry: red chrome; lemon:
         // gold), no light through it, its edges going white (Schlick, with
         // the colour as F0) - iridescent too, for holographic foil
+        #ifdef JELLY_METAL // (only while a cube is metallic)
         if (cMetal > 0.0) {
           // (its colour right at the surface: a mirror shows nothing of what's
           // inside it - layered, the bands it's cut through where you look,
@@ -1154,19 +1211,21 @@ export function createJellyMaterial(env, layerUniforms) {
           vec3 colM = reflC * Fm * 1.1 + specM + irr * skin * 0.05 * rough;
           col = mix(col, colM, cMetal);
         }
+        #endif
 
         // Opal: in its milky body, little patches that flash pure spectral
         // colour as you move - each a tiny grating turned its own way
+        #ifdef JELLY_OPAL // (only while a cube has opal fire)
         if (cOpal > 0.0) {
           // (a mosaic of patches at two sizes, a little way inside, each lit
           // up by how square to you it's turned)
           // (small, saturated flecks - opal's pinfire - each winking on only
           // while it's turned square to you, so they come and go as it turns)
           vec3 qo = Rp * 6.0 + refract(-V, N, 1.0 / cIor) * min(thick, 0.5) * 2.0;
-          qo += (vec3(vnoise(qo * 0.8), vnoise(qo * 0.8 + 5.0), vnoise(qo * 0.8 + 9.0)) - 0.5) * 0.9; // (ragged, not round)
+          qo += (vnoise3(qo * 0.8) - 0.5) * 0.9; // (ragged, not round)
           vec3 fire = vec3(0.0);
           for (int s = 0; s < 2; s++) {
-            vec2 wo = worley(s == 0 ? qo : qo * 2.3 + 11.0);
+            vec2 wo = worley2(s == 0 ? qo : qo * 2.3 + 11.0);
             vec3 gd = normalize(vec3(hash13(vec3(wo.y * 91.0 + float(s) * 7.0)), hash13(vec3(wo.y * 37.0 + 5.0)), hash13(vec3(wo.y * 13.0 + 9.0))) - 0.5);
             float face = abs(dot(V, gd));
             float on = smoothstep(0.72, 0.98, face) * (1.0 - smoothstep(0.32, 0.5, wo.x));
@@ -1174,10 +1233,12 @@ export function createJellyMaterial(env, layerUniforms) {
           }
           col += fire * (irr * 0.8 + keyLight * (0.18 + 0.3 * nl) + cGlowColor * uEmit * 1.6) * cOpal * (1.0 - F) * 1.5;
         }
+        #endif
 
         // Glow mode: it gives off its own light, from all of its body -
         // brighter through more of it, towards a hotter, paler core. A knock
         // sends a ring of light racing out through it from where it landed.
+        #ifdef JELLY_GLOW // (only in glow mode)
         vec3 emLit = vec3(0.0);
         if (uEmit > 0.0) {
           float deep = 1.0 - exp(-pathLen * 1.8);
@@ -1212,8 +1273,12 @@ export function createJellyMaterial(env, layerUniforms) {
           emLit = em * uEmit * (1.0 - 0.7 * cMetal) * (1.0 - 0.35 * cOpal);
           col += emLit * (1.0 - 0.85 * F);
         }
+        #else
+        const vec3 emLit = vec3(0.0);
+        #endif
 
         // dynamic point light (torch flame, explosion flash)
+        #ifdef JELLY_DYN // (only while there's one, or a weld's glowing: see below)
         if (uPLColor.r + uPLColor.g + uPLColor.b > 0.001) {
           vec3 Lp = uPLPos - Pw;
           float dp = length(Lp);
@@ -1224,7 +1289,9 @@ export function createJellyMaterial(env, layerUniforms) {
           float specP = D_GGX(max(dot(N, Hp), 0.0), max(a, 0.004)) * V_Smith(nlp, NdV, max(a, 0.004)) * nlp * 0.06;
           col += uPLColor * fall * (specP + sc * (max((dot(N, Lp) + 0.6) / 1.6, 0.0) * 0.5 + 0.35));
         }
+        #endif
 
+        #ifdef JELLY_COAT
         // sugar crystals: discrete grains with their own facets and glints,
         // the gummy colour showing between them
         if (coat > 0.0) {
@@ -1295,6 +1362,7 @@ export function createJellyMaterial(env, layerUniforms) {
             + emLit * (0.4 + 0.25 * crystal); // (lit from inside, in glow mode)
           col = mix(col, frostCol + sparkle, frost * (0.35 + 0.4 * crystal));
         }
+        #endif
 
         // (deep in a hollow a little less of the room's light gets in; its
         // rim, a crisp edge, catches it)
@@ -1309,6 +1377,7 @@ export function createJellyMaterial(env, layerUniforms) {
         // creeping outward; then a wave of healing light runs out from the
         // seams and wipes the scorch away, and the lines cool to nothing.
         // Seam distance: exact per pixel near a seam, per vertex further out.
+        #ifdef JELLY_DYN
         if (uWeldT < 5.0) {
           float t = uWeldT, U = uWeldUnit;
           vec3 pr = vRest / U;
@@ -1355,6 +1424,7 @@ export function createJellyMaterial(env, layerUniforms) {
           // (and warmth through the body while the seams are hot)
           col += hotC * (1.0 - exp(-pathLen * 1.2)) * exp(-1.6 * t) * smoothstep(0.0, 0.2, t) * 0.2;
         }
+        #endif
         // the outline, anti-aliased: the last pixel is part jelly, part
         // whatever's behind - where the jelly really is that thin, or at the
         // outer edge (no jelly just past this pixel, out along the normal)
@@ -1364,6 +1434,7 @@ export function createJellyMaterial(env, layerUniforms) {
           if (dot(nS, nS) > 1e-6 && textureLod(tBack, uv + normalize(nS) * 1.5 / resolution, 0.0).r <= 0.0) silh = 1.0;
         }
         col = mix(textureLod(tScene, uv, 0.0).rgb, col, mix(1.0, cover, silh));
+        #ifdef JELLY_DEBUG // (?dbg=n: its parts, one at a time - else they'd all be kept to the end)
         if (uDebug == 1) col = refl * F + spec;
         else if (uDebug == 2) col = trans * Tr;
         else if (uDebug == 3) col = vec3(thick * 0.5);
@@ -1372,6 +1443,7 @@ export function createJellyMaterial(env, layerUniforms) {
         else if (uDebug == 6) col = N * 0.5 + 0.5;
         else if (uDebug == 7) col = body;
         else if (uDebug == 8) col = vec3(F);
+        #endif
 
         gl_FragColor = vec4(finite(col), 1.0);
       }

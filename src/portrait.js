@@ -59,6 +59,9 @@ export class Portraits {
       vis: app.scene.children.map((o) => o.visible), fxVis: app.fxScene.children.map((o) => o.visible),
     };
     const urls = [];
+    // (the shaders it takes: whatever's compiled that will do - none started
+    // for a set only a portrait wants, see JellyView.setFeatures)
+    J.portraits = true;
     try {
       // the room emptied: the floor and the lights (and, of the effects, the glitter)
       for (const o of app.scene.children) if (o !== app.floor && !o.isLight && o !== app.keyLight?.target && !o.userData.inPortrait) o.visible = false;
@@ -84,6 +87,7 @@ export class Portraits {
       }
     } finally {
       // all put back: the jelly, its look, the room's look, the effects
+      J.portraits = false;
       app.sb = S.sb;
       app.cubes = S.cubes;
       app._order = S.order;

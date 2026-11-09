@@ -52,6 +52,13 @@ export function attachStats(app) {
     const o = app.orbit, t = o.target;
     return `${f3(o.theta)} ${f3(o.phi)} ${f3(o.radius)} ${f3(t.x)},${f3(t.y)},${f3(t.z)}`;
   };
+  // (the jelly's shader: the parts compiled into the one it's drawn with -
+  // and what's wanted, while that's still compiling: see JellyView.setFeatures)
+  const featParts = (k) => (k === undefined ? '-' : ['irid', 'metal', 'opal', 'surf', 'coat', 'glow', 'dyn', 'dbg'].filter((_, b) => k & (1 << b)).join('+') || 'plain');
+  const shader = () => {
+    const J = app.jelly, k = J._featKey, w = J._wantFeatures?.(app.sb);
+    return `${featParts(k)}${w !== undefined && w !== k ? ` (want ${featParts(w)})` : ''}`;
+  };
   const sceneLines = () => {
     const sel = app.cube?.slot;
     const set = Object.keys(app.tune)
@@ -59,7 +66,7 @@ export function attachStats(app) {
       .map((k) => `${k}=${typeof app.tune[k] === 'number' ? f3(app.tune[k]) : app.tune[k]}`)
       .join(' ');
     return [
-      `view: canvas ${app.canvas.clientWidth}x${app.canvas.clientHeight} css  res ${app.pixelRatio.toFixed(2)}x ${app.size.pw}x${app.size.ph}  theme ${app.theme}  place ${app.place}  room ${app.room?.on ? 'on' : 'off'}  tearing ${app.tearing ? 'on' : 'off'}  tool ${app.tool?.id || '-'}`,
+      `view: canvas ${app.canvas.clientWidth}x${app.canvas.clientHeight} css  res ${app.pixelRatio.toFixed(2)}x ${app.size.pw}x${app.size.ph}  theme ${app.theme}  place ${app.place}  room ${app.room?.on ? 'on' : 'off'}  tearing ${app.tearing ? 'on' : 'off'}  tool ${app.tool?.id || '-'}  shader ${shader()}`,
       `camera: ${cam()}   (theta phi radius target)`,
       `cubes (* selected): ${app.cubes.map((cb) => `${cb.slot === sel ? '*' : ''}${cb.slot} ${cubeCode(cb)}`).join('   ')}`,
       `settings: ${set || '(all as made)'}`,

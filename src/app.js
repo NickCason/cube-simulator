@@ -1202,6 +1202,18 @@ export class App {
   _bindInput() {
     const el = this.canvas;
     const pointers = new Map();
+    // (any finger or button held anywhere on the page - a slider's too - and
+    // when the last came or went: the jelly's shaders are compiled only while
+    // it's quiet, see JellyView.setFeatures)
+    this._held = new Set();
+    this._inputAt = 0;
+    const press = (e) => {
+      if (e.type === 'pointerdown') this._held.add(e.pointerId);
+      else this._held.delete(e.pointerId);
+      this._inputAt = performance.now();
+    };
+    for (const t of ['pointerdown', 'pointerup', 'pointercancel']) document.addEventListener(t, press, true);
+    window.addEventListener('blur', () => this._held.clear());
     let mode = null; // 'tool' | 'orbit' | 'pinch'
     let last = null;
     let pinch0 = 0;
@@ -2339,6 +2351,8 @@ export class App {
 
     const copy = () => this.post.copy(this.rtScene.texture, this.rtTrans);
     copy();
+    // (no one touching anything, nothing moving: see JellyView.setFeatures)
+    this.jelly.quiet = !this._held?.size && performance.now() - this._inputAt > 500 && this.sb.pieces.every((p) => p.asleep);
     if (!this.opts.nojelly) this.jelly.renderPieces(this.camera, this.sb, this.rtScene, this.rtTrans, copy);
     // (the goo sees the jelly through itself: the room with the jelly in it)
     if (this.strands.mesh.visible) {

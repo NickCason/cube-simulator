@@ -43,7 +43,10 @@ function boot() {
     if (params.has('scatter')) app.jelly.scatter = +params.get('scatter');
     app.applyStyle();
   }
-  if (params.has('dbg')) app.jelly.frontMat.uniforms.uDebug.value = +params.get('dbg');
+  if (params.has('dbg')) {
+    app.jelly.frontMat.uniforms.uDebug.value = +params.get('dbg');
+    app.jelly.debugShader = true;
+  }
   window.__app = app;
   // A GPU context the browser takes back (iOS does, for a tab left in the
   // background) can't be pieced together again here: stop drawing, and start
