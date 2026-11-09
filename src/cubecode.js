@@ -46,14 +46,14 @@ export const TUNE_CODES = {
   mu: 'fm', damping: 'vs', weight: 'dn', lambda: 'sq', bounce: 'bo', grip: 'gp', rigidity: 'rg', tough: 'tf', goo: 'go',
   opacity: 'op', glow: 'tl', depth: 'cd', rough: 'gl', ior: 'rf', irid: 'ir', metal: 'mt', opal: 'ol',
   bubbles: 'bc', bubbleSize: 'bs', glitterAmount: 'ga', glitterSize: 'gs', glitterSparkle: 'gk',
-  surfDepth: 'sd', surfScale: 'sk',
+  surfDepth: 'sd', surfScale: 'sk', trimSize: 'tz', trimDepth: 'td',
   gravity: 'gv', size: 'sz',
   grabSize: 'hs', handPull: 'hp', poke: 'pk',
   knifePush: 'kp', nailPower: 'nl', gunPower: 'gn', malletForce: 'ml', torchHeat: 'th', boilOff: 'bf', cryoCold: 'cc',
   bombPower: 'bm', syringePump: 'sy', magnetPull: 'mg',
   contactGrip: 'jj', airDrag: 'ad',
   dice: 'dc', holeSize: 'hz', autoRate: 'ar', flameSize: 'fz', acidStrength: 'as', acidPour: 'ap', pupilWiggle: 'pw',
-  siftRate: 'sr', siftSpread: 'ss', ballSize: 'bz', cuberSize: 'cz', ladle: 'ld', mutation: 'mx', globSize: 'gz', globRate: 'gr',
+  siftRate: 'sr', siftSpread: 'ss', ballSize: 'bz', cuberSize: 'cz', ladle: 'ld', mutation: 'mx', globSize: 'gz', globRate: 'gr', twistSpeed: 'tw',
 };
 const KEY_OF = Object.fromEntries(Object.entries(TUNE_CODES).map(([k, c]) => [c, k]));
 const SETTING = Object.fromEntries(SETTINGS.map((s) => [s.key, s]));

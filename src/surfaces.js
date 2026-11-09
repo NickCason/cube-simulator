@@ -534,7 +534,7 @@ export function surfaceBakeGLSL(only = -1) {
   uniform int uKind;
   uniform float uHS, uB, uL, uSp;
   uniform int uTrim; // (its edges' trim: styles.js TRIMS - 0 none)
-  uniform float uTrimN, uTrimW, uSfScale; // (its repeats an edge, its band's width; the surface's depth as a share of the map's)
+  uniform float uTrimN, uTrimW, uSfScale, uTrimScale; // (its repeats an edge, its band's width; the surface's and the trim's depths as shares of the map's)
   uniform vec2 uNN;
   uniform highp sampler2D uSites;
   uniform highp sampler2D uGrid;
@@ -675,7 +675,7 @@ export function surfaceBakeGLSL(only = -1) {
   float sfTrim(int f, vec2 uv, vec3 P) {
     if (uTrim == 0) return 1.0;
     float e = 0.5 * uL - max(abs(uv.x), abs(uv.y));
-    if (e > uTrimW * 1.3) return 1.0;
+    if (e > max(uTrimW * 1.3, 1.25 * uHS / uTrimN)) return 1.0;
     bool uEdge = abs(uv.x) > abs(uv.y);
     // (the face's ways across and up, as the cube's axes - see sfUnfoldInv)
     int ua = f < 2 ? 2 : 0, va = f < 2 ? 1 : f < 4 ? 2 : 1;

@@ -239,7 +239,7 @@ export class UI {
         <div class="sec"><span class="lbl">Material</span><div class="mats" role="group" aria-label="Material"></div></div>
         <div class="sec"><span class="lbl">Glitter</span><div class="seg glit"></div></div>
         <div class="sec"><span class="lbl">Edges</span><div class="seg edges"></div></div>
-        <div class="sec"><span class="lbl">Trim</span><div class="mats trims" role="group" aria-label="Trim"></div></div>
+        <div class="sec"><span class="lbl">Trim <em>size and depth in Settings</em></span><div class="mats trims" role="group" aria-label="Trim"></div></div>
         <div class="sec"><span class="lbl">Surface <em>depth and scale in Settings</em></span><div class="mats surfs" role="group" aria-label="Surface"></div></div>
       </div>
       <div class="palette tune" hidden>

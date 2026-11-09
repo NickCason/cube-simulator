@@ -93,7 +93,7 @@ export class TwistTool {
     c[P.fa] = P.fs;
     const moved = A === 0 ? [c[0], -c[2], c[1]] : A === 1 ? [c[2], c[1], -c[0]] : [-c[1], c[0], c[2]];
     const dir = (moved[best] - c[best]) * sgn > 0 ? 1 : -1;
-    this._start(P.slot, A, P.c[A], dir, TURN_T);
+    this._start(P.slot, A, P.c[A], dir, TURN_T / (this.app.st?.twistSpeed ?? 1));
   }
 
   up() {
@@ -166,7 +166,7 @@ export class TwistTool {
       do a = Math.floor(Math.random() * 3);
       while (a === last);
       last = a;
-      this._start(slot, a, Math.floor(Math.random() * 3) - 1, Math.random() < 0.5 ? -1 : 1, QUICK_T);
+      this._start(slot, a, Math.floor(Math.random() * 3) - 1, Math.random() < 0.5 ? -1 : 1, QUICK_T / Math.sqrt(this.app.st?.twistSpeed ?? 1));
     }
     this.app.audio?.whoosh?.(0.6);
   }

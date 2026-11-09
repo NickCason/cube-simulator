@@ -55,6 +55,9 @@ export const SETTINGS = [
   // its surface map's (see surfaces.js): how deep its relief, how big its cells
   { id: 'surfDepth', group: 'Surface', label: 'Depth', key: 'surfDepth', def: 1, ...logMap(0.25, 3), words: ['Faint', 'Soft', 'Moulded', 'Deep', 'Carved'] },
   { id: 'surfScale', group: 'Surface', label: 'Scale', key: 'surfScale', def: 1, ...logMap(0.4, 2.5), words: ['Fine', 'Small', 'Medium', 'Large', 'Bold'] },
+  // its edges' trim's (see styles.js TRIMS): how big its repeats, how deep
+  { id: 'trimSize', group: 'Trim', label: 'Size', key: 'trimSize', def: 1, ...logMap(0.5, 2), words: ['Fine', 'Small', 'Medium', 'Large', 'Bold'] },
+  { id: 'trimDepth', group: 'Trim', label: 'Depth', key: 'trimDepth', def: 1, ...logMap(0.4, 2.5), words: ['Faint', 'Soft', 'Moulded', 'Deep', 'Carved'] },
   {
     id: 'gravity', group: 'World', label: 'Gravity', key: 'gravity', def: 22, ...logMap(4, 60),
     word: (g) => (g < 7 ? 'Moon' : g < 13 ? 'Mars' : g < 32 ? 'Earth' : g < 45 ? 'Heavy' : 'Jupiter'),
@@ -97,6 +100,7 @@ export const SETTINGS = [
   { id: 'cryoCold', group: 'Cryo spray', tool: 'freeze', lab: true, label: 'Cold', key: 'cryoCold', def: 1, ...logMap(0.3, 3.3), words: ['Chill', 'Cold', 'Normal', 'Frigid', 'Absolute'] },
   { id: 'acidStrength', group: 'Acid', tool: 'acid', lab: true, label: 'Strength', key: 'acidStrength', def: 1, ...logMap(0.3, 3.3), words: ['Vinegar', 'Mild', 'Normal', 'Strong', 'Xenomorph'] },
   { id: 'acidPour', group: 'Acid', tool: 'acid', lab: true, label: 'Pour', key: 'acidPour', def: 1, ...logMap(0.4, 2.5), words: ['Drip', 'Trickle', 'Normal', 'Glug', 'Flood'] },
+  { id: 'twistSpeed', group: 'Twist', tool: 'twist', lab: true, label: 'Turn speed', key: 'twistSpeed', def: 1, ...logMap(0.4, 3), words: ['Slow', 'Easy', 'Normal', 'Snappy', 'Speedcuber'] },
   { id: 'pupilWiggle', group: 'Googly eyes', tool: 'eyes', lab: true, label: 'Pupil wiggle', key: 'pupilWiggle', def: 1, ...logMap(0.3, 3), words: ['Sluggish', 'Calm', 'Googly', 'Rattly', 'Frantic'] },
   { id: 'siftRate', group: 'Sieve', tool: 'flour', lab: true, label: 'Sift', key: 'siftRate', def: 1, ...logMap(0.3, 3), words: ['Pinch', 'Light', 'Normal', 'Heavy', 'Avalanche'] },
   { id: 'siftSpread', group: 'Sieve', tool: 'flour', lab: true, label: 'Spread', key: 'siftSpread', def: 1, ...logMap(0.4, 2.5), words: ['Tight', 'Narrow', 'Normal', 'Wide', 'Snowfall'] },

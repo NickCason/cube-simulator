@@ -728,8 +728,8 @@ export class JellyView {
     // those aren't a map) - the map then as deep as the deeper of the two;
     // a smooth one with a trim, its own kind past the surfaces' (TRIM_KIND)
     const ti = sf.fam === 'holes' ? 0 : TRIM[m.trim]?.index || 0;
-    const sfD = (sf.depth || 0) * (m.surfDepth ?? 1) * size, depth = Math.max(sfD, ti ? TRIM_DEPTH * size : 0);
-    this._bakeCube(k, sf, size, m.bevelRatio ?? 0.13, dens, false, ti, depth > 0 ? sfD / depth : 1);
+    const sfD = (sf.depth || 0) * (m.surfDepth ?? 1) * size, trD = ti ? TRIM_DEPTH * size * (m.trimDepth ?? 1) : 0, depth = Math.max(sfD, trD);
+    this._bakeCube(k, sf, size, m.bevelRatio ?? 0.13, dens, false, ti, depth > 0 ? sfD / depth : 1, depth > 0 ? trD / depth : 1, m.trimSize ?? 1);
     put(29, m.dust || 0, m.skin || 0, m.through ? 1 : 0, ti ? Math.max(sf.ao || 0, 0.55) : sf.ao || 0);
     (this._ownCoat ||= [])[k] = (m.dust || 0) > 0 || (m.sugar || 0) > 0;
     const plain = ti && !(sf.kind > 0);
@@ -775,7 +775,7 @@ export class JellyView {
     // (one set of numbers for every pattern's bake)
     this.bakeU = {
       uFace: { value: 0 }, uKind: { value: 0 }, uHS: { value: 0.5 }, uB: { value: 0.1 }, uL: { value: 1 }, uSp: { value: 0.1 },
-      uTrim: { value: 0 }, uTrimN: { value: 7 }, uTrimW: { value: 0.07 }, uSfScale: { value: 1 },
+      uTrim: { value: 0 }, uTrimN: { value: 7 }, uTrimW: { value: 0.07 }, uSfScale: { value: 1 }, uTrimScale: { value: 1 },
       uNN: { value: new THREE.Vector2(4, 4) }, uSites: { value: blank() }, uGrid: { value: blank() }, uSitesW: { value: 1 }, uGridW: { value: 1 },
       // (an ivec3: three takes it as a plain array)
       uGridMin: { value: new THREE.Vector3() }, uGridCell: { value: 1 }, uGridDim: { value: [1, 1, 1] },
@@ -807,7 +807,7 @@ export class JellyView {
           sfUnfoldInv(uFace, uv, P, n);
           // (its pattern, held to its own depth, and its edges' trim)
           float h = 1.0 - (1.0 - sfBake(uKind, uFace, uv)) * uSfScale;
-          gl_FragColor = vec4(min(h, sfTrim(uFace, uv, P)), 0.0, 0.0, 1.0);
+          gl_FragColor = vec4(min(h, 1.0 - (1.0 - sfTrim(uFace, uv, P)) * uTrimScale), 0.0, 0.0, 1.0);
         }`,
       depthTest: false,
       depthWrite: false,
@@ -845,14 +845,14 @@ export class JellyView {
   // rounding a share of that, dens its cells a face. A new pattern's baked
   // at once; the same one rescaled or rounded off - a slider dragged -
   // when it's been still a moment: see bakeLater)
-  _bakeCube(k, sf, size, br, dens, now = false, trim = 0, sfScale = 1) {
+  _bakeCube(k, sf, size, br, dens, now = false, trim = 0, sfScale = 1, trScale = 1, trSize = 1) {
     if (!this.surfRT) return;
-    this._surfArgs[k] = [sf, size, br, dens, now, trim, sfScale];
+    this._surfArgs[k] = [sf, size, br, dens, now, trim, sfScale, trScale, trSize];
     this._surfLater.delete(k);
     if (!sf || sf.fam === 'holes' || (!sf.fam && !trim)) return;
     const hs = size / 2, b = Math.min(0.45, br) * size, L = size - b * (2 - Math.PI / 2);
     const [nu, nv] = surfaceFit(sf, dens);
-    const key = [sf.kind, size.toFixed(4), b.toFixed(5), nu.toFixed(4), nv.toFixed(4), trim, sfScale.toFixed(3)].join('|');
+    const key = [sf.kind, size.toFixed(4), b.toFixed(5), nu.toFixed(4), nv.toFixed(4), trim, sfScale.toFixed(3), trScale.toFixed(3), trSize.toFixed(3)].join('|');
     const was = this._surfKey[k];
     if (was === key) return;
     if (!now && was.split('|')[0] === String(sf.kind)) {
@@ -866,11 +866,13 @@ export class JellyView {
     U.uB.value = Math.max(b, 1e-5);
     U.uL.value = L;
     U.uNN.value.set(nu, nv);
-    // (its trim: a whole number of repeats to an edge, about 14 cm each; its band 7.5% of it)
+    // (its trim: a whole number of repeats to an edge, about 14 cm each; its
+    // band 7.5% of it - both at the trim's Size; its depth a share of the map's)
     U.uTrim.value = trim;
-    U.uTrimN.value = Math.max(3, Math.round(size / 0.14));
-    U.uTrimW.value = 0.075 * size;
+    U.uTrimN.value = Math.max(3, Math.round(size / (0.14 * trSize)));
+    U.uTrimW.value = 0.075 * size * Math.sqrt(trSize);
     U.uSfScale.value = sfScale;
+    U.uTrimScale.value = trScale;
     if (sf.fam === 'sites') {
       // the sites, spread over its surface - and a grid of them, a cell the
       // spacing a side, up to 8 a cell, for the bake to find the nearest
@@ -925,8 +927,8 @@ export class JellyView {
     const t = performance.now();
     for (const [k, t0] of this._surfLater) {
       if (t - t0 <= 140) continue;
-      const [sf, size, br, dens, , trim, sfScale] = this._surfArgs[k];
-      this._bakeCube(k, sf, size, br, dens, true, trim, sfScale);
+      const [sf, size, br, dens, , ...tr] = this._surfArgs[k];
+      this._bakeCube(k, sf, size, br, dens, true, ...tr);
     }
   }
 
