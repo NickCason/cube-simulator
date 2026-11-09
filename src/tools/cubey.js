@@ -233,7 +233,15 @@ export class DicerTool {
     const right = new THREE.Vector3(1, 0, 0).applyQuaternion(app.camera.quaternion);
     let [i1, i2] = [0, 1, 2].filter((k) => k !== iu);
     if (Math.abs(F.ax[i2].dot(right)) > Math.abs(F.ax[i1].dot(right))) [i1, i2] = [i2, i1];
-    this.job = { t: 0, verts, n, iu, i1, i2, stage: 0, F, ext };
+    // A whole cube is diced cleanly: built again a whole number of cells to a
+    // die - two or three, no finer than it is - and pulled apart along that
+    // grid (SoftBody.remeshCube, splitCube): no cut tets, no slivers -
+    // 125 dice are 5000 tets, not 26000, and the pile settles twice as soon.
+    // (One already cut, holed, melted: cut as ever.)
+    const k = sb.pieces[hit.piece].cube, ps = sb.pieces.filter((p) => p.cube === k);
+    const whole = ps.length === 1 && ps[0].verts.length === sb.cN[k] && !ps[0].verts.some((i) => sb.melt[i]);
+    const grid = whole ? { k, res: Math.max(2, Math.floor(sb.cRes[k] / n)) * n } : null;
+    this.job = { t: 0, verts, n, iu, i1, i2, stage: 0, F, ext, grid };
     this._pose(0);
     this.model.visible = true;
     app.audio.diceWhoosh(0);
@@ -264,6 +272,26 @@ export class DicerTool {
   _shink(n, k0) {
     const au = this.app.audio, t0 = au.ctx ? au.ctx.currentTime : 0;
     for (let i = 0; i < n; i++) au.diceShink(k0 + i, t0 + i * 0.028);
+  }
+
+  // A whole cube's pass, the clean way: (the first, remeshed for it) pulled
+  // apart along its grid, square to these axes - its vertices then all of
+  // that cube's (the grip and the pop go by them)
+  _split(j, axes, remesh) {
+    const app = this.app, sb = app.sb, k = j.grid.k;
+    if (remesh) sb.remeshCube(k, j.grid.res, app.allAnchors());
+    const F = frameOf(sb, this._cubeVerts(k));
+    sb.splitCube(k, axes, j.n, F.ax.map((a) => [a.x, a.y, a.z]), 0.004);
+    j.verts = this._cubeVerts(k);
+    app.onTopologyChanged();
+    app.markDamaged();
+    app.hitStop(0.05);
+  }
+
+  _cubeVerts(k) {
+    const sb = this.app.sb, out = [];
+    for (let i = 0; i < sb.nV; i++) if (sb.vCube[i] === k && sb.alive[i]) out.push(i);
+    return out;
   }
 
   _slice(fields) {
@@ -347,7 +375,8 @@ export class DicerTool {
     if (j.stage === 1 && t >= T.down) {
       j.stage = 2;
       j.F = frameOf(sb, j.verts.filter((i) => sb.alive[i]));
-      this._slice([...this._cuts(j.F, j.i1, j.n), ...this._cuts(j.F, j.i2, j.n)]);
+      if (j.grid) this._split(j, [j.i1, j.i2], true);
+      else this._slice([...this._cuts(j.F, j.i1, j.n), ...this._cuts(j.F, j.i2, j.n)]);
       this._grip(j);
       app.audio.diceSlam(0);
       app.shake(0.025);
@@ -366,7 +395,8 @@ export class DicerTool {
     if (j.stage === 4 && t >= T.across) {
       j.stage = 5;
       // (square to the same axes as the first pass)
-      this._slice(this._cuts(frameOf(sb, j.verts.filter((i) => sb.alive[i])), j.iu, j.n));
+      if (j.grid) this._split(j, [j.iu], false);
+      else this._slice(this._cuts(frameOf(sb, j.verts.filter((i) => sb.alive[i])), j.iu, j.n));
       this._grip(j);
       app.audio.thud(0.7);
     }

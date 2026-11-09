@@ -489,8 +489,9 @@ export class SoftBody {
   }
 
   // (the vertices drop(i) says, and the tets on them - every tet's corners
-  // must all go or all stay: a cube's, or a piece's)
-  _removeVerts(drop) {
+  // must all go or all stay: a cube's, or a piece's. Anchors given - { tet,
+  // b } held outside the body - are renumbered too: -1, gone with theirs.)
+  _removeVerts(drop, anchors = null) {
     this.cubeVersion++;
     const nV = this.nV, nT = this.nT, map = new Int32Array(nV).fill(-1);
     let n = 0;
@@ -530,8 +531,201 @@ export class SoftBody {
         E.b.tet = tb;
       }
     }
+    if (anchors) for (const A of anchors) if (A && A.tet >= 0) A.tet = A.tet < nT ? tmap[A.tet] : -1;
     this.grabs.length = 0;
     this._bpNV = 0;
+  }
+
+  // Cube k - one whole piece - built again at resolution res just as it is:
+  // its shape now and how it moves, how warm, its coat, how swollen - each
+  // new point where the old jelly at that rest point is. (The dicer remeshes
+  // a cube a whole number of cells to a die, then splits it along the grid -
+  // see splitCube: no cut tets, no slivers.) Its nails, and the anchors
+  // given (moved in place), go on the new tets at the same rest points.
+  // Rebuilt.
+  remeshCube(k, res, anchors = []) {
+    const R = k * REST_STEP, mesh = buildCubeMesh(res, this.cSize[k], this.cBevel[k]);
+    const look = { tet: -1, b0: 0, b1: 0, b2: 0, b3: 0 };
+    const where = (px, py, pz) => (this.locateRestFast(px, py, pz, look) && this.tCube[look.tet] === k ? [look.tet, look.b0, look.b1, look.b2, look.b3] : this._restNearest(k, px, py, pz));
+    // (each anchor in it - a nail's, a weld's - by where it is at rest)
+    const moved = [];
+    const pin = (A) => {
+      if (A && A.tet >= 0 && A.tet < this.nT && this.tCube[A.tet] === k) moved.push([A, this._restPoint(A.tet, A.b)]);
+    };
+    for (const E of this.embeds) {
+      pin(E.a);
+      pin(E.b);
+    }
+    for (const A of anchors) pin(A);
+    const base = this.nV, tBase = this.nT, nv = mesh.nV, nt = mesh.nT;
+    this.ensureV(base + nv);
+    for (let i = 0; i < nv; i++) {
+      const Xr = mesh.pos[i * 3] + R, Yr = mesh.pos[i * 3 + 1], Zr = mesh.pos[i * 3 + 2];
+      const w = where(Xr, Yr, Zr);
+      let wx = 0, wy = 0, wz = 0, vx = 0, vy = 0, vz = 0, te = 0, gl = 0, du = 0;
+      const co = [0, 0, 0, 0, 0];
+      if (w) {
+        for (let q = 0; q < 4; q++) {
+          const c = this.T[w[0] * 4 + q], bq = w[q + 1], o = c * 3;
+          wx += this.x[o] * bq; wy += this.x[o + 1] * bq; wz += this.x[o + 2] * bq;
+          vx += this.v[o] * bq; vy += this.v[o + 1] * bq; vz += this.v[o + 2] * bq;
+          te += this.temp[c] * bq;
+          gl += this.glow[c] * bq;
+          du += this.dust[c] * bq;
+          for (let e = 0; e < 5; e++) co[e] += this.coat[c * 5 + e] * bq;
+        }
+      }
+      const j = this.addVertex(wx, wy, wz, Xr, Yr, Zr, vx, vy, vz, te, k, 0);
+      this.glow[j] = gl;
+      this.dust[j] = du;
+      for (let e = 0; e < 5; e++) this.coat[j * 5 + e] = co[e];
+    }
+    this.nT = tBase + nt;
+    this.ensureT(this.nT);
+    for (let t = 0; t < nt; t++) {
+      let cx = 0, cy = 0, cz = 0;
+      for (let q = 0; q < 4; q++) {
+        const c = mesh.tets[t * 4 + q];
+        this.T[(tBase + t) * 4 + q] = c + base;
+        cx += mesh.pos[c * 3] / 4; cy += mesh.pos[c * 3 + 1] / 4; cz += mesh.pos[c * 3 + 2] / 4;
+      }
+      const w = where(cx + R, cy, cz);
+      this.tVS[tBase + t] = w ? this.tVS[w[0]] : 1;
+      this.tMu[tBase + t] = w ? this.tMu[w[0]] : 1;
+    }
+    // (the anchors held on a new tet while the old ones go; put right below)
+    for (const [A] of moved) {
+      A.tet = tBase;
+      A.b = [1, 0, 0, 0];
+    }
+    this._removeVerts((i) => i < base && this.vCube[i] === k, anchors);
+    this.cN[k] = nv;
+    this.cRes[k] = res;
+    this.cH[k] = mesh.h;
+    this.rebuild();
+    for (const [A, p] of moved) {
+      const w = where(p[0], p[1], p[2]);
+      if (!w) continue;
+      A.tet = w[0];
+      A.b = [w[1], w[2], w[3], w[4]];
+    }
+  }
+
+  // Cube k's tets pulled apart along rest-space planes square to each of
+  // axes (0 x, 1 y, 2 z), n slabs a side - where a grid of a whole number of
+  // cells to a slab puts them (see remeshCube): no tet's cut; the points
+  // tets on two sides of a plane share are doubled, one for each side. Each
+  // slab nudged apart by gap along dirs (the cube's axes in the world).
+  // Rebuilt.
+  splitCube(k, axes, n, dirs = null, gap = 0.004) {
+    const half = this.cSize[k] / 2, R = k * REST_STEP, nT = this.nT;
+    const key = new Int32Array(nT).fill(-1);
+    for (let t = 0; t < nT; t++) {
+      if (this.tCube[t] !== k || !(this.vol0[t] > 0)) continue;
+      const c = [0, 0, 0];
+      for (let q = 0; q < 4; q++) {
+        const o = this.T[t * 4 + q] * 3;
+        c[0] += this.X[o] / 4; c[1] += this.X[o + 1] / 4; c[2] += this.X[o + 2] / 4;
+      }
+      c[0] -= R;
+      let kk = 0;
+      for (const a of axes) kk = kk * n + Math.min(n - 1, Math.max(0, Math.floor(((c[a] + half) / (2 * half)) * n)));
+      key[t] = kk;
+    }
+    const nV0 = this.nV, owner = new Int32Array(nV0).fill(-1), copies = new Map(), copyKey = [];
+    for (let t = 0; t < nT; t++) {
+      if (key[t] < 0) continue;
+      for (let q = 0; q < 4; q++) {
+        const i = this.T[t * 4 + q];
+        if (i >= nV0) continue;
+        if (owner[i] < 0) {
+          owner[i] = key[t];
+          continue;
+        }
+        if (owner[i] === key[t]) continue;
+        const ck = i * 1024 + key[t];
+        let j = copies.get(ck);
+        if (j === undefined) {
+          j = this._copyVertex(i);
+          copies.set(ck, j);
+          copyKey[j - nV0] = key[t];
+        }
+        this.T[t * 4 + q] = j;
+      }
+    }
+    // (apart a little: each slab out from the middle along its axes)
+    if (dirs && gap > 0) {
+      const off = (kk, i) => {
+        for (let ai = axes.length - 1; ai >= 0; ai--) {
+          const s = kk % n, d = dirs[axes[ai]], f = (s - (n - 1) / 2) * gap;
+          this.x[i * 3] += d[0] * f; this.x[i * 3 + 1] += d[1] * f; this.x[i * 3 + 2] += d[2] * f;
+          kk = Math.floor(kk / n);
+        }
+      };
+      for (let i = 0; i < nV0; i++) if (owner[i] >= 0) off(owner[i], i);
+      for (let j = nV0; j < this.nV; j++) if (copyKey[j - nV0] !== undefined) off(copyKey[j - nV0], j);
+    }
+    this.rebuild();
+  }
+
+  // (a point the same as point i, for the far side of a split)
+  _copyVertex(i) {
+    const o = i * 3;
+    const j = this.addVertex(this.x[o], this.x[o + 1], this.x[o + 2], this.X[o], this.X[o + 1], this.X[o + 2], this.v[o], this.v[o + 1], this.v[o + 2], this.temp[i], this.vCube[i], this.vTag[i]);
+    this.px[j * 3] = this.px[o]; this.px[j * 3 + 1] = this.px[o + 1]; this.px[j * 3 + 2] = this.px[o + 2];
+    this.glow[j] = this.glow[i];
+    this.melt[j] = this.melt[i];
+    this.dust[j] = this.dust[i];
+    this.alive[j] = this.alive[i];
+    this.coat.copyWithin(j * 5, i * 5, i * 5 + 5);
+    return j;
+  }
+
+  // (rest point of weights b in tet t)
+  _restPoint(t, b) {
+    const p = [0, 0, 0];
+    for (let q = 0; q < 4; q++) {
+      const o = this.T[t * 4 + q] * 3;
+      p[0] += this.X[o] * b[q]; p[1] += this.X[o + 1] * b[q]; p[2] += this.X[o + 2] * b[q];
+    }
+    return p;
+  }
+
+  // The tet of cube k nearest holding rest point p - the most nearly round
+  // it, from the rest grid's cells about it - and its weights, held to the
+  // tet: [t, b0, b1, b2, b3]. (A remesh's points near the rounded edges
+  // can fall a hair outside the old mesh's.)
+  _restNearest(k, px, py, pz) {
+    const g = this._restGrid(), R = this.X, T = this.T, B = this.B;
+    let best = -1, bs = -Infinity;
+    const bb = [0, 0, 0, 0];
+    for (let reach = 1; reach <= 3 && best < 0; reach++) {
+      const ix = Math.floor(px * g.inv), iy = Math.floor(py * g.inv), iz = Math.floor(pz * g.inv);
+      for (let a = -reach; a <= reach; a++)
+        for (let b = -reach; b <= reach; b++)
+          for (let c = -reach; c <= reach; c++) {
+            const list = g.map.get((ix + a + 512) * 1048576 + (iy + b + 512) * 1024 + (iz + c + 512));
+            if (!list) continue;
+            for (const t of list) {
+              if (this.tCube[t] !== k) continue;
+              const o = T[t * 4] * 3, bo = t * 9;
+              const rx = px - R[o], ry = py - R[o + 1], rz = pz - R[o + 2];
+              const l1 = B[bo] * rx + B[bo + 1] * ry + B[bo + 2] * rz;
+              const l2 = B[bo + 3] * rx + B[bo + 4] * ry + B[bo + 5] * rz;
+              const l3 = B[bo + 6] * rx + B[bo + 7] * ry + B[bo + 8] * rz;
+              const l0 = 1 - l1 - l2 - l3, sc = Math.min(l0, l1, l2, l3);
+              if (sc > bs) {
+                bs = sc;
+                best = t;
+                bb[0] = l0; bb[1] = l1; bb[2] = l2; bb[3] = l3;
+              }
+            }
+          }
+    }
+    if (best < 0) return null;
+    let s = 0;
+    for (let q = 0; q < 4; q++) s += (bb[q] = Math.max(0, bb[q]));
+    return [best, bb[0] / s, bb[1] / s, bb[2] / s, bb[3] / s];
   }
 
   // Cube k becomes cube j (a free slot): its rest shape moves over with it,
@@ -1127,6 +1321,8 @@ export class SoftBody {
         buzzT: 0, // (s) still, but buzzing, for this long (see _dampPieces)
         buzzA: 0, // (its buzz over the first and the second half of that)
         buzzB: 0,
+        hush: 0, // (s) left of being damped hard: shaking where it sat (see _dampPieces)
+        hushN: 0, // (times hushed since it last went anywhere)
         tangleN: 0, // looks in a row that found it passed through itself (see _tangleCheck)
         touchT: -1e9, // (sim time) last held or blasted - what tangles a piece
         vib: 0, // (m/s) how fast it jiggles: its vertices' rms speed apart from moving as a whole (the jelly's voice follows it)
@@ -2053,8 +2249,14 @@ export class SoftBody {
     const dk = dt * (this.dampBoost || 1) * (this.calmT > 0 ? 10 : 1);
     for (const pc of this.pieces) {
       const vs = pc.verts;
-      // (its cube's own damping and drag)
-      const kd = 1 - Math.exp(-this.cDamp[pc.cube] * dk * this.cBoost[pc.cube]), air = Math.exp(-this.cAir[pc.cube] * dt);
+      // (its cube's own damping and drag - and one hushed, shaking hard
+      // where it sits, see below - damped hard a while)
+      let dmp = this.cDamp[pc.cube];
+      if (pc.hush > 0) {
+        dmp = Math.max(dmp, 14);
+        pc.hush -= dt;
+      }
+      const kd = 1 - Math.exp(-dmp * dk * this.cBoost[pc.cube]), air = Math.exp(-this.cAir[pc.cube] * dt);
       let M = 0, cx = 0, cy = 0, cz = 0, vx = 0, vy = 0, vz = 0;
       let x0 = Infinity, y0 = Infinity, z0 = Infinity, x1 = -Infinity, y1 = -Infinity, z1 = -Infinity;
       for (let k = 0; k < vs.length; k++) {
@@ -2176,17 +2378,39 @@ export class SoftBody {
       // middle still and not turning for 1.5 s while the buzz doesn't die
       // down (its second half as strong as the first; a wobble decays, even
       // a water balloon's, and is left to settle the usual way).
+      // One shaking hard where it sits - squeezed between cubes, between a
+      // cube and the wall: the jelly and the contact taking turns, for ever
+      // (eight cubes in the room, packed as they happened to land, two of
+      // them did it at half a metre a second and never slept) - is hushed:
+      // damped hard a while, then it goes quiet like any other.
+      // (shaking that hard nudges its middle about too: going nowhere is a
+      // little looser for it - and never one held, or touched just now)
       let buzzing = false;
-      const vrms = Math.sqrt(vrms2);
-      if (vx * vx + vy * vy + vz * vz < 0.03 * 0.03 && wx * wx + wy * wy + wz * wz < 0.3 * 0.3 && vrms < 0.15) {
+      const vrms = Math.sqrt(vrms2), v2 = vx * vx + vy * vy + vz * vz, w2 = wx * wx + wy * wy + wz * wz;
+      const still = v2 < 0.03 * 0.03 && w2 < 0.3 * 0.3;
+      const stuck = vrms >= 0.15 && v2 < 0.1 * 0.1 && w2 < 0.8 * 0.8 && this.time - pc.touchT > 1 && !this._grabbedP?.[pc.id];
+      if ((still && vrms < 0.15) || stuck) {
         if (pc.buzzT < 0.75) pc.buzzA += vrms * dt;
         else pc.buzzB += vrms * dt;
         pc.buzzT += dt;
         if (pc.buzzT > 1.5) {
-          buzzing = pc.buzzB > 0.85 * pc.buzzA;
+          const steady = pc.buzzB > 0.85 * pc.buzzA;
+          // (hushed; still at it - a corner crumpled, folded over itself
+          // where it landed on another, fighting itself for ever - sprung
+          // back into shape (see _untangle); still at it after that, it
+          // sleeps: a shake that fast is millimetres, and it's going nowhere)
+          if (vrms < 0.15 || (steady && pc.hushN >= 2)) buzzing = steady;
+          else if (steady) {
+            pc.hush = 1;
+            if (pc.hushN === 1) pc.untangle = 0.7;
+            pc.hushN = (pc.hushN || 0) + 1;
+          }
           pc.buzzT = pc.buzzA = pc.buzzB = 0;
         }
-      } else pc.buzzT = pc.buzzA = pc.buzzB = 0;
+      } else {
+        pc.buzzT = pc.buzzA = pc.buzzB = 0;
+        if (!still) pc.hushN = 0;
+      }
       if (buzzing || (vrms2 < 0.035 * 0.035 && vmax2 < 0.3 * 0.3)) {
         pc.sleepT += buzzing ? 1 : dt;
         // (debris - a die or smaller - goes quiet sooner: a settling pile
