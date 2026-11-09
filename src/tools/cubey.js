@@ -242,6 +242,7 @@ export class DicerTool {
     const whole = ps.length === 1 && ps[0].verts.length === sb.cN[k] && !ps[0].verts.some((i) => sb.melt[i]);
     const grid = whole ? { k, res: Math.max(2, Math.floor(sb.cRes[k] / n)) * n } : null;
     this.job = { t: 0, verts, n, iu, i1, i2, stage: 0, F, ext, grid };
+    this.model.userData.setDice(n); // (its blades: as many as it's dicing)
     this._pose(0);
     this.model.visible = true;
     app.audio.diceWhoosh(0);

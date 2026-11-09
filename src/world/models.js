@@ -149,24 +149,37 @@ export function makeCuber(M) {
   return shadowed(g);
 }
 
-// Dicer: a 3x3 grid of blades, their edges at y = 0, spanning x, z in
-// -0.5..0.5 and y 0..1 (userData.blades, scaled to whatever it dices), under
-// a square frame with two grips (userData.frame, set on the blades' backs).
+// Dicer: a grid of blades - as many as it dices a side (userData.setDice(n):
+// n - 1 each way, evenly spread, 2 to 5) - their edges at y = 0, spanning x, z
+// in -0.5..0.5 and y 0..1 (userData.blades, scaled to whatever it dices),
+// under a square frame with two grips (userData.frame, set on the blades' backs).
 export function makeDicer(M) {
   const g = new THREE.Group();
   const blades = new THREE.Group(), frame = new THREE.Group();
   const steel = M.steel.clone();
   steel.side = THREE.DoubleSide;
   steel.roughness = 0.12;
-  const t = 0.006;
-  for (const o of [-1 / 6, 1 / 6]) {
+  const t = 0.006, across = [], along = [];
+  for (let i = 0; i < 4; i++) {
     const a = new THREE.Mesh(new THREE.BoxGeometry(1, 1, t), steel);
-    a.position.set(0, 0.5, o);
+    a.position.y = 0.5;
     blades.add(a);
+    across.push(a);
     const b = new THREE.Mesh(new THREE.BoxGeometry(t, 1, 1), steel);
-    b.position.set(o, 0.5, 0);
+    b.position.y = 0.5;
     blades.add(b);
+    along.push(b);
   }
+  g.userData.setDice = (n) => {
+    n = Math.max(2, Math.min(5, Math.round(n) || 3));
+    for (let i = 0; i < 4; i++) {
+      const on = i < n - 1, o = -0.5 + (i + 1) / n;
+      across[i].visible = along[i].visible = on;
+      across[i].position.z = o;
+      along[i].position.x = o;
+    }
+  };
+  g.userData.setDice(3);
   const bar = 0.04;
   for (const [w, d, x, z] of [[1 + bar, bar, 0, 0.5], [1 + bar, bar, 0, -0.5], [bar, 1 + bar, 0.5, 0], [bar, 1 + bar, -0.5, 0]]) {
     const f = new THREE.Mesh(new THREE.BoxGeometry(w, bar, d), M.darkSteel);
