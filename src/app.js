@@ -233,7 +233,8 @@ export class App {
     this.splashHold = false; // keeps the cube up while the splash shows
     // the cube hangs a moment before it drops, while the physics code warms
     // up on a throwaway body (Safari runs cold code slowly at first)
-    this.intro = { job: physicsWarmJob(), t: 0, ready: false, done: false };
+    this.intro = { job: physicsWarmJob(), t: 0, ready: false, done: false, jobReady: false, twinDone: false, gpu: 0, twin: null };
+    this._bootAt = performance.now();
     this.paused = false;
     this.raycaster = new THREE.Raycaster();
     this._ndc = new THREE.Vector2();
@@ -998,18 +999,72 @@ export class App {
   // the first runs of the cutting and contact code (or after 1.2 s, or at
   // the first touch). The rest of the job finishes in the background, a
   // couple of ms a frame.
+  // With the splash up, everything that would stutter the drop is done
+  // behind it first (its show runs by itself, off the page's thread): the
+  // whole job, not just its start - its rest, run during the drop, had that
+  // at 30 frames a second - then the real cube's own code (a twin of it),
+  // then the GPU's (_warmGPU). Only then does the splash leave: the drop is
+  // its reveal. (9 s at most, however slow the device.)
   _introStep(dt) {
-    const I = this.intro;
+    const I = this.intro, behind = this.splashHold;
     I.t += dt;
-    if (!I.jobReady && this._warmSlice(9) === 'ready') I.jobReady = true;
+    // (the surface maps' bake shaders compile meanwhile, out of the page's
+    // way - see _warmGPU)
+    if (behind && !I.gpu) {
+      this.jelly.readyBakes();
+      I.gpu = 1;
+    }
+    if (!I.jobReady && this._warmSlice(behind ? 12 : 9) === 'ready') I.jobReady = true;
     // then, behind the splash, the real cube's own code: a first visit's
     // fresh browser can still be compiling its fast tier, and the drop then
     // ran at a few frames a second for seconds - so step a twin of the cube
     // (same settings, same shapes) until its steps settle (at most ~6 s)
-    if (I.jobReady && !I.ready) I.ready = !this.splashHold || this._warmTwin() || I.t > 6;
-    // (behind the splash the job just carries on: the drop is its reveal)
-    if ((I.ready || I.t > 1.2) && !this.splashHold) I.done = true;
+    if (I.jobReady && !I.ready) {
+      if (!behind) I.ready = true;
+      else if (!I.twinDone) I.twinDone = this._warmTwin() || I.t > 6;
+      else if (I.job) this._warmSlice(12);
+      else I.ready = this._warmGPU();
+      if (performance.now() - this._bootAt > 9000) I.ready = true;
+    }
+    // (behind the splash the job just carries on: the drop is its reveal -
+    // let go a moment after the splash starts to leave: the page's own work
+    // to start that (its styles, the name's flight, a repaint) took a frame
+    // of 50 ms, and the dark only starts to fall away 0.1 s in)
+    const sp = this.splash, leaving = !sp?.leftAt || performance.now() - sp.leftAt > 120;
+    if ((I.ready || I.t > 1.2) && !this.splashHold && leaving) I.done = true;
     if (I.done) this.introMs = I.t * 1000;
+  }
+
+  // The GPU's warm-up, behind the splash, a step a frame (true when done):
+  // the surface maps' bake shaders (made ready in the background a few
+  // seconds in, they landed in the drop), and a frame drawn with the floor's
+  // effects as they are at rest and while it moves (each draws into its own
+  // targets: first drawn mid-drop, or as it came to rest, they stalled the
+  // frame) - the last as the drop's first frame will be. (Not the jelly's
+  // shader with everything in it: it compiles aside, after, unseen - here it
+  // held the splash up for seconds.)
+  _warmGPU() {
+    const I = this.intro, J = this.jelly;
+    switch (I.gpu) {
+      case 0:
+        J.readyBakes();
+        I.gpu = 1;
+        return false;
+      case 1:
+        if (J.bakesReady) I.gpu = 3;
+        return false;
+      case 3:
+      case 4:
+        J.forceMoving = I.gpu === 4;
+        J._fxSig = null;
+        this.render();
+        I.gpu++;
+        return false;
+      default:
+        J.forceMoving = null;
+        J._fxSig = null;
+        return true;
+    }
   }
 
   // A twin of the cube stepped where nobody sees it; true once its steps
@@ -1408,8 +1463,11 @@ export class App {
     this.overlay.draw(dt);
     const r0 = performance.now();
     // (nothing to draw under the splash, past the first frames that build
-    // the GPU's state; its own animation gets the time)
-    const covered = this.splash?.active && !this.splash.leaving && this.stats.frames > 2;
+    // the GPU's state; its own animation gets the time - till just before it
+    // leaves: the drop's first frames are then a run's next, not the first
+    // after a long pause)
+    const sp = this.splash;
+    const covered = sp?.active && !sp.leaving && this.stats.frames > 2 && !(sp.leaveAt && performance.now() > sp.leaveAt - 250);
     if (!covered) this.render();
     if (this.benchSync) {
       const gl = this.renderer.getContext();

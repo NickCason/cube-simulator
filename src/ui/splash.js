@@ -15,6 +15,8 @@ export class Splash {
     this.active = !!this.el && document.documentElement.classList.contains('splashing');
     this.leaving = false;
     this.goAt = 0;
+    this.leftAt = 0;
+    this.leaveAt = 0; // (when it'll leave, once that's known)
     if (!this.active) {
       this.el?.remove();
       return;
@@ -37,12 +39,15 @@ export class Splash {
   ready() {
     if (!this.active || this.leaving || this._timer || !this.goAt) return;
     const wait = Math.max(0, this.goAt + REVEAL * 1000 - performance.now());
+    this.leaveAt = performance.now() + wait;
     this._timer = setTimeout(() => this.leave(false), wait);
   }
 
   leave(fast) {
     if (!this.active || this.leaving) return;
     this.leaving = true;
+    // (when: the cube's let go a moment after - see App._introStep)
+    this.leftAt = fast ? 0 : performance.now();
     clearTimeout(this._timer);
     window.removeEventListener('keydown', this._skip);
     this.app.splashHold = false;

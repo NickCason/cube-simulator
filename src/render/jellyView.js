@@ -411,6 +411,8 @@ export class JellyView {
     this.frontMat.uniforms.uSurfSteps.value = coarse ? 6 : 10;
     this.causticLevel = 1; // (0..1: faded out while a lot of bits re-cube - see App)
     this.skipCaustics = false; // (?stats' bench: see App.skip)
+    this.forceMoving = null; // (true/false: the floor's effects drawn as though it's moving or at rest - App._warmGPU)
+    this.bakesReady = false;
     this.layerCap = Infinity; // (and fewer refraction layers meanwhile)
     this.causticMat.uniforms.uDisperse.value = 1.5;
     // (and the jelly, for one cube's shadow on another - see cubeShadowAt)
@@ -765,8 +767,9 @@ export class JellyView {
     this._surfArgs = [];
     this._surfLater = new Map();
     // (each pattern's bake made ready a while after the start, out of the
-    // way - so the first cube with one doesn't stop to build it)
-    setTimeout(() => this._readyBakes(), 2500);
+    // way - so the first cube with one doesn't stop to build it; behind the
+    // splash, if there is one: see App._warmGPU)
+    setTimeout(() => this.readyBakes(), 2500);
   }
 
   // (a pattern's bake: a shader with only its own pattern in it)
@@ -781,19 +784,24 @@ export class JellyView {
       depthWrite: false,
     }));
   }
-  async _readyBakes() {
-    const r = this.renderer;
-    if (!r.compileAsync) return;
-    for (const sf of SURFACES) {
-      if (!sf.fam || sf.fam === 'holes' || this.bakeMats[SURFACES.indexOf(sf)]) continue;
-      this.bakeQuad.material = this._bakeMat(SURFACES.indexOf(sf));
-      try {
-        await r.compileAsync(this.bakeScene, this.bakeCam);
-      } catch {
-        return;
-      }
-    }
+  // (all of them: once - a promise, and bakesReady once it's kept)
+  readyBakes() {
+    return (this._bakesP ||= (async () => {
+      const r = this.renderer;
+      if (r.compileAsync)
+        for (const sf of SURFACES) {
+          if (!sf.fam || sf.fam === 'holes' || this.bakeMats[SURFACES.indexOf(sf)]) continue;
+          this.bakeQuad.material = this._bakeMat(SURFACES.indexOf(sf));
+          try {
+            await r.compileAsync(this.bakeScene, this.bakeCam);
+          } catch {
+            break;
+          }
+        }
+      this.bakesReady = true;
+    })());
   }
+
 
   // (what slot k's map was baked from, and baked back from that - for a
   // portrait, which borrows a slot and then puts its look back)
@@ -1309,7 +1317,7 @@ export class JellyView {
     // (Moving, its caustics are drawn without the multisampling that
     // smooths their finest lines - half what they cost, and never still long
     // enough to see it; settled, once more with it.)
-    const L = this.lightDir, moving = !!sb && sb.pieces.some((p) => !p.asleep);
+    const L = this.lightDir, moving = this.forceMoving ?? (!!sb && sb.pieces.some((p) => !p.asleep));
     const sig = sb ? `${sb.topoVersion}|${sb.nV}|${this._ps}|${this._ts}|${this._ds}|${this.lookVersion}|${L.x},${L.y},${L.z}|${Math.round(this.causticLevel * 200)}|${this.multiCube}|${this.disperse}|${sb.fill ? performance.now() : 0}|${moving}|${this.skipCaustics}` : '';
     if (sig && sig === this._fxSig) {
       this._renderGlowMap();
