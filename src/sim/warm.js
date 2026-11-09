@@ -9,6 +9,7 @@
 import { SoftBody } from './softbody.js';
 import { cutBody, planeField, sphereField, separateClusters, removeTets, removeSmallPieces } from './cutting.js';
 import { weldFieldJob } from '../heal.js';
+import { weakMap, weakest, worldPlane } from './weak.js';
 
 export function* physicsWarmJob() {
   const sb = new SoftBody({ res: 7, bounce: 0.55 });
@@ -88,6 +89,16 @@ export function* physicsWarmJob() {
   }
   cutBody(sh, planeField(0, 1, 0, 0.55, (x) => x < 0.25), { separate: 0 });
   yield;
+  // (a tear looking for where it's weakest - here, along that part cut - and
+  // carrying it into the world: see sim/weak.js)
+  {
+    const k = sh.pieces.reduce((m, p, i) => (p.volume > sh.pieces[m].volume ? i : m), 0);
+    const W = weakMap(sh, k);
+    yield;
+    const wk = weakest(W, [0, -0.35, 0.4], [0, 0.4, 0.4]);
+    if (wk.n) worldPlane(sh, W, k, wk);
+    yield;
+  }
   for (let k = 0; k < 12; k++) {
     sh.wakeAll();
     sh.step(1 / 60);

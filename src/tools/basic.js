@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { cutBody, planeField, unglue, removeSmallPieces, removeTets } from '../sim/cutting.js';
 import { maxStretch } from '../sim/strain.js';
 import { polarRot } from '../sim/softbody.js';
+import { WEAK, weakMap, weakest, worldPlane } from '../sim/weak.js';
 import { makeNailGun, makeHoleGun } from '../world/models.js';
 
 const _v = new THREE.Vector3();
@@ -28,6 +29,10 @@ export class HandTool {
     this._acc = 0; // (s) since the last look
     this._tick = 0;
     this._cool = 0;
+    // (where each piece is weakest, for tearing - see _weakest)
+    this._wtopo = -1;
+    this._wmaps = new Map();
+    this._wks = new Map();
   }
 
   // (the one drag, for single-pointer callers)
@@ -189,8 +194,13 @@ export class HandTool {
         return u > 0.2 && u < 0.8;
       });
       if (!m || Math.abs(m.dir[0] * ax + m.dir[1] * ay + m.dir[2] * az) / L < 0.7) continue;
-      const lim = this._tearLimit(m), over = m.s / lim;
-      if (!best || over > best.over) best = { over, m, k, n: [ax / L, ay / L, az / L] };
+      let lim = this._tearLimit(m);
+      // (already broken somewhere between the hands - holes, a part cut, a
+      // scoop: it gives there, and the sooner the less is left to hold)
+      const wk = m.s > 1 + 0.4 * (lim - 1) ? this._weakest(k, this._restHold(A.d.grab), this._restHold(B.d.grab)) : null;
+      if (wk) lim = 1 + (lim - 1) * (0.3 + 0.7 * wk.share);
+      const over = m.s / lim;
+      if (!best || over > best.over) best = { over, m, k, n: [ax / L, ay / L, az / L], wk };
       this.lastStretch = m.s;
       this.lastLimit = lim;
     }
@@ -216,7 +226,7 @@ export class HandTool {
     }
     const t = cur || this._startTear(best);
     if (!t) return;
-    t.p += (step * (1 + 1.5 * Math.min(0.5, Math.max(0, best.over - 1)))) / this._tearTime();
+    t.p += (step * (1 + 1.5 * Math.min(0.5, Math.max(0, best.over - 1)))) / (this._tearTime() * (0.35 + 0.65 * t.share));
     t.n = best.n;
     // the rip runs along the seam as it gives: after the first sixth of the
     // way, so much of the seam open as it is through - a stage at a time
@@ -254,7 +264,7 @@ export class HandTool {
       wsum += wq;
     }
     for (let e = 0; e < 3; e++) o[e] /= wsum || 1;
-    const [nx, ny, nz] = t.n, half = t.half;
+    const [nx, ny, nz] = t.pn || t.n, half = t.half;
     this.tear = null;
     // (if the seam didn't part it - a piece the plane crosses twice - the
     // slit stays and that's that)
@@ -278,7 +288,7 @@ export class HandTool {
     const h2 = 2 * half;
     const halves = new Set();
     for (const d of this.drags.values()) halves.add(sb.vPiece[d.grab.idx[0]]);
-    const plastic = this._plastic(), yl = this._yield(o, t.n, h2, plastic, halves);
+    const plastic = this._plastic(), yl = this._yield(o, t.pn || t.n, h2, plastic, halves);
     sb.calmT = 0.3;
     sb.rebuild();
     // (a crumb the seam cut off on its own: gone)
@@ -321,8 +331,27 @@ export class HandTool {
   // softens as it gives. (Run along the mesh's own faces, the torn face came
   // out a regular egg-crate of facets.)
   _startTear(best) {
-    const app = this.app, sb = app.sb, o = tetCentre(sb, best.m.t), [nx, ny, nz] = best.n;
-    const field = ragged(planeField(nx, ny, nz, nx * o[0] + ny * o[1] + nz * o[2]), 0.035 * sb.p.size, sb.p.size);
+    const app = this.app, sb = app.sb, amp = 0.035 * sb.p.size;
+    let o = best.m ? tetCentre(sb, best.m.t) : null, [nx, ny, nz] = best.n, field = null, share = best.wk ? best.wk.share : 1;
+    // (already broken between the hands: along the weakest way through it -
+    // through the holes, on along a part cut's slit; between holes it tears
+    // straighter, hole to hole, and none of the ragging at a slit, which
+    // would slice slivers off its sides)
+    const wk = best.wk && best.wk.share < WEAK ? best.wk : null, wp = wk && this._worldPlane(best.k, wk);
+    if (wp) {
+      [nx, ny, nz] = wp.n;
+      const dp = nx * wp.o[0] + ny * wp.o[1] + nz * wp.o[2];
+      // (it starts at the slit's edge, or where it's stretched most - on the plane)
+      if (wk.slit || !o) o = wp.o;
+      else {
+        const e = nx * o[0] + ny * o[1] + nz * o[2] - dp;
+        o = [o[0] - nx * e, o[1] - ny * e, o[2] - nz * e];
+      }
+      field = ragged(planeField(nx, ny, nz, dp), amp * (wk.slit ? 1 : 0.35 + 0.65 * share), sb.p.size, wp.calm);
+    } else {
+      if (!o) return null;
+      field = ragged(planeField(nx, ny, nz, nx * o[0] + ny * o[1] + nz * o[2]), amp, sb.p.size);
+    }
     const res = cutBody(sb, field, { glueAll: true, anchors: app.allAnchors(), pieces: [best.k] });
     if (!res.changed || !res.seam.length) return null;
     app.onTopologyChanged();
@@ -351,9 +380,38 @@ export class HandTool {
     const sx = sb.x[start * 3], sy = sb.x[start * 3 + 1], sz = sb.x[start * 3 + 2];
     const d2s = (i) => (sb.x[i * 3] - sx) ** 2 + (sb.x[i * 3 + 1] - sy) ** 2 + (sb.x[i * 3 + 2] - sz) ** 2;
     seam.sort((p, q) => d2s(p) - d2s(q));
-    this.tear = { piece: k, ver: sb.topoVersion, band: Int32Array.from(band), prof: Float32Array.from(prof), p: 0, n: best.n, creak: 0, half, plus, seam: Int32Array.from(seam), done: 0, resumed: false };
+    this.tear = { piece: k, ver: sb.topoVersion, band: Int32Array.from(band), prof: Float32Array.from(prof), p: 0, n: best.n, pn: [nx, ny, nz], share, creak: 0, half, plus, seam: Int32Array.from(seam), done: 0, resumed: false };
     this.pending = null;
     return this.tear;
+  }
+
+  // (where a hand holds, in the rest shape: its held vertices' middle)
+  _restHold(g) {
+    const X = this.app.sb.X, c = [0, 0, 0];
+    for (let j = 0; j < g.n; j++) for (let q = 0; q < 3; q++) c[q] += X[g.idx[j] * 3 + q] / g.n;
+    return c;
+  }
+
+  // (the weakest way through piece k between holds at rest points A and B,
+  // and that way in the world now - see sim/weak.js; its map kept till the
+  // jelly's cut again, the way while the holds stay)
+  _weakest(k, A, B) {
+    const sb = this.app.sb;
+    if (this._wtopo !== sb.topoVersion) {
+      this._wtopo = sb.topoVersion;
+      this._wmaps.clear();
+      this._wks.clear();
+    }
+    if (!this._wmaps.has(k)) this._wmaps.set(k, weakMap(sb, k));
+    const key = `${A.map((v) => v.toFixed(3))}|${B.map((v) => v.toFixed(3))}`;
+    let wk = this._wks.get(k);
+    if (wk?.key !== key) this._wks.set(k, (wk = { ...weakest(this._wmaps.get(k), A, B), key }));
+    return wk;
+  }
+
+  _worldPlane(k, wk) {
+    const W = this._wmaps.get(k);
+    return W ? worldPlane(this.app.sb, W, k, wk) : null;
   }
 
   // Plastic yield: near the tear (within h2 of the plane through o, normal
@@ -541,7 +599,7 @@ export class HandTool {
 // (scale: the size the waves are for. Never steeper than ~half the cut's own
 // slope: steeper, the torn face folded over itself - thin slabs of jelly
 // either side of a fold, shards that tangled and stuck)
-function ragged(f, amp, scale = 1) {
+function ragged(f, amp, scale = 1, calm = null) {
   const W = [];
   let ks = 0;
   for (let i = 0; i < 4; i++) {
@@ -555,7 +613,9 @@ function ragged(f, amp, scale = 1) {
     for (const [a, b, c, k, ph] of W) s += Math.sin((a * x + b * y + c * z) * k + ph);
     return (s * amp) / 2;
   };
-  const value = (x, y, z) => f.value(x, y, z) + wav(x, y, z);
+  // (calm: how much of the rippling there is at a point, 0..1 - none right
+  // by a slit a tear carries on)
+  const value = calm ? (x, y, z) => f.value(x, y, z) + wav(x, y, z) * calm(x, y, z) : (x, y, z) => f.value(x, y, z) + wav(x, y, z);
   const e = 0.002;
   return {
     value,
