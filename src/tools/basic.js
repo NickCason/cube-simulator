@@ -892,31 +892,25 @@ export class HoleGunTool extends NailGunTool {
     // (at least ~3/4 of a cell across: the cut's inside and outside are told at
     // the mesh's vertices, and a thinner tunnel can slip between them all)
     const A = at(tA), B = at(tB), r = Math.max(0.045 * size * Math.pow(power, 0.35) * (light ? 0.75 : 1) * (app.st?.holeSize ?? 1), 0.75 * sb.hCell);
-    // the channel: a ragged tunnel, its plug crushed out
-    const anchors = app.allAnchors();
-    const res = cutBody(sb, ragged(capsuleField(A, B, r), 0.22 * r), { separate: 0, snap: 0.15, anchors });
+    // the channel: a ragged tunnel, its plug crushed out - all that's inside
+    // it, gone in the same rebuild as the cut (a round was two of them, the
+    // second only to find the plug as a piece of its own: half of every shot's
+    // time; and a plug the cut hadn't quite parted stayed in its tunnel)
+    const anchors = app.allAnchors(), F = ragged(capsuleField(A, B, r), 0.22 * r);
+    const res = cutBody(sb, F, { separate: 0, snap: 0.15, anchors, light: true });
     let vol = 0;
     if (res.changed) {
-      const L = A.distanceTo(B), plug = new Set();
-      for (const pc of sb.pieces) {
-        if (pc.volume > Math.PI * r * r * L * 2.5) continue;
-        let cx = 0, cy = 0, cz = 0, m = 0;
-        for (const i of pc.verts) {
-          cx += sb.x[i * 3] * sb.m[i]; cy += sb.x[i * 3 + 1] * sb.m[i]; cz += sb.x[i * 3 + 2] * sb.m[i];
-          m += sb.m[i];
-        }
-        if (m > 0 && segDist(cx / m, cy / m, cz / m, A, B) < 1.6 * r) plug.add(pc.id);
-      }
-      if (plug.size)
-        removeTets(sb, (t) => {
-          if (!plug.has(sb.tPiece[t])) return false;
-          vol += sb.vol0[t];
-          return true;
-        }, anchors);
+      removeTets(sb, (t, cx, cy, cz) => {
+        if (!(F.value(cx, cy, cz) < 0)) return false;
+        vol += sb.vol0[t];
+        return true;
+      }, anchors);
+      if (sb.topoStale) sb.rebuild();
       removeSmallPieces(sb, 0.0015 * size ** 3, anchors);
       app.onTopologyChanged();
       app.markDamaged();
     }
+    if (sb.topoStale) sb.rebuild();
     // spray: what was crushed out flies on out of the far side (or back out
     // of a blind hole), a splash back out of the entry
     const out = through ? B : A, outDir = through ? d : d.clone().negate();

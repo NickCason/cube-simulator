@@ -477,6 +477,15 @@ export class JellyView {
     this.rtCausticMoving.textures[0].generateMipmaps = false;
     this.rtCausticMoving.textures[1].generateMipmaps = true;
     this.rtCausticMoving.textures[1].minFilter = THREE.LinearMipmapLinearFilter;
+    // (and at half the size, for when it's heavy going - frames held up by
+    // the GPU while it moves: see App._adaptResolution. A cube shot full of
+    // holes bends the light into a thousand stretched cells, each drawn over
+    // the floor: its caustics alone were 20 ms of the GPU's a frame)
+    this.rtCausticMovingLow = new THREE.WebGLRenderTarget(384, 384, { type: THREE.HalfFloatType, depthBuffer: false, count: 2 });
+    this.rtCausticMovingLow.textures[0].generateMipmaps = false;
+    this.rtCausticMovingLow.textures[1].generateMipmaps = true;
+    this.rtCausticMovingLow.textures[1].minFilter = THREE.LinearMipmapLinearFilter;
+    this.causticLow = false;
     // ...blurred, as the shadow's map is (a Gaussian ~3 mm, both ways), for
     // the floor and the jelly's view of it to read: read sharp with taps
     // centimetres apart, every caustic line was stamped over in copies - a
@@ -1384,7 +1393,7 @@ export class JellyView {
     // smooths their finest lines - half what they cost, and never still long
     // enough to see it; settled, once more with it.)
     const L = this.lightDir, moving = this.forceMoving ?? (!!sb && sb.pieces.some((p) => !p.asleep));
-    const sig = sb ? `${sb.topoVersion}|${sb.nV}|${this._ps}|${this._ts}|${this._ds}|${this.lookVersion}|${L.x},${L.y},${L.z}|${Math.round(this.causticLevel * 200)}|${this.multiCube}|${this.disperse}|${sb.fill ? performance.now() : 0}|${moving}|${this.skipCaustics}` : '';
+    const sig = sb ? `${sb.topoVersion}|${sb.nV}|${this._ps}|${this._ts}|${this._ds}|${this.lookVersion}|${L.x},${L.y},${L.z}|${Math.round(this.causticLevel * 200)}|${this.multiCube}|${this.disperse}|${sb.fill ? performance.now() : 0}|${moving}|${this.skipCaustics}|${this.causticLow}` : '';
     if (sig && sig === this._fxSig) {
       this._renderGlowMap();
       return;
@@ -1415,13 +1424,17 @@ export class JellyView {
       F.uLightVP.value.multiplyMatrices(this.lightCam.projectionMatrix, this.lightCam.matrixWorldInverse);
       F.uLightOrigin.value.copy(this.lightOrigin);
     }
-    const rtC = moving ? this.rtCausticMoving : this.rtCaustic;
+    // (heavy going - see causticLow: settled too, the light half size, once,
+    // no colours apart: its one sharp drawing of a cube shot full of holes,
+    // all its stretched cells four times over and three colours each, was
+    // eight seconds of the GPU's, the moment it fell asleep)
+    const low = this.causticLow, rtC = low ? this.rtCausticMovingLow : moving ? this.rtCausticMoving : this.rtCaustic;
     this.fxUniforms.causThrow.value = rtC.textures[1];
     r.setRenderTarget(rtC);
     r.clear(true, false, false);
     if (lit && caus) {
       const ch = this.causticMat.uniforms.uChannel;
-      if (this.disperse) {
+      if (this.disperse && !low) {
         const auto = r.autoClear;
         r.autoClear = false;
         for (let c = 0; c < 3; c++) {

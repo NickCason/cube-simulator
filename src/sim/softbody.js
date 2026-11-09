@@ -110,11 +110,16 @@ export function polarRot(q, A, R, iters) {
 
 const PIECE_FLOATS = ['sleepT', 'rebT', 'impY', 'rebR', 'impR', 'impUx', 'impUz', 'impT', 'impDv', 'foldUntil', 'buzzT', 'buzzA', 'buzzB', 'untangle', 'tangleTouch', 'touchT', 'vib'];
 // (piece state a rebuild carries over to an untouched piece: see _buildPieces)
-const CARRY = ['sleepT', 'asleep', 'rebT', 'impY', 'boosted', 'rebR', 'impR', 'impUx', 'impUz', 'boostedR', 'impPend', 'impT', 'impDv', 'sleepLogMu', 'foldUntil', 'foldAsk', 'buzzT', 'buzzA', 'buzzB', 'tangleN', 'untangle', 'tangleTries', 'tangleTouch', 'touchT', 'hinge', 'gap'];
+const CARRY = ['sleepT', 'asleep', 'rebT', 'impY', 'boosted', 'rebR', 'impR', 'impUx', 'impUz', 'boostedR', 'impPend', 'impT', 'impDv', 'sleepLogMu', 'foldUntil', 'foldAsk', 'buzzT', 'buzzA', 'buzzB', 'tangleN', 'untangle', 'tangleTries', 'tangleTouch', 'touchT', 'hinge', 'gap', 'foldN', 'foldTouch', 'foldGiveUp'];
 
 // (the parts of a step ?stats times: SoftBody.profT, in this order - the
 // last, how many substeps)
 export const PROF_PHASES = ['pre', 'hash', 'integrate', 'grab', 'tets', 'extra', 'contact', 'bounds', 'velocity', 'post', 'substeps'];
+// (a cell, then the 13 of the 26 round it that come after it: each pair of
+// neighbouring cells looked at from one of them - see _selfCheck)
+const FOLD_GIVE_UP = 8; // (looks - about a second - a piece's folds are tried before they're left be: see _foldCheck)
+const HALF27 = [[0, 0, 0]];
+for (let a = -1; a <= 1; a++) for (let b = -1; b <= 1; b++) for (let c = -1; c <= 1; c++) if (a * 9 + b * 3 + c > 0) HALF27.push([a, b, c]);
 
 export class SoftBody {
   constructor(opts = {}) {
@@ -881,7 +886,9 @@ export class SoftBody {
     this._computeRest();
     this._computeMass();
     this._buildAdjacency();
+    this._lightBuild = true;
     this._buildPieces();
+    this._lightBuild = false;
   }
 
   rebuild() {
@@ -898,6 +905,8 @@ export class SoftBody {
     this._buildRenderClusters();
     this._findHinges();
     this._sizeContactScratch();
+    // (all that a light build changed has its surface, escape and hinges now)
+    if (this._vDirty) this._vDirty.fill(0);
     this.topoVersion++;
     this.rebuildMs += performance.now() - t0; // (read and cleared by ?stats)
     this.rebuilds++;
@@ -1054,6 +1063,13 @@ export class SoftBody {
     this._selfD = f32(this._selfD, V);
     this._svStart = i32(this._svStart, 4097);
     this._svFill = i32(this._svFill, 4096);
+    // (slivers: tets under ~1% of a whole one - see _dampPieces - their corners)
+    const SL = (this._sliverV = u8(this._sliverV, V)), vMin = 0.0015 * this.hCell ** 3;
+    SL.fill(0, 0, this.nV);
+    for (let t = 0; t < this.nT; t++) {
+      const v0 = this.vol0[t];
+      if (v0 > 0 && v0 < vMin) for (let j = 0; j < 4; j++) SL[this.T[t * 4 + j]] = 1;
+    }
     // the look for folds: per-vertex hold times (vertex numbers changed:
     // start over), and its own grid of tets
     this._foldUntil = f64(this._foldUntil, V);
@@ -1357,6 +1373,9 @@ export class SoftBody {
         sleepLogMu: undefined,
         hinge: false, // still joined to itself across a cut (see _findHinges)
         gap: false, // a cut's two sides facing each other across a gap that can close (see _findHinges)
+        foldN: 0, // (folds found in it, look after look, untouched; past FOLD_GIVE_UP left be till touched: see _foldCheck)
+        foldTouch: -1,
+        foldGiveUp: -1,
         foldUntil: 0, // (sim time) has vertices folded into itself till then (see _foldCheck)
         foldAsk: false, // look for folds next frame (it has just fallen asleep)
         buzzT: 0, // (s) still, but buzzing, for this long (see _dampPieces)
@@ -1383,10 +1402,22 @@ export class SoftBody {
     // on may have been cut away or removed): any of its vertices within 2 cm
     // of a vertex of a changed piece, as it was or as it is now.
     const kept = new Uint8Array(old.length), carried = (this._carried = new Uint8Array(this.pieces.length));
+    // (a light build - another change follows at once, see rebuildLight -
+    // works out no surface, escape or hinges for what it changed: that's
+    // marked, and not carried over unworked by the full one after it - a
+    // gun's plug, taken out after its light cut, left the cube it was shot
+    // through 'unchanged' since the cut, its hinges never looked for, and
+    // its top half sank into its bottom one)
+    if (this._vDirty && this._vDirty.length < this.vCap) {
+      const D = new Uint8Array(this.vCap);
+      D.set(this._vDirty);
+      this._vDirty = D;
+    }
+    const dirty = this._vDirty;
     let anyAsleep = false;
     for (const pc of this.pieces) {
       const vs = pc.verts, i0 = vs[0];
-      if (i0 >= oldNV) continue;
+      if (i0 >= oldNV || (dirty && dirty[i0])) continue;
       const op = oldVP[i0], o = old[op];
       if (!o || o.verts.length !== vs.length) continue;
       let same = true;
@@ -1397,6 +1428,10 @@ export class SoftBody {
       kept[op] = 1;
       carried[pc.id] = 1;
       if (pc.asleep) anyAsleep = true;
+    }
+    if (this._lightBuild) {
+      const D = this._vDirty && this._vDirty.length >= this.vCap ? this._vDirty : (this._vDirty = new Uint8Array(this.vCap));
+      for (const pc of this.pieces) if (!carried[pc.id]) for (const i of pc.verts) D[i] = 1;
     }
     if (anyAsleep) {
       const x = this.x, r = 0.02 * this.p.size, ir = 1 / r;
@@ -2411,11 +2446,12 @@ export class SoftBody {
         pc.vib = 0;
         continue;
       }
-      let vmax2 = 0, e2 = 0;
+      let vmax2 = 0, e2 = 0, nFast = 0;
       for (let k = 0; k < vs.length; k++) {
         const o = vs[k] * 3;
         const s2 = v[o] * v[o] + v[o + 1] * v[o + 1] + v[o + 2] * v[o + 2];
         if (s2 > vmax2) vmax2 = s2;
+        if (s2 > 0.09) nFast++;
         e2 += s2 * m[vs[k]];
       }
       const vrms2 = e2 / M;
@@ -2457,7 +2493,16 @@ export class SoftBody {
         pc.buzzT = pc.buzzA = pc.buzzB = 0;
         if (!still) pc.hushN = 0;
       }
-      if (buzzing || (vrms2 < 0.035 * 0.035 && vmax2 < 0.3 * 0.3)) {
+      // (still: all but a handful of its vertices - a cube shot to pieces
+      // had one sliver's corner buzzing at 1 m/s in a crease for ever, the
+      // rest of its 15,000 still, and it never slept)
+      // (one held together across a cut - its self-contact and its body
+      // trading a little energy back and forth for ever, a ring that ebbs
+      // and swells just past still: a cube shot to pieces rang so for many
+      // seconds, too uneven for a buzz - left untouched a while, going
+      // nowhere, ringing only a little, it sleeps)
+      const ringing = (pc.hinge || pc.gap) && this.time - pc.touchT > 2 && v2 < 0.05 * 0.05 && w2 < 0.15 * 0.15 && vrms2 < 0.08 * 0.08;
+      if (buzzing || ringing || (vrms2 < 0.035 * 0.035 && nFast <= Math.max(3, vs.length * 0.004))) {
         pc.sleepT += buzzing ? 1 : dt;
         // (debris - a die or smaller - goes quiet sooner: a settling pile
         // is what costs the most)
@@ -2467,15 +2512,21 @@ export class SoftBody {
         }
       } else pc.sleepT = 0;
       let dev2 = 0;
+      // (a corner of a sliver a cut left - a tet a hundredth the size of the
+      // rest, see _slivers - damped hard: they buzzed at metres a second in
+      // a cube shot full of holes, kept the rest of it ringing, and it never
+      // went to sleep)
+      const SL = this._sliverV, ks = 1 - Math.exp(-28 * dk);
       for (let k = 0; k < vs.length; k++) {
         const i = vs[k], o = i * 3;
         const rx = x[o] - cx, ry = x[o + 1] - cy, rz = x[o + 2] - cz;
         const rvx = vx + wy * rz - wz * ry, rvy = vy + wz * rx - wx * rz, rvz = vz + wx * ry - wy * rx;
         const ux = v[o] - rvx, uy = v[o + 1] - rvy, uz = v[o + 2] - rvz;
         dev2 += m[i] * (ux * ux + uy * uy + uz * uz);
-        v[o] = (rvx + (v[o] - rvx) * (1 - kd)) * air;
-        v[o + 1] = (rvy + (v[o + 1] - rvy) * (1 - kd)) * air;
-        v[o + 2] = (rvz + (v[o + 2] - rvz) * (1 - kd)) * air;
+        const kv = SL && SL[i] ? Math.max(kd, ks) : kd;
+        v[o] = (rvx + (v[o] - rvx) * (1 - kv)) * air;
+        v[o + 1] = (rvy + (v[o + 1] - rvy) * (1 - kv)) * air;
+        v[o + 2] = (rvz + (v[o + 2] - rvz) * (1 - kv)) * air;
       }
       pc.vib = Math.sqrt(dev2 / M);
     }
@@ -2736,22 +2787,32 @@ export class SoftBody {
     const look = this._foldLook;
     look.fill(0, 0, NP);
     let nLook = 0, budget = 3500;
+    // (one whose folds wouldn't come undone, left be till it's next touched)
+    const given = (pc) => pc.foldGiveUp >= 0 && pc.foldGiveUp === pc.touchT;
     for (let k = 0; k < NP; k++) {
       if (!P[k].foldAsk) continue;
       P[k].foldAsk = false;
+      if (given(P[k])) continue;
       look[k] = 1;
       nLook++;
       budget -= P[k].tets.length;
     }
     for (let n = 0; n < NP && budget > 0; n++) {
       const k = (this._foldNext + n) % NP;
-      if (look[k] || P[k].asleep || P[k].tets.length <= 8) continue;
+      if (look[k] || P[k].asleep || P[k].tets.length <= 8 || given(P[k])) continue;
       look[k] = 1;
       nLook++;
       budget -= P[k].tets.length;
       this._foldNext = k + 1;
     }
     if (!nLook) return;
+    const found = this._foldFound && this._foldFound.length >= NP ? this._foldFound : (this._foldFound = new Uint8Array(Math.max(NP, 64)));
+    found.fill(0, 0, NP);
+    // (and found deep: in a tet with no corner on its surface - a part sunk
+    // into another, never left be; not a seam pressed shut)
+    const deep = this._foldDeep && this._foldDeep.length >= NP ? this._foldDeep : (this._foldDeep = new Uint8Array(Math.max(NP, 64)));
+    deep.fill(0, 0, NP);
+    const E = this.esc;
     const x = this.x, T = this.T, tp = this.tPiece, nT = this.nT;
     // the looked-at pieces' tets in a grid about a tet across (box and cell
     // range per tet)
@@ -2841,11 +2902,37 @@ export class SoftBody {
         if (across) continue;
         foldU[i] = hold;
         P[k].foldUntil = hold;
-        if (P[k].asleep) this.wake(k);
+        found[k] = 1;
+        let inner = !!E;
+        for (let j = 0; j < 4 && inner; j++) {
+          const u = T[o + j] * 3;
+          if (E[u] * E[u] + E[u + 1] * E[u + 1] + E[u + 2] * E[u + 2] < 1e-10) inner = false;
+        }
+        if (inner) deep[k] = 1;
+        if (P[k].asleep && (inner || P[k].foldN < FOLD_GIVE_UP - 1)) this.wake(k);
         break;
       }
     }
     this._hoodStamp = hs;
+    // Folds found look after look in a piece nobody's touched meanwhile -
+    // a cube shot to pieces had 200 of its vertices pressed into the other
+    // side of a seam, found folded again every look, for ever: its whole
+    // body probing itself, and woken the moment it fell asleep - are given
+    // up on: let go, and the piece not looked at again till it's touched.
+    for (let k = 0; k < NP; k++) {
+      if (!look[k]) continue;
+      const pc = P[k];
+      if (!found[k] || deep[k]) {
+        pc.foldN = 0;
+        continue;
+      }
+      pc.foldN = pc.foldTouch === pc.touchT ? pc.foldN + 1 : 1;
+      pc.foldTouch = pc.touchT;
+      if (pc.foldN < FOLD_GIVE_UP) continue;
+      pc.foldGiveUp = pc.touchT;
+      pc.foldUntil = 0;
+      for (const i of pc.verts) foldU[i] = 0;
+    }
   }
 
   // Every 0.25 s, a look at awake pieces held or blasted in the last 4 s but
@@ -3134,6 +3221,51 @@ export class SoftBody {
     this._tgSt = st;
   }
 
+  // Each surface vertex's surface vertices within 2 steps of it in the mesh
+  // (its neighbours', and theirs): who's its own neighbourhood, not another
+  // part of its body - once a topology (see _selfCheck).
+  _ring2() {
+    if (this._r2Topo === this.topoVersion && this._r2N === this._nSurfV) return;
+    this._r2Topo = this.topoVersion;
+    this._r2N = this._nSurfV;
+    const sv = this._surfV, nSV = this._nSurfV, nbS = this.nbStart, nbL = this.nbList, nV = this.nV;
+    const isS = this._r2On && this._r2On.length >= nV ? this._r2On : (this._r2On = new Uint8Array(this.vCap));
+    isS.fill(0, 0, nV);
+    for (let q = 0; q < nSV; q++) isS[sv[q]] = 1;
+    const mark = this._r2M && this._r2M.length >= nV ? this._r2M : (this._r2M = new Int32Array(this.vCap));
+    mark.fill(-1, 0, nV);
+    const start = this._r2S && this._r2S.length >= nSV + 1 ? this._r2S : (this._r2S = new Int32Array(nSV + 1));
+    let L = this._r2L && this._r2L.length >= nSV * 24 ? this._r2L : new Int32Array(nSV * 32), n = 0;
+    const put = (w) => {
+      if (n >= L.length) {
+        const M = new Int32Array(L.length * 2);
+        M.set(L);
+        L = M;
+      }
+      L[n++] = w;
+    };
+    for (let q = 0; q < nSV; q++) {
+      start[q] = n;
+      const i = sv[q];
+      mark[i] = q;
+      for (let e1 = nbS[i]; e1 < nbS[i + 1]; e1++) {
+        const u = nbL[e1];
+        if (mark[u] !== q) {
+          mark[u] = q;
+          if (isS[u]) put(u);
+        }
+        for (let e2 = nbS[u]; e2 < nbS[u + 1]; e2++) {
+          const w = nbL[e2];
+          if (mark[w] === q) continue;
+          mark[w] = q;
+          if (isS[w]) put(w);
+        }
+      }
+    }
+    start[nSV] = n;
+    this._r2L = L;
+  }
+
   // Of the pieces that may meet themselves, the surface vertices with some
   // other part of their own body close by - not within 2 steps of them in
   // the mesh - are flagged for probing against it; a calm body has none and
@@ -3147,78 +3279,112 @@ export class SoftBody {
     // together (at most twice the most any of them moves within its piece);
     // cells one such reach across, so only the 27 round a vertex need looking at
     const pV = this._pVel, fdt = this._hashSpan, foldU = this._foldUntil, now = this.time;
-    let mr2 = 0;
-    const selfD = this._selfD;
+    // (how far its surface moves within it this frame - not counting a
+    // sliver's corners, damped hard and buzzing anyway: one of those set the
+    // reach for the whole body - see _dampPieces)
+    // (and how many outrun 3 mm a frame - a few: they're flagged anyway, and
+    // the rest set the reach)
+    const C2 = 0.003 * 0.003;
+    let mr2 = 0, mrCalm = 0, nMov = 0, nOut = 0, sig = 0;
+    const selfD = this._selfD, SL = this._sliverV;
+    for (let q = 0; q < nSV; q++) {
+      const i = sv[q], k = vp[i];
+      if (!selfOK[k] || (SL && SL[i])) continue;
+      const ux = D[i * 3] - pV[k * 3] * fdt, uy = D[i * 3 + 1] - pV[k * 3 + 1] * fdt, uz = D[i * 3 + 2] - pV[k * 3 + 2] * fdt;
+      const u2 = ux * ux + uy * uy + uz * uz;
+      nMov++;
+      if (u2 > mr2) mr2 = u2;
+      if (u2 > C2) nOut++;
+      else if (u2 > mrCalm) mrCalm = u2;
+    }
+    for (let a = 0; a < NP; a++) if (selfOK[a]) sig = (Math.imul(sig, 31) + a + 1) | 0;
+    // A calm body - all but a few of it moving less than 3 mm a frame within
+    // it: what's near what hardly changes, so it's worked out every other
+    // frame (the reach stretched to cover both), the same ones probing in
+    // between - a cube shot full of holes, settling, spent a fifth of its
+    // time here
+    const calm = nOut <= Math.max(3, 0.004 * nMov);
+    if (calm) mr2 = mrCalm;
+    if (calm && this._selfFresh && this._selfTopo === this.topoVersion && this._selfSig === sig) {
+      this._selfFresh = false;
+      return this._selfStatus(NP);
+    }
+    this._selfFresh = calm;
+    this._selfTopo = this.topoVersion;
+    this._selfSig = sig;
     for (let q = 0; q < nSV; q++) {
       const i = sv[q], k = vp[i];
       // (found folded in: probed till it has popped out, see _foldCheck -
-      // and kept, whatever the budget below)
-      selfFlag[i] = foldU[i] > now ? 1 : 0;
-      selfD[i] = selfFlag[i] ? -1 : Infinity;
-      if (!selfOK[k]) continue;
-      const ux = D[i * 3] - pV[k * 3] * fdt, uy = D[i * 3 + 1] - pV[k * 3 + 1] * fdt, uz = D[i * 3 + 2] - pV[k * 3 + 2] * fdt;
-      const u2 = ux * ux + uy * uy + uz * uz;
-      if (u2 > mr2) mr2 = u2;
+      // and kept, whatever the budget below; and, calm, the few outrunning
+      // the rest)
+      let f = foldU[i] > now;
+      if (calm && nOut && selfOK[k] && !(SL && SL[i])) {
+        const ux = D[i * 3] - pV[k * 3] * fdt, uy = D[i * 3 + 1] - pV[k * 3 + 1] * fdt, uz = D[i * 3 + 2] - pV[k * 3 + 2] * fdt;
+        if (ux * ux + uy * uy + uz * uz > C2) f = true;
+      }
+      selfFlag[i] = f ? 1 : 0;
+      selfD[i] = f ? -1 : Infinity;
     }
-    const r0 = 0.72 * this.hCell + 0.01, rc = Math.min(1.3 * this.hCell, r0 + 2 * Math.sqrt(mr2)), irc = 1 / rc;
-    const HM = 4095, hSt = this._svStart, hLi = this._svList;
+    const r0 = 0.72 * this.hCell + 0.01, rc = Math.min(1.3 * this.hCell, r0 + (calm ? 4 : 2) * Math.sqrt(mr2)), irc = 1 / rc, rc2 = rc * rc, r02 = r0 * r0;
+    // (a table at least twice the vertices in it: a shot-up cube's thousands
+    // of surface vertices in 4096 buckets shared them with other cells' - a
+    // fifth of the pass was looking through those)
+    let nIn = 0;
+    for (let q = 0; q < nSV; q++) if (selfOK[vp[sv[q]]]) nIn++;
+    let HS = 4096;
+    while (HS < nIn * 2 && HS < 1 << 16) HS <<= 1;
+    if (this._svStart.length < HS + 1) this._svStart = new Int32Array(HS + 1);
+    if (this._svFill.length < HS) this._svFill = new Int32Array(HS);
+    const HM = HS - 1, hSt = this._svStart, hLi = this._svList;
     const key = (ix, iy, iz, k) => (Math.imul(ix, 92837111) ^ Math.imul(iy, 689287499) ^ Math.imul(iz, 283923481) ^ Math.imul(k, 1640531513)) & HM;
-    hSt.fill(0);
+    hSt.fill(0, 0, HS + 1);
     for (let q = 0; q < nSV; q++) {
       const i = sv[q];
       if (!selfOK[vp[i]]) continue;
       hSt[key(Math.floor(x[i * 3] * irc), Math.floor(x[i * 3 + 1] * irc), Math.floor(x[i * 3 + 2] * irc), vp[i]) + 1]++;
     }
-    for (let k = 0; k < 4096; k++) hSt[k + 1] += hSt[k];
+    for (let k = 0; k < HS; k++) hSt[k + 1] += hSt[k];
     const hF = this._svFill;
-    hF.set(hSt.subarray(0, 4096));
+    hF.set(hSt.subarray(0, HS));
     for (let q = 0; q < nSV; q++) {
       const i = sv[q];
       if (selfOK[vp[i]]) hLi[hF[key(Math.floor(x[i * 3] * irc), Math.floor(x[i * 3 + 1] * irc), Math.floor(x[i * 3 + 2] * irc), vp[i])]++] = i;
     }
+    // (not a vertex's own neighbourhood - within 2 steps of it in the mesh:
+    // its surface ones, worked out once a topology, see _ring2 - stamped)
+    this._ring2();
+    const r2S = this._r2S, r2L = this._r2L;
     let hs2 = this._hoodStamp;
     for (let q = 0; q < nSV; q++) {
       const i = sv[q], k = vp[i];
       if (!selfOK[k]) continue;
-      // its immediate neighbours first; the wider neighbourhood (2 steps
-      // out) only if something else turns up close by
-      hs2++;
-      const h1 = hs2;
+      const h1 = ++hs2;
       hoodA[i] = h1;
-      for (let e = nbS0[i]; e < nbS0[i + 1]; e++) hoodA[nbL0[e]] = h1;
-      let h2 = 0;
+      for (let e = r2S[q]; e < r2S[q + 1]; e++) hoodA[r2L[e]] = h1;
       const ox = x[i * 3], oy = x[i * 3 + 1], oz = x[i * 3 + 2];
       const cx = Math.floor(ox * irc), cy = Math.floor(oy * irc), cz = Math.floor(oz * irc);
-      for (let a1 = -1; a1 <= 1; a1++)
-        for (let b1 = -1; b1 <= 1; b1++)
-          for (let c1 = -1; c1 <= 1; c1++) {
-            const h = key(cx + a1, cy + b1, cz + c1, k);
-            for (let e = hSt[h]; e < hSt[h + 1]; e++) {
-              const j = hLi[e];
-              if (j <= i || vp[j] !== k) continue; // (each pair once: both get flagged)
-              const dx = x[j * 3] - ox, dy = x[j * 3 + 1] - oy, dz = x[j * 3 + 2] - oz;
-              const d2 = dx * dx + dy * dy + dz * dz;
-              if (d2 > rc * rc) continue;
-              const hj = hoodA[j];
-              if (hj === h1 || (h2 && hj === h2)) continue;
-              const r = Math.min(rc, r0 + Math.hypot(D[j * 3] - D[i * 3], D[j * 3 + 1] - D[i * 3 + 1], D[j * 3 + 2] - D[i * 3 + 2]));
-              if (d2 >= r * r) continue;
-              if (!h2) {
-                // (now the wider neighbourhood - its immediate ring keeps
-                // its stamp, so mark 2 steps out with a new one)
-                h2 = ++hs2;
-                for (let e1 = nbS0[i]; e1 < nbS0[i + 1]; e1++) {
-                  const u = nbL0[e1];
-                  for (let e2 = nbS0[u]; e2 < nbS0[u + 1]; e2++) if (hoodA[nbL0[e2]] !== h1) hoodA[nbL0[e2]] = h2;
-                }
-                if (hoodA[j] === h2) continue;
-              }
-              selfFlag[i] = 1;
-              selfFlag[j] = 1;
-              if (d2 < selfD[i]) selfD[i] = d2;
-              if (d2 < selfD[j]) selfD[j] = d2;
-            }
+      // (each pair once: its own cell, those after it; and the 13 cells
+      // ahead of it - the other 13 look at it from theirs)
+      for (let n = 0; n < 14; n++) {
+        const o = HALF27[n], h = key(cx + o[0], cy + o[1], cz + o[2], k), own = n === 0;
+        for (let e = hSt[h]; e < hSt[h + 1]; e++) {
+          const j = hLi[e];
+          if ((own && j <= i) || j === i || vp[j] !== k) continue;
+          const dx = x[j * 3] - ox, dy = x[j * 3 + 1] - oy, dz = x[j * 3 + 2] - oz;
+          const d2 = dx * dx + dy * dy + dz * dz;
+          if (d2 > rc2 || hoodA[j] === h1) continue;
+          // (past the reach at rest: only as near as they're closing in
+          // allows - and no Math.hypot, a fifth of the pass)
+          if (d2 >= r02) {
+            const mx = D[j * 3] - D[i * 3], my = D[j * 3 + 1] - D[i * 3 + 1], mz = D[j * 3 + 2] - D[i * 3 + 2], r = Math.min(rc, r0 + Math.sqrt(mx * mx + my * my + mz * mz));
+            if (d2 >= r * r) continue;
           }
+          selfFlag[i] = 1;
+          selfFlag[j] = 1;
+          if (d2 < selfD[i]) selfD[i] = d2;
+          if (d2 < selfD[j]) selfD[j] = d2;
+        }
+      }
     }
     this._hoodStamp = hs2;
     // A budget: soft jelly shot full of holes and wobbling hard had nine in
@@ -3256,6 +3422,13 @@ export class SoftBody {
       }
     }
     this._selfFaces = nFlag <= 400;
+    return this._selfStatus(NP);
+  }
+
+  // (each piece that may meet itself: does it, after all - any of its
+  // surface flagged - and how: all its tets, or those at its surface)
+  _selfStatus(NP) {
+    const selfOK = this._selfOK, selfFlag = this._selfFlag, act = this._pieceActive, sv = this._surfV, nSV = this._nSurfV, vp = this.vPiece, now = this.time;
     // pieces with nobody near themselves after all: no self pass
     for (let a = 0; a < NP; a++) if (selfOK[a]) selfOK[a] = 3; // (3 = none found yet)
     for (let q = 0; q < nSV; q++) {

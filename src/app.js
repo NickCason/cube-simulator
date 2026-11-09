@@ -1515,9 +1515,24 @@ export class App {
   _adaptResolution(dt, cpuMs = 0) {
     if (this.opts.preserve || this.skip.adapt) return;
     const raw = Math.min(this._rawDt || dt, 0.25);
-    const a = (this._adapt ||= { t: 0, slow: 0, fast: 0, ceiling: this.maxPixelRatio, upAt: -1e9, floor: 0, capDt: 0, ring: new Float32Array(48), n: 0, trial: null });
+    const a = (this._adapt ||= { t: 0, slow: 0, fast: 0, ceiling: this.maxPixelRatio, upAt: -1e9, floor: 0, capDt: 0, ring: new Float32Array(48), n: 0, trial: null, cSlow: 0, cFast: 0 });
     a.t += dt;
     a.ring[a.n++ % a.ring.length] = raw;
+    // (the moving caustics at half size while the GPU holds frames up - half
+    // a second of that; back to full size after three seconds of easy going.
+    // Settled, they're drawn sharp anyway.)
+    {
+      // (by the clock: a 600 ms frame counted as a thirtieth of a second
+      // took nine seconds of them to switch)
+      const slow = raw > 1 / 42 && cpuMs < raw * 1000 * 0.6, J = this.jelly;
+      a.cSlow = slow ? a.cSlow + raw : Math.max(0, a.cSlow - raw);
+      // (and back to sharp only when it's easy going with something moving:
+      // all asleep, every frame's easy - and the heavy scene still there)
+      const moving = this.sb.pieces.some((p) => !p.asleep);
+      a.cFast = raw < 1 / 50 && moving ? a.cFast + raw : raw < 1 / 50 ? a.cFast : 0;
+      if (!J.causticLow && a.cSlow > 0.5) J.causticLow = true;
+      else if (J.causticLow && a.cFast > 3) J.causticLow = false;
+    }
     if (a.t < 2.5) return;
     // A step down is a trial: if frames don't come any sooner after it, it
     // wasn't the GPU holding them back - the browser caps the frame rate
