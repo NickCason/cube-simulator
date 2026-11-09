@@ -110,7 +110,7 @@ export function polarRot(q, A, R, iters) {
 
 const PIECE_FLOATS = ['sleepT', 'rebT', 'impY', 'rebR', 'impR', 'impUx', 'impUz', 'impT', 'impDv', 'foldUntil', 'buzzT', 'buzzA', 'buzzB', 'untangle', 'tangleTouch', 'touchT', 'vib'];
 // (piece state a rebuild carries over to an untouched piece: see _buildPieces)
-const CARRY = ['sleepT', 'asleep', 'rebT', 'impY', 'boosted', 'rebR', 'impR', 'impUx', 'impUz', 'boostedR', 'impPend', 'impT', 'impDv', 'sleepLogMu', 'foldUntil', 'foldAsk', 'buzzT', 'buzzA', 'buzzB', 'tangleN', 'untangle', 'tangleTries', 'tangleTouch', 'touchT', 'hinge'];
+const CARRY = ['sleepT', 'asleep', 'rebT', 'impY', 'boosted', 'rebR', 'impR', 'impUx', 'impUz', 'boostedR', 'impPend', 'impT', 'impDv', 'sleepLogMu', 'foldUntil', 'foldAsk', 'buzzT', 'buzzA', 'buzzB', 'tangleN', 'untangle', 'tangleTries', 'tangleTouch', 'touchT', 'hinge', 'gap'];
 
 // (the parts of a step ?stats times: SoftBody.profT, in this order - the
 // last, how many substeps)
@@ -910,7 +910,7 @@ export class SoftBody {
     const { sTri, sTag, sTet, X, tPiece, sRestN } = this;
     // (a piece the change didn't touch keeps what it had: see _buildPieces)
     const carried = this._carried && this._carried.length === this.pieces.length ? this._carried : null;
-    for (const pc of this.pieces) if (!carried || !carried[pc.id]) pc.hinge = false;
+    for (const pc of this.pieces) if (!carried || !carried[pc.id]) pc.hinge = pc.gap = false;
     const C = 0.02 * this.p.size, iC = 1 / C, near2 = (0.6 * C) ** 2;
     const cells = new Map();
     const cen = new Float64Array(this.nF * 3);
@@ -945,6 +945,46 @@ export class SoftBody {
                 }
               }
               if (this.pieces[pf].hinge) break;
+            }
+      }
+    }
+    // ...and one with a cut's two sides facing each other across a gap that
+    // can close: a row of bullet holes through it, its top half held on by
+    // the webs between them - the gap closes under the weight, and with no
+    // self-contact the top half sank straight into the bottom one and stuck
+    // there. (A scoop's walls, a crater's, too. Not a die's cut faces: back
+    // to back, they face away from each other. Every other cut face asks; a
+    // gap has plenty of pairs.)
+    const D = 0.16 * this.p.size, iD = 1 / D, D2 = D * D, gc = new Map();
+    for (let f = 0; f < this.nF; f++) {
+      if (sTag[f] === TAG_EXTERIOR || (carried && carried[tPiece[sTet[f]]]) || this.pieces[tPiece[sTet[f]]].hinge) continue;
+      const k = key(Math.floor(cen[f * 3] * iD), Math.floor(cen[f * 3 + 1] * iD), Math.floor(cen[f * 3 + 2] * iD));
+      const l = gc.get(k);
+      if (l) l.push(f);
+      else gc.set(k, [f]);
+    }
+    let budget = 4e6;
+    for (const [k, list] of gc) {
+      if (budget <= 0) break;
+      const ci = Math.floor(k / 1048576) - 512, cj = (Math.floor(k / 1024) % 1024) - 512, ck = (k % 1024) - 512;
+      for (let q = 0; q < list.length && budget > 0; q += 2) {
+        const f = list[q], pc = this.pieces[tPiece[sTet[f]]];
+        if (pc.gap) continue;
+        const pf = pc.id, nx = sRestN[f * 3], ny = sRestN[f * 3 + 1], nz = sRestN[f * 3 + 2];
+        search: for (let di = -1; di <= 1; di++)
+          for (let dj = -1; dj <= 1; dj++)
+            for (let dk = -1; dk <= 1; dk++) {
+              const other = gc.get(key(ci + di, cj + dj, ck + dk));
+              if (!other) continue;
+              budget -= other.length;
+              for (const g of other) {
+                if (tPiece[sTet[g]] !== pf || nx * sRestN[g * 3] + ny * sRestN[g * 3 + 1] + nz * sRestN[g * 3 + 2] > -0.6) continue;
+                const dx = cen[g * 3] - cen[f * 3], dy = cen[g * 3 + 1] - cen[f * 3 + 1], dz = cen[g * 3 + 2] - cen[f * 3 + 2], d2 = dx * dx + dy * dy + dz * dz;
+                // (across the gap from it: in front of it, as it faces)
+                if (d2 > D2 || dx * nx + dy * ny + dz * nz < 0.5 * Math.sqrt(d2)) continue;
+                pc.gap = true;
+                break search;
+              }
             }
       }
     }
@@ -1316,6 +1356,7 @@ export class SoftBody {
         impDv: 0,
         sleepLogMu: undefined,
         hinge: false, // still joined to itself across a cut (see _findHinges)
+        gap: false, // a cut's two sides facing each other across a gap that can close (see _findHinges)
         foldUntil: 0, // (sim time) has vertices folded into itself till then (see _foldCheck)
         foldAsk: false, // look for folds next frame (it has just fallen asleep)
         buzzT: 0, // (s) still, but buzzing, for this long (see _dampPieces)
@@ -2636,7 +2677,12 @@ export class SoftBody {
       // (or anything with a fold in it to pop out - all its tets, as the
       // fold can reach past the layer at the surface)
       const folded = P[a].foldUntil > this.time;
-      const can = this.p.selfCollide && !quiet && !P[a].asleep && !(P[a].untangle > 0) && P[a].cube !== ghost && (P[a].hinge || soft || folded), ac = act[a];
+      // (a blast's quiet - see radialImpulse, cavity - is for soft jelly's
+      // folds, a cost; one held together across a cut needs it always: a
+      // gunshot's quiet, shot after shot, let the top half of a cube shot
+      // through sink into the bottom half)
+      const needs = P[a].hinge || P[a].gap;
+      const can = this.p.selfCollide && (!quiet || needs) && !P[a].asleep && !(P[a].untangle > 0) && P[a].cube !== ghost && (needs || soft || folded), ac = act[a];
       selfOK[a] = can ? (ac || folded ? 1 : 2) : 0;
       anySelf = anySelf || selfOK[a] > 0;
     }
