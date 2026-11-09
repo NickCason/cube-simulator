@@ -718,12 +718,8 @@ export function surfaceBakeGLSL(only = -1) {
     int ax = uEdge ? va : ua;
     float s = ax == 0 ? P.x : ax == 1 ? P.y : P.z;
     float p = 2.0 * uHS / uTrimN, x = (fract((s + uHS) / p) - 0.5) * p, w = uTrimW;
-    if (uTrim == 1) {
-      // scalloped: the edge in round lobes bulging out to it, bitten in
-      // between (a lobe's round its middle, the bites' points inward)
-      float R = 0.6 * p, d = length(vec2(x, e - R)) - R;
-      return 1.0 - smoothstep(-0.004, 0.006, d) * step(e, R);
-    }
+    // (scalloped is the cube's own shape: mesh.js shapeSDF)
+    if (uTrim == 1) return 1.0;
     if (uTrim == 2) {
       // sawtooth: teeth, with v-notches between
       float D = 0.85 * w * (2.0 * abs(x) / p);

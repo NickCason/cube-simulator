@@ -3,7 +3,7 @@
 // contact with friction, inter-piece contact, grabbing, embedded rigid
 // segments (nails) and a per-vertex temperature field.
 
-import { buildCubeMesh, roundBoxSDF, roundBoxNormal } from './mesh.js';
+import { buildCubeMesh, roundBoxSDF, roundBoxNormal, shapeSDF, shapeNormal } from './mesh.js';
 
 export const FACES = [[0, 2, 1], [0, 1, 3], [0, 3, 2], [1, 2, 3]];
 export const TAG_FRESH = 0;
@@ -164,6 +164,10 @@ export class SoftBody {
     this.dampBoost = 1;
     this.dmgHeal = 0; // (s) left of torn ends firming up (tDmg decaying)
     this.calmT = 0; // (s) left of the jiggle damped hard (just torn: the halves settle, not flail)
+    // each cube's scalloped edges, if it has them: how far a lobe stands out,
+    // how long one is (0: none - see mesh.js shapeSDF, setLobe)
+    this.cLobeA = new Float64Array(MAX_CUBES);
+    this.cLobeP = new Float64Array(MAX_CUBES);
     // each cube's material (see setCube; cube 0 starts as p)
     this.cMu = new Float64Array(MAX_CUBES);
     this.cLam = new Float64Array(MAX_CUBES);
@@ -378,10 +382,23 @@ export class SoftBody {
   }
 
   // ---------------------------------------------------------------- setup
+  // Cube k's scalloped edges (A 0: none) - for the next time it's built.
+  setLobe(k, A, P) {
+    this.cLobeA[k] = A > 0 ? A : 0;
+    this.cLobeP[k] = P > 0 ? P : 0;
+  }
+
+  // (cube k's, for its shape: null, or { A, P, d } - d its render's finest
+  // spacing, a quarter of a cell (see mesh.js scallop). res, size: what it's
+  // being built at, if that's not its own yet)
+  lobeOf(k, res = this.cRes[k], size = this.cSize[k]) {
+    return this.cLobeA[k] > 0 ? { A: this.cLobeA[k], P: this.cLobeP[k], d: res > 0 ? size / res / 4 : 0 } : null;
+  }
+
   loadCube(ox = 0, oy = 0, oz = 0, yaw = 0) {
     this.cubeVersion++;
     this.cBevel[0] = this.p.bevel;
-    const mesh = buildCubeMesh(this.p.res, this.p.size, this.p.bevel);
+    const mesh = buildCubeMesh(this.p.res, this.p.size, this.p.bevel, this.lobeOf(0, this.p.res, this.p.size));
     this.cN[0] = mesh.nV;
     this.cSize[0] = this.p.size;
     this.cRes[0] = this.p.res;
@@ -412,7 +429,7 @@ export class SoftBody {
   addCube(k, ox = 0, oy = 0, oz = 0, yaw = 0, bevel = this.p.bevel, size = this.p.size, res = this.p.res) {
     this.cubeVersion++;
     this.cBevel[k] = bevel;
-    const mesh = buildCubeMesh(res, size, bevel);
+    const mesh = buildCubeMesh(res, size, bevel, this.lobeOf(k, res, size));
     this.cN[k] = mesh.nV;
     this.cSize[k] = size;
     this.cRes[k] = res;
@@ -549,7 +566,7 @@ export class SoftBody {
   // given (moved in place), go on the new tets at the same rest points.
   // Rebuilt.
   remeshCube(k, res, anchors = []) {
-    const R = k * REST_STEP, mesh = buildCubeMesh(res, this.cSize[k], this.cBevel[k]);
+    const R = k * REST_STEP, mesh = buildCubeMesh(res, this.cSize[k], this.cBevel[k], this.lobeOf(k, res));
     const look = { tet: -1, b0: 0, b1: 0, b2: 0, b3: 0 };
     const where = (px, py, pz) => (this.locateRestFast(px, py, pz, look) && this.tCube[look.tet] === k ? [look.tet, look.b0, look.b1, look.b2, look.b3] : this._restNearest(k, px, py, pz));
     // (each anchor in it - a nail's, a weld's - by where it is at rest)
@@ -743,7 +760,7 @@ export class SoftBody {
       this.vCube[i] = j;
       this.X[i * 3] += d;
     }
-    for (const a of [this.cMu, this.cLam, this.cDens, this.cDamp, this.cFric, this.cBounce, this.cRigid, this.cAir, this.cBevel, this.cN, this.cGrav, this.cBoost, this.cSize, this.cRes, this.cH]) a[j] = a[k];
+    for (const a of [this.cMu, this.cLam, this.cDens, this.cDamp, this.cFric, this.cBounce, this.cRigid, this.cAir, this.cBevel, this.cN, this.cGrav, this.cBoost, this.cSize, this.cRes, this.cH, this.cLobeA, this.cLobeP]) a[j] = a[k];
     this.embeds.length = 0;
     this.grabs.length = 0;
     this._bpNV = 0;
@@ -1526,6 +1543,9 @@ export class SoftBody {
     const sRestN = new Float32Array(nF * 3);
     const vCube = this.vCube, cBevel = this.cBevel, cSize = this.cSize;
     const nrm = [0, 0, 0];
+    // (a scalloped cube's points: on its skin or not, each worked out once -
+    // 1 on, -1 not)
+    const onSkin = this.cLobeA.some((A) => A > 0) ? new Int8Array(this.nV) : null, lobes = [];
     let f = 0;
     const tetBoundary = new Int32Array(nT).fill(-1); // first boundary face of tet (linked)
     const nextBoundary = new Int32Array(nF).fill(-1);
@@ -1548,11 +1568,27 @@ export class SoftBody {
       // (against its own cube's shape, where that sits in rest space)
       const cb = vCube[a], bevel = cBevel[cb], half = cSize[cb] / 2;
       const cx = (ax + X[b * 3] + X[c * 3]) / 3 - cb * REST_STEP, cy = (ay + X[b * 3 + 1] + X[c * 3 + 1]) / 3, cz = (az + X[b * 3 + 2] + X[c * 3 + 2]) / 3;
-      const sd = roundBoxSDF(cx, cy, cz, half, bevel);
+      // (its own shape: a scalloped one's lobes are its skin too)
+      const lb = this.cLobeA[cb] > 0 ? (lobes[cb] ||= this.lobeOf(cb)) : null;
       let tag = TAG_FRESH;
-      if (Math.abs(sd) < 0.06 * half) {
-        roundBoxNormal(cx, cy, cz, half, bevel, nrm);
-        if (nx * nrm[0] + ny * nrm[1] + nz * nrm[2] > 0.55) tag = TAG_EXTERIOR;
+      if (lb) {
+        // (a scalloped one's skin: near its shape - a coarse face's middle
+        // lies well inside its scallops' curves - and facing its way, with a
+        // corner of it one of its skin's own points (a cut's face has none:
+        // its corners are all new, and near the skin its scallops' sides can
+        // face the cut's way). A face of its skin that's whole: facing out.)
+        const R0 = cb * REST_STEP, on = (v) => (onSkin[v] || (onSkin[v] = Math.abs(shapeSDF(X[v * 3] - R0, X[v * 3 + 1], X[v * 3 + 2], half, bevel, lb)) < 0.003 * half ? 1 : -1)) > 0;
+        const oa = on(a), ob = on(b), oc = on(c);
+        if ((oa || ob || oc) && Math.abs(shapeSDF(cx, cy, cz, half, bevel, lb)) < 0.09 * half) {
+          shapeNormal(cx, cy, cz, half, bevel, lb, nrm);
+          if (nx * nrm[0] + ny * nrm[1] + nz * nrm[2] > (oa && ob && oc ? 0 : 0.45)) tag = TAG_EXTERIOR;
+        }
+      } else {
+        const sd = roundBoxSDF(cx, cy, cz, half, bevel);
+        if (Math.abs(sd) < 0.06 * half) {
+          roundBoxNormal(cx, cy, cz, half, bevel, nrm);
+          if (nx * nrm[0] + ny * nrm[1] + nz * nrm[2] > 0.55) tag = TAG_EXTERIOR;
+        }
       }
       // (melted by the torch: wherever it is - a shallow crater's floor lies
       // near the cube's own shape, facing its way, and passed for its skin:

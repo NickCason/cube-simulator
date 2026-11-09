@@ -837,7 +837,7 @@ export class Healer {
     }
     this.weldField = null;
     const p = sb.p;
-    const template = buildCubeMesh(p.res, p.size, p.bevel).pos;
+    const template = buildCubeMesh(p.res, p.size, p.bevel, sb.lobeOf(0, p.res, p.size)).pos;
     this.fillTemplate = template;
     this.weldJob = segs.length ? weldFieldJob(segs, p.size, template) : null;
     // and what's missing, for the liquid fill (first: the droplets want it)

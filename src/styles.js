@@ -361,7 +361,9 @@ export const GLITTERS = [
 // its outline too where it's seen edge on). In the shader by its place here.
 export const TRIMS = [
   { id: 'none', name: 'Plain' },
-  { id: 'scalloped', name: 'Scalloped', cut: true },
+  // (a shape, not a pattern: every edge's ridge moved out in a row of
+  // scallops, as crisp or round as the Edges make it - see mesh.js shapeSDF)
+  { id: 'scalloped', name: 'Scalloped', shape: 'scallop' },
   { id: 'sawtooth', name: 'Sawtooth', cut: true },
   { id: 'stitched', name: 'Stitched' },
   { id: 'piped', name: 'Piped' },

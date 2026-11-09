@@ -468,6 +468,20 @@ export class App {
         rigidity: cs.rigidity, density: cs.weight, airDrag: cs.airDrag,
       });
       this.jelly.setCubeLook(cb.slot, resolveFlavor(cb.style), { ...ct, ...cs, surface: cb.style.surface, trim: cb.style.trim, bevelRatio: (EDGES[cb.style.edges] || EDGES[DEFAULT_STYLE.edges]).bevel }, sb.cSize[cb.slot]);
+      // (its scalloped edges, if it has them: its shape - built again in
+      // place if that's changed and it's whole; else at its next re-cube)
+      const L = this.lobeOf(cb, cs);
+      if (Math.abs(L.A - sb.cLobeA[cb.slot]) > 1e-6 || Math.abs(L.P - sb.cLobeP[cb.slot]) > 1e-6 || ((L.A > 0 || sb.cLobeA[cb.slot] > 0) && Math.abs(this.bevelOf(cb) - sb.cBevel[cb.slot]) > 1e-6)) {
+        sb.setLobe(cb.slot, L.A, L.P);
+        if (cb.slot === this.cube.slot) sb.p.bevel = this.bevelOf(cb);
+        (this._reshape ||= new Set()).add(cb.slot);
+      }
+    }
+    if (this._reshape?.size && !this._reshaping) {
+      this._reshaping = true;
+      for (const slot of this._reshape) this._reformCube(slot);
+      this._reshape.clear();
+      this._reshaping = false;
     }
     this.jelly.multiCube = this.cubes.length > 1; // (their shadows on each other)
     // (a gradient across, corner to corner or out from the middle: the jelly
@@ -856,6 +870,13 @@ export class App {
       this._edgeMorph = null;
       this.healer.active = false;
       this.heal();
+      return;
+    }
+    // (scalloped: its lobes are its edges' own rounding - built again with
+    // the new one, no easing between: see _reformCube)
+    if (sb.cLobeA[slot] > 0) {
+      this._edgeMorph = null;
+      this._reformCube(slot);
       return;
     }
     const half = sb.cSize[slot] / 2, R = slot * REST_STEP, M = this._edgeMorph;
@@ -1580,6 +1601,45 @@ export class App {
   // a cube's rounding (each has its own edges), at the size they all are
   bevelOf(cb) {
     return (EDGES[cb.style.edges] || EDGES[DEFAULT_STYLE.edges]).bevel * this.sizeOf(cb);
+  }
+
+  // Its scalloped edges' lobes (see mesh.js shapeSDF): how far one stands
+  // out, how long it is - by the trim's Size and Depth (A 0: not scalloped)
+  lobeOf(cb, cs = resolveSettings(cb.tune, TEXTURES[cb.style.texture])) {
+    if (TRIM[cb.style.trim]?.shape !== 'scallop') return { A: 0, P: 0 };
+    const size = this.sizeOf(cb);
+    return { A: 0.075 * size * Math.min(1.8, cs.trimDepth ?? 1), P: 0.24 * size * (cs.trimSize ?? 1) };
+  }
+
+  // A whole cube built again just where it is, as it is now - its shape's
+  // changed (scalloped edges on or off, or their size; its edges under
+  // them): the jelly springs. False if it can't be (cut, mid re-cube).
+  _reformCube(slot) {
+    const sb = this.sb, cb = this.cubes.find((c) => c.slot === slot);
+    if (!cb || !this._whole(slot) || this.healer.active || this.swapper.active || this.cubiplication.active) return false;
+    let main = null;
+    for (const pc of sb.pieces) if (pc.cube === slot) main = pc;
+    if (!main) return false;
+    let M = 0, x = 0, z = 0, y0 = Infinity;
+    for (const i of main.verts) {
+      const m = sb.m[i];
+      M += m;
+      x += sb.x[i * 3] * m;
+      z += sb.x[i * 3 + 2] * m;
+      y0 = Math.min(y0, sb.x[i * 3 + 1]);
+    }
+    const yaw = this.healer._yawOf(main);
+    this._edgeMorph = null;
+    this.nails.clearAll();
+    sb.removeCube(slot);
+    sb.addCube(slot, x / (M || 1), Math.max(0, y0), z / (M || 1), yaw, this.bevelOf(cb), this.sizeOf(cb), this.resOf(cb));
+    sb.rebuild();
+    this._syncSel();
+    this.onTopologyChanged();
+    this.markHealed();
+    const k = sb.pieces.findIndex((p) => p.cube === slot);
+    if (k >= 0) sb.impulse(x / (M || 1), y0 + this.sizeOf(cb), z / (M || 1), 0, -1, 0, this.sizeOf(cb), 1.2, k);
+    return true;
   }
 
   // ---- sizes: each cube its own (the Size slider: the selected one's), and

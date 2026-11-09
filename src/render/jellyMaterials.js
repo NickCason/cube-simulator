@@ -1538,7 +1538,7 @@ export function createJellyMaterial(env, layerUniforms) {
         float trimCut = 0.0;
         #if defined(JELLY_SURF)
         float trimId = cubeT(33).w;
-        if (trimId > 0.5 && trimId < 2.5 && surfFade > 0.0) trimCut = (1.0 - smoothstep(0.25, 0.6, surfH)) * (1.0 - smoothstep(0.2, 0.45, NdVg)) * surfFade;
+        if (trimId > 1.5 && trimId < 2.5 && surfFade > 0.0) trimCut = (1.0 - smoothstep(0.25, 0.6, surfH)) * (1.0 - smoothstep(0.2, 0.45, NdVg)) * surfFade;
         #endif
         col = mix(textureLod(tScene, uv, 0.0).rgb, col, mix(1.0, cover, silh) * (1.0 - trimCut));
         #ifdef JELLY_DEBUG // (?dbg=n: its parts, one at a time - else they'd all be kept to the end)

@@ -1,3 +1,4 @@
+import { shapeSDF, shapeNormal, lobeOut, lobeFlat } from '../sim/mesh.js';
 import * as THREE from 'three';
 import { biasExp, RUBIK_COLORS, gradAt, gradSequence, GRAD_SHAPE_INDEX, rubikPack, rubikStateOf, TRIM } from '../styles.js';
 import { FREE_N, bakeFree } from '../freeform.js';
@@ -159,7 +160,7 @@ function vertexNormals(index, pos, nrm, n) {
 // disp (to the true shape - see snapToShape). data (per-vertex extras) may
 // be null.
 const PHONG = 0.75;
-function tessellate(pos, nrm, data, mids, first, disp, coat = null, coatM = null) {
+function tessellate(pos, nrm, data, mids, first, disp, coat = null, coatM = null, disp3 = null, twin = null) {
   for (let m = 0, k = first, j = 0; m < mids.length; m += 3, k++, j++) {
     const a = mids[m] * 3, b = mids[m + 1] * 3;
     const ax = pos[a], ay = pos[a + 1], az = pos[a + 2];
@@ -191,7 +192,24 @@ function tessellate(pos, nrm, data, mids, first, disp, coat = null, coatM = null
     nx *= il; ny *= il; nz *= il;
     const d = disp[j];
     const o = k * 3;
-    pos[o] = qx + nx * d; pos[o + 1] = qy + ny * d; pos[o + 2] = qz + nz * d;
+    // (a scalloped cube's: onto its lobes by an offset along its edge, out,
+    // and across - each as the edge and its normal are now: see snapToLobes)
+    if (twin && twin[j] >= 0) {
+      // (a crease's other side's: just where that one is)
+      const t = twin[j] * 3;
+      pos[o] = pos[t]; pos[o + 1] = pos[t + 1]; pos[o + 2] = pos[t + 2];
+    } else if (disp3 && (disp3[j * 3] !== 0 || disp3[j * 3 + 1] !== 0 || disp3[j * 3 + 2] !== 0)) {
+      const ex = bx - ax, ey = by - ay, ez = bz - az, el = Math.sqrt(ex * ex + ey * ey + ez * ez) || 1e-9;
+      let sx = ny * ez - nz * ey, sy = nz * ex - nx * ez, sz = nx * ey - ny * ex;
+      const sl = Math.sqrt(sx * sx + sy * sy + sz * sz) || 1e-9;
+      sx /= sl; sy /= sl; sz /= sl;
+      const ae = disp3[j * 3], bn = disp3[j * 3 + 1], gs = disp3[j * 3 + 2];
+      pos[o] = qx + ex * ae + nx * bn + sx * gs;
+      pos[o + 1] = qy + ey * ae + ny * bn + sy * gs;
+      pos[o + 2] = qz + ez * ae + nz * bn + sz * gs;
+    } else {
+      pos[o] = qx + nx * d; pos[o + 1] = qy + ny * d; pos[o + 2] = qz + nz * d;
+    }
     nrm[o] = nx; nrm[o + 1] = ny; nrm[o + 2] = nz;
     if (data) {
       const da4 = mids[m] * 4, db4 = mids[m + 1] * 4, o4 = k * 4;
@@ -238,27 +256,90 @@ function roundedBox(px, py, pz, a, r) {
   _cp[3 + ax] = sg;
   return -gap;
 }
-// (shapes: each cube's { a, r }; cube: each render vertex's cube)
+// (a cube's own shape - a scalloped one's lobes too (mesh.js shapeSDF):
+// its distance, and the nearest point on it and the way out there in _cp)
+const _n3 = [0, 0, 0];
+function shapeAt(px, py, pz, s) {
+  if (!s.lobe) return roundedBox(px, py, pz, s.a, s.r);
+  const d = shapeSDF(px, py, pz, s.a + s.r, s.r, s.lobe);
+  shapeNormal(px, py, pz, s.a + s.r, s.r, s.lobe, _n3);
+  _cp[3] = _n3[0]; _cp[4] = _n3[1]; _cp[5] = _n3[2];
+  _cp[0] = px - _n3[0] * d; _cp[1] = py - _n3[1] * d; _cp[2] = pz - _n3[2] * d;
+  return d;
+}
+// A scalloped cube's new points exactly onto its lobes (at rest): each one's
+// way there kept as so much of its edge, of its normal and of across - so
+// it lands on them however the jelly bends (see tessellate). Only on its
+// outside: both its edge's ends on the shape. A crease's too (a sharp edge's
+// crest): both its sides', together (see twins).
+function snapToLobes(pos, nrm, mids, first, disp3, shapes, cube, onLobe = null) {
+  let any = false;
+  const on = new Int8Array(first);
+  const onShape = (v) => {
+    const s = shapes[cube[v]];
+    if (!on[v]) on[v] = !s.lobe || Math.abs(shapeSDF(pos[v * 3], pos[v * 3 + 1], pos[v * 3 + 2], s.a + s.r, s.r, s.lobe)) > 4e-3 ? -1 : 1;
+    return on[v] > 0;
+  };
+  for (let m = 0, k = first, j = 0; m < mids.length; m += 3, k++, j++) {
+    if (!onShape(mids[m]) || !onShape(mids[m + 1])) continue;
+    if (onLobe) onLobe[k] = 1;
+    const S = shapes[cube[mids[m]]], o = k * 3;
+    const ia = mids[m] * 3, ib = mids[m + 1] * 3;
+    // (where it belongs: the plain box's nearest point, straight out from
+    // there to the scalloped skin)
+    roundedBox(pos[o], pos[o + 1], pos[o + 2], S.a, S.r);
+    const bx = _cp[0], by = _cp[1], bz = _cp[2], bnx = _cp[3], bny = _cp[4], bnz = _cp[5];
+    const D = lobeOut(bx, by, bz, bnx, bny, bnz, S.a + S.r, S.r, S.lobe);
+    const x = bx + bnx * D, y = by + bny * D, z = bz + bnz * D;
+    const ex = pos[ib] - pos[ia], ey = pos[ib + 1] - pos[ia + 1], ez = pos[ib + 2] - pos[ia + 2], el2 = ex * ex + ey * ey + ez * ez || 1e-18;
+    const nx = nrm[o], ny = nrm[o + 1], nz = nrm[o + 2];
+    let sx = ny * ez - nz * ey, sy = nz * ex - nx * ez, sz = nx * ey - ny * ex;
+    const sl = Math.sqrt(sx * sx + sy * sy + sz * sz) || 1e-9;
+    sx /= sl; sy /= sl; sz /= sl;
+    const ox = x - pos[o], oy = y - pos[o + 1], oz = z - pos[o + 2];
+    disp3[j * 3] = (ox * ex + oy * ey + oz * ez) / el2;
+    disp3[j * 3 + 1] = ox * nx + oy * ny + oz * nz;
+    disp3[j * 3 + 2] = ox * sx + oy * sy + oz * sz;
+    pos[o] = x; pos[o + 1] = y; pos[o + 2] = z;
+    any = true;
+  }
+  return any;
+}
+
+// (a crease's new points - one each side of it, at one place - the later
+// ones' first one: where a scalloped cube's are moved to, they move together)
+function twins(mids, midGeo, first) {
+  const n = mids.length / 3, tw = new Int32Array(n).fill(-1);
+  for (let j = 1, f = 0; j < n; j++) {
+    if (!mids[j * 3 + 2] || midGeo[j] !== midGeo[j - 1]) f = j;
+    else tw[j] = first + f;
+  }
+  return tw;
+}
+
+// (shapes: each cube's { a, r, lobe }; cube: each render vertex's cube)
 function snapToShape(pos, nrm, mids, first, disp, shapes, cube) {
   // (whether each vertex below `first` is on its cube's shape, worked out once)
   const on = new Int8Array(first);
   const onShape = (v) => {
     const s = shapes[cube[v]];
-    if (!on[v]) on[v] = !(s.a > 0) || Math.abs(roundedBox(pos[v * 3], pos[v * 3 + 1], pos[v * 3 + 2], s.a, s.r)) > 4e-3 ? -1 : 1;
+    if (!on[v]) on[v] = !(s.a > 0) || Math.abs(shapeAt(pos[v * 3], pos[v * 3 + 1], pos[v * 3 + 2], s)) > 4e-3 ? -1 : 1;
     return on[v] > 0;
   };
   for (let m = 0, k = first, j = 0; m < mids.length; m += 3, k++, j++) {
     if (mids[m + 2]) continue;
     if (!onShape(mids[m]) || !onShape(mids[m + 1])) continue;
-    const { a, r } = shapes[cube[mids[m]]];
+    const S = shapes[cube[mids[m]]];
     const ia = mids[m] * 3, ib = mids[m + 1] * 3, o = k * 3;
     const ex = pos[ia] - pos[ib], ey = pos[ia + 1] - pos[ib + 1], ez = pos[ia + 2] - pos[ib + 2];
     const len = Math.sqrt(ex * ex + ey * ey + ez * ez);
-    const sd = roundedBox(pos[o], pos[o + 1], pos[o + 2], a, r);
+    const sd = shapeAt(pos[o], pos[o + 1], pos[o + 2], S);
     const nx = nrm[o], ny = nrm[o + 1], nz = nrm[o + 2];
-    if (sd < -0.35 * len || nx * _cp[3] + ny * _cp[4] + nz * _cp[5] < 0.9) continue;
+    // (a scalloped one's lobes turn faster than its mesh: let it reach further)
+    const L = !!S.lobe;
+    if (sd < (L ? -0.6 : -0.35) * len || nx * _cp[3] + ny * _cp[4] + nz * _cp[5] < (L ? 0.45 : 0.9)) continue;
     const d = (_cp[0] - pos[o]) * nx + (_cp[1] - pos[o + 1]) * ny + (_cp[2] - pos[o + 2]) * nz;
-    if (Math.abs(d) > 0.25 * len) continue;
+    if (Math.abs(d) > (L ? 0.6 : 0.25) * len) continue;
     disp[j] = d;
     pos[o] += nx * d; pos[o + 1] += ny * d; pos[o + 2] += nz * d;
   }
@@ -739,7 +820,8 @@ export class JellyView {
     // ...and its edges' trim, baked into the same map (not through holes:
     // those aren't a map) - the map then as deep as the deeper of the two;
     // a smooth one with a trim, its own kind past the surfaces' (TRIM_KIND)
-    const ti = sf.fam === 'holes' ? 0 : TRIM[m.trim]?.index || 0;
+    // (a shape trim - scalloped - is the mesh's own shape, nothing baked)
+    const ti = sf.fam === 'holes' || TRIM[m.trim]?.shape ? 0 : TRIM[m.trim]?.index || 0;
     // (its relief: the Depth slider's share of the map's own, zoomed with its
     // scale - finer, shallower, as a pattern zoomed out is - and never much
     // steeper than a quarter of a cell deep: drawn by parallax on the flat of
@@ -1053,13 +1135,19 @@ export class JellyView {
     vertexNormals(rIndex, rest, restN, nB);
     // (each cube its own rounding; each render vertex knows its cube - the
     // new points their edge's)
-    const shapes = Array.from(sb.cBevel, (b, k) => ({ a: sb.cSize[k] / 2 - b, r: b }));
+    const shapes = Array.from(sb.cBevel, (b, k) => ({ a: sb.cSize[k] / 2 - b, r: b, lobe: sb.lobeOf(k) }));
     const cube = new Float32Array(maxN);
     for (let r = 0; r < nB; r++) cube[r] = sb.vCube[rSim[r]];
     for (let m = 0, k = nB; m < L1.mids.length; m += 3, k++) cube[k] = cube[L1.mids[m]];
     this.disp1 = new Float32Array(L1.mids.length / 3);
+    this.disp31 = new Float32Array(L1.mids.length);
+    const lobed = shapes.some((S) => S.lobe);
+    this.twin1 = lobed ? twins(L1.mids, L1.midGeo, nB) : null;
     tessellate(rest, restN, null, L1.mids, nB, this.disp1);
-    snapToShape(rest, restN, L1.mids, nB, this.disp1, shapes, cube);
+    // (which render points are on a scalloped cube's skin: the new ones put there)
+    const onLobe = lobed ? new Uint8Array(maxN) : null;
+    if (lobed) snapToLobes(rest, restN, L1.mids, nB, this.disp31, shapes, cube, onLobe);
+    snapToShape(rest, restN, L1.mids, nB, this.disp1, shapes.map((S) => (S.lobe ? { a: 0, r: 0 } : S)), cube);
     // the second level only where the surface curves (bevels, corners): flat
     // faces - and the cut faces a burst leaves - gain nothing from it
     const t1 = L1.index.length / 3;
@@ -1070,8 +1158,11 @@ export class JellyView {
       const bc = restN[b] * restN[c] + restN[b + 1] * restN[c + 1] + restN[b + 2] * restN[c + 2];
       const ca = restN[c] * restN[a] + restN[c + 1] * restN[a + 1] + restN[c + 2] * restN[a + 2];
       refine[t] = Math.min(ab, bc, ca) < 0.996 ? 1 : 0; // (> ~5 degrees between normals)
+      // (a scalloped cube's, all: its lobes curve however its mesh lies)
+      if (lobed && (shapes[cube[L1.index[t * 3]]]?.lobe || shapes[cube[L1.index[t * 3 + 1]]]?.lobe || shapes[cube[L1.index[t * 3 + 2]]]?.lobe)) refine[t] = 1;
     }
     const L2 = splitEdges(L1.index, geo1, nL1, refine);
+    this.twin2 = lobed ? twins(L2.mids, L2.midGeo, nL1) : null;
     const n = nL1 + L2.mids.length / 3;
     this.mids1 = L1.mids;
     this.mids2 = L2.mids;
@@ -1084,10 +1175,43 @@ export class JellyView {
     this.coat = new Float32Array(n * 4); // (the powder on it: see SoftBody.coat)
     this.coatM = new Float32Array(n);
     this.disp2 = new Float32Array(L2.mids.length / 3);
+    this.disp32 = new Float32Array(L2.mids.length);
     for (let m = 0, k = nL1; m < L2.mids.length; m += 3, k++) cube[k] = cube[L2.mids[m]];
     tessellate(rest, restN, null, L2.mids, nL1, this.disp2);
-    snapToShape(rest, restN, L2.mids, nL1, this.disp2, shapes, cube);
+    if (lobed) snapToLobes(rest, restN, L2.mids, nL1, this.disp32, shapes, cube, onLobe);
+    snapToShape(rest, restN, L2.mids, nL1, this.disp2, shapes.map((S) => (S.lobe ? { a: 0, r: 0 } : S)), cube);
     const index = L2.index;
+    // (a scalloped cube's light off its own fine surface, not its coarse
+    // mesh's: the render vertices of such cubes, and the triangles at them -
+    // see _lobeNormals)
+    this._lobeTri = null;
+    if (lobed) {
+      const isL = (r) => !!shapes[cube[r]]?.lobe, tris = [];
+      for (let t = 0; t < index.length; t += 3) if (isL(index[t]) || isL(index[t + 1]) || isL(index[t + 2])) tris.push(t);
+      const vs = [];
+      for (let r = 0; r < n; r++) if (isL(r)) vs.push(r);
+      this._lobeTri = Int32Array.from(tris);
+      this._lobeV = Int32Array.from(vs);
+      this._lobeIndex = index;
+      // (and its skin's true way out at rest - the shape's own: mesh.js
+      // shapeNormal - beside its smooth normal there, carried down from its
+      // coarse mesh: each frame the one turned just as the other has. Off its
+      // skin - a cut face - or where the two are far apart - a cut's rim,
+      // seen from the cut - its fine triangles' alone)
+      this._lobeAcc = new Float32Array(n * 3);
+      const F = (this._lobeTrue = new Float32Array(vs.length * 6)), nt = [0, 0, 0];
+      for (let j = 0; j < vs.length; j++) {
+        const r = vs[j], o = r * 3, S = shapes[cube[r]], hf = S.a + S.r;
+        // (a face's flat middle: its fine triangles' are true already)
+        if (lobeFlat(rest[o], rest[o + 1], rest[o + 2], hf, S.r)) continue;
+        if (!onLobe[r] && Math.abs(shapeSDF(rest[o], rest[o + 1], rest[o + 2], hf, S.r, S.lobe)) > 2e-3 * hf) continue;
+        shapeNormal(rest[o], rest[o + 1], rest[o + 2], hf, S.r, S.lobe, nt);
+        const ax = restN[o], ay = restN[o + 1], az = restN[o + 2];
+        if (ax * nt[0] + ay * nt[1] + az * nt[2] < 0.3) continue;
+        F[j * 6] = ax; F[j * 6 + 1] = ay; F[j * 6 + 2] = az;
+        F[j * 6 + 3] = nt[0]; F[j * 6 + 4] = nt[1]; F[j * 6 + 5] = nt[2];
+      }
+    }
     this.aPos = new THREE.BufferAttribute(this.pos, 3).setUsage(THREE.DynamicDrawUsage);
     this.aNrm = new THREE.BufferAttribute(this.nrm, 3).setUsage(THREE.DynamicDrawUsage);
     this.aData = new THREE.BufferAttribute(this.data, 4).setUsage(THREE.DynamicDrawUsage);
@@ -1193,8 +1317,9 @@ export class JellyView {
     const pos = this.pos, nrm = this.nrm, data = this.data;
     sb.writeRender(pos, nrm, data, this.coat, this.coatM);
     if (fill) this._fill(sb, sb.fill);
-    tessellate(pos, nrm, data, this.mids1, this.nBase, this.disp1, this.coat, this.coatM);
-    tessellate(pos, nrm, data, this.mids2, this.nL1, this.disp2, this.coat, this.coatM);
+    tessellate(pos, nrm, data, this.mids1, this.nBase, this.disp1, this.coat, this.coatM, this._lobeTri ? this.disp31 : null, this._lobeTri ? this.twin1 : null);
+    tessellate(pos, nrm, data, this.mids2, this.nL1, this.disp2, this.coat, this.coatM, this._lobeTri ? this.disp32 : null, this._lobeTri ? this.twin2 : null);
+    if (this._lobeTri) this._lobeNormals(pos, nrm);
     if (moved) {
       this.aPos.needsUpdate = true;
       this.aNrm.needsUpdate = true;
@@ -1249,6 +1374,46 @@ export class JellyView {
     for (let r = 0; r < nB; r++) {
       const o = r * 3, l = Math.hypot(nrm[o], nrm[o + 1], nrm[o + 2]) || 1;
       nrm[o] /= l; nrm[o + 1] /= l; nrm[o + 2] /= l;
+    }
+  }
+
+  // A scalloped cube's normals: its coarse mesh's, carried down, lit its
+  // lobes in facets - its skin's true ones (see build), turned as its smooth
+  // normal's turned from how it lay at rest; elsewhere its fine triangles'
+  _lobeNormals(pos, nrm) {
+    const V = this._lobeV, F = this._lobeTrue, acc = this._lobeAcc;
+    this._fineNormals(pos, acc);
+    for (let j = 0; j < V.length; j++) {
+      const o = V[j] * 3, k = j * 6, ax = F[k], ay = F[k + 1], az = F[k + 2];
+      const bx = nrm[o], by = nrm[o + 1], bz = nrm[o + 2], c = ax * bx + ay * by + az * bz;
+      if (!(ax || ay || az) || !(c > -0.5)) {
+        const l = Math.sqrt(acc[o] * acc[o] + acc[o + 1] * acc[o + 1] + acc[o + 2] * acc[o + 2]);
+        if (l > 1e-12) (nrm[o] = acc[o] / l), (nrm[o + 1] = acc[o + 1] / l), (nrm[o + 2] = acc[o + 2] / l);
+        continue;
+      }
+      // (the turn from a to b - w = a x b - on the true one, v)
+      const wx = ay * bz - az * by, wy = az * bx - ax * bz, wz = ax * by - ay * bx;
+      const vx = F[k + 3], vy = F[k + 4], vz = F[k + 5];
+      const ux = wy * vz - wz * vy, uy = wz * vx - wx * vz, uz = wx * vy - wy * vx;
+      const g = 1 / (1 + c);
+      const nx = vx + ux + (wy * uz - wz * uy) * g, ny = vy + uy + (wz * ux - wx * uz) * g, nz = vz + uz + (wx * uy - wy * ux) * g;
+      const m = Math.sqrt(nx * nx + ny * ny + nz * nz) || 1;
+      nrm[o] = nx / m; nrm[o + 1] = ny / m; nrm[o + 2] = nz / m;
+    }
+  }
+  // (the fine triangles' area-weighted normals at a scalloped cube's
+  // vertices, of positions P, into acc: not normalized)
+  _fineNormals(P, acc) {
+    const T = this._lobeTri, I = this._lobeIndex, V = this._lobeV;
+    for (const r of V) acc[r * 3] = acc[r * 3 + 1] = acc[r * 3 + 2] = 0;
+    for (let q = 0; q < T.length; q++) {
+      const t = T[q], a = I[t] * 3, b = I[t + 1] * 3, c = I[t + 2] * 3;
+      const ux = P[b] - P[a], uy = P[b + 1] - P[a + 1], uz = P[b + 2] - P[a + 2];
+      const vx = P[c] - P[a], vy = P[c + 1] - P[a + 1], vz = P[c + 2] - P[a + 2];
+      const nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx;
+      acc[a] += nx; acc[a + 1] += ny; acc[a + 2] += nz;
+      acc[b] += nx; acc[b + 1] += ny; acc[b + 2] += nz;
+      acc[c] += nx; acc[c + 1] += ny; acc[c + 2] += nz;
     }
   }
 
