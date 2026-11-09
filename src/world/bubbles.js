@@ -27,8 +27,13 @@ export class Bubbles {
       depthWrite: false,
       depthTest: true,
       blending: THREE.NormalBlending,
+      // (where the line of sight goes into its piece - the box round it -
+      // worked out here, with the camera it's drawn with: worked out with the
+      // frame before's, zooming in put that behind the jelly's skin and the
+      // bubbles vanished till the camera stopped)
       vertexShader: /* glsl */ `
-        attribute float aEntryZ;
+        attribute vec3 aBoxLo;
+        attribute vec3 aBoxHi;
         varying vec3 vN;
         varying vec3 vV;
         varying vec3 vTint;
@@ -37,9 +42,16 @@ export class Bubbles {
           vN = normalize(mat3(modelMatrix) * mat3(instanceMatrix) * normal);
           vV = normalize(cameraPosition - wp.xyz);
           vTint = instanceColor;
+          vec3 c = (modelMatrix * instanceMatrix * vec4(0.0, 0.0, 0.0, 1.0)).xyz, o = cameraPosition, d = c - o;
+          float len = max(length(d), 1e-6);
+          d /= len;
+          vec3 dd = vec3(abs(d.x) < 1e-6 ? 1e-6 : d.x, abs(d.y) < 1e-6 ? 1e-6 : d.y, abs(d.z) < 1e-6 ? 1e-6 : d.z);
+          vec3 tm = min((aBoxLo - o) / dd, (aBoxHi - o) / dd);
+          float tEntry = clamp(max(max(tm.x, tm.y), tm.z), 0.0, len);
+          float ez = (viewMatrix * vec4(o + d * tEntry, 1.0)).z + 0.02;
           vec4 mv = viewMatrix * wp;
           vec4 clip = projectionMatrix * mv;
-          vec4 surf = projectionMatrix * vec4(mv.xy, max(mv.z, aEntryZ), 1.0);
+          vec4 surf = projectionMatrix * vec4(mv.xy, min(max(mv.z, ez), -0.06), 1.0);
           clip.z = surf.z / surf.w * clip.w;
           gl_Position = clip;
         }`,
@@ -73,8 +85,11 @@ export class Bubbles {
     this.mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
     this.mesh.setColorAt(0, new THREE.Color(1, 1, 1));
     this.mesh.instanceColor.setUsage(THREE.DynamicDrawUsage);
-    this.entryZ = new THREE.InstancedBufferAttribute(new Float32Array(MAX), 1).setUsage(THREE.DynamicDrawUsage);
-    geo.setAttribute('aEntryZ', this.entryZ);
+    // (each one's piece's box: see the vertex shader)
+    this.boxLo = new THREE.InstancedBufferAttribute(new Float32Array(MAX * 3), 3).setUsage(THREE.DynamicDrawUsage);
+    this.boxHi = new THREE.InstancedBufferAttribute(new Float32Array(MAX * 3), 3).setUsage(THREE.DynamicDrawUsage);
+    geo.setAttribute('aBoxLo', this.boxLo);
+    geo.setAttribute('aBoxHi', this.boxHi);
     this.mesh.renderOrder = 5; // (after the glitter: see above)
     app.fxScene.add(this.mesh);
     let seed = 7;
@@ -273,7 +288,6 @@ export class Bubbles {
     // its row of the cube looks, see JellyView.setCubeLook)
     const D = app.jelly.cubeData;
     const ox = cam.position.x, oy = cam.position.y, oz = cam.position.z;
-    const vm = cam.matrixWorldInverse.elements;
     const tint = this._tint || (this._tint = new THREE.Color());
     let c = 0;
     for (const b of this.items) {
@@ -302,11 +316,14 @@ export class Bubbles {
         sl(oz, dz, bb[2], bb[5]);
         t0 = Math.min(Math.max(tmin, 0), len);
       }
-      const ex = ox + dx * t0, ey = oy + dy * t0, ez = oz + dz * t0;
       const L = len - t0;
-      // view-space z of the entry point (slightly in front of the surface)
-      const vz = vm[2] * ex + vm[6] * ey + vm[10] * ez + vm[14] + 0.02;
-      this.entryZ.array[c] = vz;
+      const lo = this.boxLo.array, hi = this.boxHi.array;
+      if (bb) {
+        lo[c * 3] = bb[0]; lo[c * 3 + 1] = bb[1]; lo[c * 3 + 2] = bb[2];
+        hi[c * 3] = bb[3]; hi[c * 3 + 1] = bb[4]; hi[c * 3 + 2] = bb[5];
+      } else {
+        lo[c * 3] = hi[c * 3] = px; lo[c * 3 + 1] = hi[c * 3 + 1] = py; lo[c * 3 + 2] = hi[c * 3 + 2] = pz;
+      }
       const fade = vis * Math.exp(-D[row + 3] * L * 0.8);
       tint.setRGB(
         (0.25 + 0.75 * D[row + 4]) * Math.exp(-D[row] * L) * fade,
@@ -322,6 +339,7 @@ export class Bubbles {
     this.mesh.count = c;
     this.mesh.instanceMatrix.needsUpdate = true;
     this.mesh.instanceColor.needsUpdate = true;
-    this.entryZ.needsUpdate = true;
+    this.boxLo.needsUpdate = true;
+    this.boxHi.needsUpdate = true;
   }
 }
