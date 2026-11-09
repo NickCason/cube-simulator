@@ -457,6 +457,12 @@ export class JellyView {
     this.rtCaustic.textures[0].generateMipmaps = false;
     this.rtCaustic.textures[1].generateMipmaps = true;
     this.rtCaustic.textures[1].minFilter = THREE.LinearMipmapLinearFilter;
+    // (and the same without the multisampling, for while it moves: see
+    // renderFloorFx)
+    this.rtCausticMoving = new THREE.WebGLRenderTarget(768, 768, { type: THREE.HalfFloatType, depthBuffer: false, count: 2 });
+    this.rtCausticMoving.textures[0].generateMipmaps = false;
+    this.rtCausticMoving.textures[1].generateMipmaps = true;
+    this.rtCausticMoving.textures[1].minFilter = THREE.LinearMipmapLinearFilter;
     // ...blurred, as the shadow's map is (a Gaussian ~3 mm, both ways), for
     // the floor and the jelly's view of it to read: read sharp with taps
     // centimetres apart, every caustic line was stamped over in copies - a
@@ -1294,8 +1300,11 @@ export class JellyView {
     // as it was; only glow mode's light pool again, which pulses. A cube at
     // rest cost the light's three views, the caustics and their blurs and
     // the shadow's maps, every frame, for nothing.)
-    const L = this.lightDir;
-    const sig = sb ? `${sb.topoVersion}|${sb.nV}|${this._ps}|${this._ts}|${this._ds}|${this.lookVersion}|${L.x},${L.y},${L.z}|${Math.round(this.causticLevel * 200)}|${this.multiCube}|${this.disperse}|${sb.fill ? performance.now() : 0}` : '';
+    // (Moving, its caustics are drawn without the multisampling that
+    // smooths their finest lines - half what they cost, and never still long
+    // enough to see it; settled, once more with it.)
+    const L = this.lightDir, moving = !!sb && sb.pieces.some((p) => !p.asleep);
+    const sig = sb ? `${sb.topoVersion}|${sb.nV}|${this._ps}|${this._ts}|${this._ds}|${this.lookVersion}|${L.x},${L.y},${L.z}|${Math.round(this.causticLevel * 200)}|${this.multiCube}|${this.disperse}|${sb.fill ? performance.now() : 0}|${moving}` : '';
     if (sig && sig === this._fxSig) {
       this._renderGlowMap();
       return;
@@ -1326,7 +1335,9 @@ export class JellyView {
       F.uLightVP.value.multiplyMatrices(this.lightCam.projectionMatrix, this.lightCam.matrixWorldInverse);
       F.uLightOrigin.value.copy(this.lightOrigin);
     }
-    r.setRenderTarget(this.rtCaustic);
+    const rtC = moving ? this.rtCausticMoving : this.rtCaustic;
+    this.fxUniforms.causThrow.value = rtC.textures[1];
+    r.setRenderTarget(rtC);
     r.clear(true, false, false);
     if (lit && caus) {
       const ch = this.causticMat.uniforms.uChannel;
@@ -1345,7 +1356,7 @@ export class JellyView {
     }
     // (blurred: ~3 mm sigma in the world, 2 steps of 1.5 mm; nothing there, nothing to blur)
     const cst = 0.0015 * this.fxUniforms.causRect.value.z;
-    this.blurMat.uniforms.tSrc.value = this.rtCaustic.texture;
+    this.blurMat.uniforms.tSrc.value = rtC.texture;
     this.blurMat.uniforms.uStep.value.set(cst, 0);
     r.setRenderTarget(this.rtCausticT);
     if (lit && caus) r.render(this.blurScene, this.fxCam);
