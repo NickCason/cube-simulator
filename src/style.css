@@ -4404,3 +4404,123 @@ html.dark .res-head {
   }
 }
 
+
+/* ---------------------------------------------------------------- clips (see ui/clips.js) */
+.rec-btn {
+  position: fixed;
+  top: max(14px, calc(env(safe-area-inset-top) + 6px));
+  left: calc(max(14px, calc(env(safe-area-inset-left) + 8px)) + 116px);
+  height: 40px;
+  min-width: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 0;
+  border-radius: 999px;
+  appearance: none;
+  border: 1px solid var(--line);
+  background: var(--glass);
+  -webkit-backdrop-filter: blur(16px) saturate(1.6);
+  backdrop-filter: blur(16px) saturate(1.6);
+  box-shadow: 0 6px 18px rgba(40, 30, 20, 0.12), inset 0 1px 0 rgba(255, 255, 255, 0.85);
+  color: var(--ink);
+  font: 700 13.5px/1 var(--font);
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+  transition: opacity 0.3s ease, transform 0.15s, background 0.2s, color 0.2s, padding 0.2s;
+}
+
+.rec-btn svg {
+  width: 20px;
+  height: 20px;
+}
+
+.rec-btn .dot {
+  fill: #e5333f;
+  transform-origin: 12px 12px;
+}
+
+.rec-btn:active {
+  transform: scale(0.92);
+}
+
+/* recording: red, the dot pulsing, the time beside it */
+.rec-btn.on {
+  padding: 0 13px 0 10px;
+  background: #e5333f;
+  border-color: #e5333f;
+  color: #fff;
+}
+
+.rec-btn.on .dot {
+  fill: #fff;
+  animation: rec-pulse 1s ease-in-out infinite;
+}
+
+.rec-btn.on .ring {
+  stroke-dasharray: 53.41;
+  transform: rotate(-90deg);
+  transform-origin: 12px 12px;
+  transition: stroke-dashoffset 0.25s linear;
+}
+
+.rec-time:empty {
+  display: none;
+}
+
+@keyframes rec-pulse {
+  50% {
+    transform: scale(0.6);
+    opacity: 0.6;
+  }
+}
+
+.splashing .rec-btn {
+  opacity: 0;
+}
+
+html.dark .rec-btn:not(.on) {
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+}
+
+@media (max-width: 720px) {
+  .rec-btn {
+    left: calc(max(14px, calc(env(safe-area-inset-left) + 8px)) + 48px);
+  }
+  /* (no room for the time by the logotype: the ring says it) */
+  .rec-btn.on {
+    padding: 0;
+  }
+  .rec-btn .rec-time {
+    display: none;
+  }
+}
+
+.clip-card {
+  width: min(380px, 100%);
+}
+
+.clip-video {
+  width: 100%;
+  max-height: min(56vh, 520px);
+  margin-top: 12px;
+  border-radius: 14px;
+  background: #000;
+  object-fit: contain;
+}
+
+.clip-modal .modal-actions a {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 44px;
+  border-radius: 13px;
+  font-size: 14.5px;
+  font-weight: 700;
+  color: var(--ink);
+  text-decoration: none;
+}

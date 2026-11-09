@@ -381,4 +381,32 @@ export class Post {
     u.uTime.value = time;
     this.fs.render(this.renderer, this.compositeMat, null);
   }
+
+  // A clip being recorded (see ui/clips.js): its mark - the logotype and
+  // where to play - over the picture, small, bottom middle. (Drawn here, by
+  // the GPU, into what's recorded: no copy of each frame to put it on.)
+  drawMark(tex, w, h) {
+    const r = this.renderer;
+    if (!this._mark) {
+      const mesh = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), new THREE.MeshBasicMaterial({ transparent: true, depthTest: false, depthWrite: false, toneMapped: false }));
+      mesh.frustumCulled = false;
+      const scene = new THREE.Scene();
+      scene.add(mesh);
+      this._mark = { mesh, scene, cam: new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1) };
+    }
+    const M = this._mark, img = tex.image;
+    if (M.mesh.material.map !== tex) {
+      M.mesh.material.map = tex;
+      M.mesh.material.needsUpdate = true;
+    }
+    // (a third of the shorter side across; its own shape; 3.5% of the height up)
+    const pw = Math.min(w, h) * 0.34, ph = (pw * img.height) / img.width;
+    M.mesh.scale.set(pw / w, ph / h, 1);
+    M.mesh.position.set(0, -1 + (ph + 0.035 * h * 2) / h, 0);
+    const auto = r.autoClear;
+    r.autoClear = false;
+    r.setRenderTarget(null);
+    r.render(M.scene, M.cam);
+    r.autoClear = auto;
+  }
 }

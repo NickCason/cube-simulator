@@ -1,6 +1,7 @@
 import { FLAVORS, TEXTURES, EDGES, GLITTERS, LAYER_PRESETS, MIN_LAYERS, MAX_LAYERS, MAX_REPEAT, MAX_TILES, flavorSwatchCSS, flavorMainHex, materialSwatchCSS } from '../styles.js';
 import { SETTINGS, settingWord, settingNum } from '../settings.js';
 import { Cubby } from './cubby.js';
+import { Clips } from './clips.js';
 import { StackPanel, STACK_ICON } from './stackpanel.js';
 import { PlacesPanel, PLACE_ICON } from './places.js';
 import { GradEditor } from './gradedit.js';
@@ -618,6 +619,8 @@ export class UI {
       else if ((e.key === 'l' || e.key === 'L') && !e.repeat) this.toggleTheme();
     });
     this.cubby = new Cubby(this, app);
+    // clips: record what's going on, to share (see clips.js)
+    this.clips = new Clips(this, app);
     // the stack (several cubes): its button by Re-cube, its panel
     this.stackBtn = root.querySelector('.stack-btn');
     this.stack = new StackPanel(this, app, root);

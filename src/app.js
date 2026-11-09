@@ -222,6 +222,9 @@ export class App {
     // (parts of the drawing left out, for ?stats' bench - and its time then
     // taken to when the GPU's done with the frame: see ui/stats.js)
     this.skip = { floorFx: false, refl: false, room: false, jelly: false, fx: false, bloom: false, aa: false, adapt: false };
+    // (a clip being recorded: its mark drawn over each frame - see ui/clips.js)
+    this.recording = false;
+    this.markTex = null;
     this.benchSync = false;
     this._px = new Uint8Array(4);
     this.substepRate = 720; // physics substeps per second
@@ -2451,5 +2454,9 @@ export class App {
       this.post.fxaa(this.rtScene.texture, this.rtAA);
       this.post.composite(this.rtAA.texture, bloom, this.clock.t);
     } else this.post.composite(this.rtScene.texture, bloom, this.clock.t);
+    if (this.recording && this.markTex) {
+      const cv = this.renderer.domElement;
+      this.post.drawMark(this.markTex, cv.width, cv.height);
+    }
   }
 }

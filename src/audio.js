@@ -9,6 +9,7 @@ const MASTER = 0.8;
 export class AudioEngine {
   constructor() {
     this.ctx = null;
+    this.out = null; // (everything as it's heard: a clip records it too - see ui/clips.js)
     this.muted = false;
     this.volume = 0.75; // master level (Settings > Sound)
     this.impactLevel = 0.55; // how loud bumps and landings are
@@ -36,6 +37,7 @@ export class AudioEngine {
     comp.attack.value = 0.003;
     comp.release.value = 0.2;
     this.master.connect(comp).connect(ctx.destination);
+    this.out = comp;
     // shared noise
     const len = ctx.sampleRate * 2;
     const nb = ctx.createBuffer(1, len, ctx.sampleRate);
