@@ -471,9 +471,17 @@ export class Glitter {
       const sl = Math.hypot(st.spin[0], st.spin[1], st.spin[2]);
       if (sl > 4) for (let i = 0; i < 3; i++) st.spin[i] *= 4 / sl;
       st.w = w;
-      // (stirred by a shake, a knock, a turn)
-      const shake = Math.max(0, (al * ak) / Math.abs(gy) - 0.25);
+      // (stirred by a shake, a knock, a turn - as against gravity, which a
+      // re-cube turns off a while: 0/0, and the water's stir was NaN for good,
+      // every flake set where it was - snow no more, just glitter)
+      const shake = Math.max(0, (al * ak) / Math.max(4, Math.abs(gy)) - 0.25);
       st.stir = Math.min(2.5, st.stir * Math.exp(-dt / STIR_T) + dt * 0.9 * shake + 0.05 * Math.hypot(...st.spin) * dt);
+      // (and anything not a number, however it came: the water calm again)
+      if (!Number.isFinite(st.stir) || !st.spin.every(Number.isFinite)) {
+        st.stir = 0;
+        st.spin = [0, 0, 0];
+        st.vel = null;
+      }
       // (disturbed: stirred, spinning, or the way down's changed - what's
       // settled is lifted; else only what's still falling moves)
       st.stirred = st.stir > 0.03 || Math.hypot(...st.spin) > 0.2 || down[0] * st.down[0] + down[1] * st.down[1] + down[2] * st.down[2] < 0.996;
@@ -497,6 +505,10 @@ export class Glitter {
       const k3 = k * 3;
       let x = this.lp[k3], y = this.lp[k3 + 1], z = this.lp[k3 + 2];
       let ux = this.lv[k3], uy = this.lv[k3 + 1], uz = this.lv[k3 + 2];
+      if (!Number.isFinite(x + y + z + ux + uy + uz)) {
+        x = RK[k * 4]; y = RK[k * 4 + 1]; z = RK[k * 4 + 2];
+        ux = uy = uz = 0;
+      }
       // the water here: turning, and stirred (Arnold-Beltrami-Childress
       // flow: eddies all through, nothing piling up anywhere)
       const sp = st.spin, kk = st.k, ph = st.ph, amp = st.stir * SWIRL * st.size;
