@@ -82,7 +82,7 @@ export class CuberTool {
     // (a face snapped onto one left the cube welded in). (Its cube's rows:
     // each cube's rest shape sits apart along x - see REST_STEP.)
     const cube = sb.pieces[hit.piece].cube || 0, g = sb.cH[cube], half = sb.cSize[cube] / 2, R = cube * REST_STEP;
-    const cs = Math.min(1.6, Math.max(0.6, app.st?.cuberSize ?? 1)); // (its scoop's size: the Cubicle's)
+    const cs = Math.min(1.6, Math.max(0.6, this.app.st?.cuberSize ?? 1)); // (its scoop's size: the Cubicle's)
     const mid = (v, o) => o - half + (Math.round((v - o + half) / g - 0.5) + 0.5) * g;
     const d = p.clone().sub(F.c);
     const X = [0, 1, 2].map((k) => F.C.getComponent(k) + d.dot(F.ax[k]));
