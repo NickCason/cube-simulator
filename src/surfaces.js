@@ -104,6 +104,19 @@ const holes = (prob, r0, r1) => (x, y, z) => {
   return h;
 };
 
+// A die's faces' pips (by face: +x, -x, +y, -y, +z, -z - opposite ones
+// making seven, one to three anticlockwise round their corner, as a die's
+// are), and where each count's sit: on a 3 x 3 grid (bits: its cells, the
+// bottom row first), a quarter of the face apart, each a twelfth of it across.
+export const DIE_FACES = [4, 3, 2, 5, 1, 6];
+const PIP_MASK = [0, 16, 257, 273, 325, 341, 365], PIP_D = 0.25, PIP_R = 0.082;
+function pipsAt(n, x, y) {
+  const cx = clamp(Math.floor(x / PIP_D + 0.5), -1, 1), cy = clamp(Math.floor(y / PIP_D + 0.5), -1, 1);
+  if (!(PIP_MASK[n] & (1 << ((cy + 1) * 3 + cx + 1)))) return 1;
+  const u = Math.hypot(x - cx * PIP_D, y - cy * PIP_D) / PIP_R;
+  return u < 1 ? 1 - Math.sqrt(1 - u * u) : 1;
+}
+
 export const SURFACES = [
   { id: 'none', name: 'Smooth' },
   {
@@ -331,6 +344,16 @@ export const SURFACES = [
     glsl: 'return sfHoles(p, 0.85, 0.12, 0.32);',
     js: holes(0.85, 0.12, 0.32),
     holes: [0.85, 0.12, 0.32],
+  },
+  {
+    // a die: each face its own count of pips, opposite ones making seven (see
+    // DIE_FACES) - hollows inked (white in a dark jelly, black in a pale one:
+    // see JellyView) - and what it rolled told when it comes to rest (see dice.js)
+    id: 'dice', name: 'Dice', density: 1, depth: 0.011, ao: 0.35, grip: 1, fam: 'face', ink: true,
+    words: [['Lucky', 'Rolling', 'High-Rolling', 'Loaded'], ['Die', 'Dice', 'Roll', 'Jackpot']],
+    glsl: `int n = f == 0 ? ${DIE_FACES[0]} : f == 1 ? ${DIE_FACES[1]} : f == 2 ? ${DIE_FACES[2]} : f == 3 ? ${DIE_FACES[3]} : f == 4 ? ${DIE_FACES[4]} : ${DIE_FACES[5]};
+      return sfPips(n, q);`,
+    js: (x, y) => pipsAt(5, fract(x) - 0.5, fract(y) - 0.5),
   },
 ];
 export const SURFACE = Object.fromEntries(SURFACES.map((s, i) => [s.id, { ...s, kind: i }]));
@@ -663,6 +686,19 @@ export function surfaceBakeGLSL(only = -1) {
     ${SURFACES.map((x, i) => (x.fam === 'sites' && has(i) ? `if (k == ${i}) { ${x.glsl} }` : '')).filter(Boolean).join('\n    ')}
     return 1.0;
   }
+  // a die's pips: n of them on a face (q: across it, its middle 0, a share of the cube's size)
+  float sfPips(int n, vec2 q) {
+    int mask = n == 1 ? 16 : n == 2 ? 257 : n == 3 ? 273 : n == 4 ? 325 : n == 5 ? 341 : 365;
+    vec2 c = clamp(floor(q / ${PIP_D} + 0.5), -1.0, 1.0);
+    if ((mask & (1 << (int(c.y + 1.0) * 3 + int(c.x + 1.0)))) == 0) return 1.0;
+    float u = length(q - c * ${PIP_D}) / ${PIP_R};
+    return u < 1.0 ? 1.0 - sqrt(1.0 - u * u) : 1.0;
+  }
+  // (a face one: each face its own - a die's - q across it as above)
+  float sfFace(int k, int f, vec2 q) {
+    ${SURFACES.map((x, i) => (x.fam === 'face' && has(i) ? `if (k == ${i}) { ${x.glsl} }` : '')).filter(Boolean).join('\n    ')}
+    return 1.0;
+  }
   float sfNoiseK(int k, vec3 p) {
     ${SURFACES.map((x, i) => (x.fam === 'noise' && has(i) ? `if (k == ${i}) { ${x.glsl} }` : '')).filter(Boolean).join('\n    ')}
     return 1.0;
@@ -722,7 +758,7 @@ export function surfaceBakeGLSL(only = -1) {
   float sfBake(int k, int f, vec2 uv) {
     vec3 P, n;
     sfUnfoldInv(f, uv, P, n);
-    ${SURFACES.map((x, i) => (!has(i) ? '' : x.fam === 'grid' ? `if (k == ${i}) return sfGrid(k, (uv / uL + 0.5) * uNN);` : x.fam === 'rings' ? `if (k == ${i}) return sfRings(k, sfRing(f, uv) * (uNN.x / uL));` : x.fam === 'sites' ? `if (k == ${i}) return sfSites(k, P);` : x.fam === 'noise' ? `if (k == ${i}) return sfNoiseK(k, P * (uNN.x / uL));` : '')).filter(Boolean).join('\n    ')}
+    ${SURFACES.map((x, i) => (!has(i) ? '' : x.fam === 'grid' ? `if (k == ${i}) return sfGrid(k, (uv / uL + 0.5) * uNN);` : x.fam === 'rings' ? `if (k == ${i}) return sfRings(k, sfRing(f, uv) * (uNN.x / uL));` : x.fam === 'sites' ? `if (k == ${i}) return sfSites(k, P);` : x.fam === 'noise' ? `if (k == ${i}) return sfNoiseK(k, P * (uNN.x / uL));` : x.fam === 'face' ? `if (k == ${i}) return sfFace(k, f, uv / (2.0 * uHS));` : '')).filter(Boolean).join('\n    ')}
     return 1.0;
   }
 `;
@@ -1017,12 +1053,12 @@ export function surfaceSwatch(id, hex = '#d4102a', px = 76) {
   const g = cv.getContext('2d'), img = g.createImageData(px, px);
   const n = parseInt(hex.slice(1), 16), base = [((n >> 16) & 255) / 255, ((n >> 8) & 255) / 255, (n & 255) / 255].map((c) => 0.25 + 0.75 * c);
   // (about two cells across, the fine ones more)
-  const span = Math.max(1.6, Math.min(5, (s.density || 4) / 2.4)), step = span / px, e = step;
+  const face = s.fam === 'face', span = face ? 1 : Math.max(1.6, Math.min(5, (s.density || 4) / 2.4)), step = span / px, e = step;
   const k = (s.depth || 0.006) / (1 / (s.density || 4)) * 9; // (its slopes, made visible at this size)
   const L = [-0.5, 0.62, 0.6], ll = Math.hypot(...L);
   for (let j = 0; j < px; j++)
     for (let i = 0; i < px; i++) {
-      const x = i * step + 0.13, y = (px - j) * step + 0.29;
+      const x = i * step + (face ? 0 : 0.13), y = (px - j) * step + (face ? 0 : 0.29);
       const h = surfaceHeight(id, x, y), hx = (surfaceHeight(id, x + e, y) - h) / e, hy = (surfaceHeight(id, x, y + e) - h) / e;
       let nx = -hx * k, ny = -hy * k, nz = 1;
       const nl = Math.hypot(nx, ny, nz);

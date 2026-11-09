@@ -43,6 +43,8 @@ export const SPECIALS = [
   S('blank-canvas', ['Silken Tofu', 'The Blank Canvas'], 'Firm, plain and ready for whatever you do to it.', '#f6f1e3', 'tofu', { edges: 'sharp' }),
   S('holo-foil', ['Holo Foil', 'Rare Pull'], 'Foil-wrapped and flashing - cut it to see the jelly.', 'grape', 'holo'),
   S('puzzle-box', ['Puzzle Box', 'Scrambled'], 'Six colours, every which way. Good luck.', 'rubik', ['gummy', 'candy', 'jello'], { edges: 'soft' }),
+  S('lucky-roll', ['Lucky Roll', 'Casino Red'], 'Clear red, white pips. Throw it - it tells you what it rolled.', 'cherry', ['gummy', 'crystal'], { edges: 'soft', surface: 'dice' }),
+  S('game-night', ['Game Night', 'Roll for It'], 'A chunky white die with black pips. Your turn.', '#f7f3ea', ['tofu', 'creamy'], { edges: 'round', surface: 'dice' }),
   S('glitter-bomb', ['Glitter Bomb', 'Bedazzled'], 'More glitter than jelly. No regrets.', '#ff4fa3', 'jello', { glitter: 'holo', tune: { glitterAmount: 9000, glitterSparkle: 2 } }),
   S('bubble-bath', ['Bubble Bath', 'Sudsy'], 'All bubbles, a little blue. Do not drink.', '#bfe9ff', 'water', { tune: { bubbles: 240, bubbleSize: 2.2 } , surface: 'bubblewrap' }),
   S('disco-ball', ['Disco Ball', 'Saturday Night'], 'Mirror-bright and holographic. Let’s dance.', '#dcdcdc', 'chrome', { glitter: 'holo', edges: 'soft' , surface: 'waffle' }),

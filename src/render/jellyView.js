@@ -31,7 +31,7 @@ const CAUS_GAIN = 1.5; // (how bright the caustic light lands)
 // colour of its light, a freeform gradient's depth
 // (a smooth cube with a trim: a surface kind of its own, past the surfaces'; its map's depth)
 export const TRIM_KIND = SURFACES.length, TRIM_DEPTH = 0.024;
-export const CUBE_TEX_W = 34; // (30: the powder on it - Flour writes it; 31: its surface map; 32, 33: a Rubik's stickers)
+export const CUBE_TEX_W = 35; // (30: the powder on it - Flour writes it; 31: its surface map; 32, 33: a Rubik's stickers; 34: a die's ink)
 
 const smoothstep = (e0, e1, x) => {
   const t = Math.min(1, Math.max(0, (x - e0) / (e1 - e0)));
@@ -734,6 +734,9 @@ export class JellyView {
     (this._ownCoat ||= [])[k] = (m.dust || 0) > 0 || (m.sugar || 0) > 0;
     const plain = ti && !(sf.kind > 0);
     put(31, plain ? TRIM_KIND : sf.kind, depth, plain ? 1 : nu, plain ? 1 : nv);
+    // (a die's pips inked: white in a dark jelly, black in a pale or milky one)
+    const lum = colors.reduce((a, c) => a + 0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b, 0) / colors.length, pale = lum > 0.26 || (lum > 0.1 && (m.milk || 0) > 0.6);
+    put(34, pale ? 0.03 : 0.93, pale ? 0.03 : 0.92, pale ? 0.035 : 0.9, sf.ink ? 1 : 0);
     // (a Rubik's stickers as they are: see styles.js rubikPack, CUBE_GLSL rubikAt)
     const rp = rubik ? rubikPack(flavor.state || rubikStateOf({ rubik: flavor.rubik })) : [0, 0, 0, 0, 0, 0, 0];
     put(32, rp[0], rp[1], rp[2], rp[3]);

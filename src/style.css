@@ -4537,3 +4537,59 @@ html.dark .rec-btn:not(.on) {
   color: var(--ink);
   text-decoration: none;
 }
+
+/* a die's roll, over it a moment (see dice.js) */
+.die-roll {
+  position: fixed;
+  left: 0;
+  top: 0;
+  z-index: 6;
+  pointer-events: none;
+  will-change: transform, opacity;
+}
+
+.die-roll .die-in {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 12px 6px 6px;
+  border-radius: 14px;
+  background: rgba(22, 21, 26, 0.62);
+  -webkit-backdrop-filter: blur(10px);
+  backdrop-filter: blur(10px);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.22);
+  color: #fff;
+  font: 900 26px/1 'Lato', system-ui, sans-serif;
+  transform-origin: 50% 100%;
+  animation: die-pop 0.42s cubic-bezier(0.2, 1.6, 0.35, 1) both;
+}
+
+.die-roll svg {
+  width: 30px;
+  height: 30px;
+  display: block;
+}
+
+.die-roll.cocked .die-in {
+  flex-direction: column;
+  gap: 2px;
+  padding: 7px 12px;
+  font-size: 17px;
+}
+
+.die-roll.cocked span {
+  font-size: 11px;
+  font-weight: 600;
+  opacity: 0.75;
+}
+
+@keyframes die-pop {
+  from {
+    transform: scale(0.3) translateY(14px);
+    opacity: 0;
+  }
+  to {
+    transform: none;
+    opacity: 1;
+  }
+}

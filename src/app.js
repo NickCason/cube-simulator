@@ -51,6 +51,7 @@ const SETTING_BY_KEY = Object.fromEntries(SETTINGS.map((s) => [s.key, s]));
 // the sound, the tools - are the room's, the same in every cube)
 // (its own: its material's sliders, its size, its bubbles)
 const PER_CUBE = (k) => !!SETTING_BY_KEY[k]?.mat || k === 'size' || k === 'bubbles' || k === 'bubbleSize' || k === 'surfDepth' || k === 'surfScale' || k === 'trimSize' || k === 'trimDepth';
+import { DiceWatch } from './dice.js';
 import { Tilt } from './tilt.js';
 import { nameCube } from './namegen.js';
 
@@ -204,6 +205,7 @@ export class App {
     this.glitter = new Glitter(this);
     this.portraits = new Portraits(this); // (a cube's picture, taken properly: see portrait.js)
     this.cubiplication = new Cubiplication(this); // (fed jelly, a cube cubiplies - see tools/feed.js)
+    this.dice = new DiceWatch(this); // (a die says what it rolled - see dice.js)
     // the glass room (Settings > World), as it was left
     this.room = new GlassRoom(this);
     try {
@@ -242,7 +244,7 @@ export class App {
     this.paused = false;
     this.raycaster = new THREE.Raycaster();
     this._ndc = new THREE.Vector2();
-    this.onFrame = [];
+    this.onFrame = [(sdt, dt) => this.dice.update(dt)];
     this.damaged = false;
 
     const uiRoot = document.getElementById('ui');
@@ -732,6 +734,7 @@ export class App {
     this.style.surface = id;
     this.applyStyle();
     if (id !== 'none') this.sb.impulse(0, 0.6, 0, 0, -1, 0, 3, 0.6);
+    if (id === 'dice') this.ui?.hint("A die - throw it and it'll tell you what it rolled", 3000);
   }
 
   setGlitter(id) {

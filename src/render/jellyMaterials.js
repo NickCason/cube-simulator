@@ -1325,6 +1325,13 @@ export function createJellyMaterial(env, layerUniforms) {
           col += fire * (irr * 0.8 + keyLight * (0.18 + 0.3 * nl) + cGlowColor * uEmit * 1.6) * cOpal * (1.0 - F) * 1.5;
         }
         #endif
+        #if defined(JELLY_SURF)
+        // (a die's pips, inked - row 34: the ink, and whether - painted in its
+        // hollows, lit, with the jelly's own shine over them - over metal and
+        // opal too: paint, not the jelly)
+        vec4 ink = cubeT(34);
+        if (ink.w > 0.0) col = mix(col, ink.rgb * (0.38 + 0.62 * nl) * keyLight * 0.55 * surfShadow + ink.rgb * 0.3 + (refl * F + spec) * 0.8, (1.0 - smoothstep(0.7, 0.93, surfH)) * surfFade * ink.w);
+        #endif
 
         // Glow mode: it gives off its own light, from all of its body -
         // brighter through more of it, towards a hotter, paler core. A knock

@@ -33,7 +33,7 @@ test('the shaders have every surface, by its place in the list: face ones baked,
 
 test('each is laid on the cube one seamless way: its family, and what that needs', () => {
   for (const s of SURFACES.slice(1)) {
-    assert.ok(['sites', 'grid', 'rings', 'noise', 'holes'].includes(s.fam), s.id);
+    assert.ok(['sites', 'grid', 'rings', 'noise', 'holes', 'face'].includes(s.fam), s.id);
     assert.equal(s.fam === 'holes', !!s.through, s.id);
     // (a grid or rings one: a form, whole repeats of it a face; a sites one: spread)
     if (s.fam === 'grid' || s.fam === 'rings') assert.ok(s.period, s.id);
