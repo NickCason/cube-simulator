@@ -723,12 +723,25 @@ export class JellyView {
     // ...and its surface map (surfaces.js): its kind, how deep (m), its cells
     // across a face and up it (whole repeats: see surfaceFit) - its hollows'
     // shade, how much it scatters, and the cube's rounding (row 28)
-    const sf = surfaceOf(m.surface), dens = (sf.density || 1) / (m.surfScale ?? 1), [nu, nv] = surfaceFit(sf, dens);
+    // (cells across a face: as many as the Scale slider asks - a honeycomb's
+    // no fewer than three: two big cells to a face can't be hexagons, and
+    // its sides came out a jumble of odd shapes)
+    const sf = surfaceOf(m.surface), dens = Math.max(sf.relax ? 3 : 0, (sf.density || 1) / (m.surfScale ?? 1)), [nu, nv] = surfaceFit(sf, dens);
     // ...and its edges' trim, baked into the same map (not through holes:
     // those aren't a map) - the map then as deep as the deeper of the two;
     // a smooth one with a trim, its own kind past the surfaces' (TRIM_KIND)
     const ti = sf.fam === 'holes' ? 0 : TRIM[m.trim]?.index || 0;
-    const sfD = (sf.depth || 0) * (m.surfDepth ?? 1) * size, trD = ti ? TRIM_DEPTH * size * (m.trimDepth ?? 1) : 0, depth = Math.max(sfD, trD);
+    // (its relief: the Depth slider's share of the map's own, zoomed with its
+    // scale - finer, shallower, as a pattern zoomed out is - and never much
+    // steeper than a quarter of a cell deep: drawn by parallax on the flat of
+    // each face, a relief steeper than that fell apart - each face sunk in a
+    // rim of its rounded edges, the pattern smeared round them, the finest
+    // a noise. Smoothly: the sliders' ordinary range is as it was.)
+    // (and none much deeper than 4.5% of the cube: the rounded edges aren't
+    // drawn sunk, so deeper still, the faces looked inset however big the cells)
+    const want = (sf.depth || 0) * (m.surfDepth ?? 1) * size * Math.pow((sf.density || 1) / dens, 0.7), cap = Math.min((0.25 * size) / dens, 0.045 * size);
+    const sfD = sf.fam === 'holes' || !(want > 0) ? want : want / Math.pow(1 + Math.pow(want / cap, 6), 1 / 6);
+    const trD = ti ? TRIM_DEPTH * size * (m.trimDepth ?? 1) : 0, depth = Math.max(sfD, trD);
     this._bakeCube(k, sf, size, m.bevelRatio ?? 0.13, dens, false, ti, depth > 0 ? sfD / depth : 1, depth > 0 ? trD / depth : 1, m.trimSize ?? 1);
     put(29, m.dust || 0, m.skin || 0, m.through ? 1 : 0, ti ? Math.max(sf.ao || 0, 0.55) : sf.ao || 0);
     (this._ownCoat ||= [])[k] = (m.dust || 0) > 0 || (m.sugar || 0) > 0;
