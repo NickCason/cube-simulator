@@ -279,9 +279,22 @@ export class Cubiplication {
     app.cubes.push(cbB);
     app.stackOrder.push(slotB);
     app.cell = app.constructor.cellFor(app.cubes.map((x) => app.sizeOf(x)));
+    // each where its half was - unless that's in another cube (a crowded
+    // dish: the parent drawn out against its neighbours, or out past the
+    // wall, and one was born inside another, the two stuck as one till a
+    // re-cube): then the nearest clear spot, else on top of what's there.
+    // The first set down before the second looks, so they keep clear of
+    // each other too. (The dish a size for one more first: see _arena.)
     const lift = 0.02;
-    sb.addCube(slot, side[0].c.x, Math.max(0, side[0].c.y - c / 2) + lift, side[0].c.z, side[0].yaw, app.bevelOf(cb), c, app.resOf(cb));
-    sb.addCube(slotB, side[1].c.x, Math.max(0, side[1].c.y - c / 2) + lift, side[1].c.z, side[1].yaw, app.bevelOf(cbB), c, app.resOf(cbB));
+    app._arena();
+    const put = (k, S, who) => {
+      const [x, z, top] = app._clearSpot({ near: [S.c.x, S.c.z], size: c, gap: 1.12 });
+      const moved = Math.hypot(x - S.c.x, z - S.c.z) > 1e-6;
+      if (moved) S.c.set(x, top + c / 2, z);
+      sb.addCube(k, x, moved ? top + lift : Math.max(0, S.c.y - c / 2) + lift, z, S.yaw, app.bevelOf(who), c, app.resOf(who));
+    };
+    put(slot, side[0], cb);
+    put(slotB, side[1], cbB);
     sb.rebuild();
     app._resolution();
     app._arena();
