@@ -149,6 +149,7 @@ export class Alive {
   // a push on it: up (vy), turning about the up (wy), its top up or down (top), across (vx, vz)
   _move(pc, k, { vy = 0, wy = 0, top = 0, vx = 0, vz = 0 }) {
     if (![vy, wy, top, vx, vz].every(Number.isFinite)) return;
+    this.app.dice?.quiet(pc.cube);
     const sb = this.app.sb, x = sb.x, v = sb.v, c = pc.com, h = Math.max(1e-3, pc.bbox[4] - pc.bbox[1]);
     for (const i of pc.verts) {
       const o = i * 3, rx = x[o] - c[0], rz = x[o + 2] - c[2], ry = (x[o + 1] - pc.bbox[1]) / h;

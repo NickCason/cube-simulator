@@ -10,8 +10,9 @@ import * as THREE from 'three';
 import { DIE_FACES } from './surfaces.js';
 import { frameOf } from './tools/cubey.js';
 
-const TUMBLE = 4; // (rad/s) turning this fast at some point: it was rolled (slid along isn't)
-const MOVING = 1.4; // (m/s) or going this fast
+const MOVING = 1.4; // (m/s) going this fast, or turning (rad/s) this fast: it's off
+const TURNING = 2;
+const ROLLED = 1.2; // (rad) turned this far all told, it was rolled (slid along, dropped flat, isn't)
 const REST = 0.3; // (s) still this long: come to rest
 const SHOW = 2.6; // (s) its number shown
 const PIPS = [[], [[0, 0]], [[-1, -1], [1, 1]], [[-1, -1], [0, 0], [1, 1]], [[-1, -1], [1, -1], [-1, 1], [1, 1]], [[-1, -1], [1, -1], [0, 0], [-1, 1], [1, 1]], [[-1, -1], [-1, 0], [-1, 1], [1, -1], [1, 0], [1, 1]]];
@@ -23,7 +24,7 @@ export const dieFaceSVG = (n) =>
 export class DiceWatch {
   constructor(app) {
     this.app = app;
-    this.st = new Map(); // slot: { rolling, maxW, still }
+    this.st = new Map(); // slot: { rolling, turned, still, quiet }
     this.shown = []; // { slot, el, t }
     this.batch = []; // this roll's results so far
     this._v = new THREE.Vector3();
@@ -45,19 +46,26 @@ export class DiceWatch {
         continue;
       }
       any = true;
-      const s = this.st.get(cb.slot) || { rolling: false, maxW: 0, still: 0 };
+      const s = this.st.get(cb.slot) || { rolling: false, turned: 0, still: 0, quiet: 0 };
       this.st.set(cb.slot, s);
       const v = Math.hypot(pc.vel[0], pc.vel[1], pc.vel[2]), w = Math.hypot(pc.omega[0], pc.omega[1], pc.omega[2]);
-      if (!pc.asleep && (v > MOVING || w > TUMBLE)) {
+      // (a hop of its own - it's alive, see alive.js - isn't a roll)
+      if (s.quiet > 0) {
+        s.quiet -= dt;
+        s.rolling = false;
+        s.turned = 0;
+        continue;
+      }
+      if (s.rolling) s.turned += w * dt;
+      if (!pc.asleep && (v > MOVING || w > TURNING)) {
         s.rolling = true;
         s.still = 0;
-        s.maxW = Math.max(s.maxW, w);
       } else if (s.rolling) {
         s.still = pc.asleep || (v < 0.06 && w < 0.3) ? s.still + dt : 0;
         if (s.still > REST) {
           s.rolling = false;
-          if (s.maxW > TUMBLE) this._rolled(cb, pc);
-          s.maxW = 0;
+          if (s.turned > ROLLED) this._rolled(cb, pc);
+          s.turned = 0;
         }
       }
       if (s.rolling) rolling = true;
@@ -125,6 +133,13 @@ export class DiceWatch {
       s.el.style.opacity = String(Math.min(1, (SHOW - s.t) / 0.35));
       return true;
     });
+  }
+
+  // (it's moving on its own a moment: not a roll)
+  quiet(slot, t = 2.2) {
+    const s = this.st.get(slot);
+    if (s) s.quiet = t;
+    else this.st.set(slot, { rolling: false, turned: 0, still: 0, quiet: t });
   }
 
   clear() {
