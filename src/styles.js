@@ -325,6 +325,8 @@ export const GLITTERS = [
   { id: 'holo', name: 'Holo', dot: 'conic-gradient(#ff5f9e, #ffd25f, #6dffb0, #5fc8ff, #b28cff, #ff5f9e)' },
   { id: 'rose', name: 'Rose', dot: 'linear-gradient(135deg, #ffe0dc, #d9827a 55%, #ffd3cc)' },
   { id: 'cubic', name: 'Cubic', dot: 'conic-gradient(from 45deg, #ffffff, #cfe8ff, #ffd9f2, #fff3c4, #d6ffe9, #ffffff)' },
+  // (loose in it: a snow globe - shake it - see Glitter._loose)
+  { id: 'snow', name: 'Snow', dot: 'radial-gradient(circle at 35% 32%, #ffffff, #e6eef7 55%, #b4c2d4)' },
 ];
 
 // Its edges' trim, with any rounding: a pattern along every edge (baked into

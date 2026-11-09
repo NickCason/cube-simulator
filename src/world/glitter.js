@@ -2,9 +2,18 @@ import * as THREE from 'three';
 import { CUBE_GLSL } from '../render/jellyMaterials.js';
 import { roundBoxSDF } from '../sim/mesh.js';
 import { REST_STEP } from '../sim/softbody.js';
+import { frameOf } from '../tools/cubey.js';
 
 const MAX = 9000;
-export const GLITTER_MODES = { off: -1, silver: 0, gold: 1, holo: 2, rose: 3, cubic: 4 };
+export const GLITTER_MODES = { off: -1, silver: 0, gold: 1, holo: 2, rose: 3, cubic: 4, snow: 5 };
+const SNOW = 5;
+// A snow globe's flakes: loose in it (see Glitter._loose). How much of the
+// pull they feel (gravity less the cube's own acceleration: they're barely
+// heavier than the water they're in), how quickly the water drags them its
+// way (s), how long it keeps turning once set turning (s), how long a stir
+// lasts (s), and how fast it swirls them, stirred right up (a share of the
+// cube's size, a second).
+const SINK = 0.045, DRAG_T = 0.12, SPIN_T = 2.2, STIR_T = 1.7, SWIRL = 0.32;
 
 // Glitter suspended in the jelly. Each flake is anchored barycentrically in a
 // tet; the GPU reads the simulated vertex positions from a float texture, so
@@ -25,6 +34,16 @@ export class Glitter {
     const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
     this.u = new Float32Array(MAX * 3);
     this.n0 = new Float32Array(MAX * 3);
+    // (a snow globe's flakes, loose: where each is in its cube at rest, how
+    // it's moving there, which way it faces (they tumble), the way it turns,
+    // and whether it's settled - and each globe's water: see _loose)
+    this.lp = new Float32Array(MAX * 3);
+    this.lv = new Float32Array(MAX * 3);
+    this.ln = new Float32Array(MAX * 3);
+    this.lw = new Float32Array(MAX * 3);
+    this.lz = new Uint8Array(MAX);
+    this.globes = new Map();
+    this._lt = -1;
     this.seed = new Float32Array(MAX * 3);
     for (let i = 0; i < MAX; i++) {
       this.u[i * 3] = rnd() * 2 - 1;
@@ -38,6 +57,10 @@ export class Glitter {
       this.seed[i * 3] = 0.55 + rnd() * 0.9; // size factor
       this.seed[i * 3 + 1] = rnd(); // hue (holo)
       this.seed[i * 3 + 2] = rnd(); // shimmer phase
+      const wz = rnd() * 2 - 1, wa = rnd() * Math.PI * 2, wr = Math.sqrt(1 - wz * wz);
+      this.lw[i * 3] = wr * Math.cos(wa);
+      this.lw[i * 3 + 1] = wz;
+      this.lw[i * 3 + 2] = wr * Math.sin(wa);
     }
 
     const g = new THREE.InstancedBufferGeometry();
@@ -128,9 +151,9 @@ export class Glitter {
         void main() {
           // (cubic flakes in the cube mesh, the rest in the flat one)
           #ifdef CUBE
-          bool other = aMode < 3.5;
+          bool other = abs(aMode - 4.0) > 0.5;
           #else
-          bool other = aMode > 3.5;
+          bool other = abs(aMode - 4.0) < 0.5;
           #endif
           if (aSeed.x <= 0.0 || other) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); return; }
           vMode = aMode;
@@ -232,7 +255,10 @@ export class Glitter {
           else if (uMode == 3) col = vec3(1.0, 0.6, 0.56);
           else if (uMode == 4) col = mix(vec3(1.0), hue(fract(vHue + ndv * 2.6 + dot(n, L) * 0.7)), 0.55); // white, with fire
           else col = vec3(0.92, 0.95, 1.0);
-          vec3 c = col * (env + uLightColor * glint * 14.0) * uSparkle * rim + col * 0.03;
+          // (snow: white flakes, seen whichever way they face - a soft body of
+          // their own - and a glint now and then as they tumble)
+          float own = uMode == 5 ? 0.3 + 0.25 * max(dot(n, L), 0.0) : 0.03;
+          vec3 c = col * (env * (uMode == 5 ? 0.5 : 1.0) + uLightColor * glint * (uMode == 5 ? 6.0 : 14.0)) * uSparkle * rim + col * own;
           // (under flour, sugar, frost on the skin in front: hidden, as much as it covers)
           if (uCoverOn > 0.5) { float cv = 1.0 - texture(tCover, gl_FragCoord.xy * uCoverInv).r; c *= cv * cv; }
           gl_FragColor = vec4(min(c * vTint * vBoost, vec3(64.0)), 1.0);
@@ -291,6 +317,7 @@ export class Glitter {
     const cubes = this.app.cubes || [{ slot: 0, style: { glitter: this.mode } }];
     this.groups = cubes.filter((c) => c.style.glitter && c.style.glitter !== 'off').map((c) => ({ slot: c.slot, mode: GLITTER_MODES[c.style.glitter] ?? 0 }));
     this.anyCubic = this.groups.some((g) => g.mode === 4);
+    this.anySnow = this.groups.some((g) => g.mode === SNOW);
     this.anyFlat = this.groups.some((g) => g.mode !== 4);
     this.mesh.geometry = this.anyFlat ? this.geo : this.geoCube;
     this.mesh.material = this.anyFlat ? this.mat : this.matCube;
@@ -380,18 +407,179 @@ export class Glitter {
       this.aM.array[k * 3] = dot(b);
       this.aM.array[k * 3 + 1] = dot(c);
       this.aM.array[k * 3 + 2] = dot(d);
-      this.aSeed.array[k * 3] = this.seed[k * 3];
+      this.aSeed.array[k * 3] = this.seed[k * 3] * (grp.mode === SNOW ? 1.6 : 1);
       this.aSeed.array[k * 3 + 1] = this.seed[k * 3 + 1];
       this.aSeed.array[k * 3 + 2] = this.seed[k * 3 + 2];
       this.aInfo.array[k * 2] = py;
       this.aInfo.array[k * 2 + 1] = sb.tPiece[t];
       this.aRestK.array.set([px, py, pz, grp.slot], k * 4);
+      if (grp.mode === SNOW) {
+        this.lp[k * 3] = px; this.lp[k * 3 + 1] = py; this.lp[k * 3 + 2] = pz;
+        this.lv[k * 3] = this.lv[k * 3 + 1] = this.lv[k * 3 + 2] = 0;
+        this.ln[k * 3] = nx; this.ln[k * 3 + 1] = ny; this.ln[k * 3 + 2] = nz;
+        this.lz[k] = 0;
+      }
     }
+    this.globes.clear();
     for (const at of [this.aTet, this.aBary, this.aM, this.aSeed, this.aInfo, this.aMode, this.aRestK]) at.needsUpdate = true;
     this.geo.instanceCount = n;
     this.geoCube.instanceCount = n;
     this.topo = sb.topoVersion;
     this.anchoredFor = this._key();
+  }
+
+  // A snow globe: its flakes loose in the water it's full of. Each one's
+  // place in the cube at rest (the cube's own space: turned with it, carried
+  // with it) moved a frame at a time - sinking slowly the way that's down
+  // now, flung as the cube's shaken or knocked (its acceleration, felt the
+  // other way), swirled by the water: set turning the other way as the cube
+  // turns (and slowly catching up), stirred into eddies by a shake (dying
+  // down) - stopped by the walls, tumbling as they go (they twinkle); found
+  // again in the mesh, drawn there. Settled, they're left be till it moves.
+  // Cut up, they're set where they are.
+  _loose(dt, time) {
+    const sb = this.app.sb, X = sb.X, T = sb.T, B = sb.B, out = this._out || (this._out = { tet: -1, b0: 0, b1: 0, b2: 0, b3: 0 });
+    const gy = sb.p.gravity * (sb.gravityScale ?? 1);
+    const A = this.aTet.array, Ba = this.aBary.array, M = this.aM.array, I = this.aInfo.array, RK = this.aRestK.array, S = this.aSeed.array, MD = this.aMode.array;
+    // each globe: how it lies and moves now - the pull in its own space, its
+    // water's turning and stir
+    let any = false;
+    for (const grp of this.groups) {
+      if (grp.mode !== SNOW) continue;
+      const slot = grp.slot;
+      let pc = null, np = 0;
+      for (const p of sb.pieces) if (p.cube === slot && ++np === 1) pc = p;
+      let st = this.globes.get(slot);
+      if (!st) this.globes.set(slot, (st = { vel: null, w: [0, 0, 0], spin: [0, 0, 0], stir: 0, down: [0, -1, 0], wake: true, on: false, ph: Math.random() * 6 }));
+      st.on = np === 1;
+      if (!st.on) continue;
+      const F = frameOf(sb, pc.verts), ax = F.ax, v = pc.vel;
+      const acc = st.vel ? [(v[0] - st.vel[0]) / dt, (v[1] - st.vel[1]) / dt, (v[2] - st.vel[2]) / dt] : [0, 0, 0];
+      st.vel = [v[0], v[1], v[2]];
+      const al = Math.hypot(acc[0], acc[1], acc[2]), ak = al > 400 ? 400 / al : 1;
+      // (gravity less its acceleration, in its own space: the pull)
+      const pw = [-acc[0] * ak, gy - acc[1] * ak, -acc[2] * ak];
+      const pull = [0, 1, 2].map((i) => ax[i].x * pw[0] + ax[i].y * pw[1] + ax[i].z * pw[2]);
+      const pl = Math.hypot(pull[0], pull[1], pull[2]) || 1, down = pull.map((c) => c / pl);
+      // (turned since: the water lags it, turning the other way - and what's
+      // settled slides off, the floor's not the floor any more)
+      const w = [0, 1, 2].map((i) => ax[i].x * pc.omega[0] + ax[i].y * pc.omega[1] + ax[i].z * pc.omega[2]);
+      const ks = Math.exp(-dt / SPIN_T);
+      for (let i = 0; i < 3; i++) st.spin[i] = (st.spin[i] - 0.6 * (w[i] - st.w[i])) * ks;
+      // (a water that spins no faster than a few turns a second: tumbled
+      // end over end it was flung against the walls in a heap)
+      const sl = Math.hypot(st.spin[0], st.spin[1], st.spin[2]);
+      if (sl > 4) for (let i = 0; i < 3; i++) st.spin[i] *= 4 / sl;
+      st.w = w;
+      // (stirred by a shake, a knock, a turn)
+      const shake = Math.max(0, (al * ak) / Math.abs(gy) - 0.25);
+      st.stir = Math.min(2.5, st.stir * Math.exp(-dt / STIR_T) + dt * 0.9 * shake + 0.05 * Math.hypot(...st.spin) * dt);
+      // (disturbed: stirred, spinning, or the way down's changed - what's
+      // settled is lifted; else only what's still falling moves)
+      st.stirred = st.stir > 0.03 || Math.hypot(...st.spin) > 0.2 || down[0] * st.down[0] + down[1] * st.down[1] + down[2] * st.down[2] < 0.996;
+      if (st.stirred) st.wake = true;
+      if (st.wake) st.down = down;
+      st.pull = pull.map((c) => c * SINK);
+      st.size = sb.cSize[slot];
+      st.half = st.size / 2;
+      st.b = sb.cBevel[slot];
+      st.k = (2 * Math.PI * 0.9) / st.size;
+      st.ph += dt * (0.4 + 0.6 * st.stir);
+      if (st.wake) any = true;
+    }
+    if (!any) return;
+    let moved = false;
+    const n = this.count;
+    for (let k = 0; k < n; k++) {
+      if (MD[k] !== SNOW || S[k * 3] <= 0) continue;
+      const slot = RK[k * 4 + 3], st = this.globes.get(slot);
+      if (!st || !st.on || !st.wake || (this.lz[k] && !st.stirred)) continue;
+      const k3 = k * 3;
+      let x = this.lp[k3], y = this.lp[k3 + 1], z = this.lp[k3 + 2];
+      let ux = this.lv[k3], uy = this.lv[k3 + 1], uz = this.lv[k3 + 2];
+      // the water here: turning, and stirred (Arnold-Beltrami-Childress
+      // flow: eddies all through, nothing piling up anywhere)
+      const sp = st.spin, kk = st.k, ph = st.ph, amp = st.stir * SWIRL * st.size;
+      const fx = sp[1] * z - sp[2] * y + amp * (Math.sin(kk * z + ph) + Math.cos(kk * y + 1.3 * ph));
+      const fy = sp[2] * x - sp[0] * z + amp * (Math.sin(kk * x + 0.7 * ph) + Math.cos(kk * z + ph));
+      const fz = sp[0] * y - sp[1] * x + amp * (Math.sin(kk * y + 1.3 * ph) + Math.cos(kk * x + 0.7 * ph));
+      // (each flake its own - big ones sink faster - and a drift of its own
+      // while it's floating, so they don't all go the same way: a snowfall,
+      // not a sheet)
+      const own = 0.55 + 0.9 * this.seed[k3 + 2], free = this.lz[k] ? 0 : 0.035 * st.size;
+      const id = 1 / (1 + dt / DRAG_T);
+      ux = (ux + dt * ((fx + free * Math.sin(time * 1.7 + k)) / DRAG_T + st.pull[0] * own)) * id;
+      uy = (uy + dt * ((fy + free * Math.sin(time * 1.3 + k * 1.7)) / DRAG_T + st.pull[1] * own)) * id;
+      uz = (uz + dt * ((fz + free * Math.cos(time * 1.1 + k * 0.7)) / DRAG_T + st.pull[2] * own)) * id;
+      x += ux * dt; y += uy * dt; z += uz * dt;
+      // the walls: inside the rounded box, a flake's width in
+      const m = Math.min(0.03, st.half * 0.06), core = st.half - Math.max(st.b, m), rad = Math.max(0, st.b - m);
+      const cx = Math.max(-core, Math.min(core, x)), cy = Math.max(-core, Math.min(core, y)), cz = Math.max(-core, Math.min(core, z));
+      const dx = x - cx, dy = y - cy, dz = z - cz, d = Math.hypot(dx, dy, dz);
+      let wall = false;
+      if (d > rad) {
+        const f = rad / d, nx = dx / d, ny = dy / d, nz = dz / d;
+        x = cx + dx * f; y = cy + dy * f; z = cz + dz * f;
+        const un = ux * nx + uy * ny + uz * nz;
+        if (un > 0) { ux -= un * nx; uy -= un * ny; uz -= un * nz; }
+        // (lying on it - pulled into it - it stays put till the water's
+        // moving fast enough to lift it; else slides, slowing)
+        const into = st.pull[0] * nx + st.pull[1] * ny + st.pull[2] * nz, ut = Math.hypot(ux, uy, uz);
+        if (into > 0 && ut < 0.14 * st.size) ux = uy = uz = 0;
+        else { ux *= 0.85; uy *= 0.85; uz *= 0.85; }
+        wall = true;
+      }
+      const sp2 = ux * ux + uy * uy + uz * uz;
+      this.lv[k3] = ux; this.lv[k3 + 1] = uy; this.lv[k3 + 2] = uz;
+      this.lp[k3] = x; this.lp[k3 + 1] = y; this.lp[k3 + 2] = z;
+      // (tumbling as it goes)
+      let nx = this.ln[k3], ny = this.ln[k3 + 1], nz = this.ln[k3 + 2];
+      const ang = Math.sqrt(sp2) * dt * (14 / st.size), wx = this.lw[k3], wy = this.lw[k3 + 1], wz = this.lw[k3 + 2];
+      if (ang > 1e-5) {
+        nx += (wy * nz - wz * ny) * ang; ny += (wz * this.ln[k3] - wx * nz) * ang; nz += (wx * this.ln[k3 + 1] - wy * this.ln[k3]) * ang;
+        const nl = Math.hypot(nx, ny, nz) || 1;
+        nx /= nl; ny /= nl; nz /= nl;
+        this.ln[k3] = nx; this.ln[k3 + 1] = ny; this.ln[k3 + 2] = nz;
+      }
+      // found in the mesh: still in its tet (most frames), else looked up
+      const RX = x + slot * REST_STEP;
+      let t = -1, b0, b1, b2, b3;
+      const t0 = this.lt?.[k] ?? -1;
+      if (t0 >= 0 && t0 < sb.nT) {
+        const a = T[t0 * 4] * 3, bo = t0 * 9, rx = RX - X[a], ry = y - X[a + 1], rz = z - X[a + 2];
+        b1 = B[bo] * rx + B[bo + 1] * ry + B[bo + 2] * rz;
+        b2 = B[bo + 3] * rx + B[bo + 4] * ry + B[bo + 5] * rz;
+        b3 = B[bo + 6] * rx + B[bo + 7] * ry + B[bo + 8] * rz;
+        b0 = 1 - b1 - b2 - b3;
+        if (b0 >= -1e-6 && b1 >= -1e-6 && b2 >= -1e-6 && b3 >= -1e-6) t = t0;
+      }
+      if (t < 0) {
+        const r = sb.locateRestFast(RX, y, z, out);
+        if (r) { t = r.tet; b0 = r.b0; b1 = r.b1; b2 = r.b2; b3 = r.b3; }
+      }
+      if (t >= 0) {
+        (this.lt || (this.lt = new Int32Array(MAX).fill(-1)))[k] = t;
+        const a = T[t * 4], b = T[t * 4 + 1], c = T[t * 4 + 2], e = T[t * 4 + 3], a3 = a * 3;
+        A[k * 4] = a; A[k * 4 + 1] = b; A[k * 4 + 2] = c; A[k * 4 + 3] = e;
+        Ba[k * 4] = b0; Ba[k * 4 + 1] = b1; Ba[k * 4 + 2] = b2; Ba[k * 4 + 3] = b3;
+        const dot = (q) => (X[q * 3] - X[a3]) * nx + (X[q * 3 + 1] - X[a3 + 1]) * ny + (X[q * 3 + 2] - X[a3 + 2]) * nz;
+        M[k3] = dot(b); M[k3 + 1] = dot(c); M[k3 + 2] = dot(e);
+        I[k * 2] = y;
+        I[k * 2 + 1] = sb.tPiece[t];
+        RK[k * 4] = x; RK[k * 4 + 1] = y; RK[k * 4 + 2] = z;
+        moved = true;
+      }
+      // (settled: on the floor, still, the water calm)
+      this.lz[k] = wall && sp2 < 1e-4 && st.stir < 0.03 ? 1 : 0;
+    }
+    if (moved) for (const at of [this.aTet, this.aBary, this.aM, this.aInfo, this.aRestK]) at.needsUpdate = true;
+    // (a globe gone quiet: every flake of it settled)
+    for (const [slot, st] of this.globes) {
+      if (!st.wake || !st.on) continue;
+      let busy = false;
+      for (let k = 0; k < n && !busy; k++) if (MD[k] === SNOW && RK[k * 4 + 3] === slot && S[k * 3] > 0 && !this.lz[k]) busy = true;
+      if (!busy) st.wake = false;
+    }
   }
 
   update(time) {
@@ -402,6 +590,9 @@ export class Glitter {
     const app = this.app;
     const sb = app.sb;
     if (sb.topoVersion !== this.topo || this.anchoredFor !== this._key()) this._anchor();
+    const dt = this._lt < 0 ? 0 : Math.min(0.05, time - this._lt);
+    this._lt = time;
+    if (this.anySnow && dt > 0 && !app.paused) this._loose(dt * (app.timeScale ?? 1), time);
     // simulated vertex positions -> texture
     this._allocPosTex(sb.nV);
     const P = this.posData, x = sb.x;

@@ -44,6 +44,7 @@ export const SPECIALS = [
   S('holo-foil', ['Holo Foil', 'Rare Pull'], 'Foil-wrapped and flashing - cut it to see the jelly.', 'grape', 'holo'),
   S('puzzle-box', ['Puzzle Box', 'Scrambled'], 'Six colours, every which way. Good luck.', 'rubik', ['gummy', 'candy', 'jello'], { edges: 'soft' }),
   S('lucky-roll', ['Lucky Roll', 'Casino Red'], 'Clear red, white pips. Throw it - it tells you what it rolled.', 'cherry', ['gummy', 'crystal'], { edges: 'soft', surface: 'dice' }),
+  S('shake-me', ['Shake Me', 'Snow Day', 'Snow Globe'], 'Clear as ice and full of snow. Give it a shake and watch it settle.', '#dff3ff', ['crystal', 'water'], { glitter: 'snow', edges: 'round' }),
   S('game-night', ['Game Night', 'Roll for It'], 'A chunky white die with black pips. Your turn.', '#f7f3ea', ['tofu', 'creamy'], { edges: 'round', surface: 'dice' }),
   S('glitter-bomb', ['Glitter Bomb', 'Bedazzled'], 'More glitter than jelly. No regrets.', '#ff4fa3', 'jello', { glitter: 'holo', tune: { glitterAmount: 9000, glitterSparkle: 2 } }),
   S('bubble-bath', ['Bubble Bath', 'Sudsy'], 'All bubbles, a little blue. Do not drink.', '#bfe9ff', 'water', { tune: { bubbles: 240, bubbleSize: 2.2 } , surface: 'bubblewrap' }),

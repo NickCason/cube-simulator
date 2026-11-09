@@ -652,6 +652,34 @@ html.dark .palette .gdie {
   background: rgba(0, 0, 0, 0.05);
 }
 
+/* (the glitters: more than fit a phone's width - each its own width, and
+   the row scrolls sideways) */
+.palette .seg.glit {
+  grid-auto-columns: auto;
+  width: 0;
+  min-width: 100%;
+  box-sizing: border-box;
+  overflow-x: auto;
+  scrollbar-width: none;
+  overscroll-behavior-x: contain;
+}
+
+.palette .seg.glit::-webkit-scrollbar {
+  display: none;
+}
+
+.palette .seg.glit .opt {
+  min-width: max-content;
+  padding: 0 11px;
+}
+
+@media (max-width: 720px) {
+  .palette .seg.glit {
+    -webkit-mask-image: linear-gradient(90deg, #000 calc(100% - 22px), transparent);
+    mask-image: linear-gradient(90deg, #000 calc(100% - 22px), transparent);
+  }
+}
+
 .palette .mats {
   position: relative;
   display: flex;
