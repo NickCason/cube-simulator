@@ -99,6 +99,7 @@ export function captureCube(app, name = '') {
     edges: s.edges,
     glitter: s.glitter || 'off',
     rubik: Number.isFinite(s.rubik) ? s.rubik : 1,
+    ...(typeof s.rubikState === 'string' && /^[0-5]{54}$/.test(s.rubikState) ? { rubikState: s.rubikState } : {}),
     tune,
     tear: app.tune.tear !== false,
     theme: app.theme,
@@ -124,7 +125,8 @@ export function encodeCube(c) {
     if (L.tiles > 1) f.push('u' + Math.min(5, Math.round(L.tiles)));
     if (L.shape === 'free' && Array.isArray(L.nodes) && L.nodes.length === L.colors.length) f.push('q' + L.nodes.map((q) => hex2((q.x + 0.5) * 255) + hex2((q.y + 0.5) * 255) + hex2((q.z + 0.5) * 255) + hex2(kToByte(q.k))).join(''));
   }
-  if (c.flavor === 'rubik') f.push('k' + Math.max(0, Math.min(65535, Math.round(c.rubik ?? 1))));
+  // (a Rubik's: as it's been turned - its 54 stickers - else its scramble)
+  if (c.flavor === 'rubik') f.push('k' + (typeof c.rubikState === 'string' && /^[0-5]{54}$/.test(c.rubikState) ? c.rubikState : Math.max(0, Math.min(65535, Math.round(c.rubik ?? 1)))));
   f.push('m' + c.texture, 'e' + c.edges);
   if (c.glitter && c.glitter !== 'off') f.push('g' + c.glitter);
   if (c.theme) f.push('d' + c.theme);
@@ -201,6 +203,7 @@ export function decodeCube(text) {
     else if (k === 'g') c.glitter = GLITTERS.some((g) => g.id === v) ? v : 'off';
     else if (k === 'd') c.theme = THEMES.includes(v) ? v : null;
     else if (k === 'w') c.tear = v !== '0';
+    else if (k === 'k' && /^[0-5]{54}$/.test(v)) c.rubikState = v;
     else if (k === 'k') c.rubik = Math.round(clamp(parseInt(v, 10), 0, 65535, 1));
     else if (k === 'y') c.eyes = decodeEyes(v);
     else if (k === 's') c.surface = SURFACE[v] ? v : 'none';

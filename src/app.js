@@ -17,6 +17,7 @@ import { HandTool, KnifeTool, NailGunTool, HoleGunTool } from './tools/basic.js'
 import { MalletTool, TorchTool, FreezeTool, BallerTool, BombTool, SyringeTool, MagnetTool } from './tools/more.js';
 import { CuberTool, DicerTool } from './tools/cubey.js';
 import { FeedTool } from './tools/feed.js';
+import { TwistTool } from './tools/twist.js';
 import { AutoGunTool } from './tools/autogun.js';
 import { GelGunTool } from './tools/gelgun.js';
 import { FlourTool } from './tools/flour.js';
@@ -38,7 +39,7 @@ import { Glitter, GLITTER_MODES } from './world/glitter.js';
 import { Portraits } from './portrait.js';
 import { captureCube } from './cubecode.js';
 import { bevelPoint, unbevelPoint } from './sim/mesh.js';
-import { RUBIK_COLORS, rubikIndex, rubikCellAt } from './styles.js';
+import { RUBIK_COLORS, rubikCellAt } from './styles.js';
 import { DEFAULT_STYLE, TEXTURES, EDGES, LAYER_PRESETS, MIN_LAYERS, MAX_LAYERS, MAX_REPEAT, resolveFlavor, flavorMainHex, nextLayerColor } from './styles.js';
 import { GRAD_SHAPE_INDEX, gradStops, gradT, gradColorAt, copyLayers, tileLocal, MAX_TILES } from './styles.js';
 import { freeNodes, freeNodesDefault, freeColorAt, FREE_K_MIN, FREE_K_MAX } from './freeform.js';
@@ -269,6 +270,7 @@ export class App {
       bomb: new BombTool(this),
       syringe: new SyringeTool(this),
       magnet: new MagnetTool(this),
+      twist: new TwistTool(this),
     };
     this.tool = null;
     this.setTool('hand');
@@ -506,7 +508,10 @@ export class App {
 
   setFlavor(id) {
     // (Rubik, picked again: scrambled anew)
-    if (id === 'rubik' && (this.style.flavor === 'rubik' || !(this.style.rubik >= 1))) this.style.rubik = 1 + Math.floor(Math.random() * 65535);
+    if (id === 'rubik' && (this.style.flavor === 'rubik' || !(this.style.rubik >= 1))) {
+      this.style.rubik = 1 + Math.floor(Math.random() * 65535);
+      delete this.style.rubikState; // (scrambled afresh: no turns made yet)
+    }
     this.style.flavor = id;
     this.applyStyle();
   }
@@ -917,7 +922,7 @@ export class App {
     const f = resolveFlavor(cb.style), x = rx - k * REST_STEP;
     if (f.id === 'rubik') {
       const [face, cell] = rubikCellAt(x, ry, rz, sb.cSize[k]);
-      return RUBIK_COLORS[rubikIndex(f.rubik, face, cell)];
+      return RUBIK_COLORS[f.state[face * 9 + cell]];
     }
     if (!f.layers) return flavorMainHex(f);
     const s = sb.cSize[k], [tx, ty, tz] = tileLocal(x, ry, rz, s, f.tiles);
@@ -1725,7 +1730,7 @@ export class App {
     while (used.has(slot)) slot++;
     const flavors = ['cherry', 'lime', 'blue', 'grape', 'orange', 'lemon', 'watermelon', 'cola'];
     const style = c
-      ? { flavor: c.flavor, layers: copyLayers(c.layers), texture: c.texture, edges: EDGES[c.edges] ? c.edges : DEFAULT_STYLE.edges, glitter: c.glitter, rubik: Number.isFinite(c.rubik) ? c.rubik : 1, eyes: copyEyes(c.eyes), surface: SURFACE[c.surface] ? c.surface : 'none' }
+      ? { flavor: c.flavor, layers: copyLayers(c.layers), texture: c.texture, edges: EDGES[c.edges] ? c.edges : DEFAULT_STYLE.edges, glitter: c.glitter, rubik: Number.isFinite(c.rubik) ? c.rubik : 1, ...(c.rubikState ? { rubikState: c.rubikState } : {}), eyes: copyEyes(c.eyes), surface: SURFACE[c.surface] ? c.surface : 'none' }
       : { flavor: flavors[Math.floor(Math.random() * flavors.length)], layers: copyLayers(DEFAULT_STYLE.layers), texture: 'jello', edges: DEFAULT_STYLE.edges, glitter: 'off', eyes: Math.random() < 0.12 ? copyEyes(EYE_FACES.pair) : [], surface: Math.random() < 0.2 ? SURFACES[1 + Math.floor(Math.random() * (SURFACES.length - 1))].id : 'none' };
     // (its own material sliders; the world's as everyone's)
     const tune = {};
@@ -2032,6 +2037,9 @@ export class App {
     s.texture = c.texture;
     s.glitter = c.glitter;
     if (Number.isFinite(c.rubik)) s.rubik = c.rubik;
+    // (a Rubik's as it's been turned - or as its scramble left it)
+    if (c.rubikState) s.rubikState = c.rubikState;
+    else delete s.rubikState;
     // (its googly eyes come with it - or none)
     s.eyes = copyEyes(c.eyes);
     s.surface = SURFACE[c.surface] ? c.surface : 'none';

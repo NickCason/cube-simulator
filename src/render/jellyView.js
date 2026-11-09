@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { biasExp, RUBIK_COLORS, gradAt, gradSequence, GRAD_SHAPE_INDEX } from '../styles.js';
+import { biasExp, RUBIK_COLORS, gradAt, gradSequence, GRAD_SHAPE_INDEX, rubikPack, rubikStateOf } from '../styles.js';
 import { FREE_N, bakeFree } from '../freeform.js';
 import { MAX_CUBES, REST_STEP } from '../sim/softbody.js';
 import {
@@ -29,7 +29,7 @@ const CAUS_GAIN = 1.5; // (how bright the caustic light lands)
 // (how milky jelly of that opacity looks: see setStyle)
 // a row of the cube-look texture: 7 texels of looks, 10 + 10 of layers, the
 // colour of its light, a freeform gradient's depth
-export const CUBE_TEX_W = 32; // (30: the powder on it - Flour writes it; 31: its surface map)
+export const CUBE_TEX_W = 34; // (30: the powder on it - Flour writes it; 31: its surface map; 32, 33: a Rubik's stickers)
 
 const smoothstep = (e0, e1, x) => {
   const t = Math.min(1, Math.max(0, (x - e0) / (e1 - e0)));
@@ -726,6 +726,10 @@ export class JellyView {
     put(29, m.dust || 0, m.skin || 0, m.through ? 1 : 0, sf.ao || 0);
     (this._ownCoat ||= [])[k] = (m.dust || 0) > 0 || (m.sugar || 0) > 0;
     put(31, sf.kind, (sf.depth || 0) * (m.surfDepth ?? 1) * size, nu, nv);
+    // (a Rubik's stickers as they are: see styles.js rubikPack, CUBE_GLSL rubikAt)
+    const rp = rubik ? rubikPack(flavor.state || rubikStateOf({ rubik: flavor.rubik })) : [0, 0, 0, 0, 0, 0, 0];
+    put(32, rp[0], rp[1], rp[2], rp[3]);
+    put(33, rp[4], rp[5], rp[6], D[r + 33 * 4 + 3]);
     this.cubeTex.needsUpdate = true;
     if (flavor.layers && flavor.shape === 'free') {
       // (baked - 32 cubed colours, and the whole grid sent to the GPU, a

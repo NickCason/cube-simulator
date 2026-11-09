@@ -44,6 +44,53 @@ export function rubikCellAt(x, y, z, size) {
   const g = (w) => Math.min(2, Math.max(0, Math.floor(((w + size / 2) / size) * 3)));
   return [face, g(u) * 3 + g(v)];
 }
+// A Rubik's stickers as they are: 54, face by face (0 +x, 1 -x, 2 +y, 3 -y,
+// 4 +z, 5 -z), each face's 3x3 as rubikCellAt numbers them - its own, once
+// it's been turned (style.rubikState: 54 digits), else its scramble's.
+export function rubikStateOf(style) {
+  const t = style?.rubikState;
+  if (typeof t === 'string' && /^[0-5]{54}$/.test(t)) return [...t].map(Number);
+  const seed = Number.isFinite(style?.rubik) ? style.rubik : 1, out = [];
+  for (let f = 0; f < 6; f++) for (let c = 0; c < 9; c++) out.push(rubikIndex(seed, f, c));
+  return out;
+}
+// Where each sticker is: its little cube (x, y, z each -1, 0 or 1) and the
+// way out of it (as rubikCellAt has a face's 3x3: across, up)
+const RUBIK_N = [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]];
+export const RUBIK_SLOTS = [];
+for (let f = 0; f < 6; f++)
+  for (let c = 0; c < 9; c++) {
+    const i = Math.floor(c / 3) - 1, j = (c % 3) - 1, n = RUBIK_N[f];
+    const p = f < 2 ? [n[0], j, i] : f < 4 ? [i, n[1], j] : [i, j, n[2]];
+    RUBIK_SLOTS.push({ p, n });
+  }
+const rubikSlot = (p, n) => RUBIK_SLOTS.findIndex((s) => s.p.every((v, q) => v === p[q]) && s.n.every((v, q) => v === n[q]));
+// (a quarter turn about axis a: dir 1 the right-hand way round it)
+const quarter = (v, a, dir) => {
+  const [x, y, z] = v;
+  if (a === 0) return dir > 0 ? [x, -z, y] : [x, z, -y];
+  if (a === 1) return dir > 0 ? [z, y, -x] : [-z, y, x];
+  return dir > 0 ? [-y, x, z] : [y, -x, z];
+};
+// A turn: the layer at `at` (-1, 0, 1) along axis a (0 x, 1 y, 2 z) a quarter
+// turn (dir 1: the right-hand way about the axis) - the stickers it moves,
+// where they go (the shader's twist runs the same way: see rubikAt)
+export function rubikTurn(state, a, at, dir) {
+  const out = state.slice();
+  RUBIK_SLOTS.forEach((s, i) => {
+    if (s.p[a] !== at) return;
+    out[rubikSlot(quarter(s.p, a, dir), quarter(s.n, a, dir))] = state[i];
+  });
+  return out;
+}
+export const rubikSolved = (state) => [0, 1, 2, 3, 4, 5].every((f) => state.slice(f * 9, f * 9 + 9).every((v) => v === state[f * 9]));
+// (for the shader: eight stickers a number, three bits each - seven numbers)
+export function rubikPack(state) {
+  const out = [0, 0, 0, 0, 0, 0, 0];
+  state.forEach((v, i) => (out[i >> 3] += v * 2 ** ((i & 7) * 3)));
+  return out;
+}
+
 export const RUBIK_SWATCH =
   'linear-gradient(90deg, transparent 31%, #1b1b1f 31% 36%, transparent 36% 64%, #1b1b1f 64% 69%, transparent 69%), ' +
   'linear-gradient(180deg, transparent 31%, #1b1b1f 31% 36%, transparent 36% 64%, #1b1b1f 64% 69%, transparent 69%), ' +
@@ -306,7 +353,7 @@ export function resolveFlavor(style) {
     return { id: 'layers', name: 'Layers', layers: L.colors, blur: L.blur ?? 0, repeat: L.repeat || 1, bias: L.bias || 0, stops, nodes, tiles: Math.max(1, Math.round(L.tiles || 1)), shape: GRAD_SHAPE_INDEX[L.shape] !== undefined ? L.shape : 'up' };
   }
   // (Rubik: its scramble, and red for where one colour has to stand for it)
-  if (style.flavor === 'rubik') return { id: 'rubik', name: 'Rubik', rubik: Number.isFinite(style.rubik) ? style.rubik : 1, hex: RUBIK_COLORS[2] };
+  if (style.flavor === 'rubik') return { id: 'rubik', name: 'Rubik', rubik: Number.isFinite(style.rubik) ? style.rubik : 1, state: rubikStateOf(style), hex: RUBIK_COLORS[2] };
   return flavorById(style.flavor);
 }
 

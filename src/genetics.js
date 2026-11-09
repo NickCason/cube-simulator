@@ -107,6 +107,7 @@ export function mutate(style, tune, { rnd = Math.random, gen = 0, boost = 1 } = 
     if (rnd() < 0.3 && style.flavor !== 'rubik') {
       style.flavor = 'rubik';
       style.rubik = 1 + Math.floor(rnd() * 65535);
+      delete style.rubikState;
       add({ tier: 3, label: "A Rubik's cube!", kind: 'flavor' });
     } else {
       const to = pick(rnd, LEGEND.filter((t) => t !== style.texture));
@@ -197,7 +198,10 @@ export function mutate(style, tune, { rnd = Math.random, gen = 0, boost = 1 } = 
 
   // ---- drift: always
   if (style.flavor === 'rubik') {
-    if (!changes.some((c) => c.kind === 'flavor')) style.rubik = 1 + Math.floor(rnd() * 65535);
+    if (!changes.some((c) => c.kind === 'flavor')) {
+      style.rubik = 1 + Math.floor(rnd() * 65535);
+      delete style.rubikState;
+    }
     add({ tier: 0, label: 'Scrambled anew', kind: 'drift' });
   } else if (L) {
     L.colors = L.colors.map((h) => hueShift(h, (rnd() - 0.5) * 24, (rnd() - 0.5) * 0.12));

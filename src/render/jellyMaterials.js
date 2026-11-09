@@ -163,12 +163,34 @@ export const CUBE_GLSL = /* glsl */ `
     cTiles = max(q28.y, 1.0);
   }
   // Rubik: the colour (0..5) at rest point p - each face a 3x3 of stickers
-  // run in to the middle, centres their own face's colour, the rest
-  // scrambled by the seed (the same hash as styles.js rubikIndex);
-  // cRubikSeam: how near a seam between stickers, 0..1
+  // run in to the middle, as they are (its 54, packed eight a number into
+  // its row's columns 32 and 33: see styles.js rubikPack) - and a layer of
+  // it being turned (uTwist: axis, layer -1/0/1, angle so far, which cube)
+  // turned that far; cRubikSeam: how near a seam between stickers, 0..1
   const int RUBIK_FACE[6] = int[6](2, 3, 0, 1, 5, 4);
   float cRubikSeam = 0.0;
+  uniform vec4 uTwist;
+  int rubikSticker(int idx) {
+    int fi = idx >> 3;
+    vec4 t = cubeT(32 + (fi >> 2));
+    int q = fi & 3;
+    float v = q == 0 ? t.x : q == 1 ? t.y : q == 2 ? t.z : t.w;
+    return (int(v + 0.5) >> ((idx & 7) * 3)) & 7;
+  }
   int rubikAt(vec3 p) {
+    // (the layer being turned: turned back as far as it's gone - what's
+    // there now came from there)
+    if (uTwist.z != 0.0 && abs(float(gK) - uTwist.w) < 0.5) {
+      int ax = int(uTwist.x + 0.5);
+      float w = ax == 0 ? p.x : ax == 1 ? p.y : p.z, third = cLSpan / 6.0;
+      bool inL = uTwist.y > 0.5 ? w > third : uTwist.y < -0.5 ? w < -third : abs(w) <= third;
+      if (inL) {
+        float c = cos(-uTwist.z), s = sin(-uTwist.z);
+        if (ax == 0) p = vec3(p.x, c * p.y - s * p.z, s * p.y + c * p.z);
+        else if (ax == 1) p = vec3(c * p.x + s * p.z, p.y, -s * p.x + c * p.z);
+        else p = vec3(c * p.x - s * p.y, s * p.x + c * p.y, p.z);
+      }
+    }
     vec3 a = abs(p);
     int face; vec2 uv;
     if (a.x >= a.y && a.x >= a.z) { face = p.x > 0.0 ? 0 : 1; uv = p.zy; }
@@ -178,11 +200,7 @@ export const CUBE_GLSL = /* glsl */ `
     vec2 d = min(abs(g - 1.0), abs(g - 2.0));
     cRubikSeam = 1.0 - smoothstep(0.035, 0.075, min(d.x, d.y));
     ivec2 ij = ivec2(clamp(floor(g), 0.0, 2.0));
-    int cell = ij.x * 3 + ij.y;
-    if (cRubikSeed < 0.5 || cell == 4) return RUBIK_FACE[face];
-    uint h = uint(cRubikSeed + 0.5) * 747796405u + uint(face * 9 + cell) * 2891336453u;
-    h ^= h >> 16u; h *= 2246822519u; h ^= h >> 13u; h *= 3266489917u; h ^= h >> 16u;
-    return int(h % 6u);
+    return min(rubikSticker(face * 9 + ij.x * 3 + ij.y), 5);
   }
   // Its gradient (layered): a rest point's place along its shape, 0..1 (as
   // styles.js gradT); its absorption there (row 0) or the colour of the light
@@ -431,6 +449,7 @@ export function createJellyMaterial(env, layerUniforms) {
       uMilk: { value: 0 },
       uIrid: { value: 0 },
       uCubeTex: { value: emptyFloatTexture() },
+      uTwist: { value: new THREE.Vector4() }, // (a Rubik's layer being turned: see CUBE_GLSL rubikAt)
       uMetal: { value: 0 },
       uOpal: { value: 0 },
       uMetalCeil: { value: new THREE.Color(0, 0, 0) }, // (the studio's overhead softbox, for metal to mirror: see the metal shading)

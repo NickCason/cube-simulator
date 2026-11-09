@@ -59,6 +59,7 @@ export const ICONS = {
   eyes: svg('<circle cx="7.6" cy="12" r="5"/><circle cx="16.4" cy="12" r="5"/><circle cx="8.4" cy="13.7" r="1.9" fill="currentColor"/><circle cx="17.2" cy="13.7" r="1.9" fill="currentColor"/>'),
   flour: svg('<circle cx="10" cy="8.5" r="5.5"/><path d="M15.4 7.4 21 5.6"/><path d="M5.6 7h8.8M5.2 10h9.6M7.4 4.5h5.2M8 13h4"/><circle cx="7.6" cy="17.6" r=".7"/><circle cx="11" cy="19.4" r=".7"/><circle cx="13.4" cy="16.6" r=".7"/><circle cx="9.2" cy="21.2" r=".55"/>'),
   acid: svg('<path d="M9.5 3h5M10.5 3v5.2L5.2 18.4A1.8 1.8 0 0 0 6.8 21h10.4a1.8 1.8 0 0 0 1.6-2.6L13.5 8.2V3"/><path d="M7.4 15.4h9.2"/><circle cx="10.6" cy="18" r=".8"/><circle cx="13.6" cy="17.2" r=".6"/>'),
+  twist: svg('<path d="M5 9a7 7 0 0 1 12.4-3.6M19 15a7 7 0 0 1-12.4 3.6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M18.6 2.8v3.9h-3.9M5.4 21.2v-3.9h3.9" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><rect x="8.6" y="8.6" width="6.8" height="6.8" rx="1.2"/>'),
   gelgun: svg('<path d="M3.5 11h10.5l2.6 1.4v2H11l-1.5 4.4H6.3l1.2-4.4h-4z"/><circle cx="8.6" cy="7.3" r="2.6"/><path d="M19.6 9.2c1.6.2 2.2 1.6 1.4 2.6-.7.9-2.4.8-2.8-.4-.3-1 .3-2.3 1.4-2.2Z"/>'),
   cuber: svg('<rect x="3.2" y="11.6" width="9" height="9" rx="2"/><path d="M5.6 15.6v-1.4h1.4"/><path d="m11.6 12.4 6.3-6.3a1.8 1.8 0 0 1 2.5 2.5l-6.3 6.3"/>'),
   baller: svg(
@@ -103,6 +104,7 @@ export const TOOL_DEFS = [
   { id: 'feed', label: 'Add jelly', hint: 'Hold on a cube to ladle jelly in · feed it enough and it cubiplies', key: 'j' },
   { id: 'gelgun', label: 'Gel gun', hint: 'Hold to lob globs of jelly at it · they sink in and build it up · Re-cube to shake it off', key: 'e' },
   { id: 'magnet', label: 'Magnet', hint: 'Hold near nails to pull them out (and drag the jelly with them)', key: '0' },
+  { id: 'twist', label: 'Twist', hint: "A Rubik's cube: drag across a face to turn that row · hold still on it to scramble", key: 'r' },
 ];
 
 const blendWord = (b) => (b < 0.12 ? 'Crisp' : b < 0.38 ? 'Soft' : b < 0.7 ? 'Blended' : 'Gradient');
