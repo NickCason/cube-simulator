@@ -2,9 +2,20 @@
 // frame rate and a frame-time graph, physics / render / other time per
 // frame, resolution and physics substeps, and a log of slow frames with what
 // happened in them (new GPU shaders compiled, the jelly cut and rebuilt, the
-// resolution changed). "Copy report" puts it all on the clipboard as text.
+// resolution changed) - each slow one's physics broken down into its parts.
+// And a log of what was done, enough to do it again (scratch/replay.mjs):
+// the scene (every cube's code, the settings, the view), then every touch
+// and click on the jelly - where on the screen, what it landed on, the
+// camera - each drag's path, the tools picked, settings changed, re-cubes,
+// cuts. "Mark" puts a marker in it (it lagged here). "Copy report" puts it
+// all on the clipboard as text.
+
+import { captureCube, encodeCube } from '../cubecode.js';
+import { PROF_PHASES } from '../sim/softbody.js';
 
 const SLOW_MS = 45;
+const LOG_S = 120; // (s of the log the report keeps)
+const SAMPLE_MS = 100; // (a drag's path: a point this often)
 
 export function attachStats(app) {
   const r = app.renderer;
@@ -17,25 +28,192 @@ export function attachStats(app) {
     gpu = '?';
   }
   const t0 = performance.now();
+  const now = () => (performance.now() - t0) / 1000;
   const programs = () => r.info.programs?.length || 0;
+  const f2 = (v) => (Math.round(v * 100) / 100).toString();
+  const f3 = (v) => (Math.round(v * 1000) / 1000).toString();
+
+  // ---- the log: [t, text], the last LOG_S seconds
+  const log = [];
+  const say = (text, t = now()) => {
+    log.push([t, text]);
+    while (log.length && (log[0][0] < t - LOG_S || log.length > 6000)) log.shift();
+  };
+
+  // ---- the scene: every cube's code, the settings, the view
+  const cubeCode = (cb) => {
+    try {
+      return encodeCube(captureCube({ style: cb.style, tune: cb.tune, theme: app.theme }));
+    } catch (e) {
+      return '?';
+    }
+  };
+  const cam = () => {
+    const o = app.orbit, t = o.target;
+    return `${f3(o.theta)} ${f3(o.phi)} ${f3(o.radius)} ${f3(t.x)},${f3(t.y)},${f3(t.z)}`;
+  };
+  const sceneLines = () => {
+    const sel = app.cube?.slot;
+    const set = Object.keys(app.tune)
+      .sort()
+      .map((k) => `${k}=${typeof app.tune[k] === 'number' ? f3(app.tune[k]) : app.tune[k]}`)
+      .join(' ');
+    return [
+      `view: canvas ${app.canvas.clientWidth}x${app.canvas.clientHeight} css  res ${app.pixelRatio.toFixed(2)}x ${app.size.pw}x${app.size.ph}  theme ${app.theme}  place ${app.place}  room ${app.room?.on ? 'on' : 'off'}  tearing ${app.tearing ? 'on' : 'off'}  tool ${app.tool?.id || '-'}`,
+      `camera: ${cam()}   (theta phi radius target)`,
+      `cubes (* selected): ${app.cubes.map((cb) => `${cb.slot === sel ? '*' : ''}${cb.slot} ${cubeCode(cb)}`).join('   ')}`,
+      `settings: ${set || '(all as made)'}`,
+    ];
+  };
+
+  // ---- what's done on the jelly: touches and clicks on the canvas
+  // (x, y: 0..1 across and down the canvas; what it landed on - its piece,
+  // where, and where that is in the jelly at rest - and the camera then)
+  const pts = new Map(); // pointerId -> { t, samples: [[ms, x, y]], last }
+  const xy = (e) => {
+    const rc = app.canvas.getBoundingClientRect();
+    return [(e.clientX - rc.left) / rc.width, (e.clientY - rc.top) / rc.height];
+  };
+  const onCanvas = (e) => e.target === app.canvas;
+  const hitText = (e) => {
+    try {
+      const ray = app.rayFromClient(e.clientX, e.clientY).clone();
+      const h = app.pickJelly(ray) || app.pickJellyNear(ray);
+      if (!h) return 'miss';
+      // (where that is at rest: the hit triangle's corners, its barycentrics)
+      const sb = app.sb, F = sb.sTri, X = sb.X, rest = [0, 0, 0];
+      if (h.face >= 0 && h.bary?.length === 3) for (let q = 0; q < 3; q++) for (let c = 0; c < 3; c++) rest[c] += X[F[h.face * 3 + q] * 3 + c] * h.bary[q];
+      return `hit ${h.piece} ${h.point.map(f3).join(',')} rest ${rest.map(f3).join(',')}${h.near ? ' near' : ''}`;
+    } catch (err) {
+      return 'hit ?';
+    }
+  };
+  const flush = (id, p) => {
+    if (!p.samples.length) return;
+    say(`move ${id} ${p.samples.map(([ms, x, y]) => `${ms}:${f3(x)},${f3(y)}`).join(' ')}`, p.t);
+    p.samples = [];
+  };
+  addEventListener(
+    'pointerdown',
+    (e) => {
+      if (!onCanvas(e)) return;
+      const [x, y] = xy(e);
+      say(`down ${e.pointerId} ${e.pointerType} ${f3(x)} ${f3(y)} ${hitText(e)} cam ${cam()}`);
+      pts.set(e.pointerId, { t: now(), samples: [], last: 0 });
+    },
+    { capture: true, passive: true },
+  );
+  addEventListener(
+    'pointermove',
+    (e) => {
+      const p = pts.get(e.pointerId);
+      if (!p) return;
+      const t = now(), ms = Math.round((t - p.t) * 1000);
+      if (ms - p.last < SAMPLE_MS) return;
+      p.last = ms;
+      const [x, y] = xy(e);
+      p.samples.push([ms, x, y]);
+      // (a line a second or so, each its own start time)
+      if (ms > 1000) {
+        flush(e.pointerId, p);
+        p.t = t;
+        p.last = 0;
+      }
+    },
+    { capture: true, passive: true },
+  );
+  const end = (kind) => (e) => {
+    const p = pts.get(e.pointerId);
+    if (!p) return;
+    flush(e.pointerId, p);
+    pts.delete(e.pointerId);
+    const [x, y] = xy(e);
+    say(`${kind} ${e.pointerId} ${f3(x)} ${f3(y)}`);
+  };
+  addEventListener('pointerup', end('up'), { capture: true, passive: true });
+  addEventListener('pointercancel', end('cancel'), { capture: true, passive: true });
+  addEventListener(
+    'wheel',
+    (e) => {
+      if (onCanvas(e)) say(`wheel ${Math.round(e.deltaY)}`);
+    },
+    { capture: true, passive: true },
+  );
+
+  // ---- what changes, looked at each frame (or now and then): the tool,
+  // cuts, re-cubes, the camera, the cubes and the settings
+  let tool = app.tool?.id || '', topo = -1, healing = false, camAt = 0, camLast = '', sceneAt = 0;
+  let codes = new Map(app.cubes.map((cb) => [cb.slot, cubeCode(cb)]));
+  let tune = { ...app.tune }, theme = app.theme, place = app.place, sel = app.cube?.slot;
+  const watch = () => {
+    const t = now(), sb = app.sb;
+    const id = app.tool?.id || '';
+    if (id !== tool) say(`tool ${(tool = id)}`);
+    if (sb.topoVersion !== topo) {
+      if (topo >= 0) say(`topo ${sb.pieces.length} pieces ${sb.nT} tets [${id}]`);
+      topo = sb.topoVersion;
+    }
+    const h = !!app.healer?.active;
+    if (h !== healing) say(`recube ${(healing = h) ? 'start' : 'end'}`);
+    if (t - camAt > 0.25) {
+      camAt = t;
+      const c = cam();
+      if (c !== camLast) say(`cam ${(camLast = c)}`);
+    }
+    if (t - sceneAt > 0.5) {
+      sceneAt = t;
+      const seen = new Set();
+      for (const cb of app.cubes) {
+        seen.add(cb.slot);
+        const c = cubeCode(cb), was = codes.get(cb.slot);
+        if (c !== was) say(`cube ${cb.slot} ${was || 'new'} -> ${c}`);
+        codes.set(cb.slot, c);
+      }
+      for (const [k, c] of codes) if (!seen.has(k)) (say(`cube ${k} ${c} -> gone`), codes.delete(k));
+      for (const k of new Set([...Object.keys(tune), ...Object.keys(app.tune)]))
+        if (tune[k] !== app.tune[k]) say(`set ${k} ${tune[k] ?? '-'} -> ${app.tune[k] ?? '-'}`);
+      tune = { ...app.tune };
+      if (app.theme !== theme) say(`theme ${(theme = app.theme)}`);
+      if (app.place !== place) say(`place ${(place = app.place)}`);
+      if (app.cube?.slot !== sel) say(`sel ${(sel = app.cube?.slot)}`);
+    }
+  };
 
   // ---- per-frame measurements
-  let lastStart = 0, phys = 0, rend = 0, rebuildMs = 0, rebuilds = 0, progs = programs();
+  let lastStart = 0, phys = 0, rend = 0, rebuildMs = 0, rebuilds = 0, progs = programs(), slowSaid = -1;
   let ratio = app.pixelRatio;
   const gaps = new Float32Array(240); // frame intervals (ms), ring buffer
   const cpus = new Float32Array(240);
   let head = 0, frames = 0;
-  const slow = []; // { at, gap, cpu, phys, rend, rebuild, shaders, res, tool, pieces }
+  const slow = []; // { at, gap, cpu, phys, rend, rebuild, shaders, res, tool, pieces, parts }
   const all = []; // every interval this session, for percentiles (capped)
+  const PT = new Float64Array(PROF_PHASES.length);
+  // (the physics' own timing of its parts - see SoftBody.profT; the body
+  // can be a new one after some changes: it's given the same array)
+  const prof = () => {
+    if (app.sb.profT !== PT) app.sb.profT = PT;
+  };
+  prof();
+  // (its parts, the biggest first, for a slow frame)
+  const parts = () => {
+    const out = [];
+    for (let k = 0; k < PROF_PHASES.length - 1; k++) if (PT[k] >= 1) out.push([PROF_PHASES[k], PT[k]]);
+    out.sort((a, b) => b[1] - a[1]);
+    const sb = app.sb;
+    return `${out.map(([n, v]) => `${n} ${Math.round(v)}`).join(' ')} | ${PT[PROF_PHASES.length - 1]} sub, ${sb.pieces.length} pcs (${sb.pieces.filter((p) => !p.asleep).length} awake), ${sb.nT} tets`;
+  };
 
-  // (the app records physics/render time and the body its rebuilds, so
-  // nothing in the hot simulation code needs wrapping - wrapping methods
-  // changes the objects' shape, which costs Safari seconds of slow code)
+  // (the app records physics/render time and the body its rebuilds and its
+  // parts' times, so nothing in the hot simulation code needs wrapping -
+  // wrapping methods changes the objects' shape, which costs Safari seconds
+  // of slow code)
   const frame = app.frame.bind(app);
   app.frame = (dt) => {
     const start = performance.now();
     const gap = lastStart ? start - lastStart : 16.7;
     lastStart = start;
+    prof();
+    PT.fill(0);
     frame(dt);
     phys = app.stats.physLast;
     rend = app.stats.renderLast;
@@ -54,9 +232,10 @@ export function attachStats(app) {
     head = (head + 1) % gaps.length;
     frames++;
     if (all.length < 20000) all.push(gap);
+    watch();
     // this frame took long, or something heavy happened in it or just before it
     if (gap > SLOW_MS || cpu > SLOW_MS || newProgs > 0 || rebuilds > 0 || resChanged) {
-      slow.push({
+      const s = {
         at: (start - t0) / 1000,
         gap,
         cpu,
@@ -67,8 +246,16 @@ export function attachStats(app) {
         res: resChanged ? ratio : 0,
         tool: app.tool?.id || '',
         pieces: app.sb.pieces.length,
-      });
-      if (slow.length > 40) slow.shift();
+        parts: phys > 4 ? parts() : '',
+      };
+      slow.push(s);
+      if (slow.length > 60) slow.shift();
+      // (into the log too, beside what was being done - the really slow
+      // ones, a few a second at most: a phone at 20 fps filled it)
+      if ((gap > 80 || phys > 40 || rebuilds > 0) && s.at - slowSaid > 0.25) {
+        slowSaid = s.at;
+        say(`SLOW ${fmtSlow(s, false)}`, s.at);
+      }
     }
     last = { cpu, phys, rend };
   };
@@ -77,11 +264,17 @@ export function attachStats(app) {
   // ---- overlay
   const el = document.createElement('div');
   el.className = 'stats';
-  el.innerHTML = `<canvas width="200" height="44"></canvas><pre></pre><div class="stats-btns"><button class="copy">Copy report</button><button class="close" aria-label="Hide stats">×</button></div>`;
+  el.innerHTML = `<canvas width="200" height="44"></canvas><pre></pre><div class="stats-btns"><button class="copy">Copy report</button><button class="mark">Mark</button><button class="close" aria-label="Hide stats">×</button></div>`;
   document.body.appendChild(el);
   const cv = el.querySelector('canvas'), ctx = cv.getContext('2d');
   const pre = el.querySelector('pre');
   el.querySelector('.close').addEventListener('click', () => el.remove());
+  el.querySelector('.mark').addEventListener('click', (e) => {
+    say('MARK');
+    const b = e.currentTarget;
+    b.textContent = 'Marked ✓';
+    setTimeout(() => (b.textContent = 'Mark'), 1200);
+  });
   el.querySelector('.copy').addEventListener('click', async (e) => {
     const b = e.currentTarget;
     const text = report();
@@ -119,26 +312,37 @@ export function attachStats(app) {
       `${sb.nT} tets  ${sb.pieces.length} piece${sb.pieces.length === 1 ? '' : 's'} (${awake} awake)  shaders ${programs()}`,
     ];
   };
-  const fmtSlow = (s) =>
-    `${s.at.toFixed(1).padStart(5)}s ${Math.round(s.gap).toString().padStart(4)}ms cpu ${Math.round(s.cpu)}` +
-    (s.phys > 4 ? ` phys ${Math.round(s.phys)}` : '') +
-    (s.rend > 4 ? ` rend ${Math.round(s.rend)}` : '') +
-    (s.shaders ? ` +${s.shaders} shader${s.shaders > 1 ? 's' : ''}` : '') +
-    (s.rebuild ? ` rebuild ${Math.round(s.rebuild)}` : '') +
-    (s.res ? ` res→${s.res.toFixed(2)}x` : '') +
-    (s.tool ? ` [${s.tool}]` : '');
+  function fmtSlow(s, at = true) {
+    return (
+      (at ? `${s.at.toFixed(1).padStart(5)}s ` : '') +
+      `${Math.round(s.gap).toString().padStart(4)}ms cpu ${Math.round(s.cpu)}` +
+      (s.phys > 4 ? ` phys ${Math.round(s.phys)}` : '') +
+      (s.rend > 4 ? ` rend ${Math.round(s.rend)}` : '') +
+      (s.shaders ? ` +${s.shaders} shader${s.shaders > 1 ? 's' : ''}` : '') +
+      (s.rebuild ? ` rebuild ${Math.round(s.rebuild)}` : '') +
+      (s.res ? ` res→${s.res.toFixed(2)}x` : '') +
+      (s.tool ? ` [${s.tool}]` : '') +
+      (s.parts ? `  = ${s.parts}` : '')
+    );
+  }
   const report = () => {
     const w = app.warmStats;
+    for (const [id, p] of pts) flush(id, p);
     return [
-      'Cube Simulator stats',
+      'Cube Simulator stats v2',
       `${navigator.userAgent}`,
       `gpu: ${gpu}   dpr ${window.devicePixelRatio}   cores ${navigator.hardwareConcurrency || '?'}   screen ${innerWidth}x${innerHeight}`,
       w ? `warm-up at load: ${Math.round(w.ms)} ms, ${w.programs} shaders; intro hold ${Math.round(app.introMs || 0)} ms` : '',
-      `session ${((performance.now() - t0) / 1000).toFixed(0)} s, ${frames} frames: median ${pct(all, 0.5).toFixed(1)} ms, 95th ${pct(all, 0.95).toFixed(1)} ms, 99th ${pct(all, 0.99).toFixed(1)} ms`,
+      `session ${now().toFixed(0)} s, ${frames} frames: median ${pct(all, 0.5).toFixed(1)} ms, 95th ${pct(all, 0.95).toFixed(1)} ms, 99th ${pct(all, 0.99).toFixed(1)} ms`,
       ...summary(),
-      'slow / eventful frames (time, interval, what happened):',
-      ...slow.map(fmtSlow),
-    ].filter(Boolean).join('\n');
+      ...sceneLines(),
+      `log (the last ${LOG_S} s; t = s since load; x y = 0..1 across and down the canvas; move: ms:x,y from the line's t):`,
+      ...log.map(([t, s]) => `${t.toFixed(2)} ${s}`),
+      'slow / eventful frames (time, interval, what happened = the physics\' parts, ms):',
+      ...slow.map((s) => fmtSlow(s)),
+    ]
+      .filter(Boolean)
+      .join('\n');
   };
 
   const draw = () => {
@@ -157,7 +361,10 @@ export function attachStats(app) {
       const cv2 = Math.min(66, c[k]);
       ctx.fillRect(k * sx, H - cv2 * sy, Math.max(1, sx - 0.5), 1.5);
     }
-    pre.textContent = [...summary(), ...slow.slice(-5).reverse().map(fmtSlow)].join('\n');
+    pre.textContent = [...summary(), ...slow.slice(-5).reverse().map((s) => fmtSlow(s))].join('\n');
   };
   setInterval(draw, 250);
+  // (for a harness: the report without the clipboard)
+  window.__statsReport = report;
+  say(`start  ${app.cubes.length} cube${app.cubes.length === 1 ? '' : 's'}: ${[...codes.values()].join('   ')}  cam ${cam()}`);
 }

@@ -112,6 +112,10 @@ const PIECE_FLOATS = ['sleepT', 'rebT', 'impY', 'rebR', 'impR', 'impUx', 'impUz'
 // (piece state a rebuild carries over to an untouched piece: see _buildPieces)
 const CARRY = ['sleepT', 'asleep', 'rebT', 'impY', 'boosted', 'rebR', 'impR', 'impUx', 'impUz', 'boostedR', 'impPend', 'impT', 'impDv', 'sleepLogMu', 'foldUntil', 'foldAsk', 'buzzT', 'buzzA', 'buzzB', 'tangleN', 'untangle', 'tangleTries', 'tangleTouch', 'touchT', 'hinge'];
 
+// (the parts of a step ?stats times: SoftBody.profT, in this order - the
+// last, how many substeps)
+export const PROF_PHASES = ['pre', 'hash', 'integrate', 'grab', 'tets', 'extra', 'contact', 'bounds', 'velocity', 'post', 'substeps'];
+
 export class SoftBody {
   constructor(opts = {}) {
     this.p = asFloat(Object.assign({}, DEFAULTS, opts), ['rigidity', 'grabK', 'contactGrip', 'airDrag']);
@@ -135,6 +139,9 @@ export class SoftBody {
     this.topoVersion = 0;
     this.restVersion = 0; // (rest shapes changed in place - the render's rest points to re-read: see easeRest)
     this._restEase = null;
+    // (?stats: time spent in each part of a step, ms, added up till read -
+    // see PROF_PHASES; null, not timed. Set here so the object keeps its shape.)
+    this.profT = null;
     // (bumped when whole cubes - or pieces - come and go and the tets are
     // renumbered: what's anchored by tet index, and not in embeds, re-finds
     // its place - see Bubbles)
@@ -1444,6 +1451,16 @@ export class SoftBody {
     const P = this.p;
     const nS = P.substeps;
     const h = dt / nS;
+    // (?stats: each part's time - see PROF_PHASES)
+    const PT = this.profT;
+    let pt = PT ? performance.now() : 0;
+    const lap = PT
+      ? (k) => {
+          const n = performance.now();
+          PT[k] += n - pt;
+          pt = n;
+        }
+      : null;
     this.time += dt;
     if (this._restEase) this._tickRestEase(dt);
     this.impacts.length = 0;
@@ -1511,30 +1528,44 @@ export class SoftBody {
         this._hashAge = dt;
         this._hashTopo = this.topoVersion;
         this._hashDirty = false;
+        if (lap) lap(0);
         this._buildCollisionHash();
+        if (lap) lap(1);
       } else this._hashAge = age;
     } else this._hashDirty = true;
+    if (lap) {
+      lap(0);
+      PT[10] += nS;
+    }
     for (let s = 0; s < nS; s++) {
       this._integrate(h);
+      if (lap) lap(2);
       // (the hand pulls first, then the jelly answers: pulled after its
       // elasticity had its say, a held patch pressed against something was
       // crushed flat each substep - a thin slice turned inside out and blew
       // up like a balloon - and a corner could be dragged straight through
       // the body, leaving it passed through itself)
       for (let n = 0; n < this.grabs.length; n++) this._solveGrab(this.grabs[n], h);
+      if (lap) lap(3);
       this._solveTets(h);
+      if (lap) lap(4);
       if (this._anyRigid) this._solveRigidity(h);
       if (this.embeds.length) this._solveEmbeds(h);
       if (this.attract) this._solveAttract(h);
       if (this.pushers.length) this._solvePushers((s + 1) / nS);
+      if (lap) lap(5);
       if (multi && this._anyContact) this._solvePieceCollisions(h);
+      if (lap) lap(6);
       this._solveBounds(h);
+      if (lap) lap(7);
       this._updateVelocities(h);
+      if (lap) lap(8);
     }
     this._dampPieces(dt);
     this._tangleCheck(dt);
     this._untangle(dt);
     this._emitImpacts(dt, h);
+    if (lap) lap(9);
   }
 
   // Impacts for sound, from the impulse floor, walls and other pieces gave
