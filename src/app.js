@@ -219,6 +219,11 @@ export class App {
     this.clock = { last: performance.now(), t: 0 };
     this.timeScale = 1;
     this.stats = { physMs: 0, frameMs: 0, frames: 0, physLast: 0, renderLast: 0 };
+    // (parts of the drawing left out, for ?stats' bench - and its time then
+    // taken to when the GPU's done with the frame: see ui/stats.js)
+    this.skip = { floorFx: false, refl: false, room: false, jelly: false, fx: false, bloom: false, aa: false, adapt: false };
+    this.benchSync = false;
+    this._px = new Uint8Array(4);
     this.substepRate = 720; // physics substeps per second
     this.isTouch = false;
     this._panV = new THREE.Vector3();
@@ -1406,6 +1411,10 @@ export class App {
     // the GPU's state; its own animation gets the time)
     const covered = this.splash?.active && !this.splash.leaving && this.stats.frames > 2;
     if (!covered) this.render();
+    if (this.benchSync) {
+      const gl = this.renderer.getContext();
+      gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, this._px);
+    }
     this.stats.renderLast = performance.now() - r0;
     if (this.splash?.active && this.stats.frames > 1) {
       this.splash.go();
@@ -1423,7 +1432,7 @@ export class App {
   // seconds of smooth frames. A step up that soon has to be undone puts that
   // level off the table.
   _adaptResolution(dt, cpuMs = 0) {
-    if (this.opts.preserve) return;
+    if (this.opts.preserve || this.skip.adapt) return;
     const raw = Math.min(this._rawDt || dt, 0.25);
     const a = (this._adapt ||= { t: 0, slow: 0, fast: 0, ceiling: this.maxPixelRatio, upAt: -1e9, floor: 0, capDt: 0, ring: new Float32Array(48), n: 0, trial: null });
     a.t += dt;
@@ -2340,20 +2349,21 @@ export class App {
     this.jelly.frontMat.uniforms.uPLPos.value.copy(this.fireLight.position);
     this.jelly.frontMat.uniforms.uPLColor.value.setRGB(1.0 * fl, 0.55 * fl, 0.2 * fl);
 
-    this.jelly.renderFloorFx(this.sb);
-    if (!this.opts.nojelly) this.jelly.renderReflection(this.camera, this.rtRefl);
+    const skip = this.skip;
+    if (!skip.floorFx) this.jelly.renderFloorFx(this.sb);
+    if (!this.opts.nojelly && !skip.refl) this.jelly.renderReflection(this.camera, this.rtRefl);
 
     r.shadowMap.needsUpdate = true;
     r.setRenderTarget(this.rtScene);
     r.setClearColor(this.bg, 1);
     r.clear(true, true, false);
-    r.render(this.scene, this.camera);
+    if (!skip.room) r.render(this.scene, this.camera);
 
     const copy = () => this.post.copy(this.rtScene.texture, this.rtTrans);
     copy();
     // (no one touching anything, nothing moving: see JellyView.setFeatures)
     this.jelly.quiet = !this._held?.size && performance.now() - this._inputAt > 500 && this.sb.pieces.every((p) => p.asleep);
-    if (!this.opts.nojelly) this.jelly.renderPieces(this.camera, this.sb, this.rtScene, this.rtTrans, copy);
+    if (!this.opts.nojelly && !skip.jelly) this.jelly.renderPieces(this.camera, this.sb, this.rtScene, this.rtTrans, copy);
     // (the goo sees the jelly through itself: the room with the jelly in it)
     if (this.strands.mesh.visible) {
       copy();
@@ -2361,7 +2371,7 @@ export class App {
     }
 
     this.glitter.update(this.clock.t);
-    if (this.fxScene) {
+    if (this.fxScene && !skip.fx) {
       const auto = r.autoClear;
       r.autoClear = false;
       r.setRenderTarget(this.rtScene);
@@ -2378,8 +2388,8 @@ export class App {
 
     this.flash *= 0.86;
     this.post.compositeMat.uniforms.uFlash.value = this.flash;
-    const bloom = this.post.bloom(this.rtScene.texture, this.size.pw, this.size.ph);
-    if (this.rtAA) {
+    const bloom = skip.bloom ? this.post.rts[0].texture : this.post.bloom(this.rtScene.texture, this.size.pw, this.size.ph);
+    if (this.rtAA && !skip.aa) {
       this.post.fxaa(this.rtScene.texture, this.rtAA);
       this.post.composite(this.rtAA.texture, bloom, this.clock.t);
     } else this.post.composite(this.rtScene.texture, bloom, this.clock.t);

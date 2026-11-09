@@ -410,6 +410,7 @@ export class JellyView {
     // (a surface map's depth: fewer steps down into it on a phone)
     this.frontMat.uniforms.uSurfSteps.value = coarse ? 6 : 10;
     this.causticLevel = 1; // (0..1: faded out while a lot of bits re-cube - see App)
+    this.skipCaustics = false; // (?stats' bench: see App.skip)
     this.layerCap = Infinity; // (and fewer refraction layers meanwhile)
     this.causticMat.uniforms.uDisperse.value = 1.5;
     // (and the jelly, for one cube's shadow on another - see cubeShadowAt)
@@ -1309,7 +1310,7 @@ export class JellyView {
     // smooths their finest lines - half what they cost, and never still long
     // enough to see it; settled, once more with it.)
     const L = this.lightDir, moving = !!sb && sb.pieces.some((p) => !p.asleep);
-    const sig = sb ? `${sb.topoVersion}|${sb.nV}|${this._ps}|${this._ts}|${this._ds}|${this.lookVersion}|${L.x},${L.y},${L.z}|${Math.round(this.causticLevel * 200)}|${this.multiCube}|${this.disperse}|${sb.fill ? performance.now() : 0}|${moving}` : '';
+    const sig = sb ? `${sb.topoVersion}|${sb.nV}|${this._ps}|${this._ts}|${this._ds}|${this.lookVersion}|${L.x},${L.y},${L.z}|${Math.round(this.causticLevel * 200)}|${this.multiCube}|${this.disperse}|${sb.fill ? performance.now() : 0}|${moving}|${this.skipCaustics}` : '';
     if (sig && sig === this._fxSig) {
       this._renderGlowMap();
       return;
@@ -1321,7 +1322,7 @@ export class JellyView {
     // caustics: the light's view of the jelly, then its grid of rays (the
     // light's view is the cubes' shadows on each other too - faded out,
     // only that)
-    const caus = this.causticLevel > 0.01;
+    const caus = this.causticLevel > 0.01 && !this.skipCaustics;
     const lit = sb && this.allMesh && (caus || this.multiCube) && this._fitLightView(sb);
     if (lit) {
       for (const { rt, mat } of this.lightView) {

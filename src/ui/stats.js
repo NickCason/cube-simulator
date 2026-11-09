@@ -271,7 +271,7 @@ export function attachStats(app) {
   // ---- overlay
   const el = document.createElement('div');
   el.className = 'stats';
-  el.innerHTML = `<canvas width="200" height="44"></canvas><pre></pre><div class="stats-btns"><button class="copy">Copy report</button><button class="mark">Mark</button><button class="close" aria-label="Hide stats">×</button></div>`;
+  el.innerHTML = `<canvas width="200" height="44"></canvas><pre></pre><div class="stats-btns"><button class="copy">Copy report</button><button class="mark">Mark</button><button class="bench">Bench</button><button class="close" aria-label="Hide stats">×</button></div>`;
   document.body.appendChild(el);
   const cv = el.querySelector('canvas'), ctx = cv.getContext('2d');
   const pre = el.querySelector('pre');
@@ -295,6 +295,92 @@ export function attachStats(app) {
     }
     setTimeout(() => (b.textContent = 'Copy report'), 1800);
   });
+
+  // ---- bench: what each part of the drawing costs this GPU. Each left out
+  // in turn, the frame timed from the start of its drawing to when the GPU's
+  // done with it (made to wait for that: App.benchSync) - still (the
+  // physics paused), then wobbling (the shadows, the caustics and the
+  // light's views of the jelly drawn every frame), then the whole frame at
+  // a lower resolution. Hands off while it runs (~30 s).
+  const BENCH = [
+    ['still', 'all'], ['still', 'no room', 'room'], ['still', 'no jelly', 'jelly'], ['still', 'no glitter/bubbles', 'fx'],
+    ['still', 'no mirror', 'refl'], ['still', 'no bloom', 'bloom'], ['still', 'no edge pass', 'aa'],
+    ['moving', 'all'], ['moving', 'no caustics', 'caustics'], ['moving', 'no floor effects', 'floorFx'],
+    ['moving', 'no room', 'room'], ['moving', 'no jelly', 'jelly'], ['moving', 'no mirror', 'refl'],
+  ];
+  let benchLines = [], benching = false;
+  const median = (v) => {
+    const q = [...v].sort((a, b) => a - b);
+    return q[q.length >> 1] || 0;
+  };
+  // (n frames' drawing times, after a few to settle; each() before each)
+  const timeFrames = async (n, each) => {
+    const out = [];
+    let seen = app.stats.frames, k = 0;
+    while (out.length < n) {
+      await new Promise((res) => requestAnimationFrame(res));
+      if (each) each(k);
+      k++;
+      if (app.stats.frames !== seen) {
+        seen = app.stats.frames;
+        if (k > 8) out.push(app.stats.renderLast);
+      }
+    }
+    return median(out);
+  };
+  const wobble = (k) => {
+    if (k % 15) return;
+    const sb = app.sb, t = performance.now() / 1000;
+    for (let i = 0; i < sb.nV; i++) sb.v[i * 3 + 1] += 0.15 * Math.sin(sb.x[i * 3] * 6 + t * 7);
+    sb.wakeAll();
+  };
+  const runBench = async (btn) => {
+    if (benching) return;
+    benching = true;
+    const skip = app.skip, J = app.jelly, pr = app.pixelRatio, paused = app.paused;
+    const out = [`bench (ms a frame, drawing start to GPU done; each part left out in turn; res ${pr.toFixed(2)}x ${app.size.pw}x${app.size.ph}, shader ${shader()}):`];
+    benchLines = out;
+    skip.adapt = true;
+    app.benchSync = true;
+    try {
+      let base = { still: 0, moving: 0 };
+      for (let i = 0; i < BENCH.length; i++) {
+        const [phase, label, key] = BENCH[i];
+        btn.textContent = `Bench ${i + 1}/${BENCH.length + 1}…`;
+        app.paused = phase === 'still';
+        if (key === 'caustics') J.skipCaustics = true;
+        else if (key) skip[key] = true;
+        const ms = await timeFrames(phase === 'still' ? 30 : 45, phase === 'moving' ? wobble : null);
+        if (key === 'caustics') J.skipCaustics = false;
+        else if (key) skip[key] = false;
+        if (!key) base[phase] = ms;
+        out.push(`  ${phase.padEnd(7)} ${label.padEnd(20)} ${ms.toFixed(1).padStart(6)}${key ? `  (${(ms - base[phase]).toFixed(1)})` : ''}`);
+      }
+      // (and the whole frame, still, at a lower resolution: how much of it
+      // goes with the pixels)
+      btn.textContent = `Bench ${BENCH.length + 1}/${BENCH.length + 1}…`;
+      app.paused = true;
+      const lo = Math.max(0.75, Math.min(1, pr - 0.5));
+      if (lo < pr - 0.01) {
+        app.pixelRatio = lo;
+        app._resizePending = true;
+        const ms = await timeFrames(30);
+        out.push(`  still   all at ${lo.toFixed(2)}x ${app.size.pw}x${app.size.ph}`.padEnd(37) + `${ms.toFixed(1).padStart(6)}  (${(ms - base.still).toFixed(1)})`);
+      }
+    } finally {
+      app.pixelRatio = pr;
+      app._resizePending = true;
+      for (const k in skip) skip[k] = false;
+      J.skipCaustics = false;
+      app.benchSync = false;
+      app.paused = paused;
+      benching = false;
+      btn.textContent = 'Bench ✓';
+      setTimeout(() => (btn.textContent = 'Bench'), 2500);
+    }
+    say(`BENCH ${out.slice(1).map((l) => l.trim().replace(/\s+/g, ' ')).join(' | ')}`);
+  };
+  el.querySelector('.bench').addEventListener('click', (e) => runBench(e.currentTarget));
 
   const recent = (arr) => {
     const n = Math.min(frames, arr.length);
@@ -347,6 +433,7 @@ export function attachStats(app) {
       ...log.map(([t, s]) => `${t.toFixed(2)} ${s}`),
       'slow / eventful frames (time, interval, what happened = the physics\' parts, ms):',
       ...slow.map((s) => fmtSlow(s)),
+      ...benchLines,
     ]
       .filter(Boolean)
       .join('\n');
@@ -368,10 +455,11 @@ export function attachStats(app) {
       const cv2 = Math.min(66, c[k]);
       ctx.fillRect(k * sx, H - cv2 * sy, Math.max(1, sx - 0.5), 1.5);
     }
-    pre.textContent = [...summary(), ...slow.slice(-5).reverse().map((s) => fmtSlow(s))].join('\n');
+    pre.textContent = [...summary(), ...(benchLines.length ? benchLines : slow.slice(-5).reverse().map((s) => fmtSlow(s)))].join('\n');
   };
   setInterval(draw, 250);
-  // (for a harness: the report without the clipboard)
+  // (for a harness: the report without the clipboard, and the bench)
   window.__statsReport = report;
+  window.__statsBench = () => runBench(el.querySelector('.bench'));
   say(`start  ${app.cubes.length} cube${app.cubes.length === 1 ? '' : 's'}: ${[...codes.values()].join('   ')}  cam ${cam()}`);
 }
