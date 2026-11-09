@@ -945,9 +945,11 @@ export function createJellyMaterial(env, layerUniforms) {
         if (cq31.x > 0.5 && cavity < 0.5) {
           vec4 cq28s = cubeT(28);
           SfInfo sf = sfInfo(cq31, cq28s, cq4.w);
-          if (sf.thru || fresh < 0.5) {
+          // (on its moulded skin only - not a cut, nor a melted surface
+          // (fresh 0.25); and melting away as it heats)
+          if (sf.thru || fresh < 0.1) {
             float fpc = 2.0 * sqrt(length(dRx) * length(dRy)) / sf.cell;
-            float fade = 1.0 - smoothstep(0.1, 0.4, fpc);
+            float fade = (1.0 - smoothstep(0.1, 0.4, fpc)) * (sf.thru ? 1.0 : 1.0 - melt);
             surfRough = cq28s.z + (1.0 - fade) * min(0.3, 2.0 * sf.depth / sf.cell);
             if (fade > 0.0) {
               vec3 Nr = sfRestN(dRx, dRy, dPx, dPy, N);
@@ -1620,7 +1622,7 @@ export function createLightViewMaterial(kind) {
       vec3 surfN(vec3 n) {
         ${kind === 0 ? 'return n;' : `gK = int(vCubeK + 0.5);
         vec4 q31 = cubeT(31);
-        if (q31.x < 0.5 || vFresh > 0.5) return n;
+        if (q31.x < 0.5 || vFresh > 0.1) return n;
         SfInfo sf = sfInfo(q31, cubeT(28), cubeT(4).w);
         if (sf.thru) return n;
         vec3 dRx = dFdx(vRest3), dRy = dFdy(vRest3), dPx = dFdx(vW), dPy = dFdy(vW);

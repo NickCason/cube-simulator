@@ -1519,7 +1519,10 @@ export class SoftBody {
         roundBoxNormal(cx, cy, cz, half, bevel, nrm);
         if (nx * nrm[0] + ny * nrm[1] + nz * nrm[2] > 0.55) tag = TAG_EXTERIOR;
       }
-      if (tag === TAG_FRESH && this.melt[a] && this.melt[b] && this.melt[c]) tag = TAG_MELT;
+      // (melted by the torch: wherever it is - a shallow crater's floor lies
+      // near the cube's own shape, facing its way, and passed for its skin:
+      // its surface map ran on down into the wound)
+      if (this.melt[a] && this.melt[b] && this.melt[c]) tag = TAG_MELT;
       sTag[f] = tag;
       f++;
     }
@@ -1672,7 +1675,9 @@ export class SoftBody {
         const i = rSim[r];
         extra[r * 4] = temp[i];
         extra[r * 4 + 1] = glow[i];
-        extra[r * 4 + 2] = rTag[r] === TAG_FRESH ? 1 : 0;
+        // (a melted surface: as smooth as the skin, a quarter of the way to a
+        // cut - no surface map on it; see the jelly shader's fresh)
+        extra[r * 4 + 2] = rTag[r] === TAG_FRESH ? 1 : rTag[r] === TAG_MELT ? 0.25 : 0;
         extra[r * 4 + 3] = dust[i];
       }
     }
