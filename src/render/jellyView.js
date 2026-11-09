@@ -1483,6 +1483,8 @@ export class JellyView {
       // (its source changed - harnesses do that: none of those compiled fit)
       if (this._variants) this._finishWarms();
       for (const v of this._variants?.values() || []) v.m.dispose();
+      for (const m of this._runMats?.values() || []) m.dispose();
+      this._runMats = new Map();
       this._variants = new Map();
       this._featUsed = new Set();
       this._featSrc = this.frontMat.fragmentShader;
@@ -1490,6 +1492,15 @@ export class JellyView {
     }
     if (this._featKey === undefined) return this._useFeatures(want); // (the first: compiled now)
     if (this.quiet && !this.portraits && !this._warming()) this._warm(this._featReady(all) ? want : all, camera);
+    // (several cubes: each one's own parts, compiled aside one at a time)
+    if (this.quiet && !this.portraits && !this._warming() && this._featReady(all) && this._featReady(want) && this.multiCube) {
+      const keys = this._cubeKeys();
+      for (const pc of sb.pieces) {
+        if (this._featReady(keys[pc.cube])) continue;
+        this._warm(keys[pc.cube], camera);
+        break;
+      }
+    }
     if (want === this._featKey) return;
     if (this._featReady(want)) return this._useFeatures(want);
     if ((this._featKey & want) === want) return;
@@ -1502,25 +1513,50 @@ export class JellyView {
 
   // what's here: the cubes' looks, any coat, glow mode, a weld or a flame
   _wantFeatures(sb) {
-    const D = this.cubeData, f = this._featSeen || (this._featSeen = new Uint8Array(MAX_CUBES));
+    const f = this._featSeen || (this._featSeen = new Uint8Array(MAX_CUBES)), keys = this._cubeKeys();
     f.fill(0);
     for (const pc of sb.pieces) f[pc.cube] = 1;
     let key = 0;
+    for (let k = 0; k < MAX_CUBES; k++) if (f[k]) key |= keys[k];
+    return key;
+  }
+
+  // each cube's own: what its look needs of the front shader - and what all
+  // of them need (a coat, glow mode, a weld or a flame)
+  _cubeKeys() {
+    const D = this.cubeData, keys = this._ck || (this._ck = new Int32Array(MAX_CUBES));
+    const U = this.frontMat.uniforms, pl = U.uPLColor.value;
+    let g = 0;
+    if (this.coverWanted) g |= 16; // (sugar, a dusting, flour, frost - see update)
+    if (U.uEmit.value > 0) g |= 32;
+    if (U.uWeldT.value < 5 || pl.r + pl.g + pl.b > 0.001) g |= 64;
+    if (this.debugShader) g |= JELLY_DEBUG;
     for (let k = 0; k < MAX_CUBES; k++) {
-      if (!f[k]) continue;
       const r = k * CUBE_TEX_W * 4;
+      let key = g;
       if (D[r + 14] > 0) key |= 1; // iridescent
       if (D[r + 15] > 0) key |= 2; // metal
       if (D[r + 16] > 0) key |= 4; // opal fire
       // a surface map: a face's baked one, or holes all through
       if (D[r + 31 * 4] > 0.5) key |= SURFACES[Math.round(D[r + 31 * 4])]?.through ? 256 : 8;
+      keys[k] = key;
     }
-    const U = this.frontMat.uniforms, pl = U.uPLColor.value;
-    if (this.coverWanted) key |= 16; // (sugar, a dusting, flour, frost - see update)
-    if (U.uEmit.value > 0) key |= 32;
-    if (U.uWeldT.value < 5 || pl.r + pl.g + pl.b > 0.001) key |= 64;
-    if (this.debugShader) key |= JELLY_DEBUG;
-    return key;
+    return keys;
+  }
+
+  // The front shader for one cube's run of a layer: its own parts if those
+  // are compiled (else the frame's, with everything here)
+  _runMat(key) {
+    if (key === this._featKey || !this._featReady(key)) return this.frontMat;
+    const M = this._runMats || (this._runMats = new Map());
+    let m = M.get(key);
+    if (!m) {
+      m = this.frontMat.clone();
+      m.uniforms = this.frontMat.uniforms;
+      m.defines = jellyDefines(key);
+      M.set(key, m);
+    }
+    return m;
   }
 
   _useFeatures(key) {
@@ -1861,15 +1897,34 @@ export class JellyView {
         changed = true;
       }
     }
+    // (several cubes: a layer's pieces in runs, cube look by cube look - each
+    // run drawn with just the parts of the shader its look needs)
+    const ckeys = this.multiCube ? this._cubeKeys() : null;
+    if (ckeys) {
+      let sigK = 0;
+      for (let k = 0; k < MAX_CUBES; k++) sigK = (Math.imul(sigK, 31) + ckeys[k]) | 0;
+      if (sigK !== this._runSig) changed = true;
+      this._runSig = sigK;
+    } else if (this._runSig !== 0) {
+      changed = true;
+      this._runSig = 0;
+    }
     if (changed) {
       const full = this.fullIndex, P = this.pieceIdx;
+      const runs = this.layerRuns || (this.layerRuns = []);
       for (let L = 0; L < maxL; L++) {
         const g = this.layerMeshes[L].geometry, idx = g.index;
         let n = 0;
-        for (let k = 0; k < NP; k++) {
-          if (layerOf[k] !== L) continue;
+        const order = [];
+        for (let k = 0; k < NP; k++) if (layerOf[k] === L) order.push(k);
+        if (ckeys) order.sort((a, b) => ckeys[sb.pieces[a].cube] - ckeys[sb.pieces[b].cube] || a - b);
+        const R = (runs[L] = []);
+        for (const k of order) {
+          const len = P[k * 2 + 1] - P[k * 2], key = ckeys ? ckeys[sb.pieces[k].cube] : -1;
+          if (!R.length || R[R.length - 1].key !== key) R.push({ key, start: n, count: 0 });
           idx.array.set(full.subarray(P[k * 2], P[k * 2 + 1]), n);
-          n += P[k * 2 + 1] - P[k * 2];
+          n += len;
+          R[R.length - 1].count += len;
         }
         if (n !== this.layerCount[L] || n) {
           idx.clearUpdateRanges();
@@ -1915,7 +1970,18 @@ export class JellyView {
         r.render(this.scene, camera);
       }
       this.scene.overrideMaterial = null;
-      r.render(this.scene, camera);
+      const R = this.layerRuns?.[L];
+      if (!R || R.length < 2) r.render(this.scene, camera);
+      else {
+        const mesh = this.layerMeshes[L], g = mesh.geometry, n = g.drawRange.count;
+        for (const run of R) {
+          mesh.material = this._runMat(run.key);
+          g.setDrawRange(run.start, run.count);
+          r.render(this.scene, camera);
+        }
+        mesh.material = this.frontMat;
+        g.setDrawRange(0, n);
+      }
       if (L < nLayers - 1) copyFn();
     }
     for (const m of this.layerMeshes) m.visible = false;
