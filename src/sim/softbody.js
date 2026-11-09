@@ -164,9 +164,9 @@ export class SoftBody {
     this.dampBoost = 1;
     this.dmgHeal = 0; // (s) left of torn ends firming up (tDmg decaying)
     this.calmT = 0; // (s) left of the jiggle damped hard (just torn: the halves settle, not flail)
-    // each cube's own shape (see mesh.js shapeSDF, setShape): its faces
-    // dished or bulged (0: flat), its edges' scallops - how far one stands
-    // out (0: none), how many of the render's finest steps long
+    // each cube's own shape (see mesh.js shapeSDF, crimp; setShape): its
+    // faces dished or bulged (0: flat), its edges' crimp - how far it stands
+    // out (0: none), every how many cells
     this.cBow = new Float64Array(MAX_CUBES);
     this.cLobeA = new Float64Array(MAX_CUBES);
     this.cLobeP = new Float64Array(MAX_CUBES);
@@ -384,27 +384,31 @@ export class SoftBody {
   }
 
   // ---------------------------------------------------------------- setup
-  // Cube k's own shape - its faces' bow, its edges' scallops (A 0: none;
-  // m: how many of the render's finest steps long) - for the next time it's
-  // built.
+  // Cube k's own shape - its faces' bow, its edges' crimp (A 0: none; m:
+  // every how many cells) - for the next time it's built.
   setShape(k, bow, A, m) {
     this.cBow[k] = Number.isFinite(bow) ? bow : 0;
     this.cLobeA[k] = A > 0 ? A : 0;
     this.cLobeP[k] = m > 0 ? m : 0;
   }
 
-  // (cube k's shape: null - a plain rounded box - or { bow, A, m, d }: see
-  // mesh.js shapeSDF - d the render's finest step, a quarter of a cell. res,
-  // size: what it's being built at, if that's not its own yet)
-  shapeOf(k, res = this.cRes[k], size = this.cSize[k]) {
+  // (cube k's shape as it's built: null - a plain rounded box - or { bow,
+  // A, m }: see mesh.js buildCubeMesh)
+  shapeOf(k) {
     if (!(this.cBow[k] || this.cLobeA[k] > 0)) return null;
-    return { bow: this.cBow[k], A: this.cLobeA[k], m: this.cLobeP[k] || 4, d: res > 0 ? size / res / 4 : 0 };
+    return { bow: this.cBow[k], A: this.cLobeA[k], m: this.cLobeP[k] || 2 };
+  }
+
+  // (...and as a shape - its skin's: only a bow is - the crimp's in its
+  // points, not its shape: null, the plain rounded box, or { bow })
+  formOf(k) {
+    return this.cBow[k] ? { bow: this.cBow[k] } : null;
   }
 
   loadCube(ox = 0, oy = 0, oz = 0, yaw = 0) {
     this.cubeVersion++;
     this.cBevel[0] = this.p.bevel;
-    const mesh = buildCubeMesh(this.p.res, this.p.size, this.p.bevel, this.shapeOf(0, this.p.res, this.p.size));
+    const mesh = buildCubeMesh(this.p.res, this.p.size, this.p.bevel, this.shapeOf(0));
     this.cN[0] = mesh.nV;
     this.cSize[0] = this.p.size;
     this.cRes[0] = this.p.res;
@@ -435,7 +439,7 @@ export class SoftBody {
   addCube(k, ox = 0, oy = 0, oz = 0, yaw = 0, bevel = this.p.bevel, size = this.p.size, res = this.p.res) {
     this.cubeVersion++;
     this.cBevel[k] = bevel;
-    const mesh = buildCubeMesh(res, size, bevel, this.shapeOf(k, res, size));
+    const mesh = buildCubeMesh(res, size, bevel, this.shapeOf(k));
     this.cN[k] = mesh.nV;
     this.cSize[k] = size;
     this.cRes[k] = res;
@@ -572,7 +576,7 @@ export class SoftBody {
   // given (moved in place), go on the new tets at the same rest points.
   // Rebuilt.
   remeshCube(k, res, anchors = []) {
-    const R = k * REST_STEP, mesh = buildCubeMesh(res, this.cSize[k], this.cBevel[k], this.shapeOf(k, res));
+    const R = k * REST_STEP, mesh = buildCubeMesh(res, this.cSize[k], this.cBevel[k], this.shapeOf(k));
     const look = { tet: -1, b0: 0, b1: 0, b2: 0, b3: 0 };
     const where = (px, py, pz) => (this.locateRestFast(px, py, pz, look) && this.tCube[look.tet] === k ? [look.tet, look.b0, look.b1, look.b2, look.b3] : this._restNearest(k, px, py, pz));
     // (each anchor in it - a nail's, a weld's - by where it is at rest)
@@ -894,10 +898,23 @@ export class SoftBody {
     this._computeRest();
     if (u >= 1) {
       this._computeMass();
-      this._computeEscape();
+      this.refreshSurface();
       this._restEase = null;
       this.restVersion++;
     }
+  }
+
+  // The surface worked out again from the rest shape as it is now, its
+  // topology the same: its faces' rest normals and tags, the render's
+  // smoothing groups - after the rest shape's changed in place (a rounding
+  // eased to another, torn ends giving back). Else the old shape's creases
+  // stay: a sharp crease left on a round edge, a sharp edge smoothed over.
+  refreshSurface() {
+    this._extractSurface();
+    this._computeEscape();
+    this._buildRenderClusters();
+    this._findHinges();
+    this._rg = null;
   }
 
   // Just what the next cut needs (rest shapes, masses, adjacency, pieces):
@@ -1551,7 +1568,7 @@ export class SoftBody {
     const nrm = [0, 0, 0];
     // (a scalloped cube's points: on its skin or not, each worked out once -
     // 1 on, -1 not)
-    const onSkin = this.cLobeA.some((A) => A > 0) || this.cBow.some((B) => B !== 0) ? new Int8Array(this.nV) : null, shapes = [];
+    const shapes = [];
     let f = 0;
     const tetBoundary = new Int32Array(nT).fill(-1); // first boundary face of tet (linked)
     const nextBoundary = new Int32Array(nF).fill(-1);
@@ -1574,20 +1591,16 @@ export class SoftBody {
       // (against its own cube's shape, where that sits in rest space)
       const cb = vCube[a], bevel = cBevel[cb], half = cSize[cb] / 2;
       const cx = (ax + X[b * 3] + X[c * 3]) / 3 - cb * REST_STEP, cy = (ay + X[b * 3 + 1] + X[c * 3 + 1]) / 3, cz = (az + X[b * 3 + 2] + X[c * 3 + 2]) / 3;
-      // (its own shape: a dished or scalloped one's is its skin)
-      const lb = this.cBow[cb] || this.cLobeA[cb] > 0 ? (shapes[cb] ||= this.shapeOf(cb)) : null;
+      // (its own shape: a dished or bulged one's is its skin)
+      const lb = this.cBow[cb] ? (shapes[cb] ||= this.formOf(cb)) : null;
       let tag = TAG_FRESH;
-      if (lb) {
-        // (a shaped one's skin: near its shape - a coarse face's middle lies
-        // well inside its waves' curves - and facing its way, with a corner
-        // of it one of its skin's own points (a cut's face has none: its
-        // corners are all new, and near the skin its waves' sides can face
-        // the cut's way). A face of its skin that's whole: facing out.)
-        const R0 = cb * REST_STEP, on = (v) => (onSkin[v] || (onSkin[v] = Math.abs(shapeSDF(X[v * 3] - R0, X[v * 3 + 1], X[v * 3 + 2], half, bevel, lb)) < 0.003 * half ? 1 : -1)) > 0;
-        const oa = on(a), ob = on(b), oc = on(c);
-        if ((oa || ob || oc) && Math.abs(shapeSDF(cx, cy, cz, half, bevel, lb)) < 0.09 * half) {
+      if (lb || this.cLobeA[cb] > 0) {
+        // (a shaped one's skin - dished, bulged, its edges crimped: near its
+        // shape - a coarse face's middle lies well inside its curves, a
+        // crimp's waves stand off it - and facing much its way)
+        if (Math.abs(shapeSDF(cx, cy, cz, half, bevel, lb)) < 0.09 * half) {
           shapeNormal(cx, cy, cz, half, bevel, lb, nrm);
-          if (nx * nrm[0] + ny * nrm[1] + nz * nrm[2] > (oa && ob && oc ? 0 : 0.45)) tag = TAG_EXTERIOR;
+          if (nx * nrm[0] + ny * nrm[1] + nz * nrm[2] > 0.45) tag = TAG_EXTERIOR;
         }
       } else {
         const sd = roundBoxSDF(cx, cy, cz, half, bevel);
@@ -1665,6 +1678,9 @@ export class SoftBody {
         continue;
       }
       for (let a = 0; a < n; a++) par[a] = a;
+      // (a crimped cube's skin smoothed across every edge, however sharp: its
+      // waves soft - creased, they'd be drawn in straight lines, spikes)
+      const crimped = this.cLobeA[this.vCube[v]] > 0;
       for (let a = 0; a < n; a++) {
         const fa = (inc[s + a] / 3) | 0;
         const ca = inc[s + a] % 3;
@@ -1676,7 +1692,7 @@ export class SoftBody {
           const b1 = sTri[fb * 3 + ((cb + 1) % 3)], b2 = sTri[fb * 3 + ((cb + 2) % 3)];
           if (!(a1 === b1 || a1 === b2 || a2 === b1 || a2 === b2)) continue;
           const d = N[fa * 3] * N[fb * 3] + N[fa * 3 + 1] * N[fb * 3 + 1] + N[fa * 3 + 2] * N[fb * 3 + 2];
-          const thr = sTag[fa] === TAG_EXTERIOR ? 0.45 : sTag[fa] === TAG_MELT ? 0.15 : 0.82;
+          const thr = sTag[fa] === TAG_EXTERIOR ? (crimped ? -1.1 : 0.45) : sTag[fa] === TAG_MELT ? 0.15 : 0.82;
           if (d < thr) continue;
           const ra = find(a), rb = find(b);
           if (ra !== rb) par[rb] = ra;

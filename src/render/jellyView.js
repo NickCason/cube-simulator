@@ -1,4 +1,4 @@
-import { shapeSDF, shapeNormal, shapeRadius, shapeFlat, lobeOut } from '../sim/mesh.js';
+import { shapeSDF, shapeNormal, shapeRadius, shapeFlat } from '../sim/mesh.js';
 import * as THREE from 'three';
 import { biasExp, RUBIK_COLORS, gradAt, gradSequence, GRAD_SHAPE_INDEX, rubikPack, rubikStateOf, TRIM } from '../styles.js';
 import { FREE_N, bakeFree } from '../freeform.js';
@@ -285,20 +285,11 @@ function snapToForm(pos, nrm, mids, first, disp3, shapes, cube, onForm = null) {
     if (onForm) onForm[k] = 1;
     const S = shapes[cube[mids[m]]], o = k * 3;
     const ia = mids[m] * 3, ib = mids[m + 1] * 3;
-    // (where it belongs, found as the jelly's own points were - see mesh.js
-    // buildCubeMesh: dished or bulged, straight out or in from the middle
-    // onto its skin; only scalloped, from the plain box's nearest point
-    // straight out to it)
-    let x, y, z;
-    if (S.form.bow) {
-      const px = pos[o], py = pos[o + 1], pz = pos[o + 2], pl = Math.sqrt(px * px + py * py + pz * pz) || 1e-9;
-      const R = shapeRadius(px / pl, py / pl, pz / pl, S.a + S.r, S.r, S.form) / pl;
-      (x = px * R), (y = py * R), (z = pz * R);
-    } else {
-      roundedBox(pos[o], pos[o + 1], pos[o + 2], S.a, S.r);
-      const D = lobeOut(_cp[0], _cp[1], _cp[2], _cp[3], _cp[4], _cp[5], S.a + S.r, S.r, S.form);
-      (x = _cp[0] + _cp[3] * D), (y = _cp[1] + _cp[4] * D), (z = _cp[2] + _cp[5] * D);
-    }
+    // (where it belongs: straight out or in from the middle onto its skin,
+    // as the jelly's own points were - see mesh.js buildCubeMesh)
+    const px = pos[o], py = pos[o + 1], pz = pos[o + 2], pl = Math.sqrt(px * px + py * py + pz * pz) || 1e-9;
+    const R = shapeRadius(px / pl, py / pl, pz / pl, S.a + S.r, S.r, S.form) / pl;
+    const x = px * R, y = py * R, z = pz * R;
     const ex = pos[ib] - pos[ia], ey = pos[ib + 1] - pos[ia + 1], ez = pos[ib + 2] - pos[ia + 2], el2 = ex * ex + ey * ey + ez * ez || 1e-18;
     const nx = nrm[o], ny = nrm[o + 1], nz = nrm[o + 2];
     let sx = ny * ez - nz * ey, sy = nz * ex - nx * ez, sz = nx * ey - ny * ex;
@@ -1143,7 +1134,7 @@ export class JellyView {
     vertexNormals(rIndex, rest, restN, nB);
     // (each cube its own rounding; each render vertex knows its cube - the
     // new points their edge's)
-    const shapes = Array.from(sb.cBevel, (b, k) => ({ a: sb.cSize[k] / 2 - b, r: b, form: sb.shapeOf(k) }));
+    const shapes = Array.from(sb.cBevel, (b, k) => ({ a: sb.cSize[k] / 2 - b, r: b, form: sb.formOf(k) }));
     const cube = new Float32Array(maxN);
     for (let r = 0; r < nB; r++) cube[r] = sb.vCube[rSim[r]];
     for (let m = 0, k = nB; m < L1.mids.length; m += 3, k++) cube[k] = cube[L1.mids[m]];

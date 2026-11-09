@@ -934,9 +934,10 @@ export class App {
     sb._computeMass();
     sb.wakeAll();
     if (k >= 1) {
-      sb._computeEscape();
-      sb._rg = null;
-      this.jelly.topoVersion = -1; // (the render surface's true-shape fit, for the new rounding)
+      // (its surface's normals, tags and creases for the new rounding, and
+      // the render surface fit to it again)
+      sb.refreshSurface();
+      this.jelly.topoVersion = -1;
       this._edgeMorph = null;
     }
   }
@@ -1605,16 +1606,16 @@ export class App {
     return (EDGES[cb.style.edges] || EDGES[DEFAULT_STYLE.edges]).bevel * this.sizeOf(cb);
   }
 
-  // Its own shape (see mesh.js shapeSDF): its faces' bow - by the Faces
-  // slider, dished (-1) to bulged (1), a face's middle up to 16% of its size
-  // in or out - and its scalloped edges' crimp: how far each scallop stands
-  // out (Depth: 0.7% of its size at Moulded, the Airy ribbing's) and how
-  // long (Size: a mesh cell at Medium - four of the render's finest steps -
-  // three at Fine, eight at Bold). A 0: not scalloped.
+  // Its own shape (see mesh.js buildCubeMesh): its faces' bow - by the
+  // Faces slider, dished (-1) to bulged (1), a face's middle up to 16% of its
+  // size in or out - and its scalloped edges' soft waves: how far they stand
+  // out (Depth: 5% of its size at Moulded) and every how many cells (Size:
+  // every other at Medium and finer - the Airy ripple's - every third at
+  // Large, fourth at Bold). A 0: not scalloped.
   shapeOf(cb, cs = resolveSettings(cb.tune, TEXTURES[cb.style.texture])) {
     const size = this.sizeOf(cb), f = Math.max(-1, Math.min(1, cs.faces ?? 0)), bow = Math.abs(f) < 1e-3 ? 0 : 0.16 * size * f;
     if (TRIM[cb.style.trim]?.shape !== 'scallop') return { bow, A: 0, m: 0 };
-    return { bow, A: 0.007 * size * Math.min(2.5, cs.trimDepth ?? 1), m: Math.max(3, Math.round(4 * (cs.trimSize ?? 1))) };
+    return { bow, A: 0.05 * size * Math.min(1.8, cs.trimDepth ?? 1), m: Math.max(2, Math.round(2 * (cs.trimSize ?? 1))) };
   }
 
   // A whole cube built again just where it is, as it is now - its shape's
@@ -2568,6 +2569,8 @@ export class App {
     if (this.recording && this.markTex) {
       const cv = this.renderer.domElement;
       this.post.drawMark(this.markTex, cv.width, cv.height);
+      // (and a copy of it into the clip, while it's still there to copy)
+      this.ui?.clips?.frame();
     }
   }
 }

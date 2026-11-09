@@ -1,34 +1,39 @@
 // Clips: a record button (top left, by the Cubby). Tap it and what's drawn
-// is recorded, its sounds too, until it's tapped again (30 s at most) - then
-// a card to watch it back and share it (the system's share sheet: Photos,
-// TikTok, Messages) or save it. The picture's straight off the canvas (no
-// copying each frame), with a small mark drawn in by the GPU - the logotype
-// and where to play - so a clip that gets passed on brings people back.
+// is recorded, its sounds too, until it's tapped again (two minutes at most)
+// - then a card to watch it back and share it (the system's share sheet:
+// Photos, TikTok, Messages) or save it. Each frame drawn is copied into a
+// picture of the clip's own (30 a second at most, its long side 1280 at
+// most) with a small mark drawn in by the GPU - the logotype and where to
+// play - so a clip that gets passed on brings people back.
 
 import * as THREE from 'three';
 
-const MAX_S = 30;
+const MAX_S = 120;
+const FPS = 30;
+const LONG = 1280; // (the clip's longer side, px, at most)
 // (what the browser can make: Safari mp4, Chrome mp4 or webm)
 const TYPES = ['video/mp4;codecs=avc1.42E01E,mp4a.40.2', 'video/mp4;codecs=avc1', 'video/mp4', 'video/webm;codecs=vp9,opus', 'video/webm;codecs=vp8,opus', 'video/webm'];
-// (its ring fills as the 30 s run out - on a phone, all there's room for)
+// (its ring fills as the time runs out - on a phone, all there's room for)
 const RING = 2 * Math.PI * 8.5;
 const REC_ICON = `<svg viewBox="0 0 24 24" aria-hidden="true"><circle class="ring" cx="12" cy="12" r="8.5" fill="none" stroke="currentColor" stroke-width="1.7"/><circle class="dot" cx="12" cy="12" r="4.6"/></svg>`;
 
 export class Clips {
   constructor(ui, app) {
     this.app = app;
+    this.ui = ui;
     this.rec = null;
-    this.chunks = [];
-    this.type = '';
-    this.dest = null;
+    this.src = null; // the clip's own picture and its stream: see _source
+    this.dest = null; // the sounds, as heard (made once)
+    this._sound = false; // (the sounds going into it now)
     this.t0 = 0;
     this.url = '';
     this.file = null;
     this._tick = 0;
+    this._wait = 0;
     this._mt = null;
-    const cv = app.renderer.domElement;
     // (can't record here: no button)
-    this.able = !!(cv.captureStream && window.MediaRecorder && TYPES.some((t) => MediaRecorder.isTypeSupported?.(t)));
+    const cv = document.createElement('canvas');
+    this.able = !!(cv.captureStream && window.MediaRecorder && window.MediaStream && TYPES.some((t) => MediaRecorder.isTypeSupported?.(t)));
     if (!this.able) return;
     ui.root.insertAdjacentHTML(
       'beforeend',
@@ -64,34 +69,82 @@ export class Clips {
     return !!this.rec;
   }
 
+  // The clip's own picture, each frame copied into it, and its stream -
+  // made once and kept, never stopped (a second recording on a canvas whose
+  // first stream had been stopped never started on Safari). Frames only when
+  // asked for where the browser can (nothing copied while not recording).
+  _source() {
+    if (this.src) return this.src;
+    const cv = document.createElement('canvas');
+    cv.width = cv.height = 2;
+    const g = cv.getContext('2d', { alpha: false });
+    let track = cv.captureStream(0).getVideoTracks()[0];
+    const manual = typeof track?.requestFrame === 'function';
+    if (!manual) track = cv.captureStream(FPS).getVideoTracks()[0];
+    return (this.src = { cv, g, track, manual, last: 0 });
+  }
+
+  // after each frame's drawn (App.render, the mark on it): while recording,
+  // a copy of it into the clip - 30 a second at most
+  frame() {
+    const S = this.src;
+    if (!this.rec || !S) return;
+    const now = performance.now();
+    if (now - S.last < 1000 / FPS - 4) return;
+    S.last = now;
+    S.g.drawImage(this.app.renderer.domElement, 0, 0, S.cv.width, S.cv.height);
+    if (S.manual) S.track.requestFrame();
+  }
+
   start() {
     const app = this.app;
     if (this.rec || !this.able) return;
-    // (the tap that starts it lets the sound start too)
-    app.audio?.init?.();
-    const stream = app.renderer.domElement.captureStream(30);
-    const A = app.audio;
-    if (A?.ctx && A.out && !A.muted) {
-      try {
-        this.dest = A.ctx.createMediaStreamDestination();
-        A.out.connect(this.dest);
-        for (const tr of this.dest.stream.getAudioTracks()) stream.addTrack(tr);
-      } catch (e) {
-        this.dest = null;
-      }
-    }
-    this.type = TYPES.find((t) => MediaRecorder.isTypeSupported(t)) || '';
     try {
-      this.rec = new MediaRecorder(stream, { mimeType: this.type, videoBitsPerSecond: 8e6, audioBitsPerSecond: 128e3 });
+      // (the tap that starts it lets the sound start too)
+      app.audio?.init?.();
+      const S = this._source(), gl = app.renderer.domElement;
+      // (its size: the screen's picture, its long side 1280 at most - even,
+      // for the video encoder)
+      const k = Math.min(1, LONG / Math.max(gl.width, gl.height, 1));
+      const w = Math.max(2, Math.round((gl.width * k) / 2) * 2), h = Math.max(2, Math.round((gl.height * k) / 2) * 2);
+      if (S.cv.width !== w || S.cv.height !== h) (S.cv.width = w), (S.cv.height = h);
+      const tracks = [S.track], A = app.audio;
+      // (its sounds as you hear them - none, muted)
+      if (A?.ctx && A.out) {
+        try {
+          this.dest ||= A.ctx.createMediaStreamDestination();
+          A.out.connect(this.dest);
+          this._sound = true;
+          tracks.push(...this.dest.stream.getAudioTracks());
+        } catch (e) {
+          this._unhook();
+        }
+      }
+      const stream = new MediaStream(tracks);
+      let type = TYPES.find((t) => MediaRecorder.isTypeSupported(t)) || '', rec;
+      try {
+        rec = new MediaRecorder(stream, { mimeType: type, videoBitsPerSecond: 5e6, audioBitsPerSecond: 128e3 });
+      } catch (e) {
+        rec = new MediaRecorder(stream);
+        type = rec.mimeType || '';
+      }
+      // (each recording its own pieces: one that's still finishing can't
+      // spill into the next)
+      const chunks = [];
+      rec.ondataavailable = (e) => e.data && e.data.size && chunks.push(e.data);
+      rec.onstop = () => this._done(chunks, type);
+      rec.onerror = () => this.stop();
+      rec.start();
+      this.rec = rec;
     } catch (e) {
-      this.rec = new MediaRecorder(stream);
-      this.type = this.rec.mimeType || '';
+      console.warn('clip: could not start', e);
+      this._unhook();
+      this.rec = null;
+      this.ui.hint?.("Couldn't start a recording here");
+      return;
     }
-    this.chunks = [];
-    this.rec.ondataavailable = (e) => e.data && e.data.size && this.chunks.push(e.data);
-    this.rec.onstop = () => this._done(stream);
-    this.rec.start(1000);
     this.t0 = performance.now();
+    this.src.last = 0;
     app.markTex = this._markTexture();
     app.recording = true;
     this.btn.classList.add('on');
@@ -101,8 +154,8 @@ export class Clips {
   }
 
   stop() {
-    if (!this.rec) return;
     const rec = this.rec;
+    if (!rec) return;
     this.rec = null;
     clearInterval(this._tick);
     this.app.recording = false;
@@ -110,7 +163,15 @@ export class Clips {
     this.btn.setAttribute('aria-label', 'Record a clip');
     this.timeEl.textContent = '';
     this.ringEl.style.strokeDashoffset = '';
-    if (rec.state !== 'inactive') rec.stop();
+    // (it says it's done - or, if it never does, it didn't come out)
+    clearTimeout(this._wait);
+    this._wait = setTimeout(() => this._done([], ''), 6000);
+    try {
+      if (rec.state !== 'inactive') rec.stop();
+      else this._done([], '');
+    } catch (e) {
+      this._done([], '');
+    }
   }
 
   _time() {
@@ -120,21 +181,29 @@ export class Clips {
     this.ringEl.style.strokeDashoffset = `${(RING * (1 - s / MAX_S)).toFixed(2)}`;
   }
 
-  _done(stream) {
+  // (the sounds out of the clip again)
+  _unhook() {
     const A = this.app.audio;
-    if (this.dest && A?.out) {
+    if (this._sound && this.dest && A?.out) {
       try {
         A.out.disconnect(this.dest);
       } catch (e) {
         /* (gone already) */
       }
     }
-    this.dest = null;
-    for (const tr of stream.getTracks()) tr.stop();
-    if (!this.chunks.length) return;
-    const base = (this.type || 'video/webm').split(';')[0], ext = base.includes('mp4') ? 'mp4' : 'webm';
-    const blob = new Blob(this.chunks, { type: base });
-    this.chunks = [];
+    this._sound = false;
+  }
+
+  _done(chunks, type) {
+    clearTimeout(this._wait);
+    this._unhook();
+    if (!chunks.length) {
+      // (a recording's finishing - the one that never said - or one's going)
+      if (!this.rec && this.modal.hidden) this.ui.hint?.("That clip didn't come out - try again");
+      return;
+    }
+    const base = (type || chunks[0].type || 'video/webm').split(';')[0], ext = base.includes('mp4') ? 'mp4' : 'webm';
+    const blob = new Blob(chunks, { type: base });
     const d = new Date(), p = (n) => String(n).padStart(2, '0');
     const name = `cube-simulator-${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}.${ext}`;
     this.file = new File([blob], name, { type: base });
