@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { biasExp, RUBIK_COLORS, gradAt, gradSequence, GRAD_SHAPE_INDEX, rubikPack, rubikStateOf } from '../styles.js';
+import { biasExp, RUBIK_COLORS, gradAt, gradSequence, GRAD_SHAPE_INDEX, rubikPack, rubikStateOf, TRIM } from '../styles.js';
 import { FREE_N, bakeFree } from '../freeform.js';
 import { MAX_CUBES, REST_STEP } from '../sim/softbody.js';
 import {
@@ -29,6 +29,8 @@ const CAUS_GAIN = 1.5; // (how bright the caustic light lands)
 // (how milky jelly of that opacity looks: see setStyle)
 // a row of the cube-look texture: 7 texels of looks, 10 + 10 of layers, the
 // colour of its light, a freeform gradient's depth
+// (a smooth cube with a trim: a surface kind of its own, past the surfaces'; its map's depth)
+export const TRIM_KIND = SURFACES.length, TRIM_DEPTH = 0.024;
 export const CUBE_TEX_W = 34; // (30: the powder on it - Flour writes it; 31: its surface map; 32, 33: a Rubik's stickers)
 
 const smoothstep = (e0, e1, x) => {
@@ -722,14 +724,20 @@ export class JellyView {
     // across a face and up it (whole repeats: see surfaceFit) - its hollows'
     // shade, how much it scatters, and the cube's rounding (row 28)
     const sf = surfaceOf(m.surface), dens = (sf.density || 1) / (m.surfScale ?? 1), [nu, nv] = surfaceFit(sf, dens);
-    this._bakeCube(k, sf, size, m.bevelRatio ?? 0.13, dens);
-    put(29, m.dust || 0, m.skin || 0, m.through ? 1 : 0, sf.ao || 0);
+    // ...and its edges' trim, baked into the same map (not through holes:
+    // those aren't a map) - the map then as deep as the deeper of the two;
+    // a smooth one with a trim, its own kind past the surfaces' (TRIM_KIND)
+    const ti = sf.fam === 'holes' ? 0 : TRIM[m.trim]?.index || 0;
+    const sfD = (sf.depth || 0) * (m.surfDepth ?? 1) * size, depth = Math.max(sfD, ti ? TRIM_DEPTH * size : 0);
+    this._bakeCube(k, sf, size, m.bevelRatio ?? 0.13, dens, false, ti, depth > 0 ? sfD / depth : 1);
+    put(29, m.dust || 0, m.skin || 0, m.through ? 1 : 0, ti ? Math.max(sf.ao || 0, 0.55) : sf.ao || 0);
     (this._ownCoat ||= [])[k] = (m.dust || 0) > 0 || (m.sugar || 0) > 0;
-    put(31, sf.kind, (sf.depth || 0) * (m.surfDepth ?? 1) * size, nu, nv);
+    const plain = ti && !(sf.kind > 0);
+    put(31, plain ? TRIM_KIND : sf.kind, depth, plain ? 1 : nu, plain ? 1 : nv);
     // (a Rubik's stickers as they are: see styles.js rubikPack, CUBE_GLSL rubikAt)
     const rp = rubik ? rubikPack(flavor.state || rubikStateOf({ rubik: flavor.rubik })) : [0, 0, 0, 0, 0, 0, 0];
     put(32, rp[0], rp[1], rp[2], rp[3]);
-    put(33, rp[4], rp[5], rp[6], D[r + 33 * 4 + 3]);
+    put(33, rp[4], rp[5], rp[6], ti);
     this.cubeTex.needsUpdate = true;
     if (flavor.layers && flavor.shape === 'free') {
       // (baked - 32 cubed colours, and the whole grid sent to the GPU, a
@@ -767,6 +775,7 @@ export class JellyView {
     // (one set of numbers for every pattern's bake)
     this.bakeU = {
       uFace: { value: 0 }, uKind: { value: 0 }, uHS: { value: 0.5 }, uB: { value: 0.1 }, uL: { value: 1 }, uSp: { value: 0.1 },
+      uTrim: { value: 0 }, uTrimN: { value: 7 }, uTrimW: { value: 0.07 }, uSfScale: { value: 1 },
       uNN: { value: new THREE.Vector2(4, 4) }, uSites: { value: blank() }, uGrid: { value: blank() }, uSitesW: { value: 1 }, uGridW: { value: 1 },
       // (an ivec3: three takes it as a plain array)
       uGridMin: { value: new THREE.Vector3() }, uGridCell: { value: 1 }, uGridDim: { value: [1, 1, 1] },
@@ -792,7 +801,14 @@ export class JellyView {
       vertexShader: 'varying vec2 vUv; void main() { vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }',
       fragmentShader: `uniform int uFace; varying vec2 vUv;
         ${surfaceBakeGLSL(kind)}
-        void main() { gl_FragColor = vec4(sfBake(uKind, uFace, (vUv - 0.5) * uL), 0.0, 0.0, 1.0); }`,
+        void main() {
+          vec2 uv = (vUv - 0.5) * uL;
+          vec3 P, n;
+          sfUnfoldInv(uFace, uv, P, n);
+          // (its pattern, held to its own depth, and its edges' trim)
+          float h = 1.0 - (1.0 - sfBake(uKind, uFace, uv)) * uSfScale;
+          gl_FragColor = vec4(min(h, sfTrim(uFace, uv, P)), 0.0, 0.0, 1.0);
+        }`,
       depthTest: false,
       depthWrite: false,
     }));
@@ -829,14 +845,14 @@ export class JellyView {
   // rounding a share of that, dens its cells a face. A new pattern's baked
   // at once; the same one rescaled or rounded off - a slider dragged -
   // when it's been still a moment: see bakeLater)
-  _bakeCube(k, sf, size, br, dens, now = false) {
+  _bakeCube(k, sf, size, br, dens, now = false, trim = 0, sfScale = 1) {
     if (!this.surfRT) return;
-    this._surfArgs[k] = [sf, size, br, dens];
+    this._surfArgs[k] = [sf, size, br, dens, now, trim, sfScale];
     this._surfLater.delete(k);
-    if (!sf || !sf.fam || sf.fam === 'holes') return;
+    if (!sf || sf.fam === 'holes' || (!sf.fam && !trim)) return;
     const hs = size / 2, b = Math.min(0.45, br) * size, L = size - b * (2 - Math.PI / 2);
     const [nu, nv] = surfaceFit(sf, dens);
-    const key = [sf.kind, size.toFixed(4), b.toFixed(5), nu.toFixed(4), nv.toFixed(4)].join('|');
+    const key = [sf.kind, size.toFixed(4), b.toFixed(5), nu.toFixed(4), nv.toFixed(4), trim, sfScale.toFixed(3)].join('|');
     const was = this._surfKey[k];
     if (was === key) return;
     if (!now && was.split('|')[0] === String(sf.kind)) {
@@ -850,6 +866,11 @@ export class JellyView {
     U.uB.value = Math.max(b, 1e-5);
     U.uL.value = L;
     U.uNN.value.set(nu, nv);
+    // (its trim: a whole number of repeats to an edge, about 14 cm each; its band 7.5% of it)
+    U.uTrim.value = trim;
+    U.uTrimN.value = Math.max(3, Math.round(size / 0.14));
+    U.uTrimW.value = 0.075 * size;
+    U.uSfScale.value = sfScale;
     if (sf.fam === 'sites') {
       // the sites, spread over its surface - and a grid of them, a cell the
       // spacing a side, up to 8 a cell, for the bake to find the nearest
@@ -902,7 +923,11 @@ export class JellyView {
   bakeLater() {
     if (!this._surfLater?.size) return;
     const t = performance.now();
-    for (const [k, t0] of this._surfLater) if (t - t0 > 140) this._bakeCube(k, ...this._surfArgs[k], true);
+    for (const [k, t0] of this._surfLater) {
+      if (t - t0 <= 140) continue;
+      const [sf, size, br, dens, , trim, sfScale] = this._surfArgs[k];
+      this._bakeCube(k, sf, size, br, dens, true, trim, sfScale);
+    }
   }
 
   // A layered cube's gradient as its strip: absorption (its first row) and

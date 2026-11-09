@@ -1,4 +1,4 @@
-import { FLAVORS, TEXTURES, EDGES, GLITTERS, LAYER_PRESETS, MIN_LAYERS, MAX_LAYERS, MAX_REPEAT, MAX_TILES, flavorSwatchCSS, flavorMainHex, materialSwatchCSS } from '../styles.js';
+import { FLAVORS, TEXTURES, EDGES, TRIMS, GLITTERS, LAYER_PRESETS, MIN_LAYERS, MAX_LAYERS, MAX_REPEAT, MAX_TILES, flavorSwatchCSS, flavorMainHex, materialSwatchCSS } from '../styles.js';
 import { SETTINGS, settingWord, settingNum } from '../settings.js';
 import { Cubby } from './cubby.js';
 import { Clips } from './clips.js';
@@ -123,6 +123,56 @@ const readout = (el, word, num) => {
 };
 const signed = (x) => (x > 0 ? `+${x}` : x < 0 ? `\u2212${-x}` : '0');
 
+// A trim's tile: a square of jelly (currentColor) with that edge all round -
+// clockwise from its top-left, each edge in N runs.
+function trimTile(id) {
+  const A = 5, B = 33, N = 5, L = B - A, s = L / N, f = (v) => +v.toFixed(2);
+  // the corners, and each edge's way along and way out
+  const C = [[A, A], [B, A], [B, B], [A, B]], D = [[1, 0], [0, 1], [-1, 0], [0, -1]], O = [[0, -1], [1, 0], [0, 1], [-1, 0]];
+  const run = (each) => {
+    let d = `M${A} ${A}`;
+    for (let e = 0; e < 4; e++) for (let i = 0; i < N; i++) d += each(C[e], D[e], O[e], i);
+    return d + 'Z';
+  };
+  const at = (c, dv, i, u) => [c[0] + dv[0] * s * (i + u), c[1] + dv[1] * s * (i + u)];
+  const gloss = '<path d="M9 8h14a4 4 0 0 1-4 4H9z" fill="#fff" opacity="0.32"/>';
+  const lite = 'rgba(255,255,255,0.6)', dark = 'rgba(0,0,0,0.28)';
+  const sq = (inset, extra = '') => `<rect x="${A + inset}" y="${A + inset}" width="${L - 2 * inset}" height="${L - 2 * inset}" rx="${6 - inset * 0.6}" ${extra}/>`;
+  if (id === 'scalloped' || id === 'crimped') {
+    // lobes bulging out (a crimp's many and small, grooved between)
+    const n = id === 'crimped' ? 2 : 1, r = (s / n) * 0.62;
+    let d = `M${A} ${A}`, grooves = '';
+    for (let e = 0; e < 4; e++)
+      for (let i = 0; i < N * n; i++) {
+        const q = [C[e][0] + D[e][0] * (s / n) * (i + 1), C[e][1] + D[e][1] * (s / n) * (i + 1)];
+        d += `A${f(r)} ${f(r)} 0 0 1 ${f(q[0])} ${f(q[1])}`;
+        if (n === 2 && i < N * n - 1) grooves += `M${f(q[0])} ${f(q[1])}l${f(-O[e][0] * 3.2)} ${f(-O[e][1] * 3.2)}`;
+      }
+    return `<svg viewBox="0 0 38 38" aria-hidden="true"><path d="${d}Z" fill="currentColor"/>${grooves ? `<path d="${grooves}" stroke="${dark}" stroke-width="0.9" stroke-linecap="round"/>` : ''}${gloss}</svg>`;
+  }
+  if (id === 'sawtooth') {
+    const d = run((c, dv, o, i) => {
+      const m = at(c, dv, i, 0.5), q = at(c, dv, i, 1);
+      return `L${f(m[0] + o[0] * 2.6)} ${f(m[1] + o[1] * 2.6)}L${f(q[0])} ${f(q[1])}`;
+    });
+    return `<svg viewBox="0 0 38 38" aria-hidden="true"><path d="${d}" fill="currentColor" stroke="currentColor" stroke-width="0.6" stroke-linejoin="round"/>${gloss}</svg>`;
+  }
+  if (id === 'beaded') {
+    let beads = '';
+    for (let e = 0; e < 4; e++)
+      for (let i = 0; i < N; i++) {
+        const m = at(C[e], D[e], i, 0.5);
+        beads += `<circle cx="${f(m[0])}" cy="${f(m[1])}" r="2.6" fill="currentColor"/><circle cx="${f(m[0] - 0.8)}" cy="${f(m[1] - 0.8)}" r="0.9" fill="${lite}"/>`;
+      }
+    return `<svg viewBox="0 0 38 38" aria-hidden="true">${sq(0.6, 'fill="currentColor"')}<g stroke="${dark}" stroke-width="0.5">${beads}</g>${gloss}</svg>`;
+  }
+  if (id === 'stitched')
+    return `<svg viewBox="0 0 38 38" aria-hidden="true">${sq(0, 'fill="currentColor"')}${sq(3.6, `fill="none" stroke="${lite}" stroke-width="1.3" stroke-dasharray="2.4 1.9" stroke-linecap="round"`)}${sq(1.2, `fill="none" stroke="${dark}" stroke-width="0.7"`)}${gloss}</svg>`;
+  if (id === 'piped')
+    return `<svg viewBox="0 0 38 38" aria-hidden="true">${sq(0, 'fill="currentColor"')}${sq(1.6, `fill="none" stroke="${lite}" stroke-width="3"`)}${sq(1.6, `fill="none" stroke="${dark}" stroke-width="3" stroke-dasharray="0.9 1.6"`)}${gloss}</svg>`;
+  return `<svg viewBox="0 0 38 38" aria-hidden="true">${sq(0, 'fill="currentColor"')}${gloss}</svg>`;
+}
+
 export class UI {
   constructor(app, root) {
     this.app = app;
@@ -189,6 +239,7 @@ export class UI {
         <div class="sec"><span class="lbl">Material</span><div class="mats" role="group" aria-label="Material"></div></div>
         <div class="sec"><span class="lbl">Glitter</span><div class="seg glit"></div></div>
         <div class="sec"><span class="lbl">Edges</span><div class="seg edges"></div></div>
+        <div class="sec"><span class="lbl">Trim</span><div class="mats trims" role="group" aria-label="Trim"></div></div>
         <div class="sec"><span class="lbl">Surface <em>depth and scale in Settings</em></span><div class="mats surfs" role="group" aria-label="Surface"></div></div>
       </div>
       <div class="palette tune" hidden>
@@ -376,6 +427,22 @@ export class UI {
         app.setEdges(id);
       });
       edgeSeg.appendChild(b);
+    }
+
+    // its edges' trim: a tile of each - a square of the jelly with that edge
+    // (in its colour: see _tintSurfaces)
+    this.trimsEl = this.paletteEl.querySelector('.trims');
+    for (const t of TRIMS) {
+      const b = document.createElement('button');
+      b.className = 'mat';
+      b.dataset.trim = t.id;
+      b.innerHTML = `<i class="msw">${trimTile(t.id)}</i><span>${t.name}</span>`;
+      b.setAttribute('aria-label', `${t.name} trim`);
+      b.addEventListener('click', () => {
+        app.audio.ui();
+        app.setTrim(t.id);
+      });
+      this.trimsEl.appendChild(b);
     }
 
     // its surface map: a tile of each (drawn when the panel first opens - see
@@ -679,6 +746,7 @@ export class UI {
 
   _tintSurfaces() {
     for (const b of this.surfsEl.children) b.firstChild.style.backgroundColor = this._surfHex || '#d4102a';
+    for (const b of this.trimsEl.children) b.firstChild.style.color = this._surfHex || '#d4102a';
   }
 
   openPalette() {
@@ -863,6 +931,7 @@ export class UI {
     }
     for (const b of this.matsEl.children) b.classList.toggle('active', b.dataset.tex === style.texture);
     for (const b of this.paletteEl.querySelectorAll('.opt[data-edges]')) b.classList.toggle('active', b.dataset.edges === style.edges);
+    for (const b of this.trimsEl.children) b.classList.toggle('active', b.dataset.trim === (style.trim || 'none'));
     for (const b of this.surfsEl.children) b.classList.toggle('active', b.dataset.surf === (style.surface || 'none'));
     this._surfHex = hex;
     if (this._surfsPainted) this._tintSurfaces();

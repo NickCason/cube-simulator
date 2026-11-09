@@ -1524,7 +1524,14 @@ export function createJellyMaterial(env, layerUniforms) {
           vec2 nS = (viewMatrix * vec4(normalize(vNormal), 0.0)).xy;
           if (dot(nS, nS) > 1e-6 && textureLod(tBack, uv + normalize(nS) * 1.5 / resolution, 0.0).r <= 0.0) silh = 1.0;
         }
-        col = mix(textureLod(tScene, uv, 0.0).rgb, col, mix(1.0, cover, silh));
+        // (a scalloped or sawtooth trim seen edge on: its outline's cut too -
+        // where the map has it bitten away, the room shows)
+        float trimCut = 0.0;
+        #if defined(JELLY_SURF)
+        float trimId = cubeT(33).w;
+        if (trimId > 0.5 && trimId < 2.5 && surfFade > 0.0) trimCut = (1.0 - smoothstep(0.25, 0.6, surfH)) * (1.0 - smoothstep(0.2, 0.45, NdVg)) * surfFade;
+        #endif
+        col = mix(textureLod(tScene, uv, 0.0).rgb, col, mix(1.0, cover, silh) * (1.0 - trimCut));
         #ifdef JELLY_DEBUG // (?dbg=n: its parts, one at a time - else they'd all be kept to the end)
         if (uDebug == 1) col = refl * F + spec;
         else if (uDebug == 2) col = trans * Tr;

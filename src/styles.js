@@ -327,10 +327,25 @@ export const GLITTERS = [
   { id: 'cubic', name: 'Cubic', dot: 'conic-gradient(from 45deg, #ffffff, #cfe8ff, #ffd9f2, #fff3c4, #d6ffe9, #ffffff)' },
 ];
 
+// Its edges' trim, with any rounding: a pattern along every edge (baked into
+// its surface map - see surfaces.js sfTrim; the ones that cut the edge, cut
+// its outline too where it's seen edge on). In the shader by its place here.
+export const TRIMS = [
+  { id: 'none', name: 'Plain' },
+  { id: 'scalloped', name: 'Scalloped', cut: true },
+  { id: 'sawtooth', name: 'Sawtooth', cut: true },
+  { id: 'stitched', name: 'Stitched' },
+  { id: 'piped', name: 'Piped' },
+  { id: 'beaded', name: 'Beaded' },
+  { id: 'crimped', name: 'Crimped' },
+];
+export const TRIM = Object.fromEntries(TRIMS.map((t, i) => [t.id, { ...t, index: i }]));
+
 export const DEFAULT_STYLE = {
   flavor: 'cherry',
   texture: 'jello',
   edges: 'round',
+  trim: 'none',
   glitter: 'off',
   layers: { colors: [...LAYER_PRESETS[0].colors], blur: 0, repeat: 1, bias: 0, stops: null, shape: 'up' },
   rubik: 0, // (0: solved - picking Rubik scrambles it)

@@ -17,7 +17,9 @@
 //      digits each, run together (missing: spread evenly)
 //   m  material     e  edges     g  glitter     d  look (light, dark)
 //   w  tearing: 0 when it's switched off
-//   k  Rubik's scramble (with f rubik): 0 solved, 1..65535
+//   k  Rubik's (with f rubik): its scramble 0 solved, 1..65535 - or, turned,
+//      its 54 stickers face by face, a digit (0..5) each
+//   x  its edges' trim: scalloped, sawtooth, stitched, piped, beaded, crimped (missing: none)
 //   t  tuned sliders, <code><value> joined by commas: the codes are in
 //      TUNE_CODES, the values in each slider's own units
 // A reader skips letters and slider codes it doesn't know, so a code made by a
@@ -27,7 +29,7 @@
 import { copyEyes, encodeEyes, decodeEyes, eyesWord } from './eyes.js';
 import { SURFACE, surfaceWord } from './surfaces.js';
 import { SETTINGS, resolveSettings } from './settings.js';
-import { FLAVORS, TEXTURES, EDGES, GLITTERS, MIN_LAYERS, MAX_LAYERS, MAX_REPEAT, DEFAULT_STYLE, GRAD_SHAPE_INDEX, copyLayers } from './styles.js';
+import { FLAVORS, TEXTURES, EDGES, TRIM, GLITTERS, MIN_LAYERS, MAX_LAYERS, MAX_REPEAT, DEFAULT_STYLE, GRAD_SHAPE_INDEX, copyLayers } from './styles.js';
 import { FREE_K_MIN, FREE_K_MAX } from './freeform.js';
 
 // (a freeform point's strength, 1/4..4, as 0..255 on a log scale)
@@ -100,6 +102,7 @@ export function captureCube(app, name = '') {
     glitter: s.glitter || 'off',
     rubik: Number.isFinite(s.rubik) ? s.rubik : 1,
     ...(typeof s.rubikState === 'string' && /^[0-5]{54}$/.test(s.rubikState) ? { rubikState: s.rubikState } : {}),
+    trim: TRIM[s.trim] ? s.trim : 'none',
     tune,
     tear: app.tune.tear !== false,
     theme: app.theme,
@@ -135,6 +138,8 @@ export function encodeCube(c) {
   if (c.eyes && c.eyes.length) f.push('y' + encodeEyes(c.eyes));
   // (its surface map: see surfaces.js)
   if (c.surface && c.surface !== 'none' && SURFACE[c.surface]) f.push('s' + c.surface);
+  // (its edges' trim: see styles.js TRIMS)
+  if (c.trim && c.trim !== 'none' && TRIM[c.trim]) f.push('x' + c.trim);
   const t = Object.keys(c.tune || {})
     .filter((k) => TUNE_CODES[k] && Number.isFinite(c.tune[k]))
     .map((k) => TUNE_CODES[k] + num(c.tune[k]));
@@ -180,6 +185,7 @@ export function decodeCube(text) {
     rubik: 1,
     eyes: [],
     surface: 'none',
+    trim: 'none',
   };
   let flavor = null, custom = null, stops = null, nodes = null;
   for (const p of parts.slice(1)) {
@@ -207,6 +213,7 @@ export function decodeCube(text) {
     else if (k === 'k') c.rubik = Math.round(clamp(parseInt(v, 10), 0, 65535, 1));
     else if (k === 'y') c.eyes = decodeEyes(v);
     else if (k === 's') c.surface = SURFACE[v] ? v : 'none';
+    else if (k === 'x') c.trim = TRIM[v] ? v : 'none';
     else if (k === 't') {
       for (const pair of v.split(',')) {
         const m = pair.match(/^([a-z]{2})(-?(?:\d+\.?\d*|\.\d+)(?:e-?\d+)?)$/);

@@ -149,6 +149,7 @@ export class Portraits {
       glitter: c.glitter || 'off',
       rubik: Number.isFinite(c.rubik) ? c.rubik : 1,
       ...(c.rubikState ? { rubikState: c.rubikState } : {}),
+      trim: c.trim || 'none',
       eyes: copyEyes(c.eyes),
       surface: SURFACE[c.surface] ? c.surface : 'none',
     };

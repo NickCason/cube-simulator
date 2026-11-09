@@ -245,7 +245,7 @@ export class Cubiplication {
     // the twins: the parent's look and feel, each drifted and mutated -
     // wilder the further down its family it is - named anew
     const c = Math.min(MAX_SIZE, m.size0 * m.g * Math.cbrt(0.5));
-    const rnd = Math.random, as = (x) => ({ name: x.name, flavor: x.style.flavor, layers: x.style.layers, texture: x.style.texture, edges: x.style.edges, glitter: x.style.glitter || 'off', rubik: x.style.rubik, ...(x.style.rubikState ? { rubikState: x.style.rubikState } : {}), tune: { ...x.tune }, tear: x.tune.tear !== false, theme: app.theme, eyes: x.style.eyes || [], surface: x.style.surface || 'none' });
+    const rnd = Math.random, as = (x) => ({ name: x.name, flavor: x.style.flavor, layers: x.style.layers, texture: x.style.texture, edges: x.style.edges, glitter: x.style.glitter || 'off', rubik: x.style.rubik, ...(x.style.rubikState ? { rubikState: x.style.rubikState } : {}), trim: x.style.trim || 'none', tune: { ...x.tune }, tear: x.tune.tear !== false, theme: app.theme, eyes: x.style.eyes || [], surface: x.style.surface || 'none' });
     // (a cube with no name yet gets one now: it's going in the family tree)
     if (!cb.name) cb.name = nameCube({ ...cb.style, tune: cb.tune }, { taken: app.cubes.map((x) => x.name || ''), ...app.nameCtx(), gen: cb.lin?.gen | 0 });
     const pl = { ...linOf(cb) }, parent = as(cb);

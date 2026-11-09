@@ -533,6 +533,8 @@ export function surfaceBakeGLSL(only = -1) {
   return /* glsl */ `
   uniform int uKind;
   uniform float uHS, uB, uL, uSp;
+  uniform int uTrim; // (its edges' trim: styles.js TRIMS - 0 none)
+  uniform float uTrimN, uTrimW, uSfScale; // (its repeats an edge, its band's width; the surface's depth as a share of the map's)
   uniform vec2 uNN;
   uniform highp sampler2D uSites;
   uniform highp sampler2D uGrid;
@@ -664,6 +666,57 @@ export function surfaceBakeGLSL(only = -1) {
   float sfNoiseK(int k, vec3 p) {
     ${SURFACES.map((x, i) => (x.fam === 'noise' && has(i) ? `if (k == ${i}) { ${x.glsl} }` : '')).filter(Boolean).join('\n    ')}
     return 1.0;
+  }
+  // An edge's trim at (u, v) of face f (P: where that is on the cube): how
+  // far in from the edge's middle line (where two faces' maps meet), and
+  // where along it - by the cube's own axis the edge runs along, so the two
+  // faces on it agree - in repeats a whole number to an edge, so they meet
+  // at its corners. 1: the surface; lower: cut away, pressed in.
+  float sfTrim(int f, vec2 uv, vec3 P) {
+    if (uTrim == 0) return 1.0;
+    float e = 0.5 * uL - max(abs(uv.x), abs(uv.y));
+    if (e > uTrimW * 1.3) return 1.0;
+    bool uEdge = abs(uv.x) > abs(uv.y);
+    // (the face's ways across and up, as the cube's axes - see sfUnfoldInv)
+    int ua = f < 2 ? 2 : 0, va = f < 2 ? 1 : f < 4 ? 2 : 1;
+    int ax = uEdge ? va : ua;
+    float s = ax == 0 ? P.x : ax == 1 ? P.y : P.z;
+    float p = 2.0 * uHS / uTrimN, x = (fract((s + uHS) / p) - 0.5) * p, w = uTrimW;
+    if (uTrim == 1) {
+      // scalloped: the edge in round lobes bulging out to it, bitten in
+      // between (a lobe's round its middle, the bites' points inward)
+      float R = 0.6 * p, d = length(vec2(x, e - R)) - R;
+      return 1.0 - smoothstep(-0.004, 0.006, d) * step(e, R);
+    }
+    if (uTrim == 2) {
+      // sawtooth: teeth, with v-notches between
+      float D = 0.85 * w * (2.0 * abs(x) / p);
+      return 1.0 - (1.0 - smoothstep(-0.004, 0.006, e - D)) * step(0.0, D - 0.002);
+    }
+    if (uTrim == 3) {
+      // stitched: a seam pressed in along it, a running stitch either side
+      float crease = 1.0 - 0.45 * (1.0 - smoothstep(0.0, 0.18 * w, e));
+      float ps = p / 3.0, xs = fract((s + uHS) / ps);
+      float dash = smoothstep(0.08, 0.16, xs) * (1.0 - smoothstep(0.62, 0.7, xs));
+      float line = 1.0 - smoothstep(0.08 * w, 0.15 * w, abs(e - 0.62 * w));
+      float hole = (1.0 - smoothstep(0.03 * w, 0.07 * w, length(vec2((xs - 0.08) * ps, e - 0.62 * w)))) + (1.0 - smoothstep(0.03 * w, 0.07 * w, length(vec2((xs - 0.7) * ps, e - 0.62 * w))));
+      float band = 1.0 - smoothstep(0.85 * w, w, e);
+      return min(crease, mix(1.0, 0.82 + 0.18 * dash * line, band)) - 0.4 * hole * band;
+    }
+    if (uTrim == 4) {
+      // piped: a twisted cord of it along the edge
+      float r = 0.55 * w, bead = sqrt(max(0.0, 1.0 - (e * e) / (r * r)));
+      float twist = 0.5 + 0.5 * cos(6.2831853 * (x / (0.5 * p) + e / r * 0.7));
+      return e < r ? 0.55 + 0.45 * bead * (0.72 + 0.28 * twist) : mix(0.55, 1.0, smoothstep(r, r + 0.25 * w, e));
+    }
+    if (uTrim == 5) {
+      // beaded: a string of beads
+      float rb = 0.48 * p, q = length(vec2(x, e)) / rb;
+      return q < 1.0 ? 0.45 + 0.55 * sqrt(1.0 - q * q) : mix(0.45, 1.0, smoothstep(0.0, 0.3 * w, e - rb));
+    }
+    // crimped: a pie crust's flutes, across it
+    float pc = p / 2.0, fl = 0.5 + 0.5 * cos(6.2831853 * x / pc);
+    return 1.0 - 0.55 * (1.0 - fl) * (1.0 - smoothstep(0.55 * w, w, e));
   }
   // its height at (u, v) of face f
   float sfBake(int k, int f, vec2 uv) {
