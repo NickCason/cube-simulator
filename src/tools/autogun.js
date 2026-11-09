@@ -64,6 +64,12 @@ export class AutoGunTool extends HoleGunTool {
     this.app.audio?.spin(0);
   }
 
+  // (put down, its brass still falls, comes to rest and goes - it hung in
+  // the air where it was, for good, when only the gun in hand moved it)
+  get background() {
+    return this.cs.length > 0;
+  }
+
   // (no round till the barrels are up to speed)
   down(e, ray) {
     this.firing = true;
@@ -73,6 +79,11 @@ export class AutoGunTool extends HoleGunTool {
 
   update(dt, rdt) {
     const t = rdt || dt;
+    if (this.app.tool !== this) {
+      this._brass(dt);
+      this._fade(t);
+      return;
+    }
     this._placeModel(t);
     this.spin = this.firing ? Math.min(1, this.spin + t / SPIN_UP) : Math.max(0, this.spin - t / SPIN_DOWN);
     this.angle += this.spin * 38 * t;
