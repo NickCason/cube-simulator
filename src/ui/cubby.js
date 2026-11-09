@@ -11,7 +11,7 @@ import { cubeOfTheDay, dayKey } from '../cotd.js';
 import { cubePicture } from './sharecard.js';
 import { qrEncode, qrSVG } from './qr.js';
 import { FighterCard } from './fighter.js';
-import { resolveFlavor, layerBands, TEXTURES, RUBIK_COLORS, rubikIndex } from '../styles.js';
+import { resolveFlavor, layerBands, TEXTURES, RUBIK_COLORS, rubikStateOf } from '../styles.js';
 
 const KEY = 'cube-sim-cubby';
 const ON_KEY = 'cube-sim-cubby-on'; // which saved cube is on show, and the record of one that isn't saved
@@ -48,7 +48,7 @@ const GLINT = { silver: ['#ffffff', '#dfe6ee'], gold: ['#fff1b8', '#ffd25f'], ho
 function rubikArt(c, solid) {
   // a point of the unit cube (-0.5..0.5) on the picture
   const S = (x, y, z) => [32 + (x - 0.5) * 24 - (z - 0.5) * 24, 58 + (x - 0.5) * 12 - (y + 0.5) * 28 + (z - 0.5) * 12];
-  const seed = Number.isFinite(c.rubik) ? c.rubik : 1;
+  const st = rubikStateOf(c);
   // the three faces we see: +y (top), +z (left), +x (right) - their uv as the shaders have it
   const faces = [
     { face: 2, at: (u, v) => S(u, 0.5, v), shade: '#fff', op: 0.22 },
@@ -62,7 +62,7 @@ function rubikArt(c, solid) {
     for (let i = 0; i < 3; i++)
       for (let j = 0; j < 3; j++) {
         const g = 0.022, u0 = -0.5 + i / 3 + g, u1 = -0.5 + (i + 1) / 3 - g, v0 = -0.5 + j / 3 + g, v1 = -0.5 + (j + 1) / 3 - g;
-        out += `<path d="M${quad(u0, v0, u1, v1)}Z" fill="${RUBIK_COLORS[rubikIndex(seed, F.face, i * 3 + j)]}"/>`;
+        out += `<path d="M${quad(u0, v0, u1, v1)}Z" fill="${RUBIK_COLORS[st[F.face * 9 + i * 3 + j]]}"/>`;
       }
     if (F.op) out += `<path d="M${quad(-0.5, -0.5, 0.5, 0.5)}Z" fill="${F.shade}" opacity="${F.op}"/>`;
   }

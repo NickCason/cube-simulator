@@ -182,7 +182,22 @@ export class TwistTool {
       app.particles?.glitter?.(at, 8, [((h >> 16) & 255) / 255, ((h >> 8) & 255) / 255, (h & 255) / 255], 1.5);
     }
     if (k >= 0) sb.impulse(cm[0], cm[1] - 0.4, cm[2], 0, 1, 0, sb.cSize[cb.slot] * 1.2, 2.2, k);
-    app.ui?.hint(`Solved! ${cb.rubikMoves} turn${cb.rubikMoves === 1 ? '' : 's'}${s ? ` · ${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}` : ''}`, 4000);
+    // (and said, big: how many turns, how long)
+    const said = `${cb.rubikMoves} turn${cb.rubikMoves === 1 ? '' : 's'}${s ? ` · ${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}` : ''}`;
+    document.querySelector('.rubik-solved')?.remove();
+    const el = document.createElement('div');
+    el.className = 'rubik-solved';
+    el.setAttribute('role', 'status');
+    el.innerHTML = `<div class="rs-in"><b>Solved!</b><span>${said}</span><i>${RUBIK_COLORS.map((c) => `<em style="background:${c}"></em>`).join('')}</i></div>`;
+    document.body.appendChild(el);
+    setTimeout(() => el.classList.add('out'), 3600);
+    setTimeout(() => el.remove(), 4200);
+    setTimeout(() => {
+      for (let n = 0; n < 6; n++) {
+        const h = parseInt(RUBIK_COLORS[n].slice(1), 16);
+        app.particles?.glitter?.(at, 10, [((h >> 16) & 255) / 255, ((h >> 8) & 255) / 255, (h & 255) / 255], 2.2);
+      }
+    }, 380);
     app.tally?.('solved');
     cb.rubikMoves = 0;
     cb.rubikT0 = 0;

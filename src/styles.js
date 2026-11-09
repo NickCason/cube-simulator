@@ -19,21 +19,50 @@ export const FLAVORS = [
 ];
 
 // Rubik: six colours, and the stickers - each face a 3x3, run in to the
-// middle (a point is in the face it's nearest), the centres their face's
-// own colour, the rest scrambled by a seed (0: solved). The same hash runs in
-// the shaders (CUBE_GLSL's rubikAt): they must agree, so never change it.
+// middle (a point is in the face it's nearest), scrambled by a seed (0:
+// solved; see rubikScramble) or as it's been turned (style.rubikState). The
+// shaders get the 54 of them packed (rubikPack; CUBE_GLSL's rubikAt).
 export const RUBIK_COLORS = ['#f4f2ec', '#ffcc12', '#e0102a', '#ff6a0d', '#1262ff', '#1cb84a']; // white yellow red orange blue green
 export const RUBIK_FACE = [2, 3, 0, 1, 5, 4]; // the centre colour of +x, -x, +y, -y, +z, -z
-export function rubikIndex(seed, face, cell) {
-  if (!seed || cell === 4) return RUBIK_FACE[face];
-  let h = (Math.imul(seed >>> 0, 747796405) + Math.imul(face * 9 + cell, 2891336453 | 0)) >>> 0;
-  h = (h ^ (h >>> 16)) >>> 0;
-  h = Math.imul(h, 2246822519 | 0) >>> 0;
-  h = (h ^ (h >>> 13)) >>> 0;
-  h = Math.imul(h, 3266489917 | 0) >>> 0;
-  h = (h ^ (h >>> 16)) >>> 0;
-  return h % 6;
+// A scramble: the solved cube turned 25 times over, the turns picked by its
+// number - so it can always be put right again. (It used to be each sticker
+// a colour at random: a cube no turning could ever solve.) 0: solved.
+// (the turns, [axis, layer, way] each - none about the axis the last was)
+export function rubikScrambleMoves(seed) {
+  seed = Math.max(0, Math.round(seed) || 0) >>> 0;
+  const out = [];
+  if (!seed) return out;
+  // (mulberry32 from the seed: the same turns every time)
+  let h = (Math.imul(seed, 747796405) + 2891336453) >>> 0;
+  const rnd = () => {
+    h = (h + 0x6d2b79f5) >>> 0;
+    let t = Math.imul(h ^ (h >>> 15), 1 | h);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+  let last = -1;
+  for (let k = 0; k < 25; k++) {
+    let a;
+    do a = Math.floor(rnd() * 3);
+    while (a === last);
+    last = a;
+    out.push([a, Math.floor(rnd() * 3) - 1, rnd() < 0.5 ? -1 : 1]);
+  }
+  return out;
 }
+const scrambles = new Map();
+export function rubikScramble(seed) {
+  seed = Math.max(0, Math.round(seed) || 0) >>> 0;
+  if (!scrambles.has(seed)) {
+    let s = [];
+    for (let f = 0; f < 6; f++) for (let c = 0; c < 9; c++) s.push(RUBIK_FACE[f]);
+    for (const [a, at, dir] of rubikScrambleMoves(seed)) s = rubikTurn(s, a, at, dir);
+    scrambles.set(seed, s);
+    if (scrambles.size > 64) scrambles.delete(scrambles.keys().next().value);
+  }
+  return scrambles.get(seed).slice();
+}
+
 // the sticker a rest point (cube of side `size`, centred) is in: [face, cell]
 export function rubikCellAt(x, y, z, size) {
   const ax = Math.abs(x), ay = Math.abs(y), az = Math.abs(z);
@@ -50,9 +79,7 @@ export function rubikCellAt(x, y, z, size) {
 export function rubikStateOf(style) {
   const t = style?.rubikState;
   if (typeof t === 'string' && /^[0-5]{54}$/.test(t)) return [...t].map(Number);
-  const seed = Number.isFinite(style?.rubik) ? style.rubik : 1, out = [];
-  for (let f = 0; f < 6; f++) for (let c = 0; c < 9; c++) out.push(rubikIndex(seed, f, c));
-  return out;
+  return rubikScramble(Number.isFinite(style?.rubik) ? style.rubik : 1);
 }
 // Where each sticker is: its little cube (x, y, z each -1, 0 or 1) and the
 // way out of it (as rubikCellAt has a face's 3x3: across, up)
