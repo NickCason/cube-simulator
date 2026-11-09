@@ -1,0 +1,30 @@
+Cube Simulator stats v2
+Mozilla/5.0 (iPhone; CPU iPhone OS 18_7 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/27.0.1 Mobile/15E148 Safari/604.1
+gpu: Apple GPU   dpr 3   cores 4   screen 430x775
+warm-up at load: 151 ms, 23 shaders; intro hold 1664 ms
+session 125 s, 2593 frames: median 28.0 ms, 95th 94.0 ms, 99th 534.0 ms
+21 fps   frame 44.0 ms (worst 77)
+cpu 12.0  physics 11.0  render 1.0 ms
+substeps 576/s   res 1.50x 645x1162
+6655 tets  1 piece (1 awake)  shaders 62
+view: canvas 430x775 css  res 1.50x 645x1162  theme light  place diner  room off  tearing on  tool hand
+camera: 0.38 0.36 4.1 0,0.44,0   (theta phi radius target)
+cubes (* selected): *0 1~flayers~l3b47fb9b385bc8c90733b07c8e37fdd02e5766b911e38000~b64~hfree~q74ffc99c520021b53725ff43ff9f279b00bf5443ff41c7787f75009ea1005cff~mjello~esharp~gcubic~dlight~shammered~tjj2.5,ga300,gs.6506,gk.3,dc5,ml2,mx4,fm72.1,vs.4159,dn2.193,bo.95,op0,rf1.75,cd.315,bc202
+settings: bounce=0.95 bubbles=202 contactGrip=2.5 damping=0.416 depth=0.315 dice=5 glitterAmount=300 glitterSize=0.651 glitterSparkle=0.3 ior=1.75 malletForce=2 mu=72.098 mutation=4 opacity=0 weight=2.193
+log (the last 120 s; t = s since load; x y = 0..1 across and down the canvas; move: ms:x,y from the line's t):
+27.06 recube end
+28.55 down -2081594944 touch 0.644 0.775 miss cam -0.52 0.321 4.1 0,0.44,0
+6.70 down -2081594955 touch 0.491 0.431 hit 0 0.175,0.849,0.476 rest 0.109,0.453,0.494 cam 0.38 0.36 4.1 0,0.44,0
+6.70 move -2081594955 107:0.488,0.471 226:0.488,0.575 330:0.498,0.694 444:0.557,0.79
+7.14 up -2081594955 0.561 0.793
+9.18 tool dicer
+10.61 down -2081594953 touch 0.517 0.535 hit 0 0.26,0.567,0.577 rest 0.052,0.109,0.5 cam 0.38 0.36 4.1 0,0.44,0
+10.65 up -2081594953 0.517 0.535
+11.37 topo 25 pieces 22324 tets [dicer]
+13.96 topo 125 pieces 24955 tets [dicer]
+16.44 tool hand
+17.30 down -2081594951 touch 0.75 0.791 miss cam 0.38 0.36 4.1 0,0.44,0
+17.30 move -2081594951 442:0.419,0.823 784:0.34,0.839 1007:0.297,0.839
+18.31 move -2081594951 192:0.284,0.839
+18.50 up -2081594951 0.283 0.838
+20.49 recube start

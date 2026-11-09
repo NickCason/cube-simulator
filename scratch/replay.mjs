@@ -162,7 +162,7 @@ const cdp = mobile ? await ctx.newCDPSession(page) : null;
 const touches = new Map(); // id -> [x, y] (px)
 const px = (x, y) => [x * W, y * H];
 const sendTouch = async (type) => {
-  const tp = [...touches].map(([id, [x, y]]) => ({ x, y, id: id % 1000, radiusX: 4, radiusY: 4, force: 1 }));
+  const tp = [...touches].map(([id, [x, y]]) => ({ x, y, id: Math.abs(id) % 1000, radiusX: 4, radiusY: 4, force: 1 }));
   await cdp.send('Input.dispatchTouchEvent', { type: tp.length || type === 'touchEnd' ? type : 'touchEnd', touchPoints: type === 'touchEnd' ? [] : tp });
 };
 const sched = [];
@@ -223,6 +223,9 @@ for (const e of sched) {
     await page.screenshot({ path: `${SHOTS}-${e.t.toFixed(1)}.png` });
 }
 await page.waitForTimeout(1500);
+// (then whatever's asked: --eval file.js, an async function body run in the page; its result printed)
+const EV = opt('--eval', '');
+if (EV) console.log('-- eval:', JSON.stringify(await page.evaluate(`(async () => { ${fs.readFileSync(EV, 'utf8')} })()`), null, 1));
 const rp = await page.evaluate(() => window.__rp);
 console.log('-- the report, over the replayed span:');
 console.log(notes.join('\n') || '(nothing)');

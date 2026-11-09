@@ -255,6 +255,9 @@ export class SoftBody {
     this._surfV = null;
     this._nSurfV = 0;
     this._selfFlag = null;
+    this._selfD = null; // (each flagged one: how near the nearest other part of its own surface came, squared)
+    this._selfHist = null;
+    this._selfFaces = true; // (face centres probe their own piece too - not when it's busy: see _selfCheck)
     this._svStart = null;
     this._svFill = null;
     this._svList = null;
@@ -814,6 +817,7 @@ export class SoftBody {
     for (let i = 0; i < this.nV; i++) if (onS[i]) sv[n++] = i;
     this._nSurfV = n;
     this._selfFlag = u8(this._selfFlag, V);
+    this._selfD = f32(this._selfD, V);
     this._svStart = i32(this._svStart, 4097);
     this._svFill = i32(this._svFill, 4096);
     // the look for folds: per-vertex hold times (vertex numbers changed:
@@ -2366,9 +2370,14 @@ export class SoftBody {
       if (sw[r + 4] > bb[b + 4]) bb[b + 4] = sw[r + 4];
       if (sw[r + 5] > bb[b + 5]) bb[b + 5] = sw[r + 5];
     }
-    // hash cells per piece: fine for slow pieces, as coarse as the sweep for
-    // fast ones (so a fast tet still lands in only a few cells)
-    for (let k = 0; k < NP; k++) pcs[k] = 1 / (this.hCell * 0.75 + pcs[k]);
+    // hash cells per piece: fine for slow pieces, coarser for fast ones (so a
+    // fast tet still lands in only a few cells) - but no coarser than about
+    // two of the mesh's: the piece's fastest vertex set it, and a jelly
+    // wobbling hard (shot full of holes, soft and bouncy) had a few flying
+    // about inside it at 20 m/s - cells half a cube across, every probe
+    // looking through thousands of tets, a second a frame. A tet that fast
+    // just takes a few more cells.
+    for (let k = 0; k < NP; k++) pcs[k] = 1 / (this.hCell * 0.75 + Math.min(pcs[k], this.hCell));
     // pairs whose swept boxes overlap (and aren't both asleep): partner lists
     const act = this._pieceActive && this._pieceActive.length >= NP ? this._pieceActive : (this._pieceActive = new Uint8Array(NP64));
     act.fill(0);
@@ -2864,10 +2873,13 @@ export class SoftBody {
     // cells one such reach across, so only the 27 round a vertex need looking at
     const pV = this._pVel, fdt = this._hashSpan, foldU = this._foldUntil, now = this.time;
     let mr2 = 0;
+    const selfD = this._selfD;
     for (let q = 0; q < nSV; q++) {
       const i = sv[q], k = vp[i];
-      // (found folded in: probed till it has popped out, see _foldCheck)
+      // (found folded in: probed till it has popped out, see _foldCheck -
+      // and kept, whatever the budget below)
       selfFlag[i] = foldU[i] > now ? 1 : 0;
+      selfD[i] = selfFlag[i] ? -1 : Infinity;
       if (!selfOK[k]) continue;
       const ux = D[i * 3] - pV[k * 3] * fdt, uy = D[i * 3 + 1] - pV[k * 3 + 1] * fdt, uz = D[i * 3 + 2] - pV[k * 3 + 2] * fdt;
       const u2 = ux * ux + uy * uy + uz * uz;
@@ -2928,10 +2940,47 @@ export class SoftBody {
               }
               selfFlag[i] = 1;
               selfFlag[j] = 1;
+              if (d2 < selfD[i]) selfD[i] = d2;
+              if (d2 < selfD[j]) selfD[j] = d2;
             }
           }
     }
     this._hoodStamp = hs2;
+    // A budget: soft jelly shot full of holes and wobbling hard had nine in
+    // ten of its surface flagged - every tunnel's walls near another's -
+    // and a second a frame went on probing them. Past it, only the nearest
+    // (and anything folded in) probe their own body; and face centres join
+    // them only while there are few.
+    const SELF_MAX = 1200;
+    let nFlag = 0;
+    for (let q = 0; q < nSV; q++) if (selfFlag[sv[q]]) nFlag++;
+    if (nFlag > SELF_MAX) {
+      const NB = 64, hist = (this._selfHist ||= new Int32Array(NB)), top = rc * rc;
+      hist.fill(0);
+      let forced = 0;
+      for (let q = 0; q < nSV; q++) {
+        const i = sv[q];
+        if (!selfFlag[i]) continue;
+        if (selfD[i] < 0) forced++;
+        else hist[Math.min(NB - 1, Math.floor((selfD[i] / top) * NB))]++;
+      }
+      let keep = SELF_MAX - forced, cut = NB;
+      for (let b = 0; b < NB; b++) {
+        keep -= hist[b];
+        if (keep < 0) {
+          cut = b;
+          break;
+        }
+      }
+      const lim = (cut / NB) * top;
+      nFlag = 0;
+      for (let q = 0; q < nSV; q++) {
+        const i = sv[q];
+        if (selfFlag[i] && selfD[i] >= 0 && selfD[i] >= lim) selfFlag[i] = 0;
+        if (selfFlag[i]) nFlag++;
+      }
+    }
+    this._selfFaces = nFlag <= 400;
     // pieces with nobody near themselves after all: no self pass
     for (let a = 0; a < NP; a++) if (selfOK[a]) selfOK[a] = 3; // (3 = none found yet)
     for (let q = 0; q < nSV; q++) {
@@ -3068,13 +3117,13 @@ export class SoftBody {
     let hs = this._hoodStamp;
     // (face centres too only for watery jelly, whose folds slide edge over
     // face; a firm piece on a hinge is held well enough by its vertices)
-    const softC = this.cMu, PP = this.pieces;
+    const softC = this.cMu, PP = this.pieces, selfFaces = this._selfFaces;
     const gather = (qx0, qy0, qz0, qx1, qy1, qz1, own, px, py, pz, dpx, dpy, dpz, vi) => {
       const st = ++stamp;
       const c0 = nc;
       gRel = 0;
       gGrab = !!(GP && GP[own]);
-      const self = selfOK[own] > 0 && (vi >= 0 ? selfFlag[vi] === 1 : softC[PP[own].cube] < 110 && vi < -1 && (selfFlag[sTri[(-2 - vi) * 3]] | selfFlag[sTri[(-2 - vi) * 3 + 1]] | selfFlag[sTri[(-2 - vi) * 3 + 2]]) === 1);
+      const self = selfOK[own] > 0 && (vi >= 0 ? selfFlag[vi] === 1 : selfFaces && softC[PP[own].cube] < 110 && vi < -1 && (selfFlag[sTri[(-2 - vi) * 3]] | selfFlag[sTri[(-2 - vi) * 3 + 1]] | selfFlag[sTri[(-2 - vi) * 3 + 2]]) === 1);
       if (self) {
         hs++;
         if (vi >= 0) {
