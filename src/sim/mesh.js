@@ -35,7 +35,7 @@ export function unbevelPoint(x, y, z, half, bevel, out, o = 0) {
   out[o] = x; out[o + 1] = y; out[o + 2] = z;
 }
 
-export function buildCubeMesh(res = 12, size = 1, bevel = 0.09, lobe = null) {
+export function buildCubeMesh(res = 12, size = 1, bevel = 0.09, shape = null) {
   const n1 = res + 1;
   const h = size / res;
   const half = size / 2;
@@ -49,21 +49,29 @@ export function buildCubeMesh(res = 12, size = 1, bevel = 0.09, lobe = null) {
       }
     }
   }
-  // (scalloped: the skin out onto its lobes, and the layer under it after
-  // it, less and less, 1.5 cells in - see shapeSDF)
-  if (lobe && lobe.A > 0) {
-    const nb = [0, 0, 0], q = [0, 0, 0], reach = 1.5 * h;
+  // (its own shape. Dished or bulged: every point out or in from the middle
+  // in proportion - the plain box's skin lands on its skin, and the jelly
+  // inside follows, squeezed or stretched no more than the shape is. Only
+  // scalloped: the skin straight out onto its scallops, and the layer under
+  // it after it, less and less, 1.5 cells in - that keeps each point where it
+  // was along its edge, so the scallops' points stay on the render's steps)
+  if (shape && shape.bow) {
+    for (let v = 0; v < n1 * n1 * n1; v++) {
+      const o = v * 3, x = pos[o], y = pos[o + 1], z = pos[o + 2], l = Math.sqrt(x * x + y * y + z * z);
+      if (l < 1e-9) continue;
+      const dx = x / l, dy = y / l, dz = z / l;
+      const k = shapeRadius(dx, dy, dz, half, bevel, shape) / shapeRadius(dx, dy, dz, half, bevel, null);
+      pos[o] = x * k; pos[o + 1] = y * k; pos[o + 2] = z * k;
+    }
+  } else if (shape && shape.A > 0) {
+    const nb = [0, 0, 0], reach = 1.5 * h;
     for (let v = 0; v < n1 * n1 * n1; v++) {
       const o = v * 3, x = pos[o], y = pos[o + 1], z = pos[o + 2];
       const depth = -roundBoxSDF(x, y, z, half, bevel);
       if (depth > reach) continue;
-      // (where it'd be on the skin, straight out; and where the skin is now, there)
       roundBoxNormal(x, y, z, half, bevel, nb);
-      const dd = Math.max(0, depth);
-      q[0] = x + nb[0] * dd; q[1] = y + nb[1] * dd; q[2] = z + nb[2] * dd;
-      // (straight on out along it to the scalloped skin)
-      const t = lobeOut(q[0], q[1], q[2], nb[0], nb[1], nb[2], half, bevel, lobe);
-      const w = 1 - dd / reach;
+      const dd = Math.max(0, depth), w = 1 - dd / reach;
+      const t = lobeOut(x + nb[0] * dd, y + nb[1] * dd, z + nb[2] * dd, nb[0], nb[1], nb[2], half, bevel, shape);
       pos[o] = x + nb[0] * t * w; pos[o + 1] = y + nb[1] * t * w; pos[o + 2] = z + nb[2] * t * w;
     }
   }
@@ -113,137 +121,143 @@ export function roundBoxSDF(x, y, z, half, bevel) {
   return Math.sqrt(ox * ox + oy * oy + oz * oz) + Math.min(Math.max(qx, Math.max(qy, qz)), 0) - bevel;
 }
 
-// A scalloped cube (styles.js TRIMS 'scalloped'): along each of its twelve
-// edges a row of scallops, each edge's ridge moved straight out (out along
-// its diagonal, its cross-section kept: as crisp or as round as the Edges
-// setting makes it) by a scallop's height, back in to meet the next at a
-// point - so seen square on, a face's outline is scalloped, and the face
-// rises a little way in from it to meet its ridge, with no crease.
-// lobe: { A: how far a scallop stands out (square off each face beside it),
-// P: about how long one is (a whole number of them to an edge), d: the
-// render's finest spacing (their points on it) } - or null.
+// A cube's own shape, past its rounding (app.js shapeOf): { bow, A, m, d } -
+// or null, the plain rounded box.
+// - bow: its faces dished in (< 0) or bulged out (> 0): a face's middle that
+//   far, its edges' middles half that, its corners where they were - so,
+//   dished, a face seen square on is pinched in at every side, its corners
+//   standing out (the Faces slider).
+// - A, m, d: its edges' scallops (the scalloped trim) - a crimp all along
+//   every edge, a small round scallop a mesh cell or so long, standing out A,
+//   a soft point between each and the next: each edge's ridge moved straight
+//   out along its diagonal by them, its cross-section kept (as crisp or as
+//   round as the Edges setting makes it), so each is a little rib across the
+//   edge, gone half a scallop onto the faces beside it. Each is m of the
+//   render's finest steps d long (a quarter of a cell: SoftBody.shapeOf),
+//   its points on them - so even ones that small are drawn evenly.
 // As a shape: the rounded box, its inner box's extent along each axis
-// pushed out near the edges that run along the other two.
-// (one edge's scallops: 0..1 at s along it (-b..b) - each a half ellipse,
-// a point between each and the next (C: where they are, see cusps) - and
-// into a corner, where three edges meet, smoothly down to nothing over the
-// last half of each end one, so the corner's no pit)
-function scallop(s, b, C) {
+// moved by where a point is across the other two.
+const bell = (t) => (t >= 1 ? 0 : (1 - t * t) * (1 - t * t));
+// (one edge's scallops: 0..1 at s along it (-b..b) - round bumps P long,
+// soft points between, at whole multiples of P from its middle; the end ones,
+// whatever's left to the corners, smoothly down to nothing into them over
+// their last half, so a corner, where three edges meet, is no pit)
+function scallop(s, b, P) {
   const e = b - Math.abs(s);
   if (e <= 0) return 0;
-  const n = C.length - 1;
-  let k = Math.floor(((s + b) / (2 * b)) * n);
-  k = k < 0 ? 0 : k > n - 1 ? n - 1 : k;
-  if (s < C[k] && k > 0) k--;
-  else if (s >= C[k + 1] && k < n - 1) k++;
-  const u = (2 * (s - C[k])) / (C[k + 1] - C[k]) - 1;
-  const p = Math.sqrt(Math.max(0, 1 - u * u)), L = (C[1] + b) / 2;
-  if (e >= L) return p;
-  const t = e / L;
+  const S = Math.abs(s), K = Math.floor((b - 0.5 * P) / P), c = Math.max(0, K) * P;
+  if (K >= 1 && S <= c) {
+    const f = S / P, u = 2 * (f - Math.floor(f)) - 1;
+    return Math.max(0, 1 - u * u);
+  }
+  // (an end one: from the last point - or the middle, or across the whole
+  // edge if it's shorter than one - to the corner)
+  const c0 = K >= 0 ? c : -b, L = b - c0, u = (2 * ((K >= 0 ? S : s) - c0)) / L - 1;
+  const p = Math.max(0, 1 - u * u), h = K >= 0 ? L / 2 : L / 4;
+  if (e >= h) return p;
+  const t = e / h;
   return p * t * t * (3 - 2 * t);
 }
-// (an edge's scallops' ends, -b to b: a whole number of them, about P long,
-// each point between two on the render's finest spacing d (lobe.d: see
-// SoftBody.lobeOf) - so it's drawn as sharp as it is. Kept on the lobe.)
-function cusps(lobe, b) {
-  if (lobe._b === b) return lobe._C;
-  const n = Math.max(2, Math.round((2 * b) / lobe.P)), q = (2 * b) / n, d = lobe.d || 0, C = new Float64Array(n + 1);
-  for (let k = 0; k <= n; k++) {
-    const x = -b + k * q;
-    C[k] = k === 0 ? -b : k === n ? b : d > 0 ? Math.sign(x) * Math.round(Math.abs(x) / d) * d : x;
-  }
-  lobe._b = b;
-  return (lobe._C = C);
-}
-// (how much of its ridge's rise a face has, t in from its edge: all of it
-// at the edge and beyond, none a width w in)
+// (how much of its edge's rise a face has, t in from it: all of it at the
+// edge and beyond, none a width w in)
 function rise(t, w) {
   if (t <= 0) return 1;
   if (t >= w) return 0;
   const k = t / w;
   return 1 - k * k * (3 - 2 * k);
 }
-const RISE = 0.24; // (how far onto a face its ridge's rise reaches, of half the cube)
-export function shapeSDF(x, y, z, half, bevel, lobe) {
-  if (!lobe || !(lobe.A > 0)) return roundBoxSDF(x, y, z, half, bevel);
-  const b = half - bevel, w = RISE * half, A = lobe.A, C = cusps(lobe, b);
-  const X = Math.abs(x), Y = Math.abs(y), Z = Math.abs(z);
-  const rX = rise(b - X, w), rY = rise(b - Y, w), rZ = rise(b - Z, w);
-  // (each way's edges' scallops, where they reach: the x edges' - by its x -
-  // push the y and z extents out, ...)
+// (a scallop's length, and how far onto a face its rib reaches)
+const scallopLen = (shape, half) => (shape.d > 0 ? shape.m * shape.d : (shape.m * half) / 22);
+const ribReach = (P, half) => Math.min(0.3 * half, 0.5 * P);
+export function shapeSDF(x, y, z, half, bevel, shape) {
+  if (!shape) return roundBoxSDF(x, y, z, half, bevel);
+  const b = half - bevel, X = Math.abs(x), Y = Math.abs(y), Z = Math.abs(z);
   let ex = b, ey = b, ez = b;
-  if (rY > 0 || rZ > 0) {
-    const s = A * scallop(x, b, C);
-    ey += s * rZ;
-    ez += s * rY;
+  if (shape.bow) {
+    // (no deeper than most of the way to the middle)
+    const B = Math.max(-0.6 * b, shape.bow) / 2, cx = bell(X / b), cy = bell(Y / b), cz = bell(Z / b);
+    ex += B * (cy + cz);
+    ey += B * (cx + cz);
+    ez += B * (cx + cy);
   }
-  if (rX > 0 || rZ > 0) {
-    const s = A * scallop(y, b, C);
-    ex += s * rZ;
-    ez += s * rX;
-  }
-  if (rX > 0 || rY > 0) {
-    const s = A * scallop(z, b, C);
-    ex += s * rY;
-    ey += s * rX;
+  if (shape.A > 0) {
+    const P = scallopLen(shape, half), w = ribReach(P, half), A = shape.A;
+    const rX = rise(b - X, w), rY = rise(b - Y, w), rZ = rise(b - Z, w);
+    // (each way's edges' scallops, where they reach: the x edges' - by its
+    // x - push the y and z extents out, ...; where two edges meet, at a
+    // corner, the two shared out between them, not added up)
+    const sx = rY > 0 || rZ > 0 ? A * scallop(x, b, P) : 0;
+    const sy = rX > 0 || rZ > 0 ? A * scallop(y, b, P) : 0;
+    const sz = rX > 0 || rY > 0 ? A * scallop(z, b, P) : 0;
+    ex += (sy * rZ + sz * rY) / (1 + rZ * rY);
+    ey += (sx * rZ + sz * rX) / (1 + rZ * rX);
+    ez += (sx * rY + sy * rX) / (1 + rY * rX);
   }
   const qx = X - ex, qy = Y - ey, qz = Z - ez;
   const ox = Math.max(qx, 0), oy = Math.max(qy, 0), oz = Math.max(qz, 0);
   return Math.sqrt(ox * ox + oy * oy + oz * oz) + Math.min(Math.max(qx, Math.max(qy, qz)), 0) - bevel;
 }
-// (where a scalloped cube's skin is just its plain box's: a face's middle,
-// out of its edges' reach)
-export function lobeFlat(x, y, z, half, bevel) {
-  const b = half - bevel - RISE * half, X = Math.abs(x), Y = Math.abs(y), Z = Math.abs(z);
+// (where its skin is just the plain box's: a face's middle, out of its
+// edges' scallops' reach, and its faces not bowed)
+export function shapeFlat(x, y, z, half, bevel, shape) {
+  if (!shape) return true;
+  if (shape.bow) return false;
+  const b = half - bevel - ribReach(scallopLen(shape, half), half), X = Math.abs(x), Y = Math.abs(y), Z = Math.abs(z);
   if (X >= Y && X >= Z) return Y <= b && Z <= b;
   if (Y >= Z) return X <= b && Z <= b;
   return X <= b && Y <= b;
 }
 // lobeOut: from a point of the plain rounded box's skin, how far straight
-// out (along its normal there, nx ny nz) the scalloped skin is.
-// (found the Illinois way - false position, the end that's stuck halved:
-// a handful of looks, not a bisection's dozen)
-export function lobeOut(x, y, z, nx, ny, nz, half, bevel, lobe) {
-  if (!lobe || !(lobe.A > 0)) return 0;
-  let a = 0, b = 2.5 * lobe.A, side = 0;
-  let fa = shapeSDF(x, y, z, half, bevel, lobe), fb = shapeSDF(x + nx * b, y + ny * b, z + nz * b, half, bevel, lobe);
-  if (!(fa < 0) || !(fb > 0)) return 0;
+// out (along its normal there, nx ny nz) a scalloped one's skin is (not
+// dished or bulged: its skin's all on or outside the plain box's) - found
+// the Illinois way, like shapeRadius.
+export function lobeOut(x, y, z, nx, ny, nz, half, bevel, shape) {
+  if (!shape || !(shape.A > 0)) return 0;
+  let lo = 0, hi = 2.5 * shape.A, side = 0;
+  let flo = shapeSDF(x, y, z, half, bevel, shape), fhi = shapeSDF(x + nx * hi, y + ny * hi, z + nz * hi, half, bevel, shape);
+  if (!(flo < 0) || !(fhi > 0)) return 0;
   for (let it = 0; it < 40; it++) {
-    const c = (a * fb - b * fa) / (fb - fa), fc = shapeSDF(x + nx * c, y + ny * c, z + nz * c, half, bevel, lobe);
-    if (Math.abs(fc) < 1e-5 || b - a < 1e-4) return c;
+    const c = (lo * fhi - hi * flo) / (fhi - flo), fc = shapeSDF(x + nx * c, y + ny * c, z + nz * c, half, bevel, shape);
+    if (Math.abs(fc) < 1e-7 || hi - lo < 1e-7) return c;
     if (fc > 0) {
-      (b = c), (fb = fc);
-      if (side === -1) fa /= 2;
+      (hi = c), (fhi = fc);
+      if (side === -1) flo /= 2;
       side = -1;
     } else {
-      (a = c), (fa = fc);
-      if (side === 1) fb /= 2;
+      (lo = c), (flo = fc);
+      if (side === 1) fhi /= 2;
       side = 1;
     }
   }
-  return (a + b) / 2;
+  return (lo + hi) / 2;
 }
-
-// How far along (dx, dy, dz) from (x, y, z) - between t0 and t1 - the shape's
-// skin is (0 where it doesn't cross there): halved down to a tenth of a mm.
-export function shapeAlong(x, y, z, dx, dy, dz, t0, t1, half, bevel, lobe) {
-  let f0 = shapeSDF(x + dx * t0, y + dy * t0, z + dz * t0, half, bevel, lobe);
-  const f1 = shapeSDF(x + dx * t1, y + dy * t1, z + dz * t1, half, bevel, lobe);
-  if (f0 === 0) return t0;
-  if ((f0 < 0) === (f1 < 0)) return 0;
-  for (let it = 0; it < 40 && t1 - t0 > 1e-4; it++) {
-    const tm = (t0 + t1) / 2, fm = shapeSDF(x + dx * tm, y + dy * tm, z + dz * tm, half, bevel, lobe);
-    if ((fm < 0) === (f0 < 0)) (t0 = tm), (f0 = fm);
-    else t1 = tm;
+// How far from its middle, along the unit (dx, dy, dz), its skin is (found
+// the Illinois way - false position, the end that's stuck halved).
+export function shapeRadius(dx, dy, dz, half, bevel, shape) {
+  let lo = 0, hi = 2.2 * half, side = 0;
+  let flo = shapeSDF(0, 0, 0, half, bevel, shape), fhi = shapeSDF(dx * hi, dy * hi, dz * hi, half, bevel, shape);
+  if (!(flo < 0) || !(fhi > 0)) return half;
+  for (let it = 0; it < 60; it++) {
+    const c = (lo * fhi - hi * flo) / (fhi - flo), fc = shapeSDF(dx * c, dy * c, dz * c, half, bevel, shape);
+    if (Math.abs(fc) < 1e-7 || hi - lo < 1e-7) return c;
+    if (fc > 0) {
+      (hi = c), (fhi = fc);
+      if (side === -1) flo /= 2;
+      side = -1;
+    } else {
+      (lo = c), (flo = fc);
+      if (side === 1) fhi /= 2;
+      side = 1;
+    }
   }
-  return (t0 + t1) / 2;
+  return (lo + hi) / 2;
 }
 
-export function shapeNormal(x, y, z, half, bevel, lobe, out) {
+export function shapeNormal(x, y, z, half, bevel, shape, out) {
   const e = 1e-4;
-  const nx = shapeSDF(x + e, y, z, half, bevel, lobe) - shapeSDF(x - e, y, z, half, bevel, lobe);
-  const ny = shapeSDF(x, y + e, z, half, bevel, lobe) - shapeSDF(x, y - e, z, half, bevel, lobe);
-  const nz = shapeSDF(x, y, z + e, half, bevel, lobe) - shapeSDF(x, y, z - e, half, bevel, lobe);
+  const nx = shapeSDF(x + e, y, z, half, bevel, shape) - shapeSDF(x - e, y, z, half, bevel, shape);
+  const ny = shapeSDF(x, y + e, z, half, bevel, shape) - shapeSDF(x, y - e, z, half, bevel, shape);
+  const nz = shapeSDF(x, y, z + e, half, bevel, shape) - shapeSDF(x, y, z - e, half, bevel, shape);
   const l = Math.sqrt(nx * nx + ny * ny + nz * nz) || 1;
   out[0] = nx / l; out[1] = ny / l; out[2] = nz / l;
   return out;

@@ -50,7 +50,7 @@ const SETTING_BY_KEY = Object.fromEntries(SETTINGS.map((s) => [s.key, s]));
 // each cube's own settings: its material's, and its size (the rest - gravity,
 // the sound, the tools - are the room's, the same in every cube)
 // (its own: its material's sliders, its size, its bubbles)
-const PER_CUBE = (k) => !!SETTING_BY_KEY[k]?.mat || k === 'size' || k === 'bubbles' || k === 'bubbleSize' || k === 'surfDepth' || k === 'surfScale' || k === 'trimSize' || k === 'trimDepth';
+const PER_CUBE = (k) => !!SETTING_BY_KEY[k]?.mat || k === 'size' || k === 'bubbles' || k === 'bubbleSize' || k === 'surfDepth' || k === 'surfScale' || k === 'trimSize' || k === 'trimDepth' || k === 'faces';
 import { DiceWatch } from './dice.js';
 import { Alive } from './alive.js';
 import { Tilt } from './tilt.js';
@@ -468,11 +468,12 @@ export class App {
         rigidity: cs.rigidity, density: cs.weight, airDrag: cs.airDrag,
       });
       this.jelly.setCubeLook(cb.slot, resolveFlavor(cb.style), { ...ct, ...cs, surface: cb.style.surface, trim: cb.style.trim, bevelRatio: (EDGES[cb.style.edges] || EDGES[DEFAULT_STYLE.edges]).bevel }, sb.cSize[cb.slot]);
-      // (its scalloped edges, if it has them: its shape - built again in
-      // place if that's changed and it's whole; else at its next re-cube)
-      const L = this.lobeOf(cb, cs);
-      if (Math.abs(L.A - sb.cLobeA[cb.slot]) > 1e-6 || Math.abs(L.P - sb.cLobeP[cb.slot]) > 1e-6 || ((L.A > 0 || sb.cLobeA[cb.slot] > 0) && Math.abs(this.bevelOf(cb) - sb.cBevel[cb.slot]) > 1e-6)) {
-        sb.setLobe(cb.slot, L.A, L.P);
+      // (its own shape - faces dished or bulged, scalloped edges: built
+      // again in place if that's changed and it's whole; else at its next
+      // re-cube)
+      const L = this.shapeOf(cb, cs), k = cb.slot, shaped = L.bow || L.A > 0 || sb.cBow[k] || sb.cLobeA[k] > 0;
+      if (Math.abs(L.bow - sb.cBow[k]) > 1e-6 || Math.abs(L.A - sb.cLobeA[k]) > 1e-6 || Math.abs(L.m - sb.cLobeP[k]) > 1e-6 || (shaped && Math.abs(this.bevelOf(cb) - sb.cBevel[k]) > 1e-6)) {
+        sb.setShape(cb.slot, L.bow, L.A, L.m);
         if (cb.slot === this.cube.slot) sb.p.bevel = this.bevelOf(cb);
         (this._reshape ||= new Set()).add(cb.slot);
       }
@@ -872,9 +873,10 @@ export class App {
       this.heal();
       return;
     }
-    // (scalloped: its lobes are its edges' own rounding - built again with
-    // the new one, no easing between: see _reformCube)
-    if (sb.cLobeA[slot] > 0) {
+    // (shaped - dished, bulged, scalloped: its shape's on its edges' own
+    // rounding - built again with the new one, no easing between: see
+    // _reformCube)
+    if (sb.cBow[slot] || sb.cLobeA[slot] > 0) {
       this._edgeMorph = null;
       this._reformCube(slot);
       return;
@@ -1603,17 +1605,22 @@ export class App {
     return (EDGES[cb.style.edges] || EDGES[DEFAULT_STYLE.edges]).bevel * this.sizeOf(cb);
   }
 
-  // Its scalloped edges' lobes (see mesh.js shapeSDF): how far one stands
-  // out, how long it is - by the trim's Size and Depth (A 0: not scalloped)
-  lobeOf(cb, cs = resolveSettings(cb.tune, TEXTURES[cb.style.texture])) {
-    if (TRIM[cb.style.trim]?.shape !== 'scallop') return { A: 0, P: 0 };
-    const size = this.sizeOf(cb);
-    return { A: 0.075 * size * Math.min(1.8, cs.trimDepth ?? 1), P: 0.24 * size * (cs.trimSize ?? 1) };
+  // Its own shape (see mesh.js shapeSDF): its faces' bow - by the Faces
+  // slider, dished (-1) to bulged (1), a face's middle up to 16% of its size
+  // in or out - and its scalloped edges' crimp: how far each scallop stands
+  // out (Depth: 0.7% of its size at Moulded, the Airy ribbing's) and how
+  // long (Size: a mesh cell at Medium - four of the render's finest steps -
+  // three at Fine, eight at Bold). A 0: not scalloped.
+  shapeOf(cb, cs = resolveSettings(cb.tune, TEXTURES[cb.style.texture])) {
+    const size = this.sizeOf(cb), f = Math.max(-1, Math.min(1, cs.faces ?? 0)), bow = Math.abs(f) < 1e-3 ? 0 : 0.16 * size * f;
+    if (TRIM[cb.style.trim]?.shape !== 'scallop') return { bow, A: 0, m: 0 };
+    return { bow, A: 0.007 * size * Math.min(2.5, cs.trimDepth ?? 1), m: Math.max(3, Math.round(4 * (cs.trimSize ?? 1))) };
   }
 
   // A whole cube built again just where it is, as it is now - its shape's
-  // changed (scalloped edges on or off, or their size; its edges under
-  // them): the jelly springs. False if it can't be (cut, mid re-cube).
+  // changed (its faces dished or bulged, scalloped edges on or off, their
+  // size; its edges under them): the jelly springs. False if it can't be
+  // (cut, mid re-cube).
   _reformCube(slot) {
     const sb = this.sb, cb = this.cubes.find((c) => c.slot === slot);
     if (!cb || !this._whole(slot) || this.healer.active || this.swapper.active || this.cubiplication.active) return false;

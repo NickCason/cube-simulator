@@ -55,6 +55,9 @@ export const SETTINGS = [
   // its surface map's (see surfaces.js): how deep its relief, how big its cells
   { id: 'surfDepth', group: 'Surface', label: 'Depth', key: 'surfDepth', def: 1, ...logMap(0.25, 3), words: ['Faint', 'Soft', 'Moulded', 'Deep', 'Carved'] },
   { id: 'surfScale', group: 'Surface', label: 'Scale', key: 'surfScale', def: 1, ...logMap(0.4, 2.5), words: ['Fine', 'Small', 'Medium', 'Large', 'Bold'] },
+  // its own shape: its faces dished in - each side pinched, its corners
+  // standing out - or bulged out (see app.js shapeOf)
+  { id: 'faces', group: 'Shape', label: 'Faces', key: 'faces', def: 0, ...linMap(-1, 1), words: ['Pinched', 'Dished', 'Flat', 'Rounded', 'Puffy'] },
   // its edges' trim's (see styles.js TRIMS): how big its repeats, how deep
   { id: 'trimSize', group: 'Trim', label: 'Size', key: 'trimSize', def: 1, ...logMap(0.5, 2), words: ['Fine', 'Small', 'Medium', 'Large', 'Bold'] },
   { id: 'trimDepth', group: 'Trim', label: 'Depth', key: 'trimDepth', def: 1, ...logMap(0.4, 2.5), words: ['Faint', 'Soft', 'Moulded', 'Deep', 'Carved'] },
