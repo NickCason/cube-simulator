@@ -409,10 +409,11 @@ export function createBackMaterial(rest = false) {
 
 // The jelly shader's parts not every cube needs, each compiled in only while
 // something on screen uses it (see JellyView.setFeatures): iridescence,
-// metal, opal fire, a surface map; a coat (sugar, a dusting, flour, frost);
-// glow mode; a weld's glow or a flame's light; and ?dbg's views.
-const JELLY_FEATURES = [['JELLY_IRID', 1], ['JELLY_METAL', 2], ['JELLY_OPAL', 4], ['JELLY_SURF', 8], ['JELLY_COAT', 16], ['JELLY_GLOW', 32], ['JELLY_DYN', 64], ['JELLY_DEBUG', 128]];
-export const JELLY_ALL = 127, JELLY_DEBUG = 128;
+// metal, opal fire, a surface map (a face's baked one; holes all through);
+// a coat (sugar, a dusting, flour, frost); glow mode; a weld's glow or a
+// flame's light; and ?dbg's views.
+const JELLY_FEATURES = [['JELLY_IRID', 1], ['JELLY_METAL', 2], ['JELLY_OPAL', 4], ['JELLY_SURF', 8], ['JELLY_COAT', 16], ['JELLY_GLOW', 32], ['JELLY_DYN', 64], ['JELLY_DEBUG', 128], ['JELLY_HOLES', 256]];
+export const JELLY_ALL = 383, JELLY_DEBUG = 128;
 // (always in this order: three tells its compiled shaders apart by them, in
 // the order they're listed)
 export function jellyDefines(key) {
@@ -560,6 +561,15 @@ export function createJellyMaterial(env, layerUniforms) {
 
       ${CUBE_GLSL}
       ${FLOOR_PATTERN_GLSL}
+      // (the surface maps here: faces' baked ones, holes all through - see
+      // SURF_GLSL, JellyView.setFeatures)
+      #define SF_PICK
+      #ifdef JELLY_SURF
+      #define SF_FACES
+      #endif
+      #ifdef JELLY_HOLES
+      #define SF_HOLES
+      #endif
       ${SURF_GLSL}
       varying float vCube;
       uniform sampler2D tLightEntry;
@@ -873,7 +883,7 @@ export function createJellyMaterial(env, layerUniforms) {
         // fades into a little roughness (else it sparkles).
         float surfAO = 1.0, surfRough = 0.0, surfShadow = 1.0, surfH = 1.0, surfFade = 0.0;
         vec4 cq31 = cubeT(31);
-        #ifdef JELLY_SURF // (compiled in only while a cube has a surface map: see JellyView.setFeatures)
+        #if defined(JELLY_SURF) || defined(JELLY_HOLES) // (compiled in only while a cube has a surface map: see JellyView.setFeatures)
         if (cq31.x > 0.5 && cavity < 0.5) {
           vec4 cq28s = cubeT(28);
           SfInfo sf = sfInfo(cq31, cq28s, cq4.w);
@@ -883,23 +893,31 @@ export function createJellyMaterial(env, layerUniforms) {
             surfRough = cq28s.z + (1.0 - fade) * min(0.3, 2.0 * sf.depth / sf.cell);
             if (fade > 0.0) {
               vec3 Nr = sfRestN(dRx, dRy, dPx, dPy, N);
-              vec4 sph;
               float h = 1.0;
-              if (sf.thru && fade > 0.6 && sfHole(sf.k, vRest / sf.cell, sph)) {
-                vec3 Vr = normalize(sfToRest(V, dRx, dRy, dPx, dPy, N, Nr));
-                vec3 c = sph.xyz * sf.cell, d = vRest - c;
-                float rr = sph.w * sf.cell, bq = dot(-Vr, d), disc = bq * bq - dot(d, d) + rr * rr;
-                if (disc > 0.0) {
-                  vec3 far = vRest - Vr * (-bq + sqrt(disc));
-                  Pw = vWorldPos + sfToWorld(far - vRest, dRx, dRy, dPx, dPy, N, Nr);
-                  N = normalize(sfToWorld(c - far, dRx, dRy, dPx, dPy, N, Nr));
-                  Rp = far;
-                  V = normalize(cameraPosition - Pw);
-                  cavity = 1.0;
-                  cavDeep = clamp(dot(vRest - far, Nr) / (2.0 * rr), 0.0, 1.0);
-                  fresh = 0.0;
-                }
-              } else if (!sf.thru) {
+              if (sf.thru) {
+                #ifdef SF_HOLES
+                vec4 sph;
+                if (fade > 0.6 && sfHole(sf.k, vRest / sf.cell, sph)) {
+                  vec3 Vr = normalize(sfToRest(V, dRx, dRy, dPx, dPy, N, Nr));
+                  vec3 c = sph.xyz * sf.cell, d = vRest - c;
+                  float rr = sph.w * sf.cell, bq = dot(-Vr, d), disc = bq * bq - dot(d, d) + rr * rr;
+                  if (disc > 0.0) {
+                    vec3 far = vRest - Vr * (-bq + sqrt(disc));
+                    Pw = vWorldPos + sfToWorld(far - vRest, dRx, dRy, dPx, dPy, N, Nr);
+                    N = normalize(sfToWorld(c - far, dRx, dRy, dPx, dPy, N, Nr));
+                    Rp = far;
+                    V = normalize(cameraPosition - Pw);
+                    cavity = 1.0;
+                    cavDeep = clamp(dot(vRest - far, Nr) / (2.0 * rr), 0.0, 1.0);
+                    fresh = 0.0;
+                  }
+                } else N = sfBend(sf, vRest, dRx, dRy, dPx, dPy, N, fade, h);
+                #endif
+              } else {
+                #ifdef SF_FACES
+                // (how the world and the rest shape run across this pixel,
+                // the once - for the line of sight, the light and the bend)
+                SfFrame J = sfFrame(dRx, dRy, dPx, dPy, N);
                 // (round a rounded edge the faces' mapping turns the corner:
                 // the march into it and its shade fade out across it)
                 float deep = fade * (1.0 - sfOnEdge(sf, vRest));
@@ -909,16 +927,31 @@ export function createJellyMaterial(env, layerUniforms) {
                 vec3 rp = vRest;
                 SfFace F = sfFaceAt(sf, vRest);
                 if (deep > 0.3 && uSurfSteps > 0) {
-                  vec3 Vr = normalize(sfToRest(V, dRx, dRy, dPx, dPy, N, Nr));
+                  vec3 Vr = normalize(sfToRestJ(J, V, dRx, dRy, Nr));
                   float cv = max(dot(Vr, Nr), 0.25), shift = sf.depth * sqrt(max(1.0 - cv * cv, 0.0)) / cv / pix;
                   int st = int(min(float(uSurfSteps), ceil(shift / 1.5)));
                   if (st >= 2) rp = mix(vRest, sfParallax(sf, F, vRest, sfHf(sf, F, vec3(0.0)), Vr, Nr, st), smoothstep(0.3, 0.7, deep));
                 }
-                N = sfBend(sf, rp, dRx, dRy, dPx, dPy, N, fade, h);
-                vec3 Lr = normalize(sfToRest(normalize(uLightDir), dRx, dRy, dPx, dPy, N, Nr));
+                // (its heights there and a pixel along each way: on the flat
+                // of the face by its own two ways; on a rounded edge, where
+                // the mapping turns the corner, each found afresh)
+                vec3 o = rp - vRest;
+                float hx, hy;
+                if (sfOnFlat(sf, F, rp, 2.0 * pix)) {
+                  h = sfHf(sf, F, o);
+                  hx = sfHf(sf, F, o + dRx);
+                  hy = sfHf(sf, F, o + dRy);
+                } else {
+                  h = sfH(sf, rp);
+                  hx = sfH(sf, rp + dRx);
+                  hy = sfH(sf, rp + dRy);
+                }
+                N = sfBendH(sf, h, hx, hy, J, N, fade);
+                vec3 Lr = normalize(sfToRestJ(J, normalize(uLightDir), dRx, dRy, Nr));
                 float cl = max(dot(Lr, Nr), 0.2);
-                if (deep > 0.0 && sf.depth * sqrt(max(1.0 - cl * cl, 0.0)) / cl / pix > 1.0 && h < 0.999) surfShadow = mix(1.0, sfShadow(sf, F, rp - vRest, h, Lr, Nr), deep);
-              } else N = sfBend(sf, vRest, dRx, dRy, dPx, dPy, N, fade, h);
+                if (deep > 0.0 && sf.depth * sqrt(max(1.0 - cl * cl, 0.0)) / cl / pix > 1.0 && h < 0.999) surfShadow = mix(1.0, sfShadow(sf, F, o, h, Lr, Nr), deep);
+                #endif
+              }
               // (its hollows a little darker: less of the room reaches in)
               surfAO = 1.0 - cq29.w * (1.0 - clamp(h, 0.0, 1.0)) * fade;
               surfH = clamp(h, 0.0, 1.0);
@@ -1503,7 +1536,7 @@ export function createLightViewMaterial(kind) {
       varying vec4 vCoat;
       varying float vCoatM;
       ${SAFE_GLSL}
-      ${kind === 0 ? 'uniform highp sampler2D uCubeTex;' : CUBE_GLSL + SURF_GLSL}
+      ${kind === 0 ? 'uniform highp sampler2D uCubeTex;' : CUBE_GLSL + '\n#define SF_PICK\n#define SF_FACES\n' + SURF_GLSL /* (its faces' maps only: see surfN) */}
       ${kind === 1 ? '' : NOISE + COVER_GLSL}
       // (how much of the light its coat stops, here: see coatCover)
       float cover() {

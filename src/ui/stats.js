@@ -54,7 +54,7 @@ export function attachStats(app) {
   };
   // (the jelly's shader: the parts compiled into the one it's drawn with -
   // and what's wanted, while that's still compiling: see JellyView.setFeatures)
-  const featParts = (k) => (k === undefined ? '-' : ['irid', 'metal', 'opal', 'surf', 'coat', 'glow', 'dyn', 'dbg'].filter((_, b) => k & (1 << b)).join('+') || 'plain');
+  const featParts = (k) => (k === undefined ? '-' : ['irid', 'metal', 'opal', 'surf', 'coat', 'glow', 'dyn', 'dbg', 'holes'].filter((_, b) => k & (1 << b)).join('+') || 'plain');
   const shader = () => {
     const J = app.jelly, k = J._featKey, w = J._wantFeatures?.(app.sb);
     return `${featParts(k)}${w !== undefined && w !== k ? ` (want ${featParts(w)})` : ''}`;

@@ -333,6 +333,11 @@ export class JellyView {
     this.needRest = false;
     this.rtBackRest = null;
     this.frontMat = createJellyMaterial(env, this.layerUniforms);
+    // (Mesa - Linux's GL - hung the GPU or crashed compiling a shader while
+    // another was still compiling aside: there a set's compiled all at once,
+    // while it's quiet - see setFeatures)
+    const gl = renderer.getContext(), dbg = gl.getExtension('WEBGL_debug_renderer_info');
+    this._serialCompile = /mesa/i.test(String(gl.getParameter(dbg ? dbg.UNMASKED_RENDERER_WEBGL : gl.RENDERER)));
     // each cube's look, a row each (see setCubeLook; the front shader reads it)
     this.cubeData = new Float32Array(CUBE_TEX_W * MAX_CUBES * 4);
     this.cubeTex = new THREE.DataTexture(this.cubeData, CUBE_TEX_W, MAX_CUBES, THREE.RGBAFormat, THREE.FloatType);
@@ -1467,6 +1472,7 @@ export class JellyView {
     const want = this._wantFeatures(sb), all = JELLY_ALL | (want & JELLY_DEBUG);
     if (this.frontMat.fragmentShader !== this._featSrc) {
       // (its source changed - harnesses do that: none of those compiled fit)
+      if (this._variants) this._finishWarms();
       for (const v of this._variants?.values() || []) v.m.dispose();
       this._variants = new Map();
       this._featUsed = new Set();
@@ -1478,8 +1484,11 @@ export class JellyView {
     if (want === this._featKey) return;
     if (this._featReady(want)) return this._useFeatures(want);
     if ((this._featKey & want) === want) return;
-    // (nothing compiled has it all: the one with everything, or this one now)
-    this._useFeatures(this._featReady(all) ? all : want);
+    // (nothing compiled has it all: the one with everything, or this one now -
+    // never while another's still compiling)
+    if (this._featReady(all)) return this._useFeatures(all);
+    this._finishWarms();
+    this._useFeatures(want);
   }
 
   // what's here: the cubes' looks, any coat, glow mode, a weld or a flame
@@ -1494,7 +1503,8 @@ export class JellyView {
       if (D[r + 14] > 0) key |= 1; // iridescent
       if (D[r + 15] > 0) key |= 2; // metal
       if (D[r + 16] > 0) key |= 4; // opal fire
-      if (D[r + 31 * 4] > 0.5) key |= 8; // a surface map
+      // a surface map: a face's baked one, or holes all through
+      if (D[r + 31 * 4] > 0.5) key |= SURFACES[Math.round(D[r + 31 * 4])]?.through ? 256 : 8;
     }
     const U = this.frontMat.uniforms, pl = U.uPLColor.value;
     if (this.coverWanted) key |= 16; // (sugar, a dusting, flour, frost - see update)
@@ -1523,6 +1533,12 @@ export class JellyView {
     return false;
   }
 
+  // (wait for those still compiling: asking whether one's linked waits for it)
+  _finishWarms() {
+    const gl = this.renderer.getContext();
+    for (const v of this._variants.values()) if (!v.prog.isReady()) gl.getProgramParameter(v.prog.program, gl.LINK_STATUS);
+  }
+
   // a set compiled in the background: a stand-in material of its own, as the
   // jelly's but for its parts - three shares one compiled program between
   // materials alike, so the jelly's picks this one up when it's switched to
@@ -1539,6 +1555,7 @@ export class JellyView {
     r.compile(scene, camera);
     r.setRenderTarget(prev);
     this._variants.set(key, { m, prog: r.properties.get(m).currentProgram });
+    if (this._serialCompile) this._finishWarms();
   }
 
   renderPieces(camera, sb, rtScene, rtTrans, copyFn) {

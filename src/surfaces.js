@@ -677,9 +677,18 @@ export function surfaceBakeGLSL(only = -1) {
 export const SURF_BAKE_GLSL = surfaceBakeGLSL();
 
 export const SURF_GLSL = /* glsl */ `
+  // (which kinds this shader draws: a face's baked map (SF_FACES), holes all
+  // through (SF_HOLES) - a shader that picks defines SF_PICK and those it
+  // wants first; else both. Each one's code, compiled in but not used, still
+  // made the jelly's every pixel slower)
+  #ifndef SF_PICK
+  #define SF_FACES
+  #define SF_HOLES
+  #endif
   // (every cube's surface map, baked onto it: six layers a cube, a face each
   // - see JellyView._bakeCube)
   uniform highp sampler2DArray uSurfAtlas;
+  #ifdef SF_HOLES
   vec4 sfH34(vec3 p) {
     vec4 p4 = fract(vec4(p.xyzx) * vec4(0.1031, 0.1030, 0.0973, 0.1099));
     p4 += dot(p4, p4.wzxy + 33.33);
@@ -701,6 +710,7 @@ export const SURF_GLSL = /* glsl */ `
     }
     return h;
   }
+  #endif
   // A rest point's place on the cube unfolded: which face it's on, and how
   // far along that face each way - round a bevel by its arc - so a pattern
   // laid on it carries on round an edge onto the next face (a face's own
@@ -724,21 +734,40 @@ export const SURF_GLSL = /* glsl */ `
     if (an.y >= an.z) return vec3(sfUnf(r.x, n.x, n.y, fl, b), -sign(n.y) * sfUnf(r.z, n.z, n.y, fl, b), n.y > 0.0 ? 2.0 : 3.0);
     return vec3(sign(n.z) * sfUnf(r.x, n.x, n.z, fl, b), sfUnf(r.y, n.y, n.z, fl, b), n.z > 0.0 ? 4.0 : 5.0);
   }
+  #ifdef SF_HOLES
   float sfVolume(int k, vec3 p);
+  #endif
   // Its height at rest point r: a through one in the jelly's own space;
   // else off the cube's baked map - the face it's on, and where on it (L: a
   // face's stretch, bevel middle to bevel middle)
   float sfHeightAt(int k, bool thru, vec3 r, float hs, float b, float L, vec2 NN) {
+    #ifdef SF_HOLES
     if (thru) return sfVolume(k, r * (NN.x / (2.0 * hs)));
+    #endif
+    #ifdef SF_FACES
     vec3 f = sfFaceUV(r, hs, b);
     return textureLod(uSurfAtlas, vec3(f.xy / L + 0.5, float(gK * 6) + f.z), 0.0).r;
+    #else
+    return 1.0;
+    #endif
   }
+  #ifdef SF_HOLES
   float sfVolume(int k, vec3 p) {
     ${SURFACES.map((s, i) => (s.glsl && s.through ? `if (k == ${i}) { ${s.glsl} }` : '')).filter(Boolean).join('\n    ')}
     return 1.0;
   }
-  bool sfThrough(int k) { return ${SURFACES.map((s, i) => (s.through ? `k == ${i}` : '')).filter(Boolean).join(' || ') || 'false'}; }
+  #endif
+  bool sfThrough(int k) {
+    #if defined(SF_FACES) && defined(SF_HOLES)
+    return ${SURFACES.map((s, i) => (s.through ? `k == ${i}` : '')).filter(Boolean).join(' || ') || 'false'};
+    #elif defined(SF_HOLES)
+    return true;
+    #else
+    return false;
+    #endif
+  }
 
+  #ifdef SF_HOLES
   // A hole's sphere round rest point p (in cells), if it's in one: its
   // centre and radius (the one it's deepest in) - as sfHoles finds them.
   bool sfHoleSph(vec3 p, float prob, float r0, float r1, out vec4 sph) {
@@ -762,6 +791,7 @@ export const SURF_GLSL = /* glsl */ `
     ${SURFACES.map((s, i) => (s.holes ? `if (k == ${i}) return sfHoleSph(p, ${s.holes.map((v) => v.toFixed(3)).join(', ')}, sph);` : '')).filter(Boolean).join('\n    ')}
     return false;
   }
+  #endif
 
   // A cube's surface map, its numbers worked out (q31, q28: its rows 31 and
   // 28 of the cube looks; size: the cube's): its kind, whether it's holes all
@@ -796,21 +826,40 @@ export const SURF_GLSL = /* glsl */ `
     return textureLod(uSurfAtlas, vec3((F.f.xy + a) / s.L + 0.5, float(gK * 6) + f), 0.0).r;
   }
 
+  // How the world and the rest shape run across this pixel (dP*, dR*: the
+  // world point and the rest point, each way across it; N the surface's
+  // normal), worked out the once: for a world direction as a rest one (see
+  // sfToRestJ), and the surface gradient's axes (see sfBendH) - the rows of
+  // the inverse of the world's (dPx, dPy, N), over its determinant.
+  struct SfFrame { vec3 R1, R2, R3; float id, sN; };
+  SfFrame sfFrame(vec3 dRx, vec3 dRy, vec3 dPx, vec3 dPy, vec3 N) {
+    SfFrame J;
+    J.R1 = cross(dPy, N);
+    J.R2 = cross(N, dPx);
+    J.R3 = cross(dPx, dPy);
+    float det = dot(dPx, J.R1);
+    J.id = abs(det) < 1e-24 ? 0.0 : 1.0 / det;
+    J.sN = sqrt(length(cross(dRx, dRy)) / max(length(J.R3), 1e-24));
+    return J;
+  }
+  vec3 sfToRestJ(SfFrame J, vec3 w, vec3 dRx, vec3 dRy, vec3 Nr) {
+    vec3 c = vec3(dot(J.R1, w), dot(J.R2, w), dot(J.R3, w)) * J.id;
+    return dRx * c.x + dRy * c.y + Nr * (c.z * J.sN);
+  }
   // Its relief bent into normal N: how much it rises across this pixel, both
-  // ways (its height here, and a pixel along each way - r the rest point, d*
-  // how the rest point and the world point run across the pixel), into the
-  // world as it is now - Mikkelsen's surface gradient. h: its height here.
-  vec3 sfBend(SfInfo s, vec3 r, vec3 dRx, vec3 dRy, vec3 dPx, vec3 dPy, vec3 N, float amt, out float h) {
-    h = sfH(s, r);
-    float dBs = (sfH(s, r + dRx) - h) * s.depth * amt;
-    float dBt = (sfH(s, r + dRy) - h) * s.depth * amt;
-    vec3 R1 = cross(dPy, N), R2 = cross(N, dPx);
-    float det = dot(dPx, R1);
-    if (abs(det) < 1e-20) return N;
-    vec3 sg = (dBs * R1 + dBt * R2) / det;
+  // ways (its height here, h, and a pixel along each way, hx, hy), into the
+  // world as it is now - Mikkelsen's surface gradient.
+  vec3 sfBendH(SfInfo s, float h, float hx, float hy, SfFrame J, vec3 N, float amt) {
+    vec3 sg = ((hx - h) * J.R1 + (hy - h) * J.R2) * (s.depth * amt * J.id);
     float sl = length(sg);
     if (sl > 1.5) sg *= 1.5 / sl;
     return normalize(N - sg);
+  }
+  // ...its heights here and a pixel along each way found afresh (r the rest
+  // point, dR* how it runs across the pixel): h its height here.
+  vec3 sfBend(SfInfo s, vec3 r, vec3 dRx, vec3 dRy, vec3 dPx, vec3 dPy, vec3 N, float amt, out float h) {
+    h = sfH(s, r);
+    return sfBendH(s, h, sfH(s, r + dRx), sfH(s, r + dRy), sfFrame(dRx, dRy, dPx, dPy, N), N, amt);
   }
 
   // The rest shape's own normal here, outward (the way the world's N is):
@@ -860,6 +909,15 @@ export const SURF_GLSL = /* glsl */ `
       prevGap = gap;
     }
     return prev;
+  }
+
+  // (whether r is on the flat of F's face, m clear of its rounded edges:
+  // there the face's own two ways are its mapping - sfHf's look-ups are
+  // exact, no need to find the face afresh)
+  bool sfOnFlat(SfInfo s, SfFace F, vec3 r, float m) {
+    vec3 q = step(s.hs - s.b - m, abs(r));
+    float f = F.f.z, own = f < 1.5 ? q.x : f < 3.5 ? q.y : q.z;
+    return q.x + q.y + q.z < 1.5 && own > 0.5;
   }
 
   // (how far onto a rounded edge r is, 0..1: out of its middle - round a
