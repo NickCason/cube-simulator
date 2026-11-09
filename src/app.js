@@ -52,6 +52,7 @@ const SETTING_BY_KEY = Object.fromEntries(SETTINGS.map((s) => [s.key, s]));
 // (its own: its material's sliders, its size, its bubbles)
 const PER_CUBE = (k) => !!SETTING_BY_KEY[k]?.mat || k === 'size' || k === 'bubbles' || k === 'bubbleSize' || k === 'surfDepth' || k === 'surfScale' || k === 'trimSize' || k === 'trimDepth';
 import { DiceWatch } from './dice.js';
+import { Alive } from './alive.js';
 import { Tilt } from './tilt.js';
 import { nameCube } from './namegen.js';
 
@@ -206,6 +207,7 @@ export class App {
     this.portraits = new Portraits(this); // (a cube's picture, taken properly: see portrait.js)
     this.cubiplication = new Cubiplication(this); // (fed jelly, a cube cubiplies - see tools/feed.js)
     this.dice = new DiceWatch(this); // (a die says what it rolled - see dice.js)
+    this.alive = new Alive(this); // (a cube with eyes on is a little bit alive - see alive.js)
     // the glass room (Settings > World), as it was left
     this.room = new GlassRoom(this);
     try {
@@ -244,7 +246,7 @@ export class App {
     this.paused = false;
     this.raycaster = new THREE.Raycaster();
     this._ndc = new THREE.Vector2();
-    this.onFrame = [(sdt, dt) => this.dice.update(dt)];
+    this.onFrame = [(sdt, dt) => this.dice.update(dt), (sdt) => this.alive.update(sdt)];
     this.damaged = false;
 
     const uiRoot = document.getElementById('ui');
@@ -1342,6 +1344,7 @@ export class App {
     });
     el.addEventListener('pointermove', (e) => {
       if (pointers.has(e.pointerId)) pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      if (e.pointerType === 'mouse') this.alive?.hover(this.rayFromClient(e.clientX, e.clientY));
       if (mode === 'tool') {
         const ray = this.rayFromClient(e.clientX, e.clientY);
         this.tool?.move?.(e, ray);
@@ -1377,6 +1380,7 @@ export class App {
     el.addEventListener('pointercancel', end);
     el.addEventListener('pointerleave', (e) => {
       if (e.pointerType === 'mouse') this.tool?.hover?.(null, null);
+      this.alive?.hover(null);
     });
     el.addEventListener(
       'wheel',

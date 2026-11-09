@@ -53,7 +53,7 @@ export const TUNE_CODES = {
   bombPower: 'bm', syringePump: 'sy', magnetPull: 'mg',
   contactGrip: 'jj', airDrag: 'ad',
   dice: 'dc', holeSize: 'hz', autoRate: 'ar', flameSize: 'fz', acidStrength: 'as', acidPour: 'ap', pupilWiggle: 'pw',
-  siftRate: 'sr', siftSpread: 'ss', ballSize: 'bz', cuberSize: 'cz', ladle: 'ld', mutation: 'mx', globSize: 'gz', globRate: 'gr', twistSpeed: 'tw',
+  siftRate: 'sr', siftSpread: 'ss', ballSize: 'bz', cuberSize: 'cz', ladle: 'ld', mutation: 'mx', globSize: 'gz', globRate: 'gr', twistSpeed: 'tw', lively: 'lv',
 };
 const KEY_OF = Object.fromEntries(Object.entries(TUNE_CODES).map(([k, c]) => [c, k]));
 const SETTING = Object.fromEntries(SETTINGS.map((s) => [s.key, s]));

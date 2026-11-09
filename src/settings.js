@@ -101,6 +101,7 @@ export const SETTINGS = [
   { id: 'acidStrength', group: 'Acid', tool: 'acid', lab: true, label: 'Strength', key: 'acidStrength', def: 1, ...logMap(0.3, 3.3), words: ['Vinegar', 'Mild', 'Normal', 'Strong', 'Xenomorph'] },
   { id: 'acidPour', group: 'Acid', tool: 'acid', lab: true, label: 'Pour', key: 'acidPour', def: 1, ...logMap(0.4, 2.5), words: ['Drip', 'Trickle', 'Normal', 'Glug', 'Flood'] },
   { id: 'twistSpeed', group: 'Twist', tool: 'twist', lab: true, label: 'Turn speed', key: 'twistSpeed', def: 1, ...logMap(0.4, 3), words: ['Slow', 'Easy', 'Normal', 'Snappy', 'Speedcuber'] },
+  { id: 'lively', group: 'Googly eyes', tool: 'eyes', lab: true, label: 'Liveliness', key: 'lively', def: 0.5, ...linMap(0, 1), words: ['Still', 'Sleepy', 'Lively', 'Bouncy', 'Hyper'] },
   { id: 'pupilWiggle', group: 'Googly eyes', tool: 'eyes', lab: true, label: 'Pupil wiggle', key: 'pupilWiggle', def: 1, ...logMap(0.3, 3), words: ['Sluggish', 'Calm', 'Googly', 'Rattly', 'Frantic'] },
   { id: 'siftRate', group: 'Sieve', tool: 'flour', lab: true, label: 'Sift', key: 'siftRate', def: 1, ...logMap(0.3, 3), words: ['Pinch', 'Light', 'Normal', 'Heavy', 'Avalanche'] },
   { id: 'siftSpread', group: 'Sieve', tool: 'flour', lab: true, label: 'Spread', key: 'siftSpread', def: 1, ...logMap(0.4, 2.5), words: ['Tight', 'Narrow', 'Normal', 'Wide', 'Snowfall'] },
