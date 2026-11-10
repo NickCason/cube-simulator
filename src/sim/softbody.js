@@ -131,6 +131,43 @@ export class SoftBody {
     this.tKs = null; // per tet: stiffness scale, see _computeMass
     this._bpNV = 0; // vertex count at the last _buildPieces (0: nothing carries over)
     this._carried = null; // per piece: carried over unchanged by the last rebuild (see _buildPieces)
+    // Every field the physics ever sets, here and in this order - each a placeholder of the kind it will hold.
+    // One made later (a scratch array first needed at the first landing, grab, cut, fold...) changed the body's
+    // shape, and Safari threw away every bit of optimised code shaped to the old one and waited seconds before
+    // optimising again: the tets ran 10-20x slow for ~4 s after the first drop landed (an iPhone report, and
+    // Playwright's WebKit). Lengths 64/MAX_CUBES: grown where they're used, the same kind of array.
+    this._anyRigid = false;
+    this._lightBuild = false;
+    this._sliverV = null;
+    this.cHardTyp = new Float64Array(MAX_CUBES);
+    this._vDirty = null;
+    this._glue = null;
+    this._pressP = new Float64Array(64);
+    this._kMu = new Float64Array(MAX_CUBES);
+    this._kLam = new Float64Array(MAX_CUBES);
+    this._kBoost = new Float64Array(MAX_CUBES);
+    this._wEmb = null;
+    this._leadP = null;
+    this._leadV = null;
+    this._foldFound = new Uint8Array(64);
+    this._foldDeep = new Uint8Array(64);
+    this._tgLook = new Uint8Array(64);
+    this._tgOut = new Int32Array(64);
+    this._rgAmt = new Float64Array(MAX_CUBES);
+    this._rgA = new Float64Array(9);
+    this._rgR = new Float64Array(9);
+    this._rgHeld = null;
+    this._r2Topo = -1;
+    this._r2N = 0;
+    this._r2On = null;
+    this._r2M = null;
+    this._r2S = null;
+    this._r2L = null;
+    this._selfFresh = false;
+    this._selfTopo = -1;
+    this._selfSig = 0;
+    this._nearBox = new Uint8Array(64);
+    this._grabbedP = new Uint8Array(64);
     this._allocV(4096);
     this._allocT(16384);
     this.grabs = []; // hands holding the jelly (two fingers: two) - see startGrab
