@@ -50,7 +50,7 @@ export const TUNE_CODES = {
   gravity: 'gv', size: 'sz',
   grabSize: 'hs', handPull: 'hp', poke: 'pk',
   knifePush: 'kp', nailPower: 'nl', gunPower: 'gn', malletForce: 'ml', torchHeat: 'th', boilOff: 'bf', cryoCold: 'cc',
-  bombPower: 'bm', syringePump: 'sy', magnetPull: 'mg',
+  bombPower: 'bm', syringePump: 'sy', magnetPull: 'mg', blowForce: 'bw',
   contactGrip: 'jj', airDrag: 'ad',
   dice: 'dc', holeSize: 'hz', autoRate: 'ar', flameSize: 'fz', acidStrength: 'as', acidPour: 'ap', pupilWiggle: 'pw',
   siftRate: 'sr', siftSpread: 'ss', ballSize: 'bz', cuberSize: 'cz', ladle: 'ld', mutation: 'mx', globSize: 'gz', globRate: 'gr', twistSpeed: 'tw', lively: 'lv',

@@ -27,6 +27,7 @@ import { Eyes, LATE_LAYER } from './world/eyes.js';
 import { copyEyes, EYE_FACES } from './eyes.js';
 import { SURFACE, SURFACES } from './surfaces.js';
 import { AcidTool } from './tools/acid.js';
+import { BlowTool } from './tools/blow.js';
 import { Cubiplication } from './cubiplication.js';
 import { makeMaterials, makeBomb } from './world/models.js';
 import { physicsWarmJob } from './sim/warm.js';
@@ -285,6 +286,7 @@ export class App {
       syringe: new SyringeTool(this),
       magnet: new MagnetTool(this),
       twist: new TwistTool(this),
+      blow: new BlowTool(this),
     };
     this.tool = null;
     this.setTool('hand');

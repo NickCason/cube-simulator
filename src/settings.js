@@ -124,6 +124,7 @@ export const SETTINGS = [
   { id: 'globSize', group: 'Gel gun', tool: 'gelgun', lab: true, label: 'Glob size', key: 'globSize', def: 1, ...logMap(0.6, 1.7), words: ['Dab', 'Small', 'Normal', 'Big', 'Splat'] },
   { id: 'globRate', group: 'Gel gun', tool: 'gelgun', lab: true, label: 'Fire rate', key: 'globRate', def: 1, ...logMap(0.4, 2.2), words: ['Lob', 'Steady', 'Normal', 'Rapid', 'Hose'] },
   { id: 'magnetPull', group: 'Magnet', tool: 'magnet', lab: true, label: 'Pull', key: 'magnetPull', def: 1, ...logMap(0.3, 3.3), words: ['Fridge', 'Weak', 'Normal', 'Strong', 'MRI'] },
+  { id: 'blowForce', group: 'Blow', tool: 'blow', lab: true, label: 'Gust', key: 'blowForce', def: 1, ...logMap(0.3, 3.3), words: ['Breath', 'Breeze', 'Gust', 'Gale', 'Storm'] },
   // ...and the jelly against itself, and the air
   { id: 'contactGrip', group: 'Contact', lab: true, label: 'Jelly on jelly', key: 'contactGrip', def: 1, ...linMap(0, 2.5), words: ['Frictionless', 'Slippery', 'Normal', 'Grippy', 'Velcro'] },
   { id: 'airDrag', group: 'Contact', lab: true, label: 'Air drag', key: 'airDrag', def: 0.05, ...logMap(0.01, 4), words: ['Vacuum', 'Air', 'Breezy', 'Water', 'Honey'] },

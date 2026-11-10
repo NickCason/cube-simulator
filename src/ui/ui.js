@@ -72,6 +72,7 @@ export const ICONS = {
     '<path d="m18.5 2.5 3 3"/><path d="m20 4-3.3 3.3"/><path d="M17.8 8.4 8.6 17.6a1.4 1.4 0 0 1-2 0l-2.2-2.2a1.4 1.4 0 0 1 0-2l9.2-9.2z"/><path d="m4.5 19.5-2 2"/><path d="m9.2 11.6 1.6 1.6"/><path d="m11.4 9.4 1.6 1.6"/>',
   ),
   magnet: svg('<path d="M6 3h3.6v8.2a2.4 2.4 0 0 0 4.8 0V3H18v8.2a6 6 0 0 1-12 0z"/><path d="M6 7.2h3.6"/><path d="M14.4 7.2H18"/>'),
+  blow: svg('<path d="M3 8.5h10.5a2.75 2.75 0 1 0-2.75-2.75"/><path d="M3 12.5h15a3 3 0 1 1-3 3"/><path d="M3 16.5h6.5"/>'),
   heal: svg(
     '<path d="M11 3.5 12.7 8l4.6 1.7-4.6 1.7L11 16l-1.7-4.6-4.6-1.7L9.3 8z"/><path d="m18.5 14.5.8 2.1 2.2.8-2.2.8-.8 2.3-.8-2.3-2.2-.8 2.2-.8z"/>',
   ),
@@ -105,6 +106,7 @@ export const TOOL_DEFS = [
   { id: 'gelgun', label: 'Gel gun', hint: 'Hold to lob globs of jelly at it · they sink in and build it up · Re-cube to shake it off', key: 'e' },
   { id: 'magnet', label: 'Magnet', hint: 'Hold near nails to pull them out (and drag the jelly with them)', key: '0' },
   { id: 'twist', label: 'Twist', hint: "A Rubik's cube: drag across a face to turn that row · hold still on it to scramble", key: 'r' },
+  { id: 'blow', label: 'Blow', hint: 'Hold to blow on it · the gust ripples its skin, leans it, sends little pieces skating · shake up a snow globe', key: 'w' },
 ];
 
 const blendWord = (b) => (b < 0.12 ? 'Crisp' : b < 0.38 ? 'Soft' : b < 0.7 ? 'Blended' : 'Gradient');
