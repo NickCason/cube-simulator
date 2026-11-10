@@ -44,6 +44,12 @@ export class Glitter {
     this.lz = new Uint8Array(MAX);
     this.globes = new Map();
     this._lt = -1;
+    // (what's been sent to the GPU: the jelly's positions as of this version of them - see JellyView.posVersion -
+    // and whether a snow globe's flakes moved this tick)
+    this._posV = -1;
+    this._posN = -1;
+    this._bbSig = NaN;
+    this.looseMoved = false;
     this.seed = new Float32Array(MAX * 3);
     for (let i = 0; i < MAX; i++) {
       this.u[i * 3] = rnd() * 2 - 1;
@@ -585,6 +591,7 @@ export class Glitter {
       this.lz[k] = wall && sp2 < 1e-4 && st.stir < 0.03 ? 1 : 0;
     }
     if (moved) for (const at of [this.aTet, this.aBary, this.aM, this.aInfo, this.aRestK]) at.needsUpdate = true;
+    this.looseMoved = moved;
     // (a globe gone quiet: every flake of it settled)
     for (const [slot, st] of this.globes) {
       if (!st.wake || !st.on) continue;
@@ -592,6 +599,18 @@ export class Glitter {
       for (let k = 0; k < n && !busy; k++) if (MD[k] === SNOW && RK[k * 4 + 3] === slot && S[k * 3] > 0 && !this.lz[k]) busy = true;
       if (!busy) st.wake = false;
     }
+  }
+
+  // The snow globes' flakes, a step of their own (App.frame: every tick, drawn or not - see App._drawNow)
+  tick(time) {
+    const on = this.groups.length > 0 && this.count > 0, app = this.app;
+    const dt = this._lt < 0 ? 0 : Math.min(0.05, time - this._lt);
+    this._lt = time;
+    this.looseMoved = false;
+    if (!on || !this.anySnow || !(dt > 0) || app.paused) return;
+    const sb = app.sb;
+    if (sb.topoVersion !== this.topo || this.anchoredFor !== this._key()) this._anchor();
+    this._loose(dt * (app.timeScale ?? 1), time);
   }
 
   update(time) {
@@ -602,31 +621,41 @@ export class Glitter {
     const app = this.app;
     const sb = app.sb;
     if (sb.topoVersion !== this.topo || this.anchoredFor !== this._key()) this._anchor();
-    const dt = this._lt < 0 ? 0 : Math.min(0.05, time - this._lt);
-    this._lt = time;
-    if (this.anySnow && dt > 0 && !app.paused) this._loose(dt * (app.timeScale ?? 1), time);
-    // simulated vertex positions -> texture
+    // simulated vertex positions -> texture: when they've moved (the jelly's own count of that), not every
+    // frame - a still cube's every vertex copied and sent up again, sixty times a second
+    const H0 = this.posTex?.image.height;
     this._allocPosTex(sb.nV);
-    const P = this.posData, x = sb.x;
-    for (let i = 0, n = sb.nV; i < n; i++) {
-      P[i * 4] = x[i * 3];
-      P[i * 4 + 1] = x[i * 3 + 1];
-      P[i * 4 + 2] = x[i * 3 + 2];
+    const pv = app.jelly.posVersion;
+    if (pv !== this._posV || sb.nV !== this._posN || this.posTex.image.height !== H0) {
+      this._posV = pv;
+      this._posN = sb.nV;
+      const P = this.posData, x = sb.x;
+      for (let i = 0, n = sb.nV; i < n; i++) {
+        P[i * 4] = x[i * 3];
+        P[i * 4 + 1] = x[i * 3 + 1];
+        P[i * 4 + 2] = x[i * 3 + 2];
+      }
+      this.posTex.needsUpdate = true;
     }
-    this.posTex.needsUpdate = true;
     const U = this.uniforms;
     U.uPosW.value = this.posW;
     // (every piece's: in a texture, not a uniform array - that held 24, and
     // a cube diced into 27 had three pieces whose glitter was seen through
     // all the way from the camera, as if it were all jelly: black)
+    const W0 = this.bbTex?.image.width;
     this._allocBBTex(sb.pieces.length);
     const BB = this.bbData, W = this.bbTex.image.width;
+    let bs = sb.pieces.length + W * 0.5;
     for (let k = 0; k < sb.pieces.length; k++) {
       const bb = sb.pieces[k].bbox;
       BB[k * 4] = bb[0]; BB[k * 4 + 1] = bb[1]; BB[k * 4 + 2] = bb[2];
       BB[(W + k) * 4] = bb[3]; BB[(W + k) * 4 + 1] = bb[4]; BB[(W + k) * 4 + 2] = bb[5];
+      bs += (bb[0] + bb[1] * 1.3 + bb[2] * 1.7 + bb[3] * 2.1 + bb[4] * 2.3 + bb[5] * 2.9) * (1 + (k & 7) * 0.37);
     }
-    this.bbTex.needsUpdate = true;
+    if (bs !== this._bbSig || W !== W0) {
+      this._bbSig = bs;
+      this.bbTex.needsUpdate = true;
+    }
     U.uTime.value = time;
     const cam = app.camera;
     U.uPxScale.value = app.size.ph / (2 * Math.tan((cam.fov * Math.PI) / 360));

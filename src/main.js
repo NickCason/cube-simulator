@@ -15,6 +15,7 @@ function boot() {
       exposure: params.has('exp') ? +params.get('exp') : undefined,
       color: params.get('color') ? '#' + params.get('color') : undefined,
       nojelly: params.has('nojelly'),
+      noidle: params.has('noidle'),
       light: params.get('light') || undefined,
       flavor: params.get('flavor') || undefined,
       texture: params.get('texture') || undefined,

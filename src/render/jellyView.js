@@ -496,6 +496,9 @@ export class JellyView {
     // (a surface map's depth: fewer steps down into it on a phone)
     this.frontMat.uniforms.uSurfSteps.value = coarse ? 6 : 10;
     this.causticLevel = 1; // (0..1: faded out while a lot of bits re-cube - see App)
+    // (how many times the jelly's drawn positions have changed: what else that follows them - its glitter -
+    // sends them to the GPU again only when this has moved on)
+    this.posVersion = 0;
     this.skipCaustics = false; // (?stats' bench: see App.skip)
     this.forceMoving = null; // (true/false: the floor's effects drawn as though it's moving or at rest - App._warmGPU)
     this.bakesReady = false;
@@ -1322,6 +1325,7 @@ export class JellyView {
     if (moved) {
       this.aPos.needsUpdate = true;
       this.aNrm.needsUpdate = true;
+      this.posVersion++;
     }
     this.aData.needsUpdate = true;
     if (floured || this._coatShown) {

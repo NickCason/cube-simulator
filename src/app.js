@@ -232,6 +232,15 @@ export class App {
     this.markTex = null;
     this.benchSync = false;
     this._px = new Uint8Array(4);
+    // (frame pacing - see _drawNow: the fences of the frames the GPU may still be drawing, when the last was
+    // drawn and how the world looked then, how many still frames since, and the counts for ?stats)
+    this._fences = [];
+    this._drawnAt = 0;
+    this._drawnSig = NaN;
+    this._idleN = 0;
+    this._sigW = 1;
+    this._sig = 0;
+    this.pacing = { drawn: 0, heldBack: 0, still: 0, why: '', busy: true, busyAt: 0 };
     this.substepRate = 720; // physics substeps per second
     this.isTouch = false;
     this._panV = new THREE.Vector3();
@@ -1318,6 +1327,10 @@ export class App {
       this._inputAt = performance.now();
     };
     for (const t of ['pointerdown', 'pointerup', 'pointercancel']) document.addEventListener(t, press, true);
+    // (and anything else the page is given - a hover moves the tool, a key turns the view, a slider changes the
+    // look: what's drawn has to follow, see _drawNow)
+    const touched = () => (this._inputAt = performance.now());
+    for (const t of ['pointermove', 'wheel', 'keydown', 'keyup', 'input', 'change']) document.addEventListener(t, touched, { capture: true, passive: true });
     window.addEventListener('blur', () => this._held.clear());
     let mode = null; // 'tool' | 'orbit' | 'pinch'
     let last = null;
@@ -1490,6 +1503,7 @@ export class App {
       this.strands.update(sdt);
       this.bubbles.update();
       this.eyes.update(sdt);
+      this.glitter.tick(this.clock.t);
       for (const k in this.tools) if (this.tools[k] !== this.tool && this.tools[k].background) this.tools[k].update(sdt, dt);
       this.particles.update(sdt);
       this._impactSounds();
@@ -1515,7 +1529,11 @@ export class App {
     // after a long pause)
     const sp = this.splash;
     const covered = sp?.active && !sp.leaving && this.stats.frames > 2 && !(sp.leaveAt && performance.now() > sp.leaveAt - 250);
-    if (!covered) this.render();
+    const drawn = !covered && this._drawNow(r0);
+    if (drawn) {
+      this.render();
+      this._fence();
+    }
     if (this.benchSync) {
       const gl = this.renderer.getContext();
       gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, this._px);
@@ -1528,7 +1546,146 @@ export class App {
     const cpu = performance.now() - t0;
     this.stats.frameMs = this.stats.frameMs * 0.9 + cpu * 0.1;
     this.stats.frames++;
-    this._adaptResolution(dt, cpu);
+    // (the resolution follows how fast frames are DRAWN: one held back for the GPU is a slow frame, a still
+    // one not drawn at all is nothing to go by)
+    // (only frames drawn one after another for something going on: a still scene's slow shimmer frames, or
+    // the first after a still spell, aren't the GPU being slow)
+    if (drawn) {
+      const now = performance.now(), P = this.pacing;
+      if (P.busy) {
+        if (P.busyAt && now - P.busyAt < 250) this._rawDt = Math.max(this._rawDt || 0, (now - P.busyAt) / 1000);
+        P.busyAt = now;
+        this._adaptResolution(dt, cpu);
+      } else P.busyAt = 0;
+      this._drawnAt = now;
+    }
+  }
+
+  // ---- frame pacing. Every frame used to be drawn, whatever: a still scene at full cost sixty times a second
+  // (a phone's GPU kept busy - hot - for nothing), and once a frame took the GPU longer than the screen's,
+  // frames queued up behind it - a quarter of a second of them, then a stall while they drained: the hitches,
+  // and that long between a touch and what it did. Now a frame is drawn only once the GPU's done with the one
+  // before last (_fence), and when there's something new to see: anything moving or being touched, the view
+  // turning - or, still, only what shimmers of itself (glitter, glow, stars) and that more slowly. ?noidle:
+  // every frame drawn (still behind the fence).
+  _drawNow(now) {
+    const P = this.pacing, F = this._fences;
+    if (F.length >= 2) {
+      const gl = this.renderer.getContext();
+      if (gl.clientWaitSync(F[0], 0, 0) === gl.TIMEOUT_EXPIRED) {
+        P.heldBack++;
+        return false;
+      }
+      gl.deleteSync(F.shift());
+    }
+    const why = this._busy(now);
+    P.why = why;
+    P.busy = true;
+    if (why) {
+      this._idleN = 0;
+      return true;
+    }
+    // (still - but a few frames more first: the settled caustics, the last of a light going out)
+    if (this._idleN < 4) {
+      this._idleN++;
+      return true;
+    }
+    const sig = this._stillSig();
+    if (sig !== this._drawnSig) {
+      this._drawnSig = sig;
+      P.why = 'changed';
+      return true;
+    }
+    P.busy = false;
+    const hz = this._idleHz();
+    if (hz && now - this._drawnAt >= 1000 / hz - 4) return true;
+    P.still++;
+    return false;
+  }
+
+  // (a frame drawn: its fence, for _drawNow to see when the GPU's done with it)
+  _fence() {
+    const gl = this.renderer.getContext(), f = gl.fenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE, 0);
+    if (!f) return;
+    this._fences.push(f);
+    gl.flush();
+    this.pacing.drawn++;
+  }
+
+  // What's going on that must be seen as it happens ('' if nothing)
+  _busy(now) {
+    if (this.opts.noidle || this.opts.preserve || this.benchSync || this.recording || this.paused) return 'always';
+    if (!this.intro.done || this.splash?.active) return 'intro';
+    if (this._held.size || now - this._inputAt < 1200) return 'input';
+    if (this.sb.anyAwake) return 'moving';
+    if (this.healer.active || this.swapper.active || this.cubiplication.active || this._edgeMorph || this._themeAnim || this._placeAnim) return 'changing';
+    if (this.flash > 0.004 || this.fireLevel > 0.004 || this._hitStop > 0 || this._shake > 1e-4) return 'light';
+    if (this.glitter.looseMoved || this.eyes.flights.size) return 'flakes';
+    if (this.jelly._warming?.() || this.jelly.portraits) return 'shaders';
+    return '';
+  }
+
+  // How the world looks, as a number: the view, every visible thing's place - and what's instanced or dynamic
+  // in it (eyes, nails, bubbles, drops, sparks, the tools in hand) - and what lights up or turns without
+  // moving. The same number: nothing to see has changed. (A sampled sum: big buffers every n-th value.)
+  _stillSig() {
+    this._sig = 0;
+    this._sigW = 1;
+    const arr = (a, n) => {
+      const st = n > 24000 ? Math.ceil(n / 12000) : 1;
+      for (let i = 0; i < n; i += st) this._sigAdd(a[i]);
+      this._sigAdd(n);
+    };
+    const cam = this.camera;
+    arr(cam.matrixWorld.elements, 16);
+    arr(cam.projectionMatrix.elements, 16);
+    const each = (o) => {
+      arr(o.matrixWorld.elements, 16);
+      if (o.isInstancedMesh) {
+        this._sigAdd(o.count);
+        arr(o.instanceMatrix.array, o.count * 16);
+      }
+      const g = o.geometry;
+      if (g && !o.userData.jelly) {
+        this._sigAdd(g.drawRange.count === Infinity ? -1 : g.drawRange.count);
+        for (const k in g.attributes) {
+          const at = g.attributes[k];
+          if (at.usage === THREE.DynamicDrawUsage) arr(at.array, Math.min(at.array.length, (g.drawRange.count === Infinity ? at.count : g.drawRange.count) * at.itemSize));
+        }
+      }
+    };
+    this.scene.traverseVisible(each);
+    this.fxScene?.traverseVisible(each);
+    const U = this.jelly.frontMat.uniforms;
+    this._sigAdd(U.uWeldT.value);
+    this._sigAdd(this.jelly.causticLevel);
+    this._sigAdd(this.jelly.posVersion);
+    this._sigAdd(this.pixelRatio);
+    if (U.uTwist) {
+      const T = U.uTwist.value;
+      if (T && T.isVector4) this._sigAdd(T.x + T.y * 1.3 + T.z * 1.7 + T.w * 2.1);
+      else if (typeof T === 'number') this._sigAdd(T);
+    }
+    // (a knock's ring of light still spreading)
+    const t = this.clock.t;
+    for (const p of U.uPulse.value) this._sigAdd(t - p.w < 1.8 ? t : 0);
+    return this._sig;
+  }
+
+  _sigAdd(v) {
+    this._sig += (v || 0) * this._sigW;
+    this._sigW = this._sigW > 9 ? 1 : this._sigW + 0.618;
+  }
+
+  // Still, what shimmers of itself - and how often it's worth drawing to see it (per second; 0: nothing does)
+  _idleHz() {
+    let hz = 0;
+    if (this.glitter.mesh.visible) hz = 20;
+    if (this.jelly.frontMat.uniforms.uEmit.value > 0) hz = 20;
+    const S = this.sky.userData.u;
+    if (this.sky.visible && S.uStars?.value > 0) hz = Math.max(hz, 15);
+    else if (this.sky.visible && S.uClouds?.value > 0) hz = Math.max(hz, 5);
+    return hz;
   }
 
   // Render resolution follows the GPU: drop it while frames are slow *and*
