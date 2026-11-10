@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { encodeCube, decodeCube, findCode, cubeLink, TUNE_CODES } from '../src/cubecode.js';
+import { encodeCube, decodeCube, findCode, cubeLink, TUNE_CODES, SOUND_KEYS } from '../src/cubecode.js';
 import { SETTINGS } from '../src/settings.js';
 import { cubeName } from '../src/puns.js';
 import { qrEncode, qrCapacity } from '../src/ui/qr.js';
@@ -84,7 +84,7 @@ test('codes are found in links, fragments and messages', () => {
 test('every slider but sound has a unique two-letter code', () => {
   const codes = Object.values(TUNE_CODES);
   assert.equal(new Set(codes).size, codes.length);
-  for (const s of SETTINGS) if (!['volume', 'impacts', 'wobble'].includes(s.key)) assert.ok(TUNE_CODES[s.key], s.key);
+  for (const s of SETTINGS) if (!SOUND_KEYS.includes(s.key)) assert.ok(TUNE_CODES[s.key], s.key);
   for (const c of codes) assert.match(c, /^[a-z]{2}$/);
 });
 

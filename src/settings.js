@@ -82,6 +82,13 @@ export const SETTINGS = [
     id: 'wobble', group: 'Sound', label: 'Wobble', key: 'wobble', def: 0.5, ...linMap(0, 1),
     word: (v) => (v < 0.02 ? 'Off' : v < 0.3 ? 'Faint' : v < 0.65 ? 'Soft' : v < 0.85 ? 'Lively' : 'Loud'),
   },
+  {
+    // a jelly xylophone: each piece rings its own note as it's tapped or knocked - the smaller, the higher (a
+    // family of sizes is a scale; a cube cut in two, two notes), hard jelly a bell, soft a bonk (see
+    // App.ringNote, Audio.note)
+    id: 'notes', group: 'Sound', label: 'Notes', key: 'notes', def: 0, ...linMap(0, 1),
+    word: (v) => (v < 0.02 ? 'Off' : v < 0.35 ? 'A hint' : v < 0.7 ? 'Tuned' : 'Xylophone'),
+  },
   // ---- the Lab (Settings > Lab controls): the knobs inside each tool, 1 =
   // as it comes. See docs/physics-audit.md for what each one moves.
   // The Cubicle (lab controls): the knobs inside the hand and every tool, a

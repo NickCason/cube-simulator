@@ -57,7 +57,7 @@ export const TUNE_CODES = {
 };
 const KEY_OF = Object.fromEntries(Object.entries(TUNE_CODES).map(([k, c]) => [c, k]));
 const SETTING = Object.fromEntries(SETTINGS.map((s) => [s.key, s]));
-export const SOUND_KEYS = ['volume', 'impacts', 'wobble'];
+export const SOUND_KEYS = ['volume', 'impacts', 'wobble', 'notes'];
 const THEMES = ['light', 'dark'];
 const NAME_MAX = 40;
 

@@ -4,6 +4,16 @@
 
 const rnd = (a, b) => a + Math.random() * (b - a);
 
+// A piece's note (Settings > Sound > Notes): its size's - half the size, an octave up, as a bar's - held to a
+// major pentatonic scale (any cubes together sound well: no note of it clashes with another), G4 at 0.62 m.
+const PENTA = [0, 2, 4, 7, 9, 12];
+export function noteFor(size) {
+  const semis = 12 * Math.log2(0.62 / Math.max(0.03, size)), o = Math.floor(semis / 12), r = semis - 12 * o;
+  let best = 0;
+  for (const p of PENTA) if (Math.abs(r - p) < Math.abs(r - best)) best = p;
+  return 392 * Math.pow(2, o + best / 12);
+}
+
 const MASTER = 0.8;
 
 export class AudioEngine {
@@ -14,6 +24,7 @@ export class AudioEngine {
     this.volume = 0.75; // master level (Settings > Sound)
     this.impactLevel = 0.55; // how loud bumps and landings are
     this.wobbleLevel = 0.5; // how loud the jelly's own hum is (see wobble)
+    this.notesLevel = 0; // how much a knock rings its piece's note (see note)
     this.wob = new Map(); // per jiggling piece: where it is in its swing (see wobble)
     this.last = {};
     this.loops = {};
@@ -88,10 +99,11 @@ export class AudioEngine {
   }
 
   // Settings > Sound: overall volume, impact and wobble loudness, all 0..1
-  setLevels(volume, impacts, wobble = this.wobbleLevel) {
+  setLevels(volume, impacts, wobble = this.wobbleLevel, notes = this.notesLevel) {
     this.volume = Math.min(1, Math.max(0, volume));
     this.impactLevel = Math.min(1, Math.max(0, impacts));
     this.wobbleLevel = Math.min(1, Math.max(0, wobble));
+    this.notesLevel = Math.min(1, Math.max(0, notes || 0));
     if (this.master) this.master.gain.setTargetAtTime(this._masterGain(), this.ctx.currentTime, 0.05);
   }
 
@@ -222,14 +234,21 @@ export class AudioEngine {
   // creamy, sugar, ice } each 0..1, pan = -1..1. Soft bumps stay silent;
   // jelly gets a wet slap with a short "plop", gummy a rubbery bonk, frozen
   // pieces a glassy clack. No sub-bass thuds.
-  impact(dv, size = 1, mat = {}, pan = 0) {
+  impact(dv, size = 1, mat = {}, pan = 0, note = 0) {
     if (!this.ctx || this.muted || this.impactLevel <= 0) return;
     const a = Math.min(1, Math.max(0, (dv - 0.9) / 4));
-    const loud = Math.pow(a, 1.4) * this.impactLevel * 1.3;
+    let loud = Math.pow(a, 1.4) * this.impactLevel * 1.3;
     if (loud < 0.006) return;
     if (!this._bucket('impact', 7, 3)) return;
     const t = this.ctx.currentTime + 0.002;
     const out = this._panned(pan);
+    // (tuned: its note rung - and less of the slap, the more it's a xylophone)
+    const N = this.notesLevel;
+    if (N > 0.01 && note > 0) {
+      this._note(t, note, Math.min(1, 0.25 + a) * this.impactLevel, mat, out);
+      loud *= 1 - 0.75 * N;
+      if (loud < 0.006) return;
+    }
     const firm = mat.firm || 0, wet = mat.wet ?? 1, creamy = mat.creamy || 0;
     const pitch = Math.pow(1 / Math.min(1.6, Math.max(0.06, size)), 0.45) * rnd(0.93, 1.07);
     if ((mat.ice || 0) > 0.5) {
@@ -261,6 +280,28 @@ export class AudioEngine {
         this._noise(t + rnd(0, 0.03), rnd(0.004, 0.01), 'bandpass', f, f, 2.5, 0.12 * loud, 0.0005, out);
       }
     }
+  }
+
+  // A piece's note, rung (a tap, see App.ringNote): amount 0..1
+  note(f, amount = 0.6, mat = {}, pan = 0) {
+    if (!this.ctx || this.muted || !(this.notesLevel > 0.01) || !this._bucket('note', 12, 4)) return;
+    this._note(this.ctx.currentTime + 0.002, f, amount * Math.max(0.35, this.impactLevel), mat, this._panned(pan));
+  }
+
+  // The note itself: firm jelly a bell - long, its partials stretched (2.76, 5.4); softer a marimba's knock (the
+  // fourth harmonic, short); soft a round bonk, a little sharp as it's struck; creamy duller, frozen glassier -
+  // and the mallet's click
+  _note(t, f, g, mat, out) {
+    const N = this.notesLevel, firm = Math.min(1, Math.max(0, mat.firm || 0)), creamy = mat.creamy || 0, ice = (mat.ice || 0) > 0.5;
+    const v = g * (0.45 + 0.55 * N), ring = ice ? 1.8 : (0.3 + 1.3 * firm) * (1 - 0.45 * creamy);
+    this._tone(t, 'sine', f * (1.012 + 0.035 * (1 - firm)), f, ring, 0.42 * v, 0.002, out);
+    if (ice || firm > 0.55) {
+      this._tone(t, 'sine', f * 2.76, f * 2.75, ring * 0.55, 0.16 * v * (ice ? 1 : firm), 0.001, out);
+      this._tone(t, 'sine', f * 5.4, f * 5.38, ring * 0.28, 0.07 * v, 0.001, out);
+    } else this._tone(t, 'sine', f * 4, f * 3.98, ring * 0.3, 0.14 * v * (0.35 + firm), 0.001, out);
+    if (firm < 0.3) this._tone(t, 'triangle', f * 0.5, f * 0.49, 0.12, 0.08 * v, 0.003, out);
+    const fc = Math.min(6500, f * 6);
+    this._noise(t, 0.012, 'bandpass', fc, fc, 1.4, 0.1 * v * (1 - 0.6 * creamy), 0.0005, out);
   }
 
   // a droplet lands: a tiny plink, never a squelch

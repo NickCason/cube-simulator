@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { SoftBody, MAX_CUBES, REST_STEP } from './sim/softbody.js';
+import { noteFor } from './audio.js';
 import { createStudioEnvironment } from './render/env.js';
 import { createSkyDome, setSky } from './render/sky.js';
 import { PLACES, PLACE_BY_ID } from './places.js';
@@ -517,7 +518,7 @@ export class App {
     this.st = st; // (resolved settings, for tools that read them each use)
     sb.p.density = st.weight; // (each cube's own mass: setCube)
     sb.wakeAll();
-    this.audio.setLevels(st.volume, st.impacts, st.wobble);
+    this.audio.setLevels(st.volume, st.impacts, st.wobble, st.notes);
     this.bubbles?.configure(fizz);
     this.glitter?.configure({ mode: this.style.glitter, count: st.glitterAmount, size: st.glitterSize, sparkle: st.glitterSparkle });
     this.flavor = f;
@@ -809,7 +810,7 @@ export class App {
     const oldSize = this.sb.p.size;
     // (the jelly resets - the selected cube's material and everyone's world;
     // your sound levels and the tearing switch stay)
-    const keep = new Set(['volume', 'impacts', 'wobble', 'tear']);
+    const keep = new Set(['volume', 'impacts', 'wobble', 'notes', 'tear']);
     for (const cb of this.cubes) {
       for (const k of Object.keys(cb.tune)) if (!keep.has(k) && (!only || only.includes(k)) && (cb === this.cube || !PER_CUBE(k))) delete cb.tune[k];
     }
@@ -2301,12 +2302,12 @@ export class App {
     s.eyes = copyEyes(c.eyes);
     s.surface = SURFACE[c.surface] ? c.surface : 'none';
     const tune = { ...c.tune };
-    for (const k of ['volume', 'impacts', 'wobble']) if (this.tune[k] !== undefined) tune[k] = this.tune[k];
+    for (const k of ['volume', 'impacts', 'wobble', 'notes']) if (this.tune[k] !== undefined) tune[k] = this.tune[k];
     if (c.tear === false) tune.tear = false;
     // (its world - gravity, size, the Cubicle - is everyone's)
     for (const cb of this.cubes) {
       if (cb === this.cube) continue;
-      for (const k of Object.keys(cb.tune)) if (!PER_CUBE(k) && !['volume', 'impacts', 'wobble'].includes(k)) delete cb.tune[k];
+      for (const k of Object.keys(cb.tune)) if (!PER_CUBE(k) && !['volume', 'impacts', 'wobble', 'notes'].includes(k)) delete cb.tune[k];
       for (const k of Object.keys(tune)) if (!PER_CUBE(k)) cb.tune[k] = tune[k];
     }
     this.tune = tune;
@@ -2601,11 +2602,18 @@ export class App {
       const pc = this.sb.pieces[e.piece];
       if (!pc) continue;
       const size = Math.cbrt(e.mass / Math.max(0.05, this.sb.p.density));
-      this.audio.impact(e.dv, size, this._impactMaterial(pc), this._pan(e.x, e.y, e.z));
+      this.audio.impact(e.dv, size, this._impactMaterial(pc), this._pan(e.x, e.y, e.z), noteFor(Math.cbrt(Math.max(pc.volume, 1e-6))));
       // (against the glass room's glass: a knock on the pane too)
       if (e.kind === 'wall' && this.room.on) this.audio.glassKnock(Math.min(1, e.dv / 6) * Math.min(1, size), this._pan(e.x, e.y, e.z));
       played++;
     }
+  }
+
+  // A piece's note, rung (Settings > Sound > Notes - a tap of the hand, see HandTool): its size's, in the way
+  // it's made (firm or soft, creamy, frozen), from where it is
+  ringNote(pc, amount = 0.6) {
+    if (!pc || !this.audio.ctx || !(this.audio.notesLevel > 0.01)) return;
+    this.audio.note(noteFor(Math.cbrt(Math.max(pc.volume, 1e-6))), amount, this._impactMaterial(pc), this._pan(pc.com[0], pc.com[1], pc.com[2]));
   }
 
   // The jelly's own voice: the three pieces jiggling most (by how fast,

@@ -63,6 +63,7 @@ export class HandTool {
     this.drags.set(e.pointerId ?? 0, { grab, plane, t0: performance.now(), x0: e.clientX, y0: e.clientY, moved: 0, hit, dir: ray.direction.clone(), pt: [p[0], p[1], p[2]], off: [0, 0, 0] });
     app.setCursor('grabbing');
     app.audio?.squish(0.35, this.drags.size > 1 ? 1.15 : 0.9);
+    app.ringNote?.(app.sb.pieces[grab.piece], 0.55);
     return true;
   }
 
