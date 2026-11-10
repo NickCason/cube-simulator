@@ -2,6 +2,16 @@ import { defineConfig } from 'vite';
 import { createHash } from 'node:crypto';
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
+import { execSync } from 'node:child_process';
+
+// (the build, by commit and time: in ?stats reports, so a report says which version made it)
+const BUILD = (() => {
+  let sha = 'dev';
+  try {
+    sha = execSync('git rev-parse --short HEAD', { stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim();
+  } catch (e) {}
+  return `${sha} ${new Date().toISOString().slice(0, 16).replace('T', ' ')}Z`;
+})();
 
 // The service worker (offline play, install as an app): written at build time
 // with the exact files of this build to keep, under a cache named for them.
@@ -82,4 +92,5 @@ export default defineConfig({
   },
   plugins: [serviceWorker()],
   server: { allowedHosts: true },
+  define: { __BUILD__: JSON.stringify(BUILD) },
 });

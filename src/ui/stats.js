@@ -422,7 +422,7 @@ export function attachStats(app) {
     const w = app.warmStats;
     for (const [id, p] of pts) flush(id, p);
     return [
-      'Cube Simulator stats v2',
+      `Cube Simulator stats v2   build ${typeof __BUILD__ === 'string' ? __BUILD__ : 'dev'}`,
       `${navigator.userAgent}`,
       `gpu: ${gpu}   dpr ${window.devicePixelRatio}   cores ${navigator.hardwareConcurrency || '?'}   screen ${innerWidth}x${innerHeight}`,
       w ? `warm-up at load: ${Math.round(w.ms)} ms, ${w.programs} shaders; intro hold ${Math.round(app.introMs || 0)} ms` : '',
