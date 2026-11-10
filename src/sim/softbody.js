@@ -3,7 +3,7 @@
 // contact with friction, inter-piece contact, grabbing, embedded rigid
 // segments (nails) and a per-vertex temperature field.
 
-import { buildCubeMesh, roundBoxSDF, roundBoxNormal, shapeSDF, shapeNormal } from './mesh.js';
+import { buildCubeMesh, roundBoxSDF, roundBoxNormal, shapeSDF, shapeNormal, CRIMPS, crimpSharp } from './mesh.js';
 
 export const FACES = [[0, 2, 1], [0, 1, 3], [0, 3, 2], [1, 2, 3]];
 export const TAG_FRESH = 0;
@@ -165,11 +165,12 @@ export class SoftBody {
     this.dmgHeal = 0; // (s) left of torn ends firming up (tDmg decaying)
     this.calmT = 0; // (s) left of the jiggle damped hard (just torn: the halves settle, not flail)
     // each cube's own shape (see mesh.js shapeSDF, crimp; setShape): its
-    // faces dished or bulged (0: flat), its edges' crimp - how far it stands
-    // out (0: none), every how many cells
+    // faces dished or bulged (0: flat), its edges' trim - how far it stands
+    // out (0: none), every how many cells, which kind (mesh.js CRIMPS)
     this.cBow = new Float64Array(MAX_CUBES);
     this.cLobeA = new Float64Array(MAX_CUBES);
     this.cLobeP = new Float64Array(MAX_CUBES);
+    this.cTrimK = new Uint8Array(MAX_CUBES);
     // each cube's material (see setCube; cube 0 starts as p)
     this.cMu = new Float64Array(MAX_CUBES);
     this.cLam = new Float64Array(MAX_CUBES);
@@ -384,19 +385,21 @@ export class SoftBody {
   }
 
   // ---------------------------------------------------------------- setup
-  // Cube k's own shape - its faces' bow, its edges' crimp (A 0: none; m:
-  // every how many cells) - for the next time it's built.
-  setShape(k, bow, A, m) {
+  // Cube k's own shape - its faces' bow, its edges' trim (A 0: none; m:
+  // every how many cells; kind: mesh.js CRIMPS) - for the next time it's
+  // built.
+  setShape(k, bow, A, m, kind = 'scallop') {
     this.cBow[k] = Number.isFinite(bow) ? bow : 0;
     this.cLobeA[k] = A > 0 ? A : 0;
     this.cLobeP[k] = m > 0 ? m : 0;
+    this.cTrimK[k] = Math.max(0, CRIMPS.indexOf(kind));
   }
 
   // (cube k's shape as it's built: null - a plain rounded box - or { bow,
   // A, m }: see mesh.js buildCubeMesh)
   shapeOf(k) {
     if (!(this.cBow[k] || this.cLobeA[k] > 0)) return null;
-    return { bow: this.cBow[k], A: this.cLobeA[k], m: this.cLobeP[k] || 2 };
+    return { bow: this.cBow[k], A: this.cLobeA[k], m: this.cLobeP[k] || 2, kind: CRIMPS[this.cTrimK[k]] || 'scallop' };
   }
 
   // (...and as a shape - its skin's: only a bow is - the crimp's in its
@@ -770,7 +773,7 @@ export class SoftBody {
       this.vCube[i] = j;
       this.X[i * 3] += d;
     }
-    for (const a of [this.cMu, this.cLam, this.cDens, this.cDamp, this.cFric, this.cBounce, this.cRigid, this.cAir, this.cBevel, this.cN, this.cGrav, this.cBoost, this.cSize, this.cRes, this.cH, this.cBow, this.cLobeA, this.cLobeP]) a[j] = a[k];
+    for (const a of [this.cMu, this.cLam, this.cDens, this.cDamp, this.cFric, this.cBounce, this.cRigid, this.cAir, this.cBevel, this.cN, this.cGrav, this.cBoost, this.cSize, this.cRes, this.cH, this.cBow, this.cLobeA, this.cLobeP, this.cTrimK]) a[j] = a[k];
     this.embeds.length = 0;
     this.grabs.length = 0;
     this._bpNV = 0;
@@ -1678,9 +1681,20 @@ export class SoftBody {
         continue;
       }
       for (let a = 0; a < n; a++) par[a] = a;
-      // (a crimped cube's skin smoothed across every edge, however sharp: its
-      // waves soft - creased, they'd be drawn in straight lines, spikes)
-      const crimped = this.cLobeA[this.vCube[v]] > 0;
+      // (a trimmed cube's skin smoothed across every edge, however sharp: its
+      // waves soft - creased, they'd be drawn in straight lines, spikes. A
+      // sawtooth's moved points the other way: creased all round, crisp
+      // teeth - see mesh.js crimp)
+      const cv = this.vCube[v], crimped = this.cLobeA[cv] > 0;
+      let thrX = 0.45;
+      if (crimped) {
+        thrX = -1.1;
+        if (crimpSharp(CRIMPS[this.cTrimK[cv]])) {
+          const fm = this.formOf(cv), R0 = cv * REST_STEP, hf = this.cSize[cv] / 2, X = this.X;
+          const sd = fm ? shapeSDF(X[v * 3] - R0, X[v * 3 + 1], X[v * 3 + 2], hf, this.cBevel[cv], fm) : roundBoxSDF(X[v * 3] - R0, X[v * 3 + 1], X[v * 3 + 2], hf, this.cBevel[cv]);
+          thrX = Math.abs(sd) > 0.08 * this.cLobeA[cv] ? 0.9 : 0.45;
+        }
+      }
       for (let a = 0; a < n; a++) {
         const fa = (inc[s + a] / 3) | 0;
         const ca = inc[s + a] % 3;
@@ -1692,7 +1706,7 @@ export class SoftBody {
           const b1 = sTri[fb * 3 + ((cb + 1) % 3)], b2 = sTri[fb * 3 + ((cb + 2) % 3)];
           if (!(a1 === b1 || a1 === b2 || a2 === b1 || a2 === b2)) continue;
           const d = N[fa * 3] * N[fb * 3] + N[fa * 3 + 1] * N[fb * 3 + 1] + N[fa * 3 + 2] * N[fb * 3 + 2];
-          const thr = sTag[fa] === TAG_EXTERIOR ? (crimped ? -1.1 : 0.45) : sTag[fa] === TAG_MELT ? 0.15 : 0.82;
+          const thr = sTag[fa] === TAG_EXTERIOR ? thrX : sTag[fa] === TAG_MELT ? 0.15 : 0.82;
           if (d < thr) continue;
           const ra = find(a), rb = find(b);
           if (ra !== rb) par[rb] = ra;

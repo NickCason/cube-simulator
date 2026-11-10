@@ -61,7 +61,7 @@ export function buildCubeMesh(res = 12, size = 1, bevel = 0.09, shape = null) {
       pos[o] = x * k; pos[o + 1] = y * k; pos[o + 2] = z * k;
     }
   }
-  // (scalloped: the crimp - see crimp)
+  // (its edges' trim - see crimp)
   if (shape && shape.A > 0) crimp(pos, res, half, bevel, shape);
 
   const tets = [];
@@ -109,7 +109,7 @@ export function roundBoxSDF(x, y, z, half, bevel) {
   return Math.sqrt(ox * ox + oy * oy + oz * oz) + Math.min(Math.max(qx, Math.max(qy, qz)), 0) - bevel;
 }
 
-// A cube's own shape, past its rounding (app.js shapeOf): { bow, A, m } - or
+// A cube's own shape, past its rounding (app.js shapeOf): { bow, A, m, kind } - or
 // null, the plain rounded box.
 // - bow: its faces dished in (< 0) or bulged out (> 0): a face's middle that
 //   far, its edges' middles half that, its corners where they were - so,
@@ -117,8 +117,8 @@ export function roundBoxSDF(x, y, z, half, bevel) {
 //   standing out (the Faces slider). As a shape (shapeSDF): the rounded box,
 //   its inner box's extent along each axis moved by where a point is across
 //   the other two.
-// - A, m: its edges' crimp (the scalloped trim) - not a shape of its own
-//   but the mesh's own points moved: see crimp.
+// - A, m, kind: its edges' trim - not a shape of its own but the mesh's own
+//   points moved: see crimp.
 const bell = (t) => (t >= 1 ? 0 : (1 - t * t) * (1 - t * t));
 export function shapeSDF(x, y, z, half, bevel, shape) {
   if (!shape || !shape.bow) return roundBoxSDF(x, y, z, half, bevel);
@@ -133,18 +133,40 @@ export function shapeSDF(x, y, z, half, bevel, shape) {
 export function shapeFlat(x, y, z, half, bevel, shape) {
   return !(shape && shape.bow);
 }
-// The scalloped trim: soft waves along every edge - the ripple a bug once
-// left on light, stiff jelly's edges (Airy and Rubber: its tets crushed, see
-// softbody _solveTets), kept on purpose. Along each edge every m-th cell's
-// crest point is pushed out A and leant a little along the edge, the ones
-// between and the points beside the crest out a quarter of that; the faces
-// flat. Drawn as the jelly's own points are - smoothed between them, its
-// skin not creased (SoftBody._buildRenderClusters) - that's a row of soft
-// waves. m 2 (every other cell) was the bug's own: its tets alternate. A
-// corner's rounding, and a cell short of it, left as it is: its points are
+// The edge trims (styles.js TRIMS, each a `shape`): the mesh's own points
+// along every edge moved, as a bug once moved them on light, stiff jelly's
+// edges (Airy and Rubber: its tets crushed, see softbody _solveTets) - kept
+// on purpose, and made into a few kinds. Along each edge every m-th cell's
+// crest point is a "tip"; the crest's other points, and the points a cell
+// beside it on each face, are moved after it - each kind its own way. All
+// drawn smoothed between the points, the skin not creased (soft), except
+// the sawtooth's teeth, creased: crisp facets (SoftBody._buildRenderClusters).
+// m 2 (every other cell) was the bug's own: its tets alternate. A corner's
+// rounding, and a cell short of it, left as it is: its points are
 // close-packed there, and moved they'd fold.
+// Each kind: [tip out, tip leant along the edge, the crest's others out, a
+// tip's neighbours beside the crest out, the others beside it out] - x A,
+// out along the plain box's normal (crimped: the crest along one face's
+// normal, then the other's, in turn).
+export const CRIMPS = ['', 'scallop', 'saw', 'stitch', 'pipe', 'bead', 'crimp'];
+const CRIMP_MOVES = {
+  scallop: [1, 0.4, 0.25, 0.25, 0.25], // soft waves (the bug's own ripple)
+  saw: [1, 0.9, 0, 0.3, 0], // leant teeth, notched between - creased
+  stitch: [0.25, 0, 0.25, 0.6, 0.35], // a seam, shallow, along the edge, puckered either side
+  pipe: [0.7, 0, 0.7, -0.1, -0.1], // a cord along it, a little groove beside
+  bead: [1, 0, 0, 0.55, 0], // round beads, pinched apart
+  crimp: [0.8, 0, 0.8, 0.2, 0.2], // pinched side to side, in turn
+};
+// (nothing on the crest moved in: on a rounded edge that's a groove its
+// cells fold into - a notch, a seam, a pinch is its neighbours moved out)
+export const crimpSharp = (kind) => kind === 'saw';
+// (how deep each can go, of its depth at Moulded: further, a sawtooth's
+// leant teeth and a crimp's pinches tip their faces past what reads as its
+// skin, and a stitch's puckers fold over its seam on the roundest edges)
+export const CRIMP_DEEPEST = { saw: 1.15, crimp: 1.3, stitch: 1.5 };
 function crimp(pos, res, half, bevel, shape) {
   const n1 = res + 1, A = shape.A, m = Math.max(2, shape.m | 0), nb = [0, 0, 0], lim = half - bevel - (half * 2) / res + 1e-9;
+  const kind = CRIMP_MOVES[shape.kind] ? shape.kind : 'scallop', M = CRIMP_MOVES[kind];
   const at = (i) => (i === 0 ? -1 : i === res ? 1 : 0), near = (i) => i === 1 || i === res - 1;
   for (let i = 0; i < n1; i++) {
     for (let j = 0; j < n1; j++) {
@@ -166,16 +188,23 @@ function crimp(pos, res, half, bevel, shape) {
         if (along === 0 || along === res) continue;
         const o = ((i * n1 + j) * n1 + k) * 3, x = pos[o], y = pos[o + 1], z = pos[o + 2];
         if (Math.abs(pos[o + ax]) >= lim) continue;
-        // (the bug's: its odd points - every other cell along every edge;
-        // else every m-th)
-        const big = crest && (m === 2 ? (i + j + k) % 2 === 1 : (along + 1) % m === 0);
-        const t = big ? A : 0.25 * A;
+        // (a tip's column: the bug's odd points - every other cell along every
+        // edge (a crest point's own parity; one beside it, one off) - else
+        // every m-th)
+        const tipCol = m === 2 ? (i + j + k + (crest ? 0 : 1)) % 2 === 1 : (along + 1) % m === 0;
+        const t = (crest ? (tipCol ? M[0] : M[2]) : tipCol ? M[3] : M[4]) * A;
+        if (kind === 'crimp' && crest) {
+          // (the crest along one face's normal, then the other's, in turn)
+          const q = [0, 1, 2].filter((c) => c !== ax), c = tipCol ? q[0] : q[1];
+          pos[o + c] += S[c] * t;
+          continue;
+        }
         roundBoxNormal(x, y, z, half, bevel, nb);
         pos[o] = x + nb[0] * t; pos[o + 1] = y + nb[1] * t; pos[o + 2] = z + nb[2] * t;
-        if (big) {
+        if (crest && tipCol && M[1]) {
           // (leant along the edge: the same way all along it)
           const q = [0, 1, 2].filter((c) => c !== ax), sg = -(S[q[0]] || 1) * (S[q[1]] || 1);
-          pos[o + ax] += sg * 0.4 * A;
+          pos[o + ax] += sg * M[1] * A;
         }
       }
     }

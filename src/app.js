@@ -38,7 +38,7 @@ import { GlassRoom } from './world/glassroom.js';
 import { Glitter, GLITTER_MODES } from './world/glitter.js';
 import { Portraits } from './portrait.js';
 import { captureCube } from './cubecode.js';
-import { bevelPoint, unbevelPoint } from './sim/mesh.js';
+import { bevelPoint, unbevelPoint, CRIMP_DEEPEST } from './sim/mesh.js';
 import { RUBIK_COLORS, rubikCellAt, TRIM } from './styles.js';
 import { DEFAULT_STYLE, TEXTURES, EDGES, LAYER_PRESETS, MIN_LAYERS, MAX_LAYERS, MAX_REPEAT, resolveFlavor, flavorMainHex, nextLayerColor } from './styles.js';
 import { GRAD_SHAPE_INDEX, gradStops, gradT, gradColorAt, copyLayers, tileLocal, MAX_TILES } from './styles.js';
@@ -472,8 +472,8 @@ export class App {
       // again in place if that's changed and it's whole; else at its next
       // re-cube)
       const L = this.shapeOf(cb, cs), k = cb.slot, shaped = L.bow || L.A > 0 || sb.cBow[k] || sb.cLobeA[k] > 0;
-      if (Math.abs(L.bow - sb.cBow[k]) > 1e-6 || Math.abs(L.A - sb.cLobeA[k]) > 1e-6 || Math.abs(L.m - sb.cLobeP[k]) > 1e-6 || (shaped && Math.abs(this.bevelOf(cb) - sb.cBevel[k]) > 1e-6)) {
-        sb.setShape(cb.slot, L.bow, L.A, L.m);
+      if (Math.abs(L.bow - sb.cBow[k]) > 1e-6 || Math.abs(L.A - sb.cLobeA[k]) > 1e-6 || Math.abs(L.m - sb.cLobeP[k]) > 1e-6 || (L.A > 0 && sb.shapeOf(k)?.kind !== L.kind) || (shaped && Math.abs(this.bevelOf(cb) - sb.cBevel[k]) > 1e-6)) {
+        sb.setShape(cb.slot, L.bow, L.A, L.m, L.kind);
         if (cb.slot === this.cube.slot) sb.p.bevel = this.bevelOf(cb);
         (this._reshape ||= new Set()).add(cb.slot);
       }
@@ -1608,14 +1608,15 @@ export class App {
 
   // Its own shape (see mesh.js buildCubeMesh): its faces' bow - by the
   // Faces slider, dished (-1) to bulged (1), a face's middle up to 16% of its
-  // size in or out - and its scalloped edges' soft waves: how far they stand
-  // out (Depth: 5% of its size at Moulded) and every how many cells (Size:
-  // every other at Medium and finer - the Airy ripple's - every third at
-  // Large, fourth at Bold). A 0: not scalloped.
+  // size in or out - and its edges' trim (styles.js TRIMS - see mesh.js
+  // crimp): how far it stands out (Depth: 5% of its size at Moulded) and
+  // every how many cells it repeats (Size: every other at Medium and finer -
+  // the Airy ripple's - every third at Large, fourth at Bold). A 0: plain.
   shapeOf(cb, cs = resolveSettings(cb.tune, TEXTURES[cb.style.texture])) {
     const size = this.sizeOf(cb), f = Math.max(-1, Math.min(1, cs.faces ?? 0)), bow = Math.abs(f) < 1e-3 ? 0 : 0.16 * size * f;
-    if (TRIM[cb.style.trim]?.shape !== 'scallop') return { bow, A: 0, m: 0 };
-    return { bow, A: 0.05 * size * Math.min(1.8, cs.trimDepth ?? 1), m: Math.max(2, Math.round(2 * (cs.trimSize ?? 1))) };
+    const kind = TRIM[cb.style.trim]?.shape;
+    if (!kind) return { bow, A: 0, m: 0, kind: '' };
+    return { bow, A: 0.05 * size * Math.min(CRIMP_DEEPEST[kind] ?? 1.8, cs.trimDepth ?? 1), m: Math.max(2, Math.round(2 * (cs.trimSize ?? 1))), kind };
   }
 
   // A whole cube built again just where it is, as it is now - its shape's
