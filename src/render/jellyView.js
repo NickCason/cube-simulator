@@ -3,6 +3,7 @@ import * as THREE from 'three';
 import { biasExp, RUBIK_COLORS, gradAt, gradSequence, GRAD_SHAPE_INDEX, rubikPack, rubikStateOf, TRIM } from '../styles.js';
 import { FREE_N, bakeFree } from '../freeform.js';
 import { MAX_CUBES, REST_STEP } from '../sim/softbody.js';
+const GLOW_BIT = 32; // (JELLY_GLOW: see jellyMaterials.js JELLY_FEATURES)
 import {
   createBackMaterial,
   createCoverMaterial,
@@ -1748,6 +1749,12 @@ export class JellyView {
         break;
       }
     }
+    // (and then, still quiet, what the other look of the room will want - glow mode's glow on, or off: a
+    // switch of theme compiled it there and then, a second's freeze)
+    if (this.quiet && !this.portraits && !this._warming()) {
+      const next = this._warmNext(sb, want, all);
+      if (next !== undefined) this._warm(next, camera);
+    }
     if (want === this._featKey) return;
     if (this._featReady(want)) return this._useFeatures(want);
     if ((this._featKey & want) === want) return;
@@ -1811,6 +1818,26 @@ export class JellyView {
     this._featUsed.add(key);
     this.frontMat.defines = jellyDefines(key);
     this.frontMat.needsUpdate = true;
+  }
+
+  // What's still to be compiled aside, in turn (undefined: nothing): the one with everything, what's wanted
+  // now, each cube's own (several), then each of those with glow mode switched
+  _warmNext(sb, want, all) {
+    if (!this._featReady(all)) return all;
+    if (!this._featReady(want)) return want;
+    const keys = this.multiCube ? this._cubeKeys() : null, ks = [want];
+    if (keys) for (const pc of sb.pieces) if (!ks.includes(keys[pc.cube])) ks.push(keys[pc.cube]);
+    for (const k of ks) if (!this._featReady(k)) return k;
+    for (const k of ks) if (!this._featReady(k ^ GLOW_BIT)) return k ^ GLOW_BIT;
+    return undefined;
+  }
+
+  // (anything still to compile aside - App._busy keeps drawing while it is, the compiles happen as it draws)
+  warmPending(sb) {
+    if (this._featKey === undefined || !this._variants || this.portraits) return false;
+    if (this._warming()) return true;
+    const want = this._wantFeatures(sb);
+    return this._warmNext(sb, want, JELLY_ALL | (want & JELLY_DEBUG)) !== undefined;
   }
 
   _featReady(key) {

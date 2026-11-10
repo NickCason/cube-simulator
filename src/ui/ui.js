@@ -770,12 +770,16 @@ export class UI {
   }
 
   // Fraction of the screen height covered by an open panel (bottom sheet on phones).
+  // (asked every frame - the camera lifts the scene over it: the page's width from the app's own size, not
+  // window.innerWidth, which made the browser lay out the page there and then whenever anything in it had
+  // changed - and the panel's place only while one's open)
   get panelCover() {
-    if (window.innerWidth > 720) return 0;
+    const S = this.app.size;
+    if (!S || S.w > 720) return 0;
     const el = !this.tuneEl.hidden ? this.tuneEl : !this.paletteEl.hidden ? this.paletteEl : this.cubby && !this.cubby.el.hidden ? this.cubby.el : this.stack && !this.stack.el.hidden ? this.stack.el : null;
     if (!el) return 0;
     const r = el.getBoundingClientRect();
-    return Math.max(0, (window.innerHeight - r.top) / window.innerHeight);
+    return Math.max(0, (S.h - r.top) / S.h);
   }
 
   // switches that live outside the sliders, after a whole cube is put on

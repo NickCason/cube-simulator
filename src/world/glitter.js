@@ -4,6 +4,9 @@ import { roundBoxSDF } from '../sim/mesh.js';
 import { REST_STEP } from '../sim/softbody.js';
 import { frameOf } from '../tools/cubey.js';
 
+// (a grid cell's key: i, j, k each within ±500)
+const cellKey = (i, j, k) => ((i + 512) * 1024 + (j + 512)) * 1024 + (k + 512);
+
 const MAX = 9000;
 export const GLITTER_MODES = { off: -1, silver: 0, gold: 1, holo: 2, rose: 3, cubic: 4, snow: 5 };
 const SNOW = 5;
@@ -341,10 +344,12 @@ export class Glitter {
   _bubbleGrid() {
     const sb = this.app.sb, B = this.app.bubbles, out = {};
     if (!B) return out;
+    // (a cell's key a number: 2600 flakes each looking in 125 cells made as many strings - most of a look's
+    // change of glitter, 24 ms)
     for (const b of B.items) {
       const g = out[b.slot] || (out[b.slot] = { cell: 0.08 * sb.cSize[b.slot], map: new Map() });
       const [x, y, z] = b.c, r = b.R;
-      const key = `${Math.floor(x / g.cell)},${Math.floor(y / g.cell)},${Math.floor(z / g.cell)}`;
+      const key = cellKey(Math.floor(x / g.cell), Math.floor(y / g.cell), Math.floor(z / g.cell));
       (g.map.get(key) || g.map.set(key, []).get(key)).push([x, y, z, r]);
     }
     return out;
@@ -374,7 +379,7 @@ export class Glitter {
           for (let di = -2; di <= 2; di++)
             for (let dj = -2; dj <= 2; dj++)
               for (let dk = -2; dk <= 2; dk++) {
-                const L = bg.map.get(`${ci + di},${cj + dj},${ck + dk}`);
+                const L = bg.map.get(cellKey(ci + di, cj + dj, ck + dk));
                 if (!L) continue;
                 for (const [bx, by, bz, br] of L) {
                   const rr = br + fr;

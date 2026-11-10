@@ -64,6 +64,10 @@ function boot() {
   app.splash = new Splash(app);
   if (params.has('stats')) import('./ui/stats.js').then((m) => m.attachStats(app));
   app.start();
+  // (the sound's noise and echo made ahead - at the first still moment after the start, not on the first
+  // touch: see AudioEngine.prepare)
+  const prep = () => (app.pacing?.why === '' || performance.now() > 15000 ? app.audio.prepare?.() : setTimeout(prep, 400));
+  setTimeout(prep, 1500);
 }
 
 // With the splash up, let it paint first: its animations then run on the

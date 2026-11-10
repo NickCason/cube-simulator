@@ -38,29 +38,44 @@ export class AudioEngine {
     comp.release.value = 0.2;
     this.master.connect(comp).connect(ctx.destination);
     this.out = comp;
-    // shared noise
-    const len = ctx.sampleRate * 2;
-    const nb = ctx.createBuffer(1, len, ctx.sampleRate);
-    const d = nb.getChannelData(0);
-    for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
+    // shared noise, and a small room's reverb - made ahead (prepare), at this rate
+    const sr = ctx.sampleRate, D = this._made(sr);
+    const nb = ctx.createBuffer(1, D.noise.length, sr);
+    nb.copyToChannel(D.noise, 0);
     this.noiseBuf = nb;
-    // small room reverb
-    const ir = ctx.createBuffer(2, ctx.sampleRate * 1.4, ctx.sampleRate);
-    for (let ch = 0; ch < 2; ch++) {
-      const c = ir.getChannelData(ch);
-      for (let i = 0; i < c.length; i++) {
-        const t = i / ctx.sampleRate;
-        c[i] = (Math.random() * 2 - 1) * Math.exp(-t * 4.2) * (t < 0.012 ? t / 0.012 : 1);
-      }
-    }
+    const ir = ctx.createBuffer(2, D.ir[0].length, sr);
+    ir.copyToChannel(D.ir[0], 0);
+    ir.copyToChannel(D.ir[1], 1);
     this.verb = ctx.createConvolver();
-    this.verb.buffer = ir;
+    // (the echo's own set-up - its FFTs - a moment after the touch that woke the sound, not in its frame)
+    setTimeout(() => (this.verb.buffer = ir), 40);
     this.verbGain = ctx.createGain();
     this.verbGain.gain.value = 0.22;
     this.verb.connect(this.verbGain).connect(this.master);
     this.bus = ctx.createGain();
     this.bus.connect(this.master);
     this.bus.connect(this.verb);
+  }
+
+  // The noise and the room's echo, made while nothing's going on (main.js, once the page is up): made on the
+  // first touch - the one that has to wake the sound - they held that frame up by ~25 ms. (At the usual rates;
+  // any other, made then.)
+  prepare() {
+    for (const sr of [48000, 44100]) this._made(sr);
+  }
+
+  _made(sr) {
+    const M = (this._pre ||= {});
+    if (M[sr]) return M[sr];
+    const noise = new Float32Array(sr * 2);
+    for (let i = 0; i < noise.length; i++) noise[i] = Math.random() * 2 - 1;
+    const ir = [new Float32Array(Math.round(sr * 1.4)), new Float32Array(Math.round(sr * 1.4))];
+    for (const c of ir)
+      for (let i = 0; i < c.length; i++) {
+        const t = i / sr;
+        c[i] = (Math.random() * 2 - 1) * Math.exp(-t * 4.2) * (t < 0.012 ? t / 0.012 : 1);
+      }
+    return (M[sr] = { noise, ir });
   }
 
   _masterGain() {

@@ -1621,7 +1621,7 @@ export class App {
     if (this.healer.active || this.swapper.active || this.cubiplication.active || this._edgeMorph || this._themeAnim || this._placeAnim) return 'changing';
     if (this.flash > 0.004 || this.fireLevel > 0.004 || this._hitStop > 0 || this._shake > 1e-4) return 'light';
     if (this.glitter.looseMoved || this.eyes.flights.size) return 'flakes';
-    if (this.jelly._warming?.() || this.jelly.portraits) return 'shaders';
+    if (this.jelly.portraits || this.jelly.warmPending(this.sb)) return 'shaders';
     return '';
   }
 
