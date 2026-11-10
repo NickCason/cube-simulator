@@ -361,15 +361,15 @@ export const GLITTERS = [
 // its outline too where it's seen edge on). In the shader by its place here.
 export const TRIMS = [
   { id: 'none', name: 'Plain' },
-  // (each a shape, not a pattern: the mesh's own points along every edge
-  // moved, as a bug once moved them - as crisp or round as the Edges make
-  // it: see mesh.js crimp)
-  { id: 'scalloped', name: 'Scalloped', shape: 'scallop' }, // soft waves
-  { id: 'sawtooth', name: 'Sawtooth', shape: 'saw' }, // crisp leant teeth
-  { id: 'stitched', name: 'Stitched', shape: 'stitch' }, // a sunk seam, puckered
-  { id: 'piped', name: 'Piped', shape: 'pipe' }, // a cord along each edge
-  { id: 'beaded', name: 'Beaded', shape: 'bead' }, // beads, pinched apart
-  { id: 'crimped', name: 'Crimped', shape: 'crimp' }, // pinched side to side
+  // (scalloped and sawtooth are shapes - the mesh's own points along every
+  // edge moved, as a bug once moved them: see mesh.js crimp; the others are
+  // patterns, drawn into its surface map: surfaces.js sfTrim)
+  { id: 'scalloped', name: 'Scalloped', shape: 'scallop' }, // soft ripples
+  { id: 'sawtooth', name: 'Sawtooth', shape: 'saw' }, // the edge itself in teeth
+  { id: 'stitched', name: 'Stitched' },
+  { id: 'piped', name: 'Piped' },
+  { id: 'beaded', name: 'Beaded' },
+  { id: 'crimped', name: 'Crimped' },
 ];
 export const TRIM = Object.fromEntries(TRIMS.map((t, i) => [t.id, { ...t, index: i }]));
 

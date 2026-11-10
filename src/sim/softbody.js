@@ -1681,19 +1681,14 @@ export class SoftBody {
         continue;
       }
       for (let a = 0; a < n; a++) par[a] = a;
-      // (a trimmed cube's skin smoothed across every edge, however sharp: its
-      // waves soft - creased, they'd be drawn in straight lines, spikes. A
-      // sawtooth's moved points the other way: creased all round, crisp
-      // teeth - see mesh.js crimp)
-      const cv = this.vCube[v], crimped = this.cLobeA[cv] > 0;
+      // (a sawtooth's moved points creased all round: crisp teeth - see
+      // mesh.js crimp)
+      const cv = this.vCube[v];
       let thrX = 0.45;
-      if (crimped) {
-        thrX = -1.1;
-        if (crimpSharp(CRIMPS[this.cTrimK[cv]])) {
-          const fm = this.formOf(cv), R0 = cv * REST_STEP, hf = this.cSize[cv] / 2, X = this.X;
-          const sd = fm ? shapeSDF(X[v * 3] - R0, X[v * 3 + 1], X[v * 3 + 2], hf, this.cBevel[cv], fm) : roundBoxSDF(X[v * 3] - R0, X[v * 3 + 1], X[v * 3 + 2], hf, this.cBevel[cv]);
-          thrX = Math.abs(sd) > 0.08 * this.cLobeA[cv] ? 0.9 : 0.45;
-        }
+      if (this.cLobeA[cv] > 0 && crimpSharp(CRIMPS[this.cTrimK[cv]])) {
+        const fm = this.formOf(cv), R0 = cv * REST_STEP, hf = this.cSize[cv] / 2, X = this.X;
+        const sd = fm ? shapeSDF(X[v * 3] - R0, X[v * 3 + 1], X[v * 3 + 2], hf, this.cBevel[cv], fm) : roundBoxSDF(X[v * 3] - R0, X[v * 3 + 1], X[v * 3 + 2], hf, this.cBevel[cv]);
+        if (Math.abs(sd) > 0.08 * this.cLobeA[cv]) thrX = 0.9;
       }
       for (let a = 0; a < n; a++) {
         const fa = (inc[s + a] / 3) | 0;

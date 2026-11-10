@@ -38,7 +38,7 @@ import { GlassRoom } from './world/glassroom.js';
 import { Glitter, GLITTER_MODES } from './world/glitter.js';
 import { Portraits } from './portrait.js';
 import { captureCube } from './cubecode.js';
-import { bevelPoint, unbevelPoint, CRIMP_DEEPEST } from './sim/mesh.js';
+import { bevelPoint, unbevelPoint, CRIMP_AMP, CRIMP_DEEPEST } from './sim/mesh.js';
 import { RUBIK_COLORS, rubikCellAt, TRIM } from './styles.js';
 import { DEFAULT_STYLE, TEXTURES, EDGES, LAYER_PRESETS, MIN_LAYERS, MAX_LAYERS, MAX_REPEAT, resolveFlavor, flavorMainHex, nextLayerColor } from './styles.js';
 import { GRAD_SHAPE_INDEX, gradStops, gradT, gradColorAt, copyLayers, tileLocal, MAX_TILES } from './styles.js';
@@ -1608,15 +1608,15 @@ export class App {
 
   // Its own shape (see mesh.js buildCubeMesh): its faces' bow - by the
   // Faces slider, dished (-1) to bulged (1), a face's middle up to 16% of its
-  // size in or out - and its edges' trim (styles.js TRIMS - see mesh.js
-  // crimp): how far it stands out (Depth: 5% of its size at Moulded) and
+  // size in or out - and, a shape trim (scalloped, sawtooth: see mesh.js
+  // crimp), how far it stands out (Depth, from CRIMP_AMP at Moulded) and
   // every how many cells it repeats (Size: every other at Medium and finer -
-  // the Airy ripple's - every third at Large, fourth at Bold). A 0: plain.
+  // the Airy ripple's - every third at Large, fourth at Bold). A 0: none.
   shapeOf(cb, cs = resolveSettings(cb.tune, TEXTURES[cb.style.texture])) {
     const size = this.sizeOf(cb), f = Math.max(-1, Math.min(1, cs.faces ?? 0)), bow = Math.abs(f) < 1e-3 ? 0 : 0.16 * size * f;
     const kind = TRIM[cb.style.trim]?.shape;
     if (!kind) return { bow, A: 0, m: 0, kind: '' };
-    return { bow, A: 0.05 * size * Math.min(CRIMP_DEEPEST[kind] ?? 1.8, cs.trimDepth ?? 1), m: Math.max(2, Math.round(2 * (cs.trimSize ?? 1))), kind };
+    return { bow, A: (CRIMP_AMP[kind] ?? 0.05) * size * Math.min(CRIMP_DEEPEST[kind] ?? 1.8, cs.trimDepth ?? 1), m: Math.max(2, Math.round(2 * (cs.trimSize ?? 1))), kind };
   }
 
   // A whole cube built again just where it is, as it is now - its shape's
