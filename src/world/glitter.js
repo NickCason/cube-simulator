@@ -485,8 +485,10 @@ export class Glitter {
       // (stirred by a shake, a knock, a turn - as against gravity, which a
       // re-cube turns off a while: 0/0, and the water's stir was NaN for good,
       // every flake set where it was - snow no more, just glitter)
+      // (a good shake stirs it right up within half a second: it built up three times slower, and a shake that
+      // would have a real globe snowing left the flakes lying)
       const shake = Math.max(0, (al * ak) / Math.max(4, Math.abs(gy)) - 0.25);
-      st.stir = Math.min(2.5, st.stir * Math.exp(-dt / STIR_T) + dt * 0.9 * shake + 0.05 * Math.hypot(...st.spin) * dt);
+      st.stir = Math.min(2.5, st.stir * Math.exp(-dt / STIR_T) + dt * 2.6 * shake + 0.05 * Math.hypot(...st.spin) * dt);
       // (and anything not a number, however it came: the water calm again)
       if (!Number.isFinite(st.stir) || !st.spin.every(Number.isFinite)) {
         st.stir = 0;
@@ -521,11 +523,23 @@ export class Glitter {
         ux = uy = uz = 0;
       }
       // the water here: turning, and stirred (Arnold-Beltrami-Childress
-      // flow: eddies all through, nothing piling up anywhere)
-      const sp = st.spin, kk = st.k, ph = st.ph, amp = st.stir * SWIRL * st.size;
-      const fx = sp[1] * z - sp[2] * y + amp * (Math.sin(kk * z + ph) + Math.cos(kk * y + 1.3 * ph));
-      const fy = sp[2] * x - sp[0] * z + amp * (Math.sin(kk * x + 0.7 * ph) + Math.cos(kk * z + ph));
-      const fz = sp[0] * y - sp[1] * x + amp * (Math.sin(kk * y + 1.3 * ph) + Math.cos(kk * x + 0.7 * ph));
+      // flow: eddies all through, nothing piling up anywhere) - big eddies and
+      // smaller ones in them: with only the one size, a shaken globe's flakes
+      // all went round together, a sheet, never a flurry
+      const sp = st.spin, kk = st.k, ph = st.ph, amp = st.stir * SWIRL * st.size, k2 = kk * 2.6, a2 = amp * 0.55;
+      let fx = sp[1] * z - sp[2] * y + amp * (Math.sin(kk * z + ph) + Math.cos(kk * y + 1.3 * ph)) + a2 * (Math.sin(k2 * z - 1.7 * ph + 1) + Math.cos(k2 * y + 2.1 * ph));
+      let fy = sp[2] * x - sp[0] * z + amp * (Math.sin(kk * x + 0.7 * ph) + Math.cos(kk * z + ph)) + a2 * (Math.sin(k2 * x + 1.9 * ph + 2) + Math.cos(k2 * z - 1.3 * ph));
+      let fz = sp[0] * y - sp[1] * x + amp * (Math.sin(kk * y + 1.3 * ph) + Math.cos(kk * x + 0.7 * ph)) + a2 * (Math.sin(k2 * y - 2.3 * ph + 3) + Math.cos(k2 * x + 1.1 * ph));
+      // (and each flake on an eddy of its own - so they spread apart - and, while the water's churned up, lifted:
+      // most so the nearer the bottom they are)
+      if (amp > 0) {
+        const s0 = this.seed[k3], s1 = this.seed[k3 + 1], tw = amp * 0.9, tt = time;
+        fx += tw * Math.sin(tt * (2.3 + 2.1 * s0) + k * 1.37);
+        fy += tw * Math.sin(tt * (1.9 + 2.4 * s1) + k * 2.11);
+        fz += tw * Math.sin(tt * (2.7 + 1.8 * s0 * s1) + k * 0.73);
+        const dn = st.down, h = (x * dn[0] + y * dn[1] + z * dn[2]) / st.half, lift = Math.max(0, st.stir - 0.15) * 0.45 * SWIRL * st.size * Math.max(0, 0.5 + 0.5 * h);
+        fx -= dn[0] * lift; fy -= dn[1] * lift; fz -= dn[2] * lift;
+      }
       // (each flake its own - big ones sink faster - and a drift of its own
       // while it's floating, so they don't all go the same way: a snowfall,
       // not a sheet)
@@ -548,7 +562,7 @@ export class Glitter {
         // (lying on it - pulled into it - it stays put till the water's
         // moving fast enough to lift it; else slides, slowing)
         const into = st.pull[0] * nx + st.pull[1] * ny + st.pull[2] * nz, ut = Math.hypot(ux, uy, uz);
-        if (into > 0 && ut < 0.14 * st.size) ux = uy = uz = 0;
+        if (into > 0 && ut < (0.14 * st.size) / (1 + 3 * st.stir)) ux = uy = uz = 0;
         else { ux *= 0.85; uy *= 0.85; uz *= 0.85; }
         wall = true;
       }
