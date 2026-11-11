@@ -29,6 +29,10 @@ const GAIN = 0.8; // (m/s) the most the solver speeds a particle up a substep
 const COH = 0.3; // cohesion: how hard thin parts pull together (vs packed parts pushing apart)
 const EPS = +(globalThis.__fluidEps ?? 1); // constraint relaxation, x a full neighbourhood's gradient sum
 const VISC = 0.25; // XSPH: how much each takes on its neighbours' velocity
+// its surface: each particle a smooth bump out to SPLAT_R particles' spacing, the surface where they add up to
+// SPLAT_ISO - wider bumps, a higher level: a smoother skin on it, a pool flat (at 1.6 and 0.55 it was lumpy,
+// a heap of beads)
+const SPLAT_R = +(globalThis.__splatR ?? 2.1), SPLAT_ISO = +(globalThis.__splatIso ?? 1.0);
 
 export class Fluid {
   constructor(app) {
@@ -117,29 +121,76 @@ export class Fluid {
     geo.setAttribute('color', this.aCol);
     geo.setDrawRange(0, 0);
     this.geo = geo;
-    this.mat = new THREE.MeshPhysicalMaterial({
+    // Drawn as a liquid: what's behind it seen through it - the room, the floor, the jelly - bent by its
+    // surface and tinted the deeper it is (the colours its jelly takes away, taken away more through more of
+    // it: a thin film near clear, a pool rich), and on it the room's light, more of it edge-on, and a sharp
+    // glint. (It was a glossy paint of its colour: lit, nearly opaque - no liquid in it.) Drawn on its own,
+    // just after the room - what's behind it is the room's picture (App.render: tBg) - and before the jelly,
+    // which sees it through itself. A copy of it, drawn only into the shadows, in the room for its shadow.
+    const F = app.jelly.frontMat.uniforms;
+    this.mat = new THREE.ShaderMaterial({
       vertexColors: true,
-      roughness: 0.08,
-      metalness: 0,
-      clearcoat: 1,
-      clearcoatRoughness: 0.04,
-      transparent: true,
-      opacity: 0.94,
-      envMap: app.env.texture,
-      envMapIntensity: 0.7,
+      side: THREE.DoubleSide,
+      uniforms: { tBg: { value: null }, uRes: { value: new THREE.Vector2(1, 1) }, envMap: { value: app.env.texture }, uLight: { value: app.lightDir }, uLightColor: F.uLightColor, uEmit: { value: 0 } },
+      vertexShader: /* glsl */ `
+        varying vec3 vW;
+        varying vec3 vN;
+        varying vec3 vCol;
+        void main() {
+          vec4 w = modelMatrix * vec4(position, 1.0);
+          vW = w.xyz;
+          vN = normalize(mat3(modelMatrix) * normal);
+          vCol = color;
+          gl_Position = projectionMatrix * viewMatrix * w;
+        }`,
+      fragmentShader: /* glsl */ `
+        uniform sampler2D tBg;
+        uniform vec2 uRes;
+        uniform samplerCube envMap;
+        uniform vec3 uLight;
+        uniform vec3 uLightColor;
+        uniform float uEmit;
+        varying vec3 vW;
+        varying vec3 vN;
+        varying vec3 vCol;
+        void main() {
+          vec3 N = normalize(vN), V = normalize(cameraPosition - vW);
+          if (dot(N, V) < 0.0) N = -N;
+          float ndv = clamp(dot(N, V), 0.0, 1.0);
+          // how much of it the line of sight crosses: a pool on the floor as deep as its surface is high, a
+          // run of it over the jelly a few cm - slanted through, more of it, seen edge-on
+          float thick = vW.y < 0.15 ? max(vW.y, 0.004) : 0.035;
+          float path = min(thick / max(ndv, 0.25), 0.3);
+          // what's behind, bent by its surface - more the deeper
+          vec3 Nv = normalize((viewMatrix * vec4(N, 0.0)).xyz);
+          vec2 uv = gl_FragCoord.xy / uRes - Nv.xy * (0.012 + 0.07 * min(path / 0.12, 1.0));
+          vec3 bg = texture2D(tBg, clamp(uv, vec2(0.001), vec2(0.999))).rgb;
+          // its colour: what its jelly lets through, the rest taken away along the way
+          vec3 tint = max(vCol, vec3(0.015));
+          vec3 through = bg * exp(log(tint) * (path * 7.0)) + vCol * 0.03;
+          // the room's light off it, more edge-on; the light's glint
+          float Fr = 0.03 + 0.97 * pow(1.0 - ndv, 5.0);
+          vec3 R = reflect(-V, N);
+          vec3 env = textureLod(envMap, R, 1.0).rgb;
+          vec3 H = normalize(normalize(uLight) + V);
+          float spec = pow(max(dot(N, H), 0.0), 260.0) * 7.0 * step(0.0, dot(N, uLight));
+          vec3 c = through * (1.0 - Fr) + env * Fr * 0.9 + uLightColor * spec;
+          // (glow mode: it shines in its own colours)
+          c += vCol * uEmit * 1.2;
+          gl_FragColor = vec4(c, 1.0);
+        }`,
     });
-    // (deeper than the colour itself, as the jelly looks - it's a thick
-    // layer of it; glow mode: it shines in its own colours, like the droplets)
-    this.mat.onBeforeCompile = (sh) => {
-      sh.fragmentShader = sh.fragmentShader
-        .replace('#include <color_fragment>', '#include <color_fragment>\n#ifdef USE_COLOR\ndiffuseColor.rgb *= sqrt(vColor.rgb);\n#endif')
-        .replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\n#ifdef USE_COLOR\ntotalEmissiveRadiance *= vColor.rgb * 1.2;\n#endif');
-    };
     this.mesh = new THREE.Mesh(geo, this.mat);
     this.mesh.frustumCulled = false;
     this.mesh.visible = false;
-    this.mesh.castShadow = true;
-    app.scene.add(this.mesh);
+    this.scene = new THREE.Scene();
+    this.scene.add(this.mesh);
+    // (its shadow: a copy in the room drawn only into the shadows - nothing of it on the screen)
+    this.shadow = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ colorWrite: false, depthWrite: false }));
+    this.shadow.frustumCulled = false;
+    this.shadow.castShadow = true;
+    this.shadow.visible = false;
+    app.scene.add(this.shadow);
     this.drainT = 0; // (s) left of draining away (the heal)
     this._setClock = 0;
     app.onHealStart?.push(() => this._healStart());
@@ -147,7 +198,7 @@ export class Fluid {
   }
 
   setGlow(e) {
-    this.mat.emissive.setScalar(e);
+    this.mat.uniforms.uEmit.value = e;
   }
 
   // Melted jelly in: volume (m^3) at a point, moving at v, its colour (and
@@ -1135,7 +1186,7 @@ export class Fluid {
       this.geo.setDrawRange(0, 0);
       return;
     }
-    const R = 1.6 * D, R2 = R * R;
+    const R = SPLAT_R * D, R2 = R * R;
     let x0 = Infinity, y0 = Infinity, z0 = Infinity, x1 = -Infinity, y1 = -Infinity, z1 = -Infinity;
     for (let i = 0; i < n; i++) {
       const o = i * 3;
@@ -1206,7 +1257,7 @@ export class Fluid {
         }
       }
     }
-    const iso = 0.55;
+    const iso = SPLAT_ISO;
     // the cells with an inside corner (the 8 round each inside point)
     let nc = 0;
     for (let a = 0; a < nt; a++) {

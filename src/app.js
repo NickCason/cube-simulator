@@ -2830,10 +2830,24 @@ export class App {
     r.setRenderTarget(this.rtScene);
     r.setClearColor(this.bg, 1);
     r.clear(true, true, false);
+    // (the liquid's shadow with the room's; the liquid itself just after: see Fluid)
+    const FL = this.fluid;
+    FL.shadow.visible = FL.mesh.visible;
     if (!skip.room) r.render(this.scene, this.camera);
 
     const copy = () => this.post.copy(this.rtScene.texture, this.rtTrans);
     copy();
+    // the liquid: the room's picture seen through it - and then that, with it, for the jelly to see through
+    if (FL.mesh.visible && !skip.room) {
+      const auto = r.autoClear;
+      FL.mat.uniforms.tBg.value = this.rtTrans.texture;
+      FL.mat.uniforms.uRes.value.set(this.rtScene.width, this.rtScene.height);
+      r.autoClear = false;
+      r.setRenderTarget(this.rtScene);
+      r.render(FL.scene, this.camera);
+      r.autoClear = auto;
+      copy();
+    }
     // (no one touching anything, nothing moving: see JellyView.setFeatures)
     this.jelly.quiet = !this._held?.size && performance.now() - this._inputAt > 500 && this.sb.pieces.every((p) => p.asleep);
     if (!this.opts.nojelly && !skip.jelly) this.jelly.renderPieces(this.camera, this.sb, this.rtScene, this.rtTrans, copy);
