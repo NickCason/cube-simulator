@@ -116,7 +116,40 @@ export function cutBody(sb, field, opts = {}) {
     }
     cand.sort((a, b) => Math.abs(s[a]) - Math.abs(s[b]));
     const { x, px, X, T, vtStart, vtList } = sb;
-    for (const i of cand) {
+    // (one on the piece's surface moves only along it: a face lying along the cut - an earlier cut's a
+    // slice away, or the cube's own side - had its corners snapped onto the cut, and a thin slice came out
+    // notched and crumpled, raw tets and shards, like refrozen slime. A vertex on a face turned within 45°
+    // of the cut stays put unless all but on it (a sliver's width): the slice is cut between, flat both
+    // sides - and its new face coarsened after, see coarsenCut.)
+    const along = new Float32Array(cand.length);
+    if (!sb.topoStale && sb.sTri && sb.nF > 0 && cand.length) {
+      const ci = new Int32Array(nV0).fill(-1), cn = new Float32Array(cand.length * 3);
+      cand.forEach((i, k) => {
+        ci[i] = k;
+        field.normal(x[i * 3], x[i * 3 + 1], x[i * 3 + 2], nrm);
+        cn[k * 3] = nrm[0]; cn[k * 3 + 1] = nrm[1]; cn[k * 3 + 2] = nrm[2];
+      });
+      const F = sb.sTri;
+      for (let f = 0; f < sb.nF; f++) {
+        const a = F[f * 3], b = F[f * 3 + 1], c = F[f * 3 + 2];
+        if (a >= nV0 || b >= nV0 || c >= nV0 || (ci[a] < 0 && ci[b] < 0 && ci[c] < 0)) continue;
+        const ux = x[b * 3] - x[a * 3], uy = x[b * 3 + 1] - x[a * 3 + 1], uz = x[b * 3 + 2] - x[a * 3 + 2];
+        const wx = x[c * 3] - x[a * 3], wy = x[c * 3 + 1] - x[a * 3 + 1], wz = x[c * 3 + 2] - x[a * 3 + 2];
+        const nx = uy * wz - uz * wy, ny = uz * wx - ux * wz, nz = ux * wy - uy * wx;
+        const l = Math.hypot(nx, ny, nz);
+        if (l < 1e-14) continue;
+        for (const v of [a, b, c]) {
+          const k = ci[v];
+          if (k < 0) continue;
+          const d = Math.abs(nx * cn[k * 3] + ny * cn[k * 3 + 1] + nz * cn[k * 3 + 2]) / l;
+          if (d > along[k]) along[k] = d;
+        }
+      }
+    }
+    const sliver = 0.04 * hEdge;
+    for (let ck = 0; ck < cand.length; ck++) {
+      const i = cand[ck];
+      if (along[ck] > 0.7 && Math.abs(s[i]) > sliver) continue;
       const o = i * 3;
       field.normal(x[o], x[o + 1], x[o + 2], nrm);
       const dx = -s[i] * nrm[0], dy = -s[i] * nrm[1], dz = -s[i] * nrm[2];
@@ -403,15 +436,33 @@ export function cutBody(sb, field, opts = {}) {
     }
   }
 
+  // --- a whole cut by a plane: its faces coarsened (see coarsenCut) - the vertices that go, not added
+  let gone = null;
+  if (field.flat && opts.coarsen !== false && !opts.glueAll && !opts.light && !remap.size && !sb.topoStale && sb.sTri) {
+    const c = coarsenCut(sb, nV0, newVerts, newT, newVS, newMu, edgeMap, K, sign, (opts.coarsen ?? 0.6) * hEdge);
+    if (c.n) {
+      gone = c.gone;
+      const nid = new Int32Array(gone.length);
+      for (let k = 0, n = 0; k < gone.length; k++) nid[k] = gone[k] ? -1 : nV0 + n++;
+      for (let k = 0; k < newT.length; k++) if (newT[k] >= nV0) newT[k] = nid[newT[k] - nV0];
+      const vs = [...vSide];
+      vSide.clear();
+      for (const [id, sd] of vs) if (nid[id - nV0] >= 0) vSide.set(nid[id - nV0], sd);
+      for (let i = 0; i < nV0; i++) if (zDup[i] >= 0) zDup[i] = nid[zDup[i] - nV0];
+    }
+  }
+
   // --- commit
   const oldPiece = sb.vPiece.slice(0, nV0);
-  const nNew = newVerts.length / 10;
-  for (let k = 0; k < nNew; k++) {
+  let nNew = 0;
+  for (let k = 0; k < newVerts.length / 10; k++) {
+    if (gone && gone[k]) continue;
     const o = k * 10;
     const id = sb.addVertex(newVerts[o], newVerts[o + 1], newVerts[o + 2], newVerts[o + 3], newVerts[o + 4], newVerts[o + 5],
       newVerts[o + 6], newVerts[o + 7], newVerts[o + 8], newVerts[o + 9], newCube[k], newTag[k]);
     sb.dust[id] = newDust[k] || 0;
     for (let c = 0; c < 5; c++) sb.coat[id * 5 + c] = newCoat[k * 5 + c] || 0;
+    nNew++;
   }
   const nT = newT.length / 4;
   sb.ensureT(nT);
@@ -449,12 +500,175 @@ export function cutBody(sb, field, opts = {}) {
   return { changed: true, side, newVerts: nNew, nT, seam };
 }
 
+// A plane cut's new faces, coarsened: each short edge on the cut (rest length under Lmax) between a vertex
+// the cut made inside a face - where it crossed one of the old tets' inner edges, never one on the outline -
+// and another on the plane, of its side, is collapsed into that other: the tets round the edge go, the
+// rest round the vertex take the other end - if every one stays the right way out, at rest and now, no
+// worse than q 0.05 (or than it was), and no face doubles up. On the plane, inside the face, the piece's
+// shape and volume stay exactly as they were. (Cutting through what a cut left - every tet it split, in
+// pieces - split each piece again, and more again the next: thin slices sliced apart made thousands of
+// slivers - a loaf of 8 cost 17k tets, and its pile 400+ ms a frame in contact.)
+// Returns { n: collapses, gone: per new vertex } - the tet list (newT, newVS, newMu) cut down in place.
+function coarsenCut(sb, nV0, newVerts, newT, newVS, newMu, edgeMap, K, sign, Lmax) {
+  const nNew = newVerts.length / 10, nTn = newT.length / 4;
+  const X = sb.X, x = sb.x;
+  const rest = (id, c) => (id < nV0 ? X[id * 3 + c] : newVerts[(id - nV0) * 10 + 3 + c]);
+  const now = (id, c) => (id < nV0 ? x[id * 3 + c] : newVerts[(id - nV0) * 10 + c]);
+  const onPlane = (id) => id >= nV0 || sign[id] === 0;
+  const vol6 = (a, b, c, d, get) => {
+    const ax = get(a, 0), ay = get(a, 1), az = get(a, 2);
+    const bx = get(b, 0) - ax, by = get(b, 1) - ay, bz = get(b, 2) - az;
+    const cx = get(c, 0) - ax, cy = get(c, 1) - ay, cz = get(c, 2) - az;
+    const dx = get(d, 0) - ax, dy = get(d, 1) - ay, dz = get(d, 2) - az;
+    return bx * (cy * dz - cz * dy) - by * (cx * dz - cz * dx) + bz * (cx * dy - cy * dx);
+  };
+  const Q = [0, 0, 0, 0];
+  const qual = (v6) => { // (6√2 V / rms edge³: 1 for a regular tet; of Q)
+    let e2 = 0;
+    for (let i = 0; i < 4; i++) for (let j = i + 1; j < 4; j++) {
+      const ex = rest(Q[j], 0) - rest(Q[i], 0), ey = rest(Q[j], 1) - rest(Q[i], 1), ez = rest(Q[j], 2) - rest(Q[i], 2);
+      e2 += ex * ex + ey * ey + ez * ez;
+    }
+    const r = Math.sqrt(e2 / 6);
+    return (Math.SQRT2 * v6) / (r * r * r + 1e-30);
+  };
+  // the outline: the old surface's edges (a cut vertex on one is on the face's edge)
+  const surfE = new Set(), F = sb.sTri;
+  for (let f = 0; f < sb.nF; f++) for (let e = 0; e < 3; e++) {
+    const a = F[f * 3 + e], b = F[f * 3 + ((e + 1) % 3)];
+    surfE.add(a < b ? a * K + b : b * K + a);
+  }
+  const canGo = new Uint8Array(nNew);
+  for (const [key, pair] of edgeMap) if (!surfE.has(key)) canGo[pair[0] - nV0] = canGo[pair[1] - nV0] = 1;
+  // the tets round each vertex on the plane
+  const inc = new Map();
+  for (let t = 0; t < nTn; t++) for (let j = 0; j < 4; j++) {
+    const v = newT[t * 4 + j];
+    if (!onPlane(v)) continue;
+    let l = inc.get(v);
+    if (!l) inc.set(v, (l = []));
+    l.push(t);
+  }
+  const alive = new Uint8Array(nTn).fill(1), gone = new Uint8Array(nNew);
+  const KK = nV0 + nNew + 1;
+  const fkey = (a, b, c) => (a < b && a < c ? (a * KK + b) * KK + c : b < c ? (b * KK + c) * KK + a : (c * KK + a) * KK + b);
+  const faces = (t, out, u = -1, w = -1) => { // (its four faces, outward - with u read as w)
+    let a = newT[t * 4], b = newT[t * 4 + 1], c = newT[t * 4 + 2], d = newT[t * 4 + 3];
+    if (a === u) a = w; if (b === u) b = w; if (c === u) c = w; if (d === u) d = w;
+    if (vol6(a, b, c, d, rest) < 0) { const tmp = c; c = d; d = tmp; }
+    out.push(fkey(b, c, d), fkey(a, d, c), fkey(a, b, d), fkey(a, c, b));
+  };
+  let n = 0;
+  const fl = [], seenF = new Set();
+  for (let pass = 0; pass < 3; pass++) {
+    // the short edges from each vertex that can go to its neighbours on the plane, shortest first
+    const cand = [];
+    for (const [u, l] of inc) {
+      if (u < nV0 || !canGo[u - nV0] || gone[u - nV0]) continue;
+      const nb = new Set();
+      for (const t of l) if (alive[t]) for (let j = 0; j < 4; j++) {
+        const w = newT[t * 4 + j];
+        if (w !== u && onPlane(w) && !nb.has(w)) {
+          nb.add(w);
+          const ex = rest(w, 0) - rest(u, 0), ey = rest(w, 1) - rest(u, 1), ez = rest(w, 2) - rest(u, 2);
+          const L = Math.sqrt(ex * ex + ey * ey + ez * ez);
+          if (L < Lmax) cand.push(L, u, w);
+        }
+      }
+    }
+    const order = [];
+    for (let k = 0; k < cand.length; k += 3) order.push(k);
+    order.sort((p, q) => cand[p] - cand[q]);
+    let did = 0;
+    for (const k of order) {
+      const u = cand[k + 1], w = cand[k + 2];
+      if (gone[u - nV0] || (w >= nV0 && gone[w - nV0])) continue;
+      const lu = inc.get(u), lw = inc.get(w);
+      let shared = false, ok = true;
+      for (const t of lu) if (alive[t] && (newT[t * 4] === w || newT[t * 4 + 1] === w || newT[t * 4 + 2] === w || newT[t * 4 + 3] === w)) { shared = true; break; }
+      if (!shared) continue;
+      // every tet round u but not w: the right way out, at rest and now, and no sliver
+      for (const t of lu) {
+        if (!alive[t]) continue;
+        let hasW = false;
+        for (let j = 0; j < 4; j++) { const v = newT[t * 4 + j]; Q[j] = v === u ? w : v; if (v === w) hasW = true; }
+        if (hasW) continue;
+        const r0 = vol6(newT[t * 4], newT[t * 4 + 1], newT[t * 4 + 2], newT[t * 4 + 3], rest);
+        const r1 = vol6(Q[0], Q[1], Q[2], Q[3], rest);
+        const n0 = vol6(newT[t * 4], newT[t * 4 + 1], newT[t * 4 + 2], newT[t * 4 + 3], now);
+        const n1 = vol6(Q[0], Q[1], Q[2], Q[3], now);
+        if (r1 * Math.sign(r0) <= 0 || n1 * Math.sign(n0) <= 0) { ok = false; break; }
+        const q1 = qual(Math.abs(r1));
+        if (q1 < 0.05) {
+          for (let j = 0; j < 4; j++) Q[j] = newT[t * 4 + j];
+          if (q1 < qual(Math.abs(r0)) * 0.999) { ok = false; break; }
+        }
+      }
+      if (!ok) continue;
+      // and no face twice the same way round: the faces round w now, and the changed tets'
+      seenF.clear();
+      for (const t of lw) {
+        if (!alive[t]) continue;
+        let hasU = false;
+        for (let j = 0; j < 4; j++) if (newT[t * 4 + j] === u) hasU = true;
+        if (hasU) continue;
+        fl.length = 0;
+        faces(t, fl);
+        for (const f of fl) seenF.add(f);
+      }
+      for (const t of lu) {
+        if (!alive[t]) continue;
+        let hasW = false;
+        for (let j = 0; j < 4; j++) if (newT[t * 4 + j] === w) hasW = true;
+        if (hasW) continue;
+        fl.length = 0;
+        faces(t, fl, u, w);
+        for (const f of fl) {
+          if (seenF.has(f)) { ok = false; break; }
+          seenF.add(f);
+        }
+        if (!ok) break;
+      }
+      if (!ok) continue;
+      // collapse
+      for (const t of lu) {
+        if (!alive[t]) continue;
+        let hasW = false;
+        for (let j = 0; j < 4; j++) if (newT[t * 4 + j] === w) hasW = true;
+        if (hasW) { alive[t] = 0; continue; }
+        for (let j = 0; j < 4; j++) if (newT[t * 4 + j] === u) newT[t * 4 + j] = w;
+        lw.push(t);
+      }
+      gone[u - nV0] = 1;
+      inc.delete(u);
+      n++;
+      did++;
+    }
+    if (!did) break;
+  }
+  // (the tet list, those left, in place)
+  let m = 0;
+  for (let t = 0; t < nTn; t++) {
+    if (!alive[t]) continue;
+    if (m !== t) {
+      for (let j = 0; j < 4; j++) newT[m * 4 + j] = newT[t * 4 + j];
+      newVS[m] = newVS[t];
+      newMu[m] = newMu[t];
+    }
+    m++;
+  }
+  newT.length = m * 4;
+  newVS.length = newMu.length = m;
+  return { n, gone };
+}
+
 // Planar field helper
 export function planeField(nx, ny, nz, d, inRegion = null) {
   return {
     value: (x, y, z) => nx * x + ny * y + nz * z - d,
     normal: (x, y, z, out) => { out[0] = nx; out[1] = ny; out[2] = nz; return out; },
     inRegion,
+    flat: true, // (its cut faces can be coarsened - see coarsenCut)
   };
 }
 

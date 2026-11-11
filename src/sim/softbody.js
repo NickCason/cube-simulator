@@ -108,9 +108,9 @@ export function polarRot(q, A, R, iters) {
   }
 }
 
-const PIECE_FLOATS = ['sleepT', 'rebT', 'impY', 'rebR', 'impR', 'impUx', 'impUz', 'impT', 'impDv', 'foldUntil', 'buzzT', 'buzzA', 'buzzB', 'untangle', 'tangleTouch', 'touchT', 'vib'];
+const PIECE_FLOATS = ['sleepT', 'rebT', 'impY', 'rebR', 'impR', 'impUx', 'impUz', 'impT', 'impDv', 'foldUntil', 'buzzT', 'buzzA', 'buzzB', 'untangle', 'tangleTouch', 'touchT', 'vib', 'nwT', 'nwV', 'nwU', 'nwN'];
 // (piece state a rebuild carries over to an untouched piece: see _buildPieces)
-const CARRY = ['sleepT', 'asleep', 'rebT', 'impY', 'boosted', 'rebR', 'impR', 'impUx', 'impUz', 'boostedR', 'impPend', 'impT', 'impDv', 'sleepLogMu', 'foldUntil', 'foldAsk', 'buzzT', 'buzzA', 'buzzB', 'tangleN', 'untangle', 'tangleTries', 'tangleTouch', 'touchT', 'hinge', 'gap', 'foldN', 'foldTouch', 'foldGiveUp'];
+const CARRY = ['sleepT', 'asleep', 'rebT', 'impY', 'boosted', 'rebR', 'impR', 'impUx', 'impUz', 'boostedR', 'impPend', 'impT', 'impDv', 'sleepLogMu', 'foldUntil', 'foldAsk', 'buzzT', 'buzzA', 'buzzB', 'tangleN', 'untangle', 'tangleTries', 'tangleTouch', 'touchT', 'hinge', 'gap', 'foldN', 'foldTouch', 'foldGiveUp', 'nwT', 'nwV', 'nwU', 'nwN', 'nwS'];
 
 // (the parts of a step ?stats times: SoftBody.profT, in this order - the
 // last, how many substeps)
@@ -968,6 +968,8 @@ export class SoftBody {
     if (!pc.asleep) this._hashDirty = true;
     pc.asleep = true;
     pc.vib = 0;
+    pc.nwT = pc.nwV = pc.nwU = pc.nwN = 0;
+    pc.nwS.fill(NaN);
     pc.foldAsk = true; // (not to be left asleep folded into itself)
     for (let k = 0; k < vs.length; k++) {
       const o = vs[k] * 3;
@@ -1531,6 +1533,11 @@ export class SoftBody {
         buzzT: 0, // (s) still, but buzzing, for this long (see _dampPieces)
         buzzA: 0, // (its buzz over the first and the second half of that)
         buzzB: 0,
+        nwT: 0, // (s) into this second of going nowhere (see _dampPieces), and its shiver over it - and the last's
+        nwV: 0,
+        nwU: 0,
+        nwN: 0, // (seconds running it went nowhere)
+        nwS: new Float64Array(36).fill(NaN), // (where 12 of its vertices were as the second began)
         hush: 0, // (s) left of being damped hard: shaking where it sat (see _dampPieces)
         hushN: 0, // (times hushed since it last went anywhere)
         tangleN: 0, // looks in a row that found it passed through itself (see _tangleCheck)
@@ -2718,8 +2725,36 @@ export class SoftBody {
       // seconds, too uneven for a buzz - left untouched a while, going
       // nowhere, ringing only a little, it sleeps)
       const ringing = (pc.hinge || pc.gap) && this.time - pc.touchT > 2 && v2 < 0.05 * 0.05 && w2 < 0.15 * 0.15 && vrms2 < 0.08 * 0.08;
-      if (buzzing || ringing || (vrms2 < 0.035 * 0.035 && nFast <= Math.max(3, vs.length * 0.004))) {
-        pc.sleepT += buzzing ? 1 : dt;
+      // (going nowhere: a pile of thin slices, each lying on the next - the contact between them kept a
+      // shiver of a few cm/s in all of them, rocking and creeping back and forth, over the 3.5 below and
+      // never steady enough for a buzz - and the pile never slept: 60 ms a frame of physics a minute on.
+      // One no part of which - 12 of its vertices, all but the two that moved most (a sliver's corner
+      // flapping in a crease) - is more than 1.2 cm from where it was a second ago, two seconds running,
+      // shivering under 15 cm/s (past that: hushed, above) and not dying down (a wobble does - a cube
+      // wobbling where it landed goes still the usual way), not held or touched just now, sleeps. Not one
+      // full of liquid: that sloshes as it likes.)
+      pc.nwT += dt;
+      pc.nwV += vrms * dt;
+      if (pc.nwT >= 1) {
+        const S = pc.nwS, nS = Math.min(12, vs.length);
+        let d1 = 0, d2 = 0, d3 = 0; // (the three most any moved, squared)
+        for (let k = 0; k < nS; k++) {
+          const o = vs[Math.floor((k * vs.length) / nS)] * 3;
+          const dx = x[o] - S[k * 3], dy = x[o + 1] - S[k * 3 + 1], dz = x[o + 2] - S[k * 3 + 2];
+          let q = dx * dx + dy * dy + dz * dz;
+          if (q !== q) q = Infinity; // (no second begun yet)
+          if (q > d1) { d3 = d2; d2 = d1; d1 = q; } else if (q > d2) { d3 = d2; d2 = q; } else if (q > d3) d3 = q;
+          S[k * 3] = x[o]; S[k * 3 + 1] = x[o + 1]; S[k * 3 + 2] = x[o + 2];
+        }
+        const mv = pc.nwV / pc.nwT, steady = mv >= 0.85 * pc.nwU || mv < 0.035;
+        const quiet = (nS > 3 ? d3 : d1) < 0.012 * 0.012 && mv < 0.15 && steady && !this.cLiq[pc.cube] && this.time - pc.touchT > 1 && !this._grabbedP?.[pc.id];
+        pc.nwN = quiet ? pc.nwN + 1 : 0;
+        pc.nwU = mv;
+        pc.nwT = pc.nwV = 0;
+      }
+      const nowhere = pc.nwN >= 2;
+      if (buzzing || ringing || nowhere || (vrms2 < 0.035 * 0.035 && nFast <= Math.max(3, vs.length * 0.004))) {
+        pc.sleepT += buzzing || nowhere ? 1 : dt;
         // (debris - a die or smaller - goes quiet sooner: a settling pile
         // is what costs the most)
         if (pc.sleepT > (vs.length < 0.06 * (this.cN[pc.cube] || 1e9) ? 0.35 : 0.6)) {
@@ -4274,9 +4309,11 @@ export class SoftBody {
       // well in - and otherwise a sleeping side is immovable (a neighbour
       // buzzing against it mustn't keep waking it)
       const po = P[own], pp = P[pt];
+      // (pushed well in only by one itself going somewhere: in a pile of thin slices, sunk into each other,
+      // one going nowhere - see _dampPieces - woke each one that slept, and none ever did)
       if (d > 0.003 && (po.asleep || pp.asleep)) {
-        const q = po.asleep ? pp.vel : po.vel;
-        if (d > 0.012 || q[0] * q[0] + q[1] * q[1] + q[2] * q[2] > 0.08 * 0.08) {
+        const pa = po.asleep ? pp : po, q = pa.vel;
+        if ((d > 0.012 && pa.nwN === 0) || q[0] * q[0] + q[1] * q[1] + q[2] * q[2] > 0.08 * 0.08) {
           if (po.asleep) { po.asleep = false; po.sleepT = 0; aw[own] = 1; }
           if (pp.asleep) { pp.asleep = false; pp.sleepT = 0; aw[pt] = 1; }
         }
