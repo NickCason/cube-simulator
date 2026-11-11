@@ -246,6 +246,7 @@ export class SoftBody {
     this._heatResidual = 0;
     this.weld = null; // set by the heal: distances to the healed seams
     this.fill = null; // set by the heal: what was missing, rising to fill its holes (see JellyView)
+    this.liqTop = null; // set by the spill: the top of what's left of a cube's liquid (see JellyView._level)
     this.anyAwake = true;
     // the piece-contact candidates cover _hashSpan seconds of motion from
     // when they were found (_hashAge ago); short frames reuse them
