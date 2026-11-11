@@ -34,6 +34,16 @@ export class Clips {
     // (?stats: the last recording's own account - how many frames went in, the picture's size, the tracks'
     // say, what came out, and whether its picture keeps moving to the end: see _say, _check, diagLine)
     this.diag = null;
+    // How the clip's picture is taken: 'copy' - each frame copied into a picture of the clip's own (its long
+    // side 1280 at most) and sent when asked for: Chrome, Firefox - or 'gl' - the screen's own picture, as it's
+    // shown, 30 a second: Safari, where a copied picture stopped coming after ~300 frames, every time (10 s
+    // at 30 fps, 16 at 19 - the clip frozen from there). ?rec=copy|gl to choose; ?recsound=0, no sound.
+    const q = new URLSearchParams(location.search), ua = navigator.userAgent;
+    const webkit = (/AppleWebKit/.test(ua) && !/Chrome\/|Chromium|Edg\//.test(ua)) || /CriOS|FxiOS|EdgiOS/.test(ua);
+    this.mode = q.get('rec') === 'copy' || q.get('rec') === 'gl' ? q.get('rec') : webkit ? 'gl' : 'copy';
+    this.sound = q.get('recsound') !== '0';
+    this.srcGL = null; // (the screen's own picture's stream: see _glSource)
+    this.vtrack = null; // (the picture's track this recording)
     // (can't record here: no button)
     const cv = document.createElement('canvas');
     this.able = !!(cv.captureStream && window.MediaRecorder && window.MediaStream && TYPES.some((t) => MediaRecorder.isTypeSupported?.(t)));
@@ -88,17 +98,27 @@ export class Clips {
     return (this.src = { cv, g, track, manual, last: 0 });
   }
 
+  // The screen's own picture's stream (mode 'gl'): taken by the browser as it's shown - the mark drawn into
+  // it already (App._post) - made once and kept, its track off between recordings.
+  _glSource() {
+    if (this.srcGL) return this.srcGL;
+    const track = this.app.renderer.domElement.captureStream(FPS).getVideoTracks()[0];
+    return (this.srcGL = { track });
+  }
+
   // after each frame's drawn (App.render, the mark on it): while recording,
   // a copy of it into the clip - 30 a second at most
   frame() {
-    const S = this.src;
-    if (!this.rec || !S) return;
-    const now = performance.now();
-    if (now - S.last < 1000 / FPS - 4) return;
-    S.last = now;
+    if (!this.rec) return;
     const gl = this.app.renderer.domElement;
-    S.g.drawImage(gl, 0, 0, S.cv.width, S.cv.height);
-    if (S.manual) S.track.requestFrame();
+    // (the screen's own picture: the browser takes it - nothing to copy)
+    if (this.mode !== 'gl') {
+      const S = this.src, now = performance.now();
+      if (!S || now - S.last < 1000 / FPS - 4) return;
+      S.last = now;
+      S.g.drawImage(gl, 0, 0, S.cv.width, S.cv.height);
+      if (S.manual) S.track.requestFrame();
+    }
     const D = this.diag;
     if (D) {
       D.copies++;
@@ -126,7 +146,7 @@ export class Clips {
     const D = this.diag;
     if (!D) return '';
     const secs = ((D.end || performance.now()) - D.t0) / 1000;
-    return `clip (last): ${secs.toFixed(1)} s, ${D.copies} frames copied (${(D.copies / Math.max(secs, 0.1)).toFixed(0)}/s), ${D.size} from ${D.from}, ${D.type || '?'}, frames ${D.manual ? 'asked for' : '30/s'}, sound ${D.sound}${D.events.length ? ` | ${D.events.slice(-6).join('; ')}` : ''}${D.file ? ` | made ${D.file}` : ''}${D.moved ? ` | picture moved, second by second: ${D.moved}` : ''}`;
+    return `clip (last): ${D.mode}, ${secs.toFixed(1)} s, ${D.copies} frames in (${(D.copies / Math.max(secs, 0.1)).toFixed(0)}/s), ${D.size} from ${D.from}, ${D.type || '?'}, frames ${D.manual ? 'asked for' : '30/s'}, sound ${D.sound}${D.events.length ? ` | ${D.events.slice(-6).join('; ')}` : ''}${D.file ? ` | made ${D.file}` : ''}${D.moved ? ` | picture moved, second by second: ${D.moved}` : ''}`;
   }
 
   // What came out, looked at (?stats): every second of it, a little picture - did it change since the one
@@ -141,8 +161,15 @@ export class Clips {
       v.muted = true;
       v.playsInline = true;
       v.preload = 'auto';
+      // (on the page, tiny and all but invisible: a video off it isn't shown, its frames not told of)
+      v.style.cssText = 'position:fixed;left:0;bottom:0;width:4px;height:4px;opacity:0.01;pointer-events:none;z-index:-1';
+      document.body.appendChild(v);
       v.src = url;
-      if (!(await once('loadedmetadata', 5000))) return this._say('check: it would not load');
+      const fail = (why) => {
+        if (D) D.moved = `(${why})`;
+        this._say(`check: ${why}`);
+      };
+      if (!(await once('loadedmetadata', 5000))) return fail('it would not load');
       let dur = v.duration;
       // (webm from MediaRecorder: its length unknown till it's looked at the end)
       if (!Number.isFinite(dur)) {
@@ -150,34 +177,39 @@ export class Clips {
         await once('seeked', 4000);
         dur = v.duration;
       }
-      if (!(dur > 0)) return this._say('check: no length');
+      if (!(dur > 0)) return fail('no length');
       const c = document.createElement('canvas');
       c.width = c.height = 32;
       const g = c.getContext('2d', { willReadFrequently: true });
       let prev = null, marks = '', lit = 0;
-      for (let i = 0; i < Math.min(120, Math.ceil(dur)); i++) {
-        v.currentTime = Math.min(dur - 0.05, i + 0.5);
-        if (!(await once('seeked', 3000))) {
-          marks += '?';
-          continue;
-        }
+      // (a little picture of it now - and whether it's changed since the last one)
+      const look = () => {
         g.drawImage(v, 0, 0, 32, 32);
         const px = g.getImageData(0, 0, 32, 32).data;
         let d = 0;
         for (let k = 0; k < px.length; k += 4) lit = Math.max(lit, px[k], px[k + 1], px[k + 2]);
         if (prev) for (let k = 0; k < px.length; k += 4) d = Math.max(d, Math.abs(px[k] - prev[k]), Math.abs(px[k + 1] - prev[k + 1]), Math.abs(px[k + 2] - prev[k + 2]));
-        marks += prev ? (d > 1 ? '1' : '0') : '|';
+        const m = prev ? (d > 1 ? '1' : '0') : '|';
         prev = px;
+        return m;
+      };
+      // (each second's middle, sought out: one that won't come is a '?', not a '0' - played through
+      // instead, headless Chrome showed too few of a video's frames to tell a held picture from a skipped one)
+      for (let i = 0; i < Math.min(120, Math.ceil(dur)); i++) {
+        v.currentTime = Math.min(dur - 0.05, i + 0.5);
+        marks += (await once('seeked', 3000)) ? look() : '?';
       }
       // (every picture black: its frames couldn't be read here, not a clip of black)
       const note = lit < 4 ? ', but every picture read black - not a fair look' : '';
       if (D) D.moved = `${marks} (${dur.toFixed(1)} s long${note})`;
       this._say(`check: ${dur.toFixed(1)} s long; picture moved, second by second: ${marks}${note}`);
     } catch (e) {
+      if (D) D.moved = `(failed: ${e?.message || e})`;
       this._say(`check failed: ${e?.message || e}`);
     } finally {
       v.removeAttribute('src');
       v.load?.();
+      v.remove();
       URL.revokeObjectURL(url);
     }
   }
@@ -188,15 +220,26 @@ export class Clips {
     try {
       // (the tap that starts it lets the sound start too)
       app.audio?.init?.();
-      const S = this._source(), gl = app.renderer.domElement;
-      // (its size: the screen's picture, its long side 1280 at most - even,
-      // for the video encoder)
-      const k = Math.min(1, LONG / Math.max(gl.width, gl.height, 1));
-      const w = Math.max(2, Math.round((gl.width * k) / 2) * 2), h = Math.max(2, Math.round((gl.height * k) / 2) * 2);
-      if (S.cv.width !== w || S.cv.height !== h) (S.cv.width = w), (S.cv.height = h);
-      const tracks = [S.track], A = app.audio;
+      const gl = app.renderer.domElement, glMode = this.mode === 'gl';
+      let w = gl.width, h = gl.height, manual = false;
+      if (glMode) {
+        this.vtrack = this._glSource().track;
+        this.vtrack.enabled = true;
+      } else {
+        const S = this._source();
+        // (its size: the screen's picture, its long side 1280 at most - even,
+        // for the video encoder)
+        const k = Math.min(1, LONG / Math.max(gl.width, gl.height, 1));
+        w = Math.max(2, Math.round((gl.width * k) / 2) * 2);
+        h = Math.max(2, Math.round((gl.height * k) / 2) * 2);
+        if (S.cv.width !== w || S.cv.height !== h) (S.cv.width = w), (S.cv.height = h);
+        S.last = 0;
+        manual = S.manual;
+        this.vtrack = S.track;
+      }
+      const tracks = [this.vtrack], A = app.audio;
       // (its sounds as you hear them - none, muted)
-      if (A?.ctx && A.out) {
+      if (this.sound && A?.ctx && A.out) {
         try {
           this.dest ||= A.ctx.createMediaStreamDestination();
           A.out.connect(this.dest);
@@ -225,15 +268,15 @@ export class Clips {
       };
       rec.start();
       this.rec = rec;
-      this.diag = { t0: performance.now(), end: 0, copies: 0, copies0: 0, at: 0, gw: gl.width, gh: gl.height, from: `${gl.width}x${gl.height}`, size: `${w}x${h}`, type, manual: S.manual, sound: tracks.length > 1 ? A.ctx.state : 'none', events: [], file: '', moved: '' };
+      this.diag = { mode: this.mode, t0: performance.now(), end: 0, copies: 0, copies0: 0, at: 0, gw: gl.width, gh: gl.height, from: `${gl.width}x${gl.height}`, size: `${w}x${h}`, type, manual, sound: tracks.length > 1 ? A.ctx.state : 'none', events: [], file: '', moved: '' };
       const watch = (tr, name) => {
         tr.onmute = () => this._event(`${name} muted`);
         tr.onunmute = () => this._event(`${name} unmuted`);
         tr.onended = () => this._event(`${name} ended`);
       };
-      watch(S.track, 'picture track');
+      watch(this.vtrack, 'picture track');
       for (const tr of tracks.slice(1)) watch(tr, 'sound track');
-      this._say(`start: ${type || '?'}, ${w}x${h} from the screen's ${gl.width}x${gl.height}, frames ${S.manual ? 'asked for' : '30/s'}, sound ${this.diag.sound}`);
+      this._say(`start (${this.mode}): ${type || '?'}, ${w}x${h} from the screen's ${gl.width}x${gl.height}, frames ${manual ? 'asked for' : '30/s'}, sound ${this.diag.sound}`);
     } catch (e) {
       console.warn('clip: could not start', e);
       this._unhook();
@@ -242,7 +285,6 @@ export class Clips {
       return;
     }
     this.t0 = performance.now();
-    this.src.last = 0;
     app.markTex = this._markTexture();
     app.recording = true;
     this.btn.classList.add('on');
@@ -258,9 +300,10 @@ export class Clips {
     const D = this.diag;
     if (D) {
       D.end = performance.now();
-      this._say(`stop at ${((D.end - D.t0) / 1000).toFixed(1)} s, ${D.copies} frames copied`);
+      this._say(`stop at ${((D.end - D.t0) / 1000).toFixed(1)} s, ${D.copies} frames in`);
     }
     clearInterval(this._tick);
+    if (this.srcGL) this.srcGL.track.enabled = false;
     this.app.recording = false;
     this.btn.classList.remove('on');
     this.btn.setAttribute('aria-label', 'Record a clip');
@@ -281,10 +324,10 @@ export class Clips {
     const s = (performance.now() - this.t0) / 1000;
     if (s >= MAX_S) return this.stop();
     // (?stats: every 2 s, frames copied a second, the tracks, the sound, the recorder)
-    const D = this.diag, S = this.src;
-    if (D && this.app.statsSay && s - D.at >= 2) {
+    const D = this.diag, V = this.vtrack;
+    if (D && V && this.app.statsSay && s - D.at >= 2) {
       const n = D.copies - D.copies0, st = (tr) => `${tr.readyState}${tr.muted ? ' muted' : ''}${tr.enabled ? '' : ' off'}`;
-      this._say(`${s.toFixed(1)} s: ${(n / (s - D.at)).toFixed(0)} frames/s copied, picture track ${st(S.track)}, sound ${this.app.audio?.ctx?.state || 'none'}, recorder ${this.rec?.state}`);
+      this._say(`${s.toFixed(1)} s: ${(n / (s - D.at)).toFixed(0)} frames/s in, picture track ${st(V)}, sound ${this.app.audio?.ctx?.state || 'none'}, recorder ${this.rec?.state}`);
       D.copies0 = D.copies;
       D.at = s;
     }

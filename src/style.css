@@ -1425,7 +1425,8 @@ html.dark .places-head span {
 .stats {
   position: fixed;
   left: max(10px, env(safe-area-inset-left));
-  top: max(10px, env(safe-area-inset-top));
+  /* (below the top row - the logotype, the record button - not over it) */
+  top: max(62px, calc(env(safe-area-inset-top) + 58px));
   z-index: 50;
   max-width: min(92vw, 380px);
   padding: 8px 9px 7px;
@@ -1454,8 +1455,21 @@ html.dark .places-head span {
 }
 .stats-btns {
   display: flex;
+  flex-wrap: wrap;
   gap: 6px;
   margin-top: 6px;
+}
+/* (folded away: just its tab) */
+.stats.min {
+  padding: 3px;
+}
+.stats.min canvas,
+.stats.min pre,
+.stats.min .stats-btns > :not(.close) {
+  display: none;
+}
+.stats.min .stats-btns {
+  margin-top: 0;
 }
 .stats-btns button {
   font: inherit;

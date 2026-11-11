@@ -272,11 +272,17 @@ export function attachStats(app) {
   // ---- overlay
   const el = document.createElement('div');
   el.className = 'stats';
-  el.innerHTML = `<canvas width="200" height="44"></canvas><pre></pre><div class="stats-btns"><button class="copy">Copy report</button><button class="mark">Mark</button><button class="bench">Bench</button><button class="close" aria-label="Hide stats">×</button></div>`;
+  el.innerHTML = `<canvas width="200" height="44"></canvas><pre></pre><div class="stats-btns"><button class="copy">Copy report</button><button class="mark">Mark</button><button class="bench">Bench</button>${app.ui?.clips?.able ? '<button class="rectest">Rec test</button>' : ''}<button class="close" aria-label="Hide stats">×</button></div>`;
   document.body.appendChild(el);
   const cv = el.querySelector('canvas'), ctx = cv.getContext('2d');
   const pre = el.querySelector('pre');
-  el.querySelector('.close').addEventListener('click', () => el.remove());
+  // (× folds it away to a small tab - tapped, it's back; it went for good, the record button under it)
+  const fold = el.querySelector('.close');
+  fold.addEventListener('click', () => {
+    const min = el.classList.toggle('min');
+    fold.textContent = min ? 'stats' : '×';
+    fold.setAttribute('aria-label', min ? 'Show stats' : 'Hide stats');
+  });
   el.querySelector('.mark').addEventListener('click', (e) => {
     say('MARK');
     const b = e.currentTarget;
@@ -383,6 +389,53 @@ export function attachStats(app) {
   };
   el.querySelector('.bench').addEventListener('click', (e) => runBench(e.currentTarget));
 
+  // ---- rec test: a clip recorded each way there is (see Clips.mode) - the copied picture, the screen's own,
+  // the copied one with no sound - each 22 s of a wobbling jelly, and each looked at after (Clips._check:
+  // second by second, did the picture move?). Which way's clip freezes on this phone. Hands off (~90 s).
+  let recLines = [], recTesting = false;
+  const runRecTest = async (btn) => {
+    const C = app.ui?.clips;
+    if (!C?.able || C.recording || recTesting || benching) return;
+    recTesting = true;
+    app.audio?.init?.();
+    const was = { mode: C.mode, sound: C.sound }, ways = [['copy', true], ['gl', true], ['copy', false]], out = [];
+    recLines = ['rec test (each 22 s of a wobbling jelly; the clip looked at after - did its picture move, second by second):'];
+    try {
+      for (let i = 0; i < ways.length; i++) {
+        const [mode, sound] = ways[i];
+        btn.textContent = `Rec test ${i + 1}/${ways.length}…`;
+        C.mode = mode;
+        C.sound = sound;
+        C.start();
+        if (!C.recording) {
+          out.push(`${mode}${sound ? '' : ', no sound'}: didn't start`);
+          continue;
+        }
+        const t0 = performance.now();
+        for (let k = 0; performance.now() - t0 < 22000; k++) {
+          await new Promise((res) => requestAnimationFrame(res));
+          wobble(k);
+        }
+        C.stop();
+        const t1 = performance.now();
+        while (!C.diag?.moved && performance.now() - t1 < 75000) await new Promise((res) => setTimeout(res, 250));
+        const D = C.diag;
+        out.push(`${mode}${sound ? '' : ', no sound'}: ${D?.copies || 0} frames in, ${D?.file || 'nothing made'}; moved ${D?.moved || '(not looked at)'}`);
+        C._close?.();
+        await new Promise((res) => setTimeout(res, 600));
+      }
+    } finally {
+      C.mode = was.mode;
+      C.sound = was.sound;
+      recTesting = false;
+      btn.textContent = 'Rec test ✓';
+      setTimeout(() => (btn.textContent = 'Rec test'), 2500);
+    }
+    recLines.push(...out.map((l) => `  ${l}`));
+    say(`RECTEST ${out.join(' | ')}`);
+  };
+  el.querySelector('.rectest')?.addEventListener('click', (e) => runRecTest(e.currentTarget));
+
   const recent = (arr) => {
     const n = Math.min(frames, arr.length);
     const out = [];
@@ -445,6 +498,7 @@ export function attachStats(app) {
       'slow / eventful frames (time, interval, what happened = the physics\' parts, ms):',
       ...slow.map((s) => fmtSlow(s)),
       ...benchLines,
+      ...recLines,
     ]
       .filter(Boolean)
       .join('\n');
