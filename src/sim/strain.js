@@ -2,16 +2,18 @@
 // (sqrt of FtF's biggest eigenvalue, by a few power steps), over the tets of
 // the pieces marked in `mask`. Returns { s, t, dir: [x,y,z] } - the stretch,
 // the tet, and the world direction it stretches along (unit) - or null.
-// filter(cx, cy, cz): only tets whose centre it accepts (optional).
+// filter(cx, cy, cz): only tets whose centre it accepts (optional). A cube full of liquid's inside isn't
+// counted - it's liquid, it flows: what holds it together is its skin (counted, its inside took any pull past
+// tearing, and a slit pulled open tore through in half a second, all of it pouring out).
 export function maxStretch(sb, mask, filter = null) {
-  const { T, B, x, tVS, vol0, tPiece } = sb;
+  const { T, B, x, tVS, vol0, tPiece, tCube, cLiq } = sb, skin = sb._skinT;
   let best = 1, bt = -1;
   let bx = 0, by = 0, bz = 0;
   // (slivers - a cut's leavings, a hair thick at rest - stretch absurdly
   // under any pull and say nothing about the jelly: left out)
   const minV = 0.03 * sb.hCell ** 3;
   for (let t = 0; t < sb.nT; t++) {
-    if (vol0[t] <= minV || !mask[tPiece[t]]) continue;
+    if (vol0[t] <= minV || !mask[tPiece[t]] || (cLiq[tCube[t]] && skin && !skin[t])) continue;
     const o = t * 4, i0 = T[o] * 3, i1 = T[o + 1] * 3, i2 = T[o + 2] * 3, i3 = T[o + 3] * 3;
     if (filter && !filter((x[i0] + x[i1] + x[i2] + x[i3]) * 0.25, (x[i0 + 1] + x[i1 + 1] + x[i2 + 1] + x[i3 + 1]) * 0.25, (x[i0 + 2] + x[i1 + 2] + x[i2 + 2] + x[i3 + 2]) * 0.25)) continue;
     const vs = tVS[t], sc = vs === 1 ? 1 : 1 / Math.cbrt(vs), bo = t * 9;

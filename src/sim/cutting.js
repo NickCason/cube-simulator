@@ -852,6 +852,10 @@ export function unglue(sb, verts, plus, pairs = null) {
       if (!plus[t]) continue;
       for (let k = 0; k < 4; k++) if (T[t * 4 + k] === i) T[t * 4 + k] = j;
     }
+    // (the two across the tear from each other - a slit till it's through: see Spill. One already across a
+    // slit keeps the partner it had.)
+    if (!sb.slitOf[i] || sb.slitOf[i] - 1 === i) sb.slitOf[i] = j + 1;
+    sb.slitOf[j] = i + 1;
     if (pairs) pairs.push(i, j);
     n++;
   }

@@ -55,6 +55,10 @@ const DEV_SOFT = 12;
 const DEV_CAP = 60;
 const DEV_SOFT_MIN = 3;
 const VOL_SOFT = 0.25;
+// (a cube full of liquid's cut, part way through: its two sides held to each other - see _solveStitches -
+// within this much more than their rest gap (m), pulled back over this long (s))
+const STITCH_SLACK = 0.012;
+const STITCH_T = 0.05;
 
 function growArr(a, n, C) {
   const b = new C(n);
@@ -247,6 +251,10 @@ export class SoftBody {
     this.weld = null; // set by the heal: distances to the healed seams
     this.fill = null; // set by the heal: what was missing, rising to fill its holes (see JellyView)
     this.liqTop = null; // set by the spill: the top of what's left of a cube's liquid (see JellyView._level)
+    // (the partners across a liquid cube's slits, pairs of vertices - see _solveStitches - as of a topology)
+    this._stitch = new Int32Array(64);
+    this._stN = 0;
+    this._stTopo = -1;
     this.anyAwake = true;
     // the piece-contact candidates cover _hashSpan seconds of motion from
     // when they were found (_hashAge ago); short frames reuse them
@@ -2048,6 +2056,7 @@ export class SoftBody {
       if (lap) lap(3);
       this._solveTets(h);
       if (lap) lap(4);
+      this._solveStitches(h);
       if (this._anyRigid) this._solveRigidity(h);
       if (this.embeds.length) this._solveEmbeds(h);
       if (this.attract) this._solveAttract(h);
@@ -2284,6 +2293,49 @@ export class SoftBody {
           s = w3 * dl; x[i3] += g3x * s; x[i3 + 1] += g3y * s; x[i3 + 2] += g3z * s;
         }
       }
+    }
+  }
+
+  // A cut part way through a cube full of liquid sticks to itself: each vertex and its partner across the cut
+  // (slitOf) are pulled back to within STITCH_SLACK of their rest gap, over STITCH_T - softly: a hand pulls
+  // them apart easily, and let go they close up again. (Unheld, its liquid inside slumped and the cut gaped
+  // wider and wider - a slice in from its side, 40 cm in 3 s, pouring; a solid one's stays at a centimetre.)
+  // Torn through - its sides in two pieces - they're let be.
+  _solveStitches(h) {
+    if (this._stTopo !== this.topoVersion) {
+      this._stTopo = this.topoVersion;
+      const so = this.slitOf, liq = this.cLiq, vc = this.vCube;
+      let n = 0;
+      for (let i = 0; i < this.nV; i++) {
+        const p = so[i] - 1;
+        if (p <= i || !this.alive[i] || !this.alive[p] || !liq[vc[i]]) continue;
+        if (n + 2 > this._stitch.length) {
+          const a = new Int32Array(this._stitch.length * 2);
+          a.set(this._stitch);
+          this._stitch = a;
+        }
+        this._stitch[n++] = i;
+        this._stitch[n++] = p;
+      }
+      this._stN = n;
+    }
+    const n = this._stN;
+    if (!n) return;
+    const S = this._stitch, x = this.x, X = this.X, w = this.w, vp = this.vPiece, aw = this._awake;
+    const beta = 1 - Math.exp(-h / STITCH_T);
+    for (let k = 0; k < n; k += 2) {
+      const i = S[k], p = S[k + 1], pc = vp[i];
+      if (pc < 0 || vp[p] !== pc || !aw[pc]) continue;
+      const wi = w[i], wp = w[p], ws = wi + wp;
+      if (!(ws > 0)) continue;
+      const a = i * 3, b = p * 3;
+      const dx = x[b] - x[a], dy = x[b + 1] - x[a + 1], dz = x[b + 2] - x[a + 2], d = Math.sqrt(dx * dx + dy * dy + dz * dz);
+      const rx = X[b] - X[a], ry = X[b + 1] - X[a + 1], rz = X[b + 2] - X[a + 2];
+      const C = d - Math.sqrt(rx * rx + ry * ry + rz * rz) - STITCH_SLACK;
+      if (!(C > 0)) continue;
+      const f = (beta * C) / (d * ws);
+      x[a] += dx * f * wi; x[a + 1] += dy * f * wi; x[a + 2] += dz * f * wi;
+      x[b] -= dx * f * wp; x[b + 1] -= dy * f * wp; x[b + 2] -= dz * f * wp;
     }
   }
 
