@@ -1171,6 +1171,9 @@ export function createJellyMaterial(env, layerUniforms) {
         vec3 Tr = exp(-sigma * pathLen * (1.0 + melt * 0.35));
         float haze = 1.0 - exp(-(cScatter + (cMilk + rkMilk) * 7.0 + frost * 2.5) * pathLen);
         haze = max(haze, max((cMilk + rkMilk) * 0.72, cHazeMin));
+        // (full of liquid: clearer inside than jelly - what swims in it seen - the thicker the liquid, the less)
+        vec4 cLiqT = cubeT(35);
+        haze *= 1.0 - cLiqT.x * 0.45 * (1.0 - 0.6 * cLiqT.z);
 
         // (the key light here: another cube may be in its way)
         vec3 keyLight = uLightColor * cubeShadowAt(Pw) * (0.3 + 0.7 * surfShadow);
@@ -1267,6 +1270,13 @@ export function createJellyMaterial(env, layerUniforms) {
         #endif
 
         vec3 col = body * (1.0 - F) * (0.4 + 0.6 * surfAO) + (refl * F + spec) * surfAO;
+        // Full of liquid: its skin a pale film over it - barely there face on, seen edge-on a rim (more of it
+        // crossed), the thicker the skin the more of it
+        if (cLiqT.x > 0.5) {
+          float film = 1.0 - exp(-(0.035 + 0.2 * cLiqT.y) / max(abs(NdV), 0.1));
+          vec3 skinC = mix(sc, vec3(1.0), 0.6) * (irr * 0.55 + keyLight * (0.25 + 0.3 * max(NdL, 0.0)));
+          col = mix(col, skinC, min(film, 0.8) * 0.55);
+        }
 
         // Metal: a mirror tinted by its own colour (cherry: red chrome; lemon:
         // gold), no light through it, its edges going white (Schlick, with

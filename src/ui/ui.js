@@ -497,6 +497,7 @@ export class UI {
           into = scroll;
         }
       }
+      if (st.hidden) continue; // (its own control: see below)
       const row = document.createElement('label');
       row.className = st.lab ? 'row' : 'row';
       row.innerHTML = `<span class="name">${st.label}</span><input type="range" min="0" max="1" step="${st.step ?? (st.int ? 1 / 240 : 0.001)}"><span class="word"></span>`;
@@ -536,6 +537,28 @@ export class UI {
         this.hint(app.tearing ? 'Pull it apart with two fingers and it tears' : 'Two fingers squish and stretch it · it won\'t tear', 2600);
       });
       this.rows.tough.input.closest('.row').after(row);
+    }
+    // full of liquid: a switch at the head of Liquid (its slider's hidden)
+    {
+      const row = document.createElement('div');
+      row.className = 'row toggle';
+      row.innerHTML = '<span class="name">Filled</span><button class="switch" role="switch" aria-checked="false" aria-label="Full of liquid"><i></i></button><span class="word">Off</span>';
+      const sw = row.querySelector('.switch'), word = row.querySelector('.word');
+      const show = (on) => {
+        sw.setAttribute('aria-checked', String(on));
+        sw.classList.toggle('on', on);
+        word.textContent = on ? 'On' : 'Off';
+      };
+      this._showLiquid = () => show(app.settings.liquid > 0.5);
+      this._showLiquid();
+      sw.addEventListener('click', () => {
+        app.audio.ui();
+        const on = !(app.settings.liquid > 0.5);
+        app.setSetting('liquid', on ? 1 : 0, true);
+        show(on);
+        this.hint(on ? 'Full of liquid · shake it, squash it' : 'Solid jelly again', 2200);
+      });
+      this.rows.liqVisc.input.closest('.row').before(row);
     }
     // the glass room: a switch under World
     {
@@ -787,6 +810,7 @@ export class UI {
   // switches that live outside the sliders, after a whole cube is put on
   syncSwitches() {
     this._showTear?.(this.app.tearing);
+    this._showLiquid?.();
   }
 
   setSettings(st, tex) {

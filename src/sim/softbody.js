@@ -129,6 +129,12 @@ export class SoftBody {
     this.vCap = 0;
     this.tCap = 0;
     this.tKs = null; // per tet: stiffness scale, see _computeMass
+    this.tLq = null; // per tet: its share of its cube's firmness - a liquid-filled cube's inside next to none: see _liquidTets
+    this.tPr = null; // per tet: how much more than its volume it wants (a liquid-filled cube's inside: its skin kept taut)
+    this._liqTopo = -1; // (the mesh tLq was made for, and whether a cube's liquid's changed since)
+    this._liqDirty = true;
+    this._skinT = null; // (scratch for _liquidTets: the skin's tets, its vertices)
+    this._skinV = null;
     this._bpNV = 0; // vertex count at the last _buildPieces (0: nothing carries over)
     this._carried = null; // per piece: carried over unchanged by the last rebuild (see _buildPieces)
     // Every field the physics ever sets, here and in this order - each a placeholder of the kind it will hold.
@@ -228,6 +234,11 @@ export class SoftBody {
     // and damping its own, and it passes through everything meanwhile
     this.cGrav = new Float64Array(MAX_CUBES).fill(1);
     this.cBoost = new Float64Array(MAX_CUBES).fill(1);
+    // full of liquid (0/1), how thick that is (0 water .. 1 near solid), how thick its skin (0 ultrathin .. 1
+    // thick): see _liquidTets
+    this.cLiq = new Uint8Array(MAX_CUBES);
+    this.cVisc = new Float64Array(MAX_CUBES).fill(0.15);
+    this.cSkin = new Float64Array(MAX_CUBES).fill(0.5);
     this.ghostCube = -1;
     for (let k = 0; k < MAX_CUBES; k++) this.setCube(k, this.p, true);
     this.heatActive = false;
@@ -390,6 +401,10 @@ export class SoftBody {
     this.tVS = growArr(this.tVS, cap, Float32Array);
     this.tMu = growArr(this.tMu, cap, Float32Array);
     this.tKs = growArr(this.tKs, cap, Float32Array);
+    const lq = this.tLq ? this.tLq.length : 0;
+    this.tLq = growArr(this.tLq, cap, Float32Array);
+    this.tLq.fill(1, lq); // (firm all through till _liquidTets says otherwise)
+    this.tPr = growArr(this.tPr, cap, Float32Array);
     this.tDmg = growArr(this.tDmg, cap, Float32Array); // (0..1: torn that far - softer, see _solveTets; cleared on a rebuild)
     this.tCap = cap;
   }
@@ -800,6 +815,56 @@ export class SoftBody {
     return [best, bb[0] / s, bb[1] / s, bb[2] / s, bb[3] / s];
   }
 
+  // Each tet's share of its cube's firmness (see _solveTets): all of it - but in a cube full of liquid, its skin
+  // (the tets its moulded surface's faces are on - and, a thicker skin, those touching that surface) as firm
+  // as the skin's thickness (an ultrathin one a floppy bag: a hair's-breadth skin can't be a tet thick, but it
+  // can be as weak as one), and its inside a liquid: next to none for water, to a quarter (near solid). Its
+  // volume's kept all through: the inside flows, but doesn't squash. (A cut's faces aren't skin: they're the
+  // liquid, open.)
+  _liquidTets() {
+    this._liqTopo = this.topoVersion;
+    this._liqDirty = false;
+    const nT = this.nT, L = this.tLq, tc = this.tCube, liq = this.cLiq;
+    if (!L) return;
+    let any = false;
+    for (let k = 0; k < MAX_CUBES; k++) if (liq[k]) any = true;
+    const Pr = this.tPr;
+    if (!any || !this.sTri) {
+      L.fill(1, 0, nT);
+      Pr.fill(0, 0, nT);
+      return;
+    }
+    const skin = this._skinT && this._skinT.length >= nT ? this._skinT : (this._skinT = new Uint8Array(this.tCap));
+    const onSkin = this._skinV && this._skinV.length >= this.nV ? this._skinV : (this._skinV = new Uint8Array(this.vCap));
+    skin.fill(0, 0, nT);
+    onSkin.fill(0, 0, this.nV);
+    const sT = this.sTri, sTet = this.sTet, sTag = this.sTag, T = this.T;
+    for (let f = 0; f < this.nF; f++) {
+      if (sTag[f] !== TAG_EXTERIOR) continue;
+      skin[sTet[f]] = 1;
+      onSkin[sT[f * 3]] = onSkin[sT[f * 3 + 1]] = onSkin[sT[f * 3 + 2]] = 1;
+    }
+    for (let t = 0; t < nT; t++) {
+      const k = tc[t];
+      if (!liq[k]) {
+        L[t] = 1;
+        Pr[t] = 0;
+        continue;
+      }
+      const th = this.cSkin[k];
+      let s = skin[t];
+      if (!s && th > 0.33) {
+        const q = t * 4;
+        s = onSkin[T[q]] | onSkin[T[q + 1]] | onSkin[T[q + 2]] | onSkin[T[q + 3]];
+      }
+      // (its skin: a tenth as firm as the jelly, ultrathin - as firm, medium - two and a half times, thick)
+      L[t] = s ? (th <= 0.5 ? 0.1 * Math.pow(10, 2 * th) : Math.pow(2.5, 2 * th - 1)) : 0.004 * Math.pow(0.25 / 0.004, this.cVisc[k]);
+      // (the inside a little more than fits: the skin stretched taut round it, a filled balloon's - left as it
+      // was, the liquid sank out from under its top and it dished in like a bowl)
+      Pr[t] = s ? 0 : 0.06;
+    }
+  }
+
   // Cube k becomes cube j (a free slot): its rest shape moves over with it,
   // and its stuff. rebuild() after.
   moveCube(k, j) {
@@ -810,7 +875,8 @@ export class SoftBody {
       this.vCube[i] = j;
       this.X[i * 3] += d;
     }
-    for (const a of [this.cMu, this.cLam, this.cDens, this.cDamp, this.cFric, this.cBounce, this.cRigid, this.cAir, this.cBevel, this.cN, this.cGrav, this.cBoost, this.cSize, this.cRes, this.cH, this.cBow, this.cLobeA, this.cLobeP, this.cTrimK]) a[j] = a[k];
+    for (const a of [this.cMu, this.cLam, this.cDens, this.cDamp, this.cFric, this.cBounce, this.cRigid, this.cAir, this.cBevel, this.cN, this.cGrav, this.cBoost, this.cSize, this.cRes, this.cH, this.cBow, this.cLobeA, this.cLobeP, this.cTrimK, this.cLiq, this.cVisc, this.cSkin]) a[j] = a[k];
+    this._liqDirty = true;
     this.embeds.length = 0;
     this.grabs.length = 0;
     this._bpNV = 0;
@@ -826,6 +892,10 @@ export class SoftBody {
     if (q.bounce !== undefined) this.cBounce[k] = q.bounce;
     if (q.rigidity !== undefined) this.cRigid[k] = q.rigidity;
     if (q.airDrag !== undefined) this.cAir[k] = q.airDrag;
+    // (full of liquid: its tets' shares of its firmness made again before the next step - see _liquidTets)
+    if (q.liquid !== undefined && (q.liquid ? 1 : 0) !== this.cLiq[k]) (this.cLiq[k] = q.liquid ? 1 : 0), (this._liqDirty = true);
+    if (q.liqVisc !== undefined && q.liqVisc !== this.cVisc[k]) (this.cVisc[k] = q.liqVisc), (this._liqDirty = true);
+    if (q.liqSkin !== undefined && q.liqSkin !== this.cSkin[k]) (this.cSkin[k] = q.liqSkin), (this._liqDirty = true);
     if (q.density !== undefined && q.density !== this.cDens[k]) {
       this.cDens[k] = q.density;
       if (!quiet && this.nT) {
@@ -1847,6 +1917,7 @@ export class SoftBody {
         }
       : null;
     this.time += dt;
+    if (this._liqDirty || this._liqTopo !== this.topoVersion) this._liquidTets();
     if (this._restEase) this._tickRestEase(dt);
     this.impacts.length = 0;
     const NP0 = this.pieces.length;
@@ -2071,7 +2142,7 @@ export class SoftBody {
   }
 
   _solveTets(h) {
-    const { T, B, vol0, x, w, tMu, tVS, tKs, tDmg, tCube } = this;
+    const { T, B, vol0, x, w, tMu, tVS, tKs, tDmg, tCube, tLq, tPr } = this;
     const HT = this.cHardTyp || (this.cHardTyp = new Float64Array(MAX_CUBES));
     // (each cube its own stiffness) frozen tets stiffen, but only up to what
     // these substeps can hold (beyond it jagged shards ring at the speed limit)
@@ -2107,7 +2178,8 @@ export class SoftBody {
       const boost = tMu[t] > 1 ? Math.min(tMu[t], boostHi) : tMu[t];
       // (a tear on its way through: it gives - see HandTool)
       const ks = tDmg[t] > 0 ? tKs[t] * (1 - 0.85 * tDmg[t]) : tKs[t];
-      const mu = mu0 * boost * ks;
+      // (its shape's firmness by its share - a liquid's inside next to none - its volume's all of it)
+      const mu = mu0 * boost * ks * tLq[t];
       const lamT = (boost > 1 ? lam * boost : lam) * ks;
 
       // ---- deviatoric: C = sqrt(tr(F^T F))
@@ -2152,7 +2224,7 @@ export class SoftBody {
       const k1x = f12 * f20 - f22 * f10, k1y = f22 * f00 - f02 * f20, k1z = f02 * f10 - f12 * f00;
       const k2x = f10 * f21 - f20 * f11, k2y = f20 * f01 - f00 * f21, k2z = f00 * f11 - f10 * f01;
       const J = f00 * k0x + f10 * k0y + f20 * k0z;
-      const gamma = 1 + mu / lamT;
+      const gamma = 1 + mu / lamT + tPr[t];
       C = J - gamma;
       {
         const g1x = k0x * b00 + k1x * b01 + k2x * b02, g1y = k0y * b00 + k1y * b01 + k2y * b02, g1z = k0z * b00 + k1z * b01 + k2z * b02;
@@ -2475,7 +2547,8 @@ export class SoftBody {
       const vs = pc.verts;
       // (its cube's own damping and drag - and one hushed, shaking hard
       // where it sits, see below - damped hard a while)
-      let dmp = this.cDamp[pc.cube];
+      // (full of liquid: as long as that sloshes - water a while, glue hardly, near solid not)
+      let dmp = this.cLiq[pc.cube] ? 1.5 * Math.pow(8, this.cVisc[pc.cube]) : this.cDamp[pc.cube];
       if (pc.hush > 0) {
         dmp = Math.max(dmp, 14);
         pc.hush -= dt;
@@ -2872,7 +2945,7 @@ export class SoftBody {
     // firmer jelly doesn't fold far enough, even dragged by a corner)
     const quiet = this.time < this.selfQuietUntil;
     for (let a = 0; a < NP; a++) {
-      const soft = this.cMu[P[a].cube] < 110;
+      const soft = this.cMu[P[a].cube] < 110 || this.cLiq[P[a].cube] > 0;
       // (or anything with a fold in it to pop out - all its tets, as the
       // fold can reach past the layer at the surface)
       const folded = P[a].foldUntil > this.time;

@@ -33,7 +33,7 @@ const CAUS_GAIN = 1.5; // (how bright the caustic light lands)
 // colour of its light, a freeform gradient's depth
 // (a smooth cube with a trim: a surface kind of its own, past the surfaces'; its map's depth)
 export const TRIM_KIND = SURFACES.length, TRIM_DEPTH = 0.024;
-export const CUBE_TEX_W = 35; // (30: the powder on it - Flour writes it; 31: its surface map; 32, 33: a Rubik's stickers; 34: a die's ink)
+export const CUBE_TEX_W = 36; // (30: the powder on it - Flour writes it; 31: its surface map; 32, 33: a Rubik's stickers; 34: a die's ink; 35: full of liquid - see setCubeLook)
 
 const smoothstep = (e0, e1, x) => {
   const t = Math.min(1, Math.max(0, (x - e0) / (e1 - e0)));
@@ -788,6 +788,8 @@ export class JellyView {
     };
     put(0, avgAbs.x, avgAbs.y, avgAbs.z, 9 * o * o + (many ? 1.6 * (1 - o) : 0));
     put(1, sc.r, sc.g, sc.b, hazeMinOf(o));
+    // full of liquid (1/0), its skin's thickness (0 ultrathin .. 1 thick), how thick the liquid (see SoftBody._liquidTets)
+    put(35, m.liquid > 0.5 ? 1 : 0, m.liqSkin ?? 0.5, m.liqVisc ?? 0.15, 0);
     put(2, m.glow, m.rough, m.ior, (0.018 * Math.max(0, m.ior - 1)) / 0.36);
     put(3, m.sugar || 0, m.milk || 0, m.irid || 0, m.metal || 0);
     put(4, m.opal || 0, rubik ? -1 : flavor.layers ? flavor.layers.length : 0, -size / 2, size);

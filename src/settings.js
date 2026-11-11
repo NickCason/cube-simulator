@@ -24,6 +24,11 @@ export const SETTINGS = [
   { id: 'tough', group: 'Feel', label: 'Toughness', key: 'tough', mat: true, def: 1, ...logMap(0.4, 2.5), words: ['Brittle', 'Tender', 'Normal', 'Tough', 'Taffy'] },
   // how stringy it is torn or melted: strands of goo across a tear, drips on a string (see Strands)
   { id: 'goo', group: 'Feel', label: 'Goo', key: 'goo', mat: true, def: 0.35, ...linMap(0, 1), words: ['Clean', 'Tacky', 'Gooey', 'Stringy', 'Slimy'] },
+  // Full of liquid (the switch at the head of the group: see Ui), how thick that is, how thick its skin (see
+  // SoftBody._liquidTets): each cube its own, kept through a change of material
+  { id: 'liquid', group: 'Liquid', label: 'Filled', key: 'liquid', def: 0, ...linMap(0, 1), hidden: true, words: ['Off', 'On'] },
+  { id: 'liqVisc', group: 'Liquid', label: 'Liquid', key: 'liqVisc', def: 0.15, ...linMap(0, 1), words: ['Water', 'Syrup', 'Glue', 'Gel', 'Near solid'] },
+  { id: 'liqSkin', group: 'Liquid', label: 'Skin', key: 'liqSkin', def: 0.5, ...linMap(0, 1), words: ['Ultrathin', 'Thin', 'Medium', 'Thick'] },
   { id: 'opacity', group: 'Look', label: 'Opacity', key: 'opacity', mat: true, ...linMap(0, 1), words: ['Clear', 'Hazy', 'Cloudy', 'Milky', 'Solid'] },
   { id: 'translucency', group: 'Look', label: 'Translucency', key: 'glow', mat: true, ...linMap(0, 1), words: ['Dull', 'Soft', 'Glowing', 'Radiant'] },
   { id: 'depth', group: 'Look', label: 'Colour depth', key: 'depth', mat: true, ...logMap(0.15, 4), words: ['Pale', 'Light', 'Rich', 'Deep', 'Inky'] },

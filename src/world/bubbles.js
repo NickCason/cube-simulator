@@ -355,7 +355,7 @@ export class Bubbles {
         fx += w * Math.sin(ph2); fz += w * Math.cos(ph2 * 0.83 + b.u[2] * 5);
       }
       // borne up - a big one faster - and dragged along with the water
-      const rise = st.gmag * BUOY * (0.6 + 0.4 * Math.min(2.5, b.R / (0.008 * st.size)));
+      const rise = st.gmag * BUOY * (0.6 + 0.4 * Math.min(2.5, b.R / (0.008 * st.size))) * Math.exp(-4 * st.visc);
       u[0] = (u[0] + h * (fx / DRAG_T + ux * rise)) * id;
       u[1] = (u[1] + h * (fy / DRAG_T + uy * rise)) * id;
       u[2] = (u[2] + h * (fz / DRAG_T + uz * rise)) * id;

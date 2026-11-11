@@ -300,6 +300,9 @@ export class Glitter {
     this.meshCube.visible = false;
     app.fxScene.add(this.meshCube);
     this.groups = [];
+    // (the cubes with water in them - snow globes, and every cube full of liquid - and how thick it is: see
+    // configure, _loose)
+    this.waters = [];
   }
 
   _allocPosTex(nV) {
@@ -335,9 +338,13 @@ export class Glitter {
     this.uniforms.uSparkle.value = this.sparkle;
     // each cube's own glitter (several cubes: those with any share the flakes)
     const cubes = this.app.cubes || [{ slot: 0, style: { glitter: this.mode } }];
-    this.groups = cubes.filter((c) => c.style.glitter && c.style.glitter !== 'off').map((c) => ({ slot: c.slot, mode: GLITTER_MODES[c.style.glitter] ?? 0 }));
+    this.groups = cubes.filter((c) => c.style.glitter && c.style.glitter !== 'off').map((c) => ({ slot: c.slot, mode: GLITTER_MODES[c.style.glitter] ?? 0, loose: false }));
+    // the cubes with water in them - a snow globe's, or any cube full of liquid (how thick: 0 water .. 1 near
+    // solid; a snow globe's water) - and so every flake in them loose, whatever its kind
+    this.waters = cubes.filter((c) => c.style.glitter === 'snow' || c.tune?.liquid > 0.5).map((c) => ({ slot: c.slot, visc: c.tune?.liquid > 0.5 ? (c.tune.liqVisc ?? 0.15) : 0 }));
+    for (const g of this.groups) g.loose = this.waters.some((w) => w.slot === g.slot);
     this.anyCubic = this.groups.some((g) => g.mode === 4);
-    this.anySnow = this.groups.some((g) => g.mode === SNOW);
+    this.anySnow = this.groups.some((g) => g.loose);
     this.anyFlat = this.groups.some((g) => g.mode !== 4);
     this.mesh.geometry = this.anyFlat ? this.geo : this.geoCube;
     this.mesh.material = this.anyFlat ? this.mat : this.matCube;
@@ -347,7 +354,7 @@ export class Glitter {
   _key() {
     const sb = this.app.sb, B = this.app.bubbles;
     // (and where the bubbles are: the flakes keep out of them)
-    return `${this.count}|${this.size.toFixed(3)}|${this.groups.map((g) => g.slot + ':' + g.mode + ':' + sb.cSize[g.slot].toFixed(4)).join(',')}|${B ? B.version : ''}`;
+    return `${this.count}|${this.size.toFixed(3)}|${this.groups.map((g) => g.slot + ':' + g.mode + ':' + (g.loose ? 'l' : '') + sb.cSize[g.slot].toFixed(4)).join(',')}|${B ? B.version : ''}`;
   }
 
   // The bubbles, cube by cube, in a grid of their rest places - for the
@@ -435,7 +442,7 @@ export class Glitter {
       this.aInfo.array[k * 2] = py;
       this.aInfo.array[k * 2 + 1] = sb.tPiece[t];
       this.aRestK.array.set([px, py, pz, grp.slot], k * 4);
-      if (grp.mode === SNOW) {
+      if (grp.loose) {
         this.lp[k * 3] = px; this.lp[k * 3 + 1] = py; this.lp[k * 3 + 2] = pz;
         this.lv[k * 3] = this.lv[k * 3 + 1] = this.lv[k * 3 + 2] = 0;
         this.ln[k * 3] = nx; this.ln[k * 3 + 1] = ny; this.ln[k * 3 + 2] = nz;
@@ -460,21 +467,21 @@ export class Glitter {
   // down) - stopped by the walls, tumbling as they go (they twinkle); found
   // again in the mesh, drawn there. Settled, they're left be till it moves.
   // Cut up, they're set where they are.
-  _loose(dt, time) {
+  _loose(dt, time, on = true) {
     const sb = this.app.sb, X = sb.X, T = sb.T, B = sb.B, out = this._out || (this._out = { tet: -1, b0: 0, b1: 0, b2: 0, b3: 0 });
     const gy = sb.p.gravity * (sb.gravityScale ?? 1);
     const A = this.aTet.array, Ba = this.aBary.array, M = this.aM.array, I = this.aInfo.array, RK = this.aRestK.array, S = this.aSeed.array, MD = this.aMode.array;
     // each globe: how it lies and moves now - the pull in its own space, its
     // water's turning and stir
     let any = false;
-    for (const grp of this.groups) {
-      if (grp.mode !== SNOW) continue;
-      const slot = grp.slot;
+    for (const wat of this.waters) {
+      const slot = wat.slot, visc = wat.visc;
       let pc = null, np = 0;
       for (const p of sb.pieces) if (p.cube === slot && ++np === 1) pc = p;
       let st = this.globes.get(slot);
-      if (!st) this.globes.set(slot, (st = { vel: null, w: [0, 0, 0], spin: [0, 0, 0], stir: 0, down: [0, -1, 0], wake: true, on: false, ph: Math.random() * 6, stirred: false, pull: null, gmag: 0, size: 0, half: 0, b: 0, k: 0 }));
+      if (!st) this.globes.set(slot, (st = { vel: null, w: [0, 0, 0], spin: [0, 0, 0], stir: 0, down: [0, -1, 0], wake: true, on: false, ph: Math.random() * 6, stirred: false, pull: null, gmag: 0, size: 0, half: 0, b: 0, k: 0, visc: 0 }));
       st.on = np === 1;
+      st.visc = visc;
       if (!st.on) continue;
       const F = frameOf(sb, pc.verts), ax = F.ax, v = pc.vel;
       const acc = st.vel ? [(v[0] - st.vel[0]) / dt, (v[1] - st.vel[1]) / dt, (v[2] - st.vel[2]) / dt] : [0, 0, 0];
@@ -488,8 +495,9 @@ export class Glitter {
       // (turned since: the water lags it, turning the other way - and what's
       // settled slides off, the floor's not the floor any more)
       const w = [0, 1, 2].map((i) => ax[i].x * pc.omega[0] + ax[i].y * pc.omega[1] + ax[i].z * pc.omega[2]);
-      const ks = Math.exp(-dt / SPIN_T);
-      for (let i = 0; i < 3; i++) st.spin[i] = (st.spin[i] - 0.6 * (w[i] - st.w[i])) * ks;
+      // (a thicker liquid turns with its cube more, and stops turning sooner)
+      const ks = Math.exp(-dt / (SPIN_T * (1 - 0.85 * visc)));
+      for (let i = 0; i < 3; i++) st.spin[i] = (st.spin[i] - 0.6 * (1 - 0.8 * visc) * (w[i] - st.w[i])) * ks;
       // (a water that spins no faster than a few turns a second: tumbled
       // end over end it was flung against the walls in a heap)
       const sl = Math.hypot(st.spin[0], st.spin[1], st.spin[2]);
@@ -501,7 +509,8 @@ export class Glitter {
       // (a good shake stirs it right up within half a second: it built up three times slower, and a shake that
       // would have a real globe snowing left the flakes lying)
       const shake = Math.max(0, (al * ak) / Math.max(4, Math.abs(gy)) - 0.25);
-      st.stir = Math.min(2.5, st.stir * Math.exp(-dt / STIR_T) + dt * 2.6 * shake + 0.05 * Math.hypot(...st.spin) * dt);
+      // (a thick liquid stirs less, and settles sooner: glue hardly, near solid not at all)
+      st.stir = Math.min(2.5, st.stir * Math.exp(-dt / (STIR_T * (1 - 0.8 * visc))) + (dt * 2.6 * shake + 0.05 * Math.hypot(...st.spin) * dt) * Math.exp(-3.5 * visc));
       // (and anything not a number, however it came: the water calm again)
       if (!Number.isFinite(st.stir) || !st.spin.every(Number.isFinite)) {
         st.stir = 0;
@@ -513,7 +522,8 @@ export class Glitter {
       st.stirred = st.stir > 0.03 || Math.hypot(...st.spin) > 0.2 || down[0] * st.down[0] + down[1] * st.down[1] + down[2] * st.down[2] < 0.996;
       if (st.stirred) st.wake = true;
       if (st.wake) st.down = down;
-      st.pull = pull.map((c) => c * SINK);
+      // (what sinks in it sinks slower the thicker it is: through glue, barely)
+      st.pull = pull.map((c) => c * SINK * Math.exp(-4 * visc));
       st.size = sb.cSize[slot];
       st.half = st.size / 2;
       st.b = sb.cBevel[slot];
@@ -521,17 +531,18 @@ export class Glitter {
       st.ph += dt * (0.4 + 0.6 * st.stir);
       if (st.wake) any = true;
     }
-    if (!any) return;
+    // (no flakes - a cube full of liquid with no glitter: only its water, for its bubbles)
+    if (!any || !on) return;
     let moved = false, tetMoved = false, pieceMoved = false;
     const n = this.count, GS = this._gs, busyN = this._gBusy, LP = this.lp, LV = this.lv, LN = this.ln, LW = this.lw, SD = this.seed, LZ = this.lz, LT = this.lt, PH = this.lph, nT = sb.nT, tPiece = sb.tPiece;
     GS.length = 0;
-    for (const [slot, st] of this.globes) GS[slot] = st;
+    for (const grp of this.groups) if (grp.loose && this.globes.has(grp.slot)) GS[grp.slot] = this.globes.get(grp.slot);
     busyN.fill(0);
     // (the drift's three clocks, this frame - each flake's phase added on: see lph)
     const s1 = Math.sin(time * 1.7), c1 = Math.cos(time * 1.7), s2 = Math.sin(time * 1.3), c2 = Math.cos(time * 1.3), s3 = Math.sin(time * 1.1), c3 = Math.cos(time * 1.1);
     const id = 1 / (1 + dt / DRAG_T);
     for (let k = 0; k < n; k++) {
-      if (MD[k] !== SNOW || S[k * 3] <= 0) continue;
+      if (S[k * 3] <= 0) continue;
       const slot = RK[k * 4 + 3], st = GS[slot];
       if (!st || !st.on || !st.wake || (LZ[k] && !st.stirred)) continue;
       const k3 = k * 3;
@@ -564,7 +575,8 @@ export class Glitter {
       // (each flake its own - big ones sink faster - and a drift of its own
       // while it's floating, so they don't all go the same way: a snowfall,
       // not a sheet)
-      const own = 0.55 + 0.9 * SD[k3 + 2], pl = st.pull;
+      // (each its own; glitter's metal sinks faster than snow)
+      const own = (0.55 + 0.9 * SD[k3 + 2]) * (MD[k] === SNOW ? 1 : 1.8), pl = st.pull;
       if (!LZ[k]) {
         const free = 0.035 * st.size, k6 = k * 6;
         fx += free * (s1 * PH[k6 + 1] + c1 * PH[k6]);
@@ -668,10 +680,10 @@ export class Glitter {
     const dt = this._lt < 0 ? 0 : Math.min(0.05, time - this._lt);
     this._lt = time;
     this.looseMoved = false;
-    if (!on || !this.anySnow || !(dt > 0) || app.paused) return;
+    if (!this.waters.length || !(dt > 0) || app.paused) return;
     const sb = app.sb;
-    if (sb.topoVersion !== this.topo || this.anchoredFor !== this._key()) this._anchor();
-    this._loose(dt * (app.timeScale ?? 1), time);
+    if (on && (sb.topoVersion !== this.topo || this.anchoredFor !== this._key())) this._anchor();
+    this._loose(dt * (app.timeScale ?? 1), time, on && this.anySnow);
   }
 
   update(time) {
