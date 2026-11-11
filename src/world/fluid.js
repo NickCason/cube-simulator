@@ -629,8 +629,13 @@ export class Fluid {
   // neighbours' (XSPH: thick).
   _step(h) {
     const n = this.n, x = this.x, q = this.q, v = this.v, g = this.app.sb.p.gravity ?? -22;
+    // (the table tipped - see Tilt: the liquid's pulled sideways as the jelly is; not, the jelly leaned into it
+    // as it stood, rammed it through its walls)
+    const tl = this.app.sb.tilt, tx = tl ? tl[0] || 0 : 0, tz = tl ? tl[1] || 0 : 0;
     for (let o = 0; o < n * 3; o += 3) {
+      v[o] += tx * h;
       v[o + 1] += g * h;
+      v[o + 2] += tz * h;
       q[o] = x[o] + v[o] * h; q[o + 1] = x[o + 1] + v[o + 1] * h; q[o + 2] = x[o + 2] + v[o + 2] * h;
     }
     this.cpush.fill(0, 0, n * 3);
@@ -887,102 +892,91 @@ export class Fluid {
         this.lastOut[o] = q[o]; this.lastOut[o + 1] = q[o + 1]; this.lastOut[o + 2] = q[o + 2];
         continue;
       }
-      // (till it's out of every tet - a few goes: through two thin ones at once, one push only put it back
-      // into the first, and if it was in the jelly still when the substep was done, the next took it out the
-      // nearest face - the wall's far side)
-      for (let pass = 0, hit = true; hit && pass < 4; pass++) {
-      hit = false;
-      const hb = (Math.imul(Math.floor(q[o] * 10), 92837111) ^ Math.imul(Math.floor(q[o + 1] * 10), 689287499) ^ Math.imul(Math.floor(q[o + 2] * 10), 283923481)) & CM;
-      for (let e = cs[hb], e1 = cs[hb + 1]; e < e1; e++) {
-        const t = ctl[e];
-        if (!(sb._tetGap(t, q[o], q[o + 1], q[o + 2]) < 0)) continue;
-        hit = true;
+      // In the jelly: out of it along one line, tet after tet, till it's clear - the line chosen once:
+      // back toward where it was last outside the jelly, if that's outside it still; else, the jelly moving,
+      // the way it's going (a wall swung onto it pushes it on ahead); else out its nearest bare face (or, in
+      // a tet with none, its nearest face - and on). (Pushed out each tet's own way, a drop between two of a
+      // wall's tets went back and forth between them for ever - and out the nearest face, one deep in a wall
+      // came out its far side: the cube leaked all round.)
+      let dirSet = false, dx = 0, dy = 0, dz = 0;
+      for (let pass = 0; pass < 8; pass++) {
+        const t = this._inTet(q[o], q[o + 1], q[o + 2]);
+        if (t < 0) {
+          this.lastOut[o] = q[o]; this.lastOut[o + 1] = q[o + 1]; this.lastOut[o + 2] = q[o + 2];
+          break;
+        }
         if (this.acid[i] > 0) this.acidTet[i] = t;
-        const t4 = t * 4, ia = T[t4], ib = T[t4 + 1], ic = T[t4 + 2], id = T[t4 + 3];
-        const a3 = ia * 3, b3 = ib * 3, c3 = ic * 3, d3 = id * 3;
-        let wx = 0, wy = 1, wz = 0, step = 0.004;
-        const mk = fm[t];
-        // barycentric gradients: -grad b_k leaves through the face opposite k, b_k/|grad b_k| away
-        const e1x = X[b3] - X[a3], e1y = X[b3 + 1] - X[a3 + 1], e1z = X[b3 + 2] - X[a3 + 2];
-        const e2x = X[c3] - X[a3], e2y = X[c3 + 1] - X[a3 + 1], e2z = X[c3 + 2] - X[a3 + 2];
-        const e3x = X[d3] - X[a3], e3y = X[d3 + 1] - X[a3 + 1], e3z = X[d3 + 2] - X[a3 + 2];
-        const g = this._g;
-        g[3] = e2y * e3z - e2z * e3y; g[4] = e2z * e3x - e2x * e3z; g[5] = e2x * e3y - e2y * e3x;
-        g[6] = e3y * e1z - e3z * e1y; g[7] = e3z * e1x - e3x * e1z; g[8] = e3x * e1y - e3y * e1x;
-        g[9] = e1y * e2z - e1z * e2y; g[10] = e1z * e2x - e1x * e2z; g[11] = e1x * e2y - e1y * e2x;
-        const det = e1x * g[3] + e1y * g[4] + e1z * g[5];
-        g[0] = -(g[3] + g[6] + g[9]); g[1] = -(g[4] + g[7] + g[10]); g[2] = -(g[5] + g[8] + g[11]);
-        const bs = this._bs;
-        bs[0] = ct.b0; bs[1] = ct.b1; bs[2] = ct.b2; bs[3] = ct.b3;
-        // Come into it this substep - where it began, outside this tet: back out the way it came, through the
-        // face it crossed (the last of the planes it's now on the inside of). Pushed out through the nearest
-        // surface face instead, one pressed deep into a cut cube's wall by the liquid behind it came out of the
-        // wall's far side: the cube leaked from everywhere - under its walls, through its sides - not just at
-        // the cut or the hole.
-        let entry = -1, tIn = -1;
-        const LO = this.lastOut;
-        if (det > 1e-12) {
-          const px = LO[o] - q[o], py = LO[o + 1] - q[o + 1], pz = LO[o + 2] - q[o + 2];
-          for (let k = 0; k < 4; k++) {
-            const bx = bs[k] + (g[k * 3] * px + g[k * 3 + 1] * py + g[k * 3 + 2] * pz) / det;
-            if (bx < 0) {
-              const tk = bx / (bx - bs[k]);
-              if (tk > tIn) (tIn = tk), (entry = k);
-            }
+        const t4 = t * 4, a3 = T[t4] * 3, b3 = T[t4 + 1] * 3, c3 = T[t4 + 2] * 3, d3 = T[t4 + 3] * 3;
+        const g = this._g, bs = this._bs, det = this._grads(T, X, t, q[o], q[o + 1], q[o + 2]);
+        if (!(Math.abs(det) > 1e-12)) break;
+        if (!dirSet) {
+          dirSet = true;
+          const LO = this.lastOut, lx = LO[o] - q[o], ly = LO[o + 1] - q[o + 1], lz = LO[o + 2] - q[o + 2], ll = Math.sqrt(lx * lx + ly * ly + lz * lz);
+          const Vx = sb.v[a3] + sb.v[b3] + sb.v[c3] + sb.v[d3], Vy = sb.v[a3 + 1] + sb.v[b3 + 1] + sb.v[c3 + 1] + sb.v[d3 + 1], Vz = sb.v[a3 + 2] + sb.v[b3 + 2] + sb.v[c3 + 2] + sb.v[d3 + 2];
+          const Vl = Math.sqrt(Vx * Vx + Vy * Vy + Vz * Vz);
+          if (ll > 1e-5 && this._inTet(LO[o], LO[o + 1], LO[o + 2]) < 0) {
+            dx = lx / ll; dy = ly / ll; dz = lz / ll;
+          } else if (Vl > 4 * 0.02) {
+            dx = Vx / Vl; dy = Vy / Vl; dz = Vz / Vl;
+          } else {
+            // (its nearest bare face - or, none bare, its nearest face)
+            const mk = fm[t];
+            let best = Infinity;
+            for (let pick = 0; pick < 2 && best === Infinity; pick++)
+              for (let k = 0; k < 4; k++) {
+                if (pick === 0 && !(mk & (1 << k))) continue;
+                const gx = g[k * 3] / det, gy = g[k * 3 + 1] / det, gz = g[k * 3 + 2] / det, gl = Math.sqrt(gx * gx + gy * gy + gz * gz);
+                const dist = bs[k] / gl;
+                if (dist < best) (best = dist), (dx = -gx / gl), (dy = -gy / gl), (dz = -gz / gl);
+              }
           }
         }
-        const bx = LO[o] - q[o], by = LO[o + 1] - q[o + 1], bz = LO[o + 2] - q[o + 2], bl = Math.sqrt(bx * bx + by * by + bz * bz);
-        if (entry >= 0) {
-          const k = entry, gl = Math.sqrt(g[k * 3] * g[k * 3] + g[k * 3 + 1] * g[k * 3 + 1] + g[k * 3 + 2] * g[k * 3 + 2]) / det, s = -1 / (gl * det);
-          wx = g[k * 3] * s; wy = g[k * 3 + 1] * s; wz = g[k * 3 + 2] * s;
-          step = Math.min(bs[k] / gl, 0.08) + 0.002;
-        } else if (bl > 1e-4) {
-          // (in it where it was too - the jelly moved onto it: back toward where it was last outside it, never
-          // on out the nearest face - for one deep in a wall, its far side)
-          wx = bx / bl; wy = by / bl; wz = bz / bl;
-          step = Math.min(bl, 0.03) + 0.002;
-        } else if (mk) {
-          let best = Infinity;
-          for (let k = 0; k < 4; k++) {
-            if (!(mk & (1 << k))) continue;
-            const gl = Math.sqrt(g[k * 3] * g[k * 3] + g[k * 3 + 1] * g[k * 3 + 1] + g[k * 3 + 2] * g[k * 3 + 2]) / det;
-            const dist = bs[k] / gl;
-            if (dist < best) {
-              best = dist;
-              const s = -1 / (gl * det);
-              wx = g[k * 3] * s; wy = g[k * 3 + 1] * s; wz = g[k * 3 + 2] * s;
-            }
-          }
-          step = Math.min(best, 0.03) + 0.002;
-        } else {
-          const b0 = bs[0], b1 = bs[1], b2 = bs[2], b3w = bs[3];
-          const ex = E[a3] * b0 + E[b3] * b1 + E[c3] * b2 + E[d3] * b3w;
-          const ey = E[a3 + 1] * b0 + E[b3 + 1] * b1 + E[c3 + 1] * b2 + E[d3 + 1] * b3w;
-          const ez = E[a3 + 2] * b0 + E[b3 + 2] * b1 + E[c3 + 2] * b2 + E[d3 + 2] * b3w;
-          if (ex * ex + ey * ey + ez * ez > 1e-8) {
-            const bo = t * 9;
-            const y0 = B[bo] * ex + B[bo + 1] * ey + B[bo + 2] * ez;
-            const y1 = B[bo + 3] * ex + B[bo + 4] * ey + B[bo + 5] * ez;
-            const y2 = B[bo + 6] * ex + B[bo + 7] * ey + B[bo + 8] * ez;
-            wx = (X[b3] - X[a3]) * y0 + (X[c3] - X[a3]) * y1 + (X[d3] - X[a3]) * y2;
-            wy = (X[b3 + 1] - X[a3 + 1]) * y0 + (X[c3 + 1] - X[a3 + 1]) * y1 + (X[d3 + 1] - X[a3 + 1]) * y2;
-            wz = (X[b3 + 2] - X[a3 + 2]) * y0 + (X[c3 + 2] - X[a3 + 2]) * y1 + (X[d3 + 2] - X[a3 + 2]) * y2;
-            const wl = Math.sqrt(wx * wx + wy * wy + wz * wz) || 1;
-            wx /= wl; wy /= wl; wz /= wl;
-            step = Math.min(wl, 0.03) + 0.003;
+        // how far along the line to this tet's edge: the nearest face it's heading out of
+        let sOut = Infinity;
+        for (let k = 0; k < 4; k++) {
+          const gx = g[k * 3] / det, gy = g[k * 3 + 1] / det, gz = g[k * 3 + 2] / det;
+          const rate = -(gx * dx + gy * dy + gz * dz); // (how fast b_k falls along the line)
+          if (rate > 1e-9) {
+            const sk = bs[k] / rate;
+            if (sk < sOut) sOut = sk;
           }
         }
-        q[o] += wx * step; q[o + 1] += wy * step; q[o + 2] += wz * step;
-        const cp = this.cpush, jv = (sb.v[a3] + sb.v[b3] + sb.v[c3] + sb.v[d3]) * 0.25 * wx + (sb.v[a3 + 1] + sb.v[b3 + 1] + sb.v[c3 + 1] + sb.v[d3 + 1]) * 0.25 * wy + (sb.v[a3 + 2] + sb.v[b3 + 2] + sb.v[c3 + 2] + sb.v[d3 + 2]) * 0.25 * wz;
-        cp[o] += wx * step; cp[o + 1] += wy * step; cp[o + 2] += wz * step;
+        if (!(sOut < Infinity)) sOut = 0.004;
+        const step = Math.min(sOut, 0.12) + 0.002;
+        q[o] += dx * step; q[o + 1] += dy * step; q[o + 2] += dz * step;
+        const cp = this.cpush, jv = ((sb.v[a3] + sb.v[b3] + sb.v[c3] + sb.v[d3]) * dx + (sb.v[a3 + 1] + sb.v[b3 + 1] + sb.v[c3 + 1] + sb.v[d3 + 1]) * dy + (sb.v[a3 + 2] + sb.v[b3 + 2] + sb.v[c3 + 2] + sb.v[d3 + 2]) * dz) * 0.25;
+        cp[o] += dx * step; cp[o + 1] += dy * step; cp[o + 2] += dz * step;
         if (jv > this.cjv[i]) this.cjv[i] = jv;
-        break;
-      }
-      if (!hit) {
-        this.lastOut[o] = q[o]; this.lastOut[o + 1] = q[o + 1]; this.lastOut[o + 2] = q[o + 2];
-      }
       }
     }
+  }
+
+  // The jelly's tet p is in (of those hashed near the liquid - see _jellyCells), or -1.
+  _inTet(px, py, pz) {
+    const sb = this.app.sb, cs = this.cStart, ctl = this.cTets, CM = CELL_HASH - 1;
+    const hb = (Math.imul(Math.floor(px * 10), 92837111) ^ Math.imul(Math.floor(py * 10), 689287499) ^ Math.imul(Math.floor(pz * 10), 283923481)) & CM;
+    for (let e = cs[hb], e1 = cs[hb + 1]; e < e1; e++) if (sb._tetGap(ctl[e], px, py, pz) < 0) return ctl[e];
+    return -1;
+  }
+
+  // Tet t's barycentric gradients (x det: g[k*3..], each pointing into it, toward corner k) and p's
+  // barycentric coordinates in it (this._bs); its determinant returned.
+  _grads(T, X, t, px, py, pz) {
+    const t4 = t * 4, a3 = T[t4] * 3, b3 = T[t4 + 1] * 3, c3 = T[t4 + 2] * 3, d3 = T[t4 + 3] * 3, g = this._g, bs = this._bs;
+    const e1x = X[b3] - X[a3], e1y = X[b3 + 1] - X[a3 + 1], e1z = X[b3 + 2] - X[a3 + 2];
+    const e2x = X[c3] - X[a3], e2y = X[c3 + 1] - X[a3 + 1], e2z = X[c3 + 2] - X[a3 + 2];
+    const e3x = X[d3] - X[a3], e3y = X[d3 + 1] - X[a3 + 1], e3z = X[d3 + 2] - X[a3 + 2];
+    g[3] = e2y * e3z - e2z * e3y; g[4] = e2z * e3x - e2x * e3z; g[5] = e2x * e3y - e2y * e3x;
+    g[6] = e3y * e1z - e3z * e1y; g[7] = e3z * e1x - e3x * e1z; g[8] = e3x * e1y - e3y * e1x;
+    g[9] = e1y * e2z - e1z * e2y; g[10] = e1z * e2x - e1x * e2z; g[11] = e1x * e2y - e1y * e2x;
+    const det = e1x * g[3] + e1y * g[4] + e1z * g[5];
+    g[0] = -(g[3] + g[6] + g[9]); g[1] = -(g[4] + g[7] + g[10]); g[2] = -(g[5] + g[8] + g[11]);
+    const rx = px - X[a3], ry = py - X[a3 + 1], rz = pz - X[a3 + 2];
+    bs[1] = (g[3] * rx + g[4] * ry + g[5] * rz) / det;
+    bs[2] = (g[6] * rx + g[7] * ry + g[8] * rz) / det;
+    bs[3] = (g[9] * rx + g[10] * ry + g[11] * rz) / det;
+    bs[0] = 1 - bs[1] - bs[2] - bs[3];
+    return det;
   }
 
   // Cold clumps set: particles colder than SET_T (slush), joined within

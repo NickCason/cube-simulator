@@ -880,7 +880,15 @@ export class SoftBody {
       open[this.tPiece[t]] = 1;
       anyOpen = true;
     }
-    if (anyOpen) for (let t = 0; t < nT; t++) if (open[this.tPiece[t]]) Pr[t] = 0;
+    // (and its skin's inside - the layer kept as the wall when its liquid runs out, see Spill - as firm as the
+    // skin: left as soft as the liquid it held, it sagged and swallowed what ran against it)
+    if (anyOpen)
+      for (let t = 0; t < nT; t++) {
+        if (!open[this.tPiece[t]]) continue;
+        Pr[t] = 0;
+        const k = tc[t], th = this.cSkin[k], q = t * 4;
+        if (!skin[t] && th <= 0.33 && onSkin[T[q]] | onSkin[T[q + 1]] | onSkin[T[q + 2]] | onSkin[T[q + 3]]) L[t] = 0.1 * Math.pow(10, 2 * th);
+      }
   }
 
   // Cube k becomes cube j (a free slot): its rest shape moves over with it,

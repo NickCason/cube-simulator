@@ -1,14 +1,15 @@
-// A cube full of liquid, cut open, spills. The moment it's opened its liquid - its tets inside the skin (see
-// SoftBody._liquidTets) - down to the opening's lowest point turns to liquid where it is (the torch's: see
-// Fluid), moving as it was, and runs out as it will: water all at once, glue in a slow ooze, a near-solid gel
-// not at all. A little more than that goes too - a layer under the opening's lowest point, staying in it, the
-// liquid's top: what's left in a cup, or under a hole shot through, is liquid on top, not the tets' jagged
-// faces. Tipped, a cup pours: looked at again a few times a second.
+// A cube full of liquid, cut open, spills. The moment a cut or a hole reaches its liquid - its tets inside the
+// skin (see SoftBody._liquidTets) - that piece's liquid down to the opening's lowest point (and a layer under
+// it: the top of what's left) turns to liquid where it is (the torch's: see Fluid), moving as it was, and runs
+// out as it will: water all at once, glue in a slow ooze, a near-solid gel not at all. Tipped, the opening's
+// lower: more goes. The skin's own layer stays, firm, as the wall.
 // (It ran out a batch at a time, Torricelli's rate, each batch let go at the opening: the cut stood open a
-// moment first, then it all came out of it as if under pressure, and what stayed showed the tets' faces.)
+// moment first, then it all came out of it as if under pressure. Then only what lay over the opening went,
+// the rest left as soft tets - and drops lying on those sank into them as they swayed, and came out through
+// the walls.)
 // The opening: the faces a cut (or a hole, a melt...) laid bare - its rim, the vertices of each face that
-// wasn't on the surface before and isn't the cube's own outside - so what the spill itself lays bare, the
-// hollow it leaves inside, never counts as a way out: it did, and a cup ran dry through its own floor.
+// wasn't on the surface before and isn't the cube's own outside; a slit (a partial cut, a blade's width)
+// isn't one till it gapes.
 import * as THREE from 'three';
 import { removeTets } from '../sim/cutting.js';
 import { TAG_EXTERIOR } from '../sim/softbody.js';
@@ -82,12 +83,26 @@ export class Spill {
       if (k >= 0 && x[i * 3 + 1] < lo[k]) (lo[k] = x[i * 3 + 1]), (anyRim = true);
     }
     if (!anyRim) return;
-    // the liquid over each one's rim, and a layer under it - all of it, now (a near-solid gel stays)
+    // opened: a piece whose liquid lies bare at its rim - a cut, a hole that reached it (not a nick in its skin,
+    // not a slit) - turns ALL its liquid to liquid at once: what can, runs out of the opening; what can't, stays
+    // in the skin as liquid, sloshing as liquid. (Only what was over the rim went, the rest left as tets - and
+    // the drops lying on those soft tets sank into them as they swayed, lost their way out, and came out
+    // through the walls: tipped and tipped back, a cut cube leaked all round at its liquid's level.) A
+    // near-solid gel stays.
+    const opened = new Uint8Array(NP);
+    for (let f = 0; f < sb.nF; f++) {
+      const t = sb.sTet[f];
+      if (lo[tp[t]] === Infinity || !isLiq(t)) continue;
+      if (rim[sb.sTri[f * 3]] && rim[sb.sTri[f * 3 + 1]] && rim[sb.sTri[f * 3 + 2]]) opened[tp[t]] = 1;
+    }
+    // what goes: the liquid over the rim's lowest point, and a layer under it (so what's left has liquid on
+    // top, not the tets' jagged faces). All of it went: a phone's pool holds half a cube's liquid, and spread
+    // thinner the drops settled to half its height - a cube cut near its top stood half empty.
     const go = new Set(), keep = [];
     let need = 0;
     for (let t = 0; t < sb.nT; t++) {
       const k = tp[t];
-      if (lo[k] === Infinity || !liqC[tc[t]] || sb.cVisc[tc[t]] >= 0.99) continue;
+      if (!opened[k] || !liqC[tc[t]] || sb.cVisc[tc[t]] >= 0.99) continue;
       const y = (x[T[t * 4] * 3 + 1] + x[T[t * 4 + 1] * 3 + 1] + x[T[t * 4 + 2] * 3 + 1] + x[T[t * 4 + 3] * 3 + 1]) / 4;
       if (y < lo[k] - UNDER * sb.cH[tc[t]]) continue;
       if (isLiq(t)) {
@@ -111,9 +126,9 @@ export class Spill {
       }
       const visc = sb.cVisc[tc[t]];
       col.set(app.flavorColorAtTet(t)); // (as the torch's: see liquefy)
-      // (close by its middle: further, some came out inside the skin's own layer, pushed out of it the wrong way -
-      // drops clinging to the ceiling, sat on the cube's top)
-      fl.add(cx, cy, cz, vol0[t] * scale, vx, vy, vz, col.r, col.g, col.b, Math.cbrt(vol0[t]) * 0.35, 0, 0.12 + 0.83 * Math.pow(visc, 1.2), 30 * visc * visc, mass);
+      // (at its middle - where nothing will be, once it's gone: let go further out, some came out inside the
+      // skin's own layer, never having been out of the jelly, and found no way out of it but the wall's far side)
+      fl.add(cx, cy, cz, vol0[t] * scale, vx, vy, vz, col.r, col.g, col.b, 0.004, 0, 0.12 + 0.83 * Math.pow(visc, 1.2), 30 * visc * visc, mass);
       this.drained += vol0[t];
     }
     // (and what's in it - the glitter, the bubbles - with it, onto the nearest of it; what had settled on the
