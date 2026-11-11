@@ -23,6 +23,7 @@ export class Spill {
     this.drained = 0; // (m^3, all told - for ?stats and the harnesses)
     this.rim = new Uint8Array(1024); // (per vertex: on an opening's rim)
     this.known = new Set(); // (the liquid cubes' surface faces as last seen)
+    this.slits = []; // (a partial cut's faces, three vertices each: no way out while their sides lie together)
     this.ver = -1; // (the topology they were seen at)
     this.cv = -1; // (and the cubes: a new cube, a fresh start)
     this._c = new THREE.Color();
@@ -47,6 +48,23 @@ export class Spill {
     if (!skin || !onSkin || !sb.sTri) return;
     if (sb.topoVersion !== this.ver) this._look(sb);
     const T = sb.T, x = sb.x, v = sb.v, tc = sb.tCube, tp = sb.tPiece, vol0 = sb.vol0, rim = this.rim;
+    // (a slit gaping - a flap fallen open - is a way out now)
+    if (this.slits.length) {
+      const S = this.slits, so = sb.slitOf, gap2 = 0.08 * 0.08;
+      let w = 0;
+      for (let n = 0; n < S.length; n += 3) {
+        let open = false;
+        for (let j = 0; j < 3; j++) {
+          const i = S[n + j], o2 = so[i] - 1;
+          if (!sb.alive[i] || o2 < 0 || !sb.alive[o2]) continue;
+          const dx = x[i * 3] - x[o2 * 3], dy = x[i * 3 + 1] - x[o2 * 3 + 1], dz = x[i * 3 + 2] - x[o2 * 3 + 2];
+          if (dx * dx + dy * dy + dz * dz > gap2) open = true;
+        }
+        if (open) for (let j = 0; j < 3; j++) rim[S[n + j]] = 1;
+        else (S[w++] = S[n]), (S[w++] = S[n + 1]), (S[w++] = S[n + 2]);
+      }
+      S.length = w;
+    }
     // (what turns liquid: the liquid clear of the skin - a tet touching it stays, as the skin's inside: the
     // skin's own tets, those with a face on the outside, meet only at their edges, and emptied of all else
     // its inside was a field of bare tets, pyramids - the outer layer whole, it's a wall, flat inside)
@@ -118,6 +136,7 @@ export class Spill {
       this.cv = sb.cubeVersion;
       this.known.clear();
       this.rim.fill(0);
+      this.slits.length = 0;
       mark = false;
     }
     if (this.rim.length < sb.nV) {
@@ -134,7 +153,11 @@ export class Spill {
       if (a > b) [a, b] = [b, a];
       const key = (a * nV + b) * nV + c;
       now.add(key);
-      if (mark && !this.known.has(key) && sb.sTag[f] !== TAG_EXTERIOR) this.rim[a] = this.rim[b] = this.rim[c] = 1;
+      if (mark && !this.known.has(key) && sb.sTag[f] !== TAG_EXTERIOR) {
+        // (a slit's: no way out, too thin for the liquid - till it gapes, see update)
+        if (sb.slitOf[a] && sb.slitOf[b] && sb.slitOf[c]) this.slits.push(a, b, c);
+        else this.rim[a] = this.rim[b] = this.rim[c] = 1;
+      }
     }
     this.known = now;
     this.ver = sb.topoVersion;

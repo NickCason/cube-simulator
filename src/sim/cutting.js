@@ -464,6 +464,21 @@ export function cutBody(sb, field, opts = {}) {
     for (let c = 0; c < 5; c++) sb.coat[id * 5 + c] = newCoat[k * 5 + c] || 0;
     nNew++;
   }
+  // (a partial cut's two sides, a blade's width apart: each vertex's partner across the slit - see Spill: a
+  // slit lets no liquid out, too thin for it, until it gapes)
+  if (remap.size && !opts.glueAll) {
+    for (let g = 0; g < glue.length; g += 5) {
+      const plus = glue[g], minus = glue[g + 1];
+      if (plus >= sb.nV || minus >= sb.nV) continue;
+      // (glued back - where the slit ends: on it, but shut - itself across from itself)
+      if (remap.has(minus)) {
+        if (!sb.slitOf[plus]) sb.slitOf[plus] = plus + 1;
+        continue;
+      }
+      sb.slitOf[plus] = minus + 1;
+      sb.slitOf[minus] = plus + 1;
+    }
+  }
   const nT = newT.length / 4;
   sb.ensureT(nT);
   sb.T.set(newT);

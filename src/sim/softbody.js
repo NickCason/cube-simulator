@@ -390,6 +390,7 @@ export class SoftBody {
     this.coat = growArr(this.coat, cap * 5, Float32Array);
     this.fpen = growArr(this.fpen, cap, Float32Array); // floor push-out this substep
     this.wpen = growArr(this.wpen, cap, Float32Array); // wall push-out this substep
+    this.slitOf = growArr(this.slitOf, cap, Int32Array); // (1 + the vertex across a slit from it - a partial cut's - or 0: see cutBody, Spill)
     this.vCap = cap;
   }
 
@@ -423,6 +424,7 @@ export class SoftBody {
     this.ensureV(this.nV);
     this.vCube[i] = cube;
     this.vTag[i] = tag;
+    this.slitOf[i] = 0;
     const o = i * 3;
     this.x[o] = x; this.x[o + 1] = y; this.x[o + 2] = z;
     this.px[o] = x; this.px[o + 1] = y; this.px[o + 2] = z;
@@ -463,6 +465,7 @@ export class SoftBody {
 
   loadCube(ox = 0, oy = 0, oz = 0, yaw = 0) {
     this.cubeVersion++;
+    if (this.slitOf) this.slitOf.fill(0);
     this.cBevel[0] = this.p.bevel;
     const mesh = buildCubeMesh(this.p.res, this.p.size, this.p.bevel, this.shapeOf(0));
     this.cN[0] = mesh.nV;
@@ -494,6 +497,7 @@ export class SoftBody {
   // (size, res: its own - see cSize)
   addCube(k, ox = 0, oy = 0, oz = 0, yaw = 0, bevel = this.p.bevel, size = this.p.size, res = this.p.res) {
     this.cubeVersion++;
+    if (this.slitOf) this.slitOf.fill(0, this.nV);
     this.cBevel[k] = bevel;
     const mesh = buildCubeMesh(res, size, bevel, this.shapeOf(k));
     this.cN[k] = mesh.nV;
@@ -581,6 +585,7 @@ export class SoftBody {
   // b } held outside the body - are renumbered too: -1, gone with theirs.)
   _removeVerts(drop, anchors = null) {
     this.cubeVersion++;
+    this.slitOf.fill(0); // (renumbered: what's across a slit, forgotten)
     const nV = this.nV, nT = this.nT, map = new Int32Array(nV).fill(-1);
     let n = 0;
     const vArr3 = [this.x, this.px, this.v, this.X];

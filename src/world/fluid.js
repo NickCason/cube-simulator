@@ -64,6 +64,8 @@ export class Fluid {
     // see _collide: a push out of it isn't a kick)
     this.cpush = new Float32Array(N * 3);
     this.cjv = new Float32Array(N);
+    // (where each was last outside the jelly: out of it, it goes back that way - see _collide)
+    this.lastOut = new Float32Array(N * 3);
     this.age = new Float32Array(N);
     this.lam = new Float32Array(N);
     this.dp = new Float32Array(N * 3);
@@ -251,6 +253,7 @@ export class Fluid {
       this.visc[i] = visc;
       this.thick[i] = thick;
       this.mass[i] = mass;
+      this.lastOut[o] = this.x[o]; this.lastOut[o + 1] = this.x[o + 1]; this.lastOut[o + 2] = this.x[o + 2];
     }
     if (this.n >= this.max) this.bank = 0;
     this.mesh.visible = this.n > 0;
@@ -394,6 +397,7 @@ export class Fluid {
         this.visc[w] = this.visc[i];
         this.thick[w] = this.thick[i];
         this.mass[w] = this.mass[i];
+        for (let c = 0; c < 3; c++) this.lastOut[w * 3 + c] = this.lastOut[i * 3 + c];
         R.t0[w] = R.t0[i];
         R.T[w] = R.T[i];
         R.h[w] = R.h[i];
@@ -431,6 +435,7 @@ export class Fluid {
         this.visc[w] = this.visc[i];
         this.thick[w] = this.thick[i];
         this.mass[w] = this.mass[i];
+        for (let c = 0; c < 3; c++) this.lastOut[w * 3 + c] = this.lastOut[i * 3 + c];
       }
       w++;
     }
@@ -878,11 +883,20 @@ export class Fluid {
           q[o + 2] *= R / r;
         }
       }
-      if (!this.cellsN) continue;
+      if (!this.cellsN) {
+        this.lastOut[o] = q[o]; this.lastOut[o + 1] = q[o + 1]; this.lastOut[o + 2] = q[o + 2];
+        continue;
+      }
+      // (till it's out of every tet - a few goes: through two thin ones at once, one push only put it back
+      // into the first, and if it was in the jelly still when the substep was done, the next took it out the
+      // nearest face - the wall's far side)
+      for (let pass = 0, hit = true; hit && pass < 4; pass++) {
+      hit = false;
       const hb = (Math.imul(Math.floor(q[o] * 10), 92837111) ^ Math.imul(Math.floor(q[o + 1] * 10), 689287499) ^ Math.imul(Math.floor(q[o + 2] * 10), 283923481)) & CM;
       for (let e = cs[hb], e1 = cs[hb + 1]; e < e1; e++) {
         const t = ctl[e];
         if (!(sb._tetGap(t, q[o], q[o + 1], q[o + 2]) < 0)) continue;
+        hit = true;
         if (this.acid[i] > 0) this.acidTet[i] = t;
         const t4 = t * 4, ia = T[t4], ib = T[t4 + 1], ic = T[t4 + 2], id = T[t4 + 3];
         const a3 = ia * 3, b3 = ib * 3, c3 = ic * 3, d3 = id * 3;
@@ -906,8 +920,9 @@ export class Fluid {
         // wall's far side: the cube leaked from everywhere - under its walls, through its sides - not just at
         // the cut or the hole.
         let entry = -1, tIn = -1;
+        const LO = this.lastOut;
         if (det > 1e-12) {
-          const px = this.x[o] - q[o], py = this.x[o + 1] - q[o + 1], pz = this.x[o + 2] - q[o + 2];
+          const px = LO[o] - q[o], py = LO[o + 1] - q[o + 1], pz = LO[o + 2] - q[o + 2];
           for (let k = 0; k < 4; k++) {
             const bx = bs[k] + (g[k * 3] * px + g[k * 3 + 1] * py + g[k * 3 + 2] * pz) / det;
             if (bx < 0) {
@@ -916,10 +931,16 @@ export class Fluid {
             }
           }
         }
+        const bx = LO[o] - q[o], by = LO[o + 1] - q[o + 1], bz = LO[o + 2] - q[o + 2], bl = Math.sqrt(bx * bx + by * by + bz * bz);
         if (entry >= 0) {
           const k = entry, gl = Math.sqrt(g[k * 3] * g[k * 3] + g[k * 3 + 1] * g[k * 3 + 1] + g[k * 3 + 2] * g[k * 3 + 2]) / det, s = -1 / (gl * det);
           wx = g[k * 3] * s; wy = g[k * 3 + 1] * s; wz = g[k * 3 + 2] * s;
           step = Math.min(bs[k] / gl, 0.08) + 0.002;
+        } else if (bl > 1e-4) {
+          // (in it where it was too - the jelly moved onto it: back toward where it was last outside it, never
+          // on out the nearest face - for one deep in a wall, its far side)
+          wx = bx / bl; wy = by / bl; wz = bz / bl;
+          step = Math.min(bl, 0.03) + 0.002;
         } else if (mk) {
           let best = Infinity;
           for (let k = 0; k < 4; k++) {
@@ -956,6 +977,10 @@ export class Fluid {
         cp[o] += wx * step; cp[o + 1] += wy * step; cp[o + 2] += wz * step;
         if (jv > this.cjv[i]) this.cjv[i] = jv;
         break;
+      }
+      if (!hit) {
+        this.lastOut[o] = q[o]; this.lastOut[o + 1] = q[o + 1]; this.lastOut[o + 2] = q[o + 2];
+      }
       }
     }
   }
@@ -1041,6 +1066,7 @@ export class Fluid {
         this.visc[w] = this.visc[i];
         this.thick[w] = this.thick[i];
         this.mass[w] = this.mass[i];
+        for (let c = 0; c < 3; c++) this.lastOut[w * 3 + c] = this.lastOut[i * 3 + c];
       }
       w++;
     }
