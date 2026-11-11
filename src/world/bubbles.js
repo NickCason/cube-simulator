@@ -58,7 +58,10 @@ export class Bubbles {
           vN = normalize(mat3(modelMatrix) * mat3(instanceMatrix) * normal);
           vV = normalize(cameraPosition - wp.xyz);
           vTint = instanceColor;
-          vec3 c = (modelMatrix * instanceMatrix * vec4(0.0, 0.0, 0.0, 1.0)).xyz, o = cameraPosition, d = c - o;
+          // (where the line of sight to this corner of it goes into its piece's box - each corner its own: a big
+          // bubble under the top seen steeply had the whole of it at where the line to its middle went in, and
+          // the skin nearer than that under its lower half hid that half)
+          vec3 o = cameraPosition, d = wp.xyz - o;
           float len = max(length(d), 1e-6);
           d /= len;
           vec3 dd = vec3(abs(d.x) < 1e-6 ? 1e-6 : d.x, abs(d.y) < 1e-6 ? 1e-6 : d.y, abs(d.z) < 1e-6 ? 1e-6 : d.z);
