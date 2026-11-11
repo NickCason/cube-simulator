@@ -27,6 +27,13 @@ const LAND_GAP = 0.085; // (one after another, s)
 const smooth01 = (u) => (u <= 0 ? 0 : u >= 1 ? 1 : u * u * (3 - 2 * u));
 // (the layer the eyes in front of the jelly are drawn on - a pass of their own,
 // after the jelly and its glitter and bubbles: see App.render)
+// (an attribute sent up as far as len, not whole)
+const upTo = (at, len) => {
+  at.clearUpdateRanges();
+  at.addUpdateRange(0, len);
+  at.needsUpdate = true;
+};
+
 export const LATE_LAYER = 1;
 
 const _m = new THREE.Matrix4(), _m2 = new THREE.Matrix4(), _q = new THREE.Quaternion(), _s = new THREE.Vector3(), _p = new THREE.Vector3();
@@ -561,10 +568,13 @@ export class Eyes {
       const P = this[k], c = N[k];
       counts.push([P.white, c.n], [P.pupil, c.n], [P.dome, c.n], [P.lid, c.nl], [P.brow, c.nb], [P.lash, c.nlash]);
     }
+    // (sent up: the eyes there are - none, nothing: thirteen empty meshes' every slot went up each frame)
     for (const [mesh, c] of counts) {
       mesh.count = c;
-      mesh.instanceMatrix.needsUpdate = true;
-      if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+      if (c) {
+        upTo(mesh.instanceMatrix, c * 16);
+        if (mesh.instanceColor) upTo(mesh.instanceColor, c * 3);
+      }
     }
   }
 
@@ -591,8 +601,10 @@ export class Eyes {
     }
     for (const m of [this.gWhite, this.gPupil]) {
       m.count = n;
-      m.instanceMatrix.needsUpdate = true;
-      if (m.instanceColor) m.instanceColor.needsUpdate = true;
+      if (n) {
+        upTo(m.instanceMatrix, n * 16);
+        if (m.instanceColor) upTo(m.instanceColor, n * 3);
+      }
     }
   }
 

@@ -2,6 +2,13 @@ import * as THREE from 'three';
 import { mergeVertices } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js';
 
+// (an attribute sent up as far as len, not whole)
+const upTo = (at, len) => {
+  at.clearUpdateRanges();
+  at.addUpdateRange(0, len);
+  at.needsUpdate = true;
+};
+
 // Little blobs of jelly blasted out of the cube (explosions, over-inflation).
 // They fly ballistically, splat on the floor and wait for the heal, when they
 // fly home and are absorbed. Frozen (the cryo spray catches them, and the
@@ -289,12 +296,17 @@ export class Droplets {
     }
     this.mesh.count = c;
     this.mesh.visible = this.mesh.count > 0; // (see-through: three draws the scene behind it once more while it shows)
-    this.mesh.instanceMatrix.needsUpdate = true;
-    if (this.mesh.instanceColor) this.mesh.instanceColor.needsUpdate = true;
+    // (sent up: the drops there are - none, nothing)
+    if (c) {
+      upTo(this.mesh.instanceMatrix, c * 16);
+      if (this.mesh.instanceColor) upTo(this.mesh.instanceColor, c * 3);
+    }
     this.ice.count = ci;
     this.ice.visible = ci > 0;
-    this.ice.instanceMatrix.needsUpdate = true;
-    if (this.ice.instanceColor) this.ice.instanceColor.needsUpdate = true;
+    if (ci) {
+      upTo(this.ice.instanceMatrix, ci * 16);
+      if (this.ice.instanceColor) upTo(this.ice.instanceColor, ci * 3);
+    }
   }
 
   get n() {

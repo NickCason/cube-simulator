@@ -304,7 +304,7 @@ export function attachStats(app) {
   // a lower resolution. Hands off while it runs (~30 s).
   const BENCH = [
     ['still', 'all'], ['still', 'no room', 'room'], ['still', 'no jelly', 'jelly'], ['still', 'no glitter/bubbles', 'fx'],
-    ['still', 'no mirror', 'refl'], ['still', 'no bloom', 'bloom'], ['still', 'no edge pass', 'aa'],
+    ['still', 'no mirror', 'refl'], ['still', 'no bloom', 'bloom'], ['still', 'no edge pass', 'aa'], ['still', 'flakes only', 'whole'],
     ['moving', 'all'], ['moving', 'no caustics', 'caustics'], ['moving', 'no floor effects', 'floorFx'],
     ['moving', 'no room', 'room'], ['moving', 'no jelly', 'jelly'], ['moving', 'no mirror', 'refl'],
   ];
@@ -427,7 +427,7 @@ export function attachStats(app) {
       const P = app.pacing, T = Math.max(1, now());
       if (!P) return '';
       const r = (n) => (n / T).toFixed(1);
-      return `pacing: drawn ${r(P.drawn)}/s, held back ${r(P.heldBack)}/s, still ${r(P.still)}/s${P.present ? `, still frames re-shown (${P.presents})` : ''} | browser frames ${(P.gapBusy * 1000).toFixed(0)} ms busy, ${(P.gapStill * 1000).toFixed(0)} ms still | fence ${P.fence ? 'on' : 'off'} (check ${(P.waitMs / Math.max(1, P.waits)).toFixed(2)} ms) | step up to ${((app._dtCap || 1 / 30) * 1000).toFixed(0)} ms`;
+      return `pacing: drawn ${r(P.drawn)}/s${P.lite ? ` (${r(P.lite)}/s flakes only)` : ''}, held back ${r(P.heldBack)}/s, still ${r(P.still)}/s${P.present ? `, still frames re-shown (${P.presents})` : ''} | browser frames ${(P.gapBusy * 1000).toFixed(0)} ms busy, ${(P.gapStill * 1000).toFixed(0)} ms still | fence ${P.fence ? 'on' : 'off'} (check ${(P.waitMs / Math.max(1, P.waits)).toFixed(2)} ms) | step up to ${((app._dtCap || 1 / 30) * 1000).toFixed(0)} ms`;
     };
     return [
       `Cube Simulator stats v2   build ${typeof __BUILD__ === 'string' ? __BUILD__ : 'dev'}`,

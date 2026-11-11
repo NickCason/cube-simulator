@@ -360,7 +360,13 @@ export class NailSystem {
       this.mesh.setMatrixAt(c++, this._m);
     }
     this.mesh.count = c;
-    this.mesh.instanceMatrix.needsUpdate = true;
+    // (sent up: the nails there are - none, nothing)
+    if (c) {
+      const at = this.mesh.instanceMatrix;
+      at.clearUpdateRanges();
+      at.addUpdateRange(0, c * 16);
+      at.needsUpdate = true;
+    }
   }
 
   clearAll() {

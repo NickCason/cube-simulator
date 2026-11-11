@@ -500,6 +500,8 @@ export class JellyView {
     // (how many times the jelly's drawn positions have changed: what else that follows them - its glitter -
     // sends them to the GPU again only when this has moved on)
     this.posVersion = 0;
+    // (and of anything of its look sent up: its warmth, glow, coat - a frame of flakes only needs it the same)
+    this.dataVersion = 0;
     this.skipCaustics = false; // (?stats' bench: see App.skip)
     this.forceMoving = null; // (true/false: the floor's effects drawn as though it's moving or at rest - App._warmGPU)
     this.bakesReady = false;
@@ -1328,6 +1330,7 @@ export class JellyView {
       this.aNrm.needsUpdate = true;
       this.posVersion++;
     }
+    this.dataVersion++;
     this.aData.needsUpdate = true;
     if (floured || this._coatShown) {
       this.aCoat.needsUpdate = true;

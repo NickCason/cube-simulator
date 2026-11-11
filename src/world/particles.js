@@ -1,5 +1,12 @@
 import * as THREE from 'three';
 
+// (an attribute sent up as far as len, not whole)
+const upTo = (at, len) => {
+  at.clearUpdateRanges();
+  at.addUpdateRange(0, len);
+  at.needsUpdate = true;
+};
+
 // CPU particles rendered as soft point sprites. Two layers: additive
 // (fire, sparks, flashes) and alpha-blended (smoke, frost mist).
 class Layer {
@@ -121,12 +128,15 @@ class Layer {
       this.col[i * 4 + 3] = (this.c0[i * 4 + 3] + (this.c1[i * 4 + 3] - this.c0[i * 4 + 3]) * u) * Math.max(fade, 0);
       i++;
     }
-    const g = this.points.geometry;
-    g.setDrawRange(0, this.n);
-    this.aPos.needsUpdate = true;
-    this.aCol.needsUpdate = true;
-    this.aSize.needsUpdate = true;
-    this.aSeed.needsUpdate = true;
+    const g = this.points.geometry, n = this.n;
+    g.setDrawRange(0, n);
+    // (sent up: the live ones only - and none, nothing: two empty systems' every slot went up each frame)
+    if (n) {
+      upTo(this.aPos, n * 3);
+      upTo(this.aCol, n * 4);
+      upTo(this.aSize, n);
+      upTo(this.aSeed, n);
+    }
   }
 
   _move(j, i) {

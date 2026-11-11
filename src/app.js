@@ -228,7 +228,7 @@ export class App {
     this.stats = { physMs: 0, frameMs: 0, frames: 0, physLast: 0, renderLast: 0 };
     // (parts of the drawing left out, for ?stats' bench - and its time then
     // taken to when the GPU's done with the frame: see ui/stats.js)
-    this.skip = { floorFx: false, refl: false, room: false, jelly: false, fx: false, bloom: false, aa: false, adapt: false };
+    this.skip = { floorFx: false, refl: false, room: false, jelly: false, fx: false, bloom: false, aa: false, adapt: false, lite: false, whole: false };
     // (a clip being recorded: its mark drawn over each frame - see ui/clips.js)
     this.recording = false;
     this.markTex = null;
@@ -242,7 +242,15 @@ export class App {
     this._idleN = 0;
     this._sigW = 1;
     this._sig = 0;
-    this.pacing = { drawn: 0, heldBack: 0, still: 0, why: '', busy: true, busyAt: 0, fence: true, waitMs: 0, waits: 0, present: false, presents: 0, gapStill: 0, gapBusy: 0, nStill: 0, nBusy: 0 };
+    this.pacing = { drawn: 0, heldBack: 0, still: 0, lite: 0, why: '', busy: true, busyAt: 0, fence: true, waitMs: 0, waits: 0, present: false, presents: 0, gapStill: 0, gapBusy: 0, nStill: 0, nBusy: 0 };
+    // (the scene as last drawn whole, before its glitter - kept while nothing in it moves but the flakes, for
+    // the next frames to draw only those over: see _liteNow - and how it looked then, when, and whether this
+    // frame was one of those)
+    this._base = null;
+    this._baseOK = false;
+    this._baseSig = NaN;
+    this._baseAt = 0;
+    this._liteDrawn = false;
     // (the longest step a frame may take: a twentieth of a second when the browser's holding frames to a slower
     // rate - see _loop - and the last frames' lengths it's judged by; the bloom the last frame was drawn with)
     this._dtCap = 1 / 30;
@@ -1200,7 +1208,10 @@ export class App {
     // lift the scene above an open bottom sheet on small screens
     const cover = this.ui ? this.ui.panelCover : 0;
     const goal = cover > 0 ? Math.min(0.42, cover * 0.42) : 0;
+    // (each of these eased the last of the way in: one that crept on for good - a ten-thousandth of a metre a
+    // frame, ten seconds on - moved the view every frame, and every frame was drawn whole for it)
     this._lift = (this._lift || 0) + (goal - (this._lift || 0)) * (1 - Math.exp(-dt * 10));
+    if (Math.abs(goal - this._lift) < 1e-4) this._lift = goal;
     const c = this.camera;
     if (Math.abs(this._lift) > 1e-3) {
       const W = this.size.w, H = this.size.h;
@@ -1218,12 +1229,17 @@ export class App {
     const kf = 1 - Math.exp(-dt * 2.5);
     this._frameY = (this._frameY ?? 0.44) + (fy - (this._frameY ?? 0.44)) * kf;
     this._frameR = (this._frameR ?? 1) + (fr - (this._frameR ?? 1)) * kf;
+    if (Math.abs(fy - this._frameY) < 1e-4) this._frameY = fy;
+    if (Math.abs(fr - this._frameR) < 1e-4) this._frameR = fr;
     this.orbit.target.y = this._frameY;
     const o = this.orbit, g = this.orbitGoal;
     const k = 1 - Math.exp(-dt * 12);
     o.theta += (g.theta - o.theta) * k;
     o.phi += (g.phi - o.phi) * k;
     o.radius += (g.radius - o.radius) * k;
+    if (Math.abs(g.theta - o.theta) < 1e-5) o.theta = g.theta;
+    if (Math.abs(g.phi - o.phi) < 1e-5) o.phi = g.phi;
+    if (Math.abs(g.radius - o.radius) < 1e-5) o.radius = g.radius;
     this._shake *= Math.exp(-dt * 14);
     this._applyOrbit();
   }
@@ -1261,6 +1277,7 @@ export class App {
       this.rtTrans.dispose();
       this.rtRefl.dispose();
     }
+    this._baseOK = false;
     const samples = this.opts.msaa ?? (this.coarse || this.pixelRatio > 1.6 ? 0 : 4);
     this.rtScene = new THREE.WebGLRenderTarget(pw, ph, { type: THREE.HalfFloatType, samples, depthBuffer: true });
     // (no multisampling - phones, high-density screens: smooth edges in
@@ -1539,7 +1556,8 @@ export class App {
     // other only two deep, the rest of the refraction layers' passes saved)
     const swarm = this.healer.active && this.sb.pieces.length > 6;
     const causGoal = this.healer.active ? 0 : 1, cl = this.jelly.causticLevel;
-    this.jelly.causticLevel = cl + (causGoal - cl) * Math.min(1, dt * (causGoal < cl ? 6 : 2.5));
+    const cn = cl + (causGoal - cl) * Math.min(1, dt * (causGoal < cl ? 6 : 2.5));
+    this.jelly.causticLevel = Math.abs(causGoal - cn) < 1e-3 ? causGoal : cn;
     this.jelly.layerCap = swarm ? 2 : Infinity;
     this._updateCamera(dt);
     this.overlay.draw(dt);
@@ -1551,10 +1569,10 @@ export class App {
     const sp = this.splash;
     const covered = sp?.active && !sp.leaving && this.stats.frames > 2 && !(sp.leaveAt && performance.now() > sp.leaveAt - 250);
     const drawn = !covered && this._drawNow(r0);
-    if (drawn) {
-      this.render();
-      this._fence();
-    }
+    this._liteDrawn = drawn && this._liteNow();
+    if (this._liteDrawn) this._renderLite();
+    else if (drawn) this.render(this._keepBase());
+    if (drawn) this._fence();
     this._gapTally(drawn);
     if (this.benchSync) {
       const gl = this.renderer.getContext();
@@ -1577,7 +1595,8 @@ export class App {
       if (P.busy) {
         if (P.busyAt && now - P.busyAt < 250) this._rawDt = Math.max(this._rawDt || 0, (now - P.busyAt) / 1000);
         P.busyAt = now;
-        this._adaptResolution(dt, cpu);
+        // (a frame of flakes only says nothing of what a whole one costs the GPU)
+        if (!this._liteDrawn) this._adaptResolution(dt, cpu);
       } else P.busyAt = 0;
       this._drawnAt = now;
     }
@@ -1685,7 +1704,7 @@ export class App {
   // How the world looks, as a number: the view, every visible thing's place - and what's instanced or dynamic
   // in it (eyes, nails, bubbles, drops, sparks, the tools in hand) - and what lights up or turns without
   // moving. The same number: nothing to see has changed. (A sampled sum: big buffers every n-th value.)
-  _stillSig() {
+  _stillSig(look = false) {
     this._sig = 0;
     this._sigW = 1;
     const arr = (a, n) => {
@@ -1713,6 +1732,9 @@ export class App {
     };
     this.scene.traverseVisible(each);
     this.fxScene?.traverseVisible(each);
+    // (look: and the jelly's look, sent up as it changes - its warmth, glow, coat: the scene as kept for frames
+    // of flakes only must be how it looks now)
+    if (look) this._sigAdd(this.jelly.dataVersion);
     const U = this.jelly.frontMat.uniforms;
     this._sigAdd(U.uWeldT.value);
     this._sigAdd(this.jelly.causticLevel);
@@ -1736,13 +1758,66 @@ export class App {
 
   // Still, what shimmers of itself - and how often it's worth drawing to see it (per second; 0: nothing does)
   _idleHz() {
+    return Math.max(this.glitter.mesh.visible ? 20 : 0, this._baseHz());
+  }
+
+  // (what in the scene itself shimmers - glow mode's light, the stars, the clouds: per second)
+  _baseHz() {
     let hz = 0;
-    if (this.glitter.mesh.visible) hz = 20;
     if (this.jelly.frontMat.uniforms.uEmit.value > 0) hz = 20;
     const S = this.sky.userData.u;
     if (this.sky.visible && S.uStars?.value > 0) hz = Math.max(hz, 15);
     else if (this.sky.visible && S.uClouds?.value > 0) hz = Math.max(hz, 5);
     return hz;
+  }
+
+  // ---- flakes only. A snow globe's flakes fall for twenty seconds after it's shaken - the jelly, the room,
+  // everything else as still as can be - and each of those frames was drawn whole: the most a frame costs, sixty
+  // times a second, for some snow (a phone held to 30 fps, hot). Now a frame drawn whole while nothing but the
+  // flakes moves (or nothing at all) keeps its scene before the glitter (_keepBase), and while that's still how
+  // it looks, the next frames are the flakes over it (and the still glitter's twinkle, the same way): a copy, the
+  // glitter, the post - a fifth of the work. The scene's own shimmer (glow, stars, clouds) still drawn whole, at
+  // its rate.
+  _keepBase() {
+    if (this.rtScene.samples || this.recording || this.opts.preserve || this.skip.lite) return false;
+    if (this.skip.whole) return true;
+    const why = this.pacing.why;
+    return (why === 'flakes' || why === '' || why === 'changed') && this.glitter.mesh.visible && !this.sb.anyAwake;
+  }
+
+  _liteNow() {
+    const P = this.pacing;
+    if (!this._baseOK || this.skip.lite || this.recording || this.rtScene.samples) return false;
+    if (this.skip.whole) return true; // (?stats' bench: a frame of flakes only, whatever's going on)
+    // (drawn for the flakes - or, still, for the glitter's twinkle - and for nothing else)
+    if (P.busy ? P.why !== 'flakes' : P.why !== '') return false;
+    // (nor while there's a look's shader still to compile aside: that's done as whole frames are drawn)
+    if (this.sb.anyAwake || this.jelly.portraits || this.jelly.warmPending(this.sb)) return false;
+    const hz = this._baseHz();
+    if (hz && performance.now() - this._baseAt >= 1000 / hz - 4) return false;
+    // (and the scene as it was kept: its every thing where it was, the jelly's look the same)
+    this.jelly.update(this.sb);
+    return this._stillSig(true) === this._baseSig;
+  }
+
+  // the flakes over the kept scene: its picture copied back (behind it, in the target, its depth's still there
+  // for the flakes to be hidden by), the glitter and the eyes in front over it, then the post as ever
+  _renderLite() {
+    const r = this.renderer, auto = r.autoClear;
+    this.pacing.lite++;
+    r.autoClear = false;
+    this.post.copy(this._base.texture, this.rtScene);
+    this.glitter.update(this.clock.t);
+    if (this.fxScene && !this.skip.fx) {
+      r.setRenderTarget(this.rtScene);
+      r.render(this.fxScene, this.camera);
+      const L = this.camera.layers.mask;
+      this.camera.layers.set(LATE_LAYER);
+      r.render(this.scene, this.camera);
+      this.camera.layers.mask = L;
+    }
+    r.autoClear = auto;
+    this._post();
   }
 
   // Render resolution follows the GPU: drop it while frames are slow *and*
@@ -2726,7 +2801,7 @@ export class App {
     return Math.max(-1, Math.min(1, v.x)) * 0.6;
   }
 
-  render() {
+  render(keepBase = false) {
     const r = this.renderer;
     this.jelly.update(this.sb);
     this.jelly.frontMat.uniforms.uTime.value = this.clock.t;
@@ -2765,6 +2840,20 @@ export class App {
       BU.uRes.value.set(this.rtScene.width, this.rtScene.height);
     }
 
+    // (the scene before its glitter, kept: see _keepBase)
+    if (keepBase) {
+      const { pw, ph } = this.size;
+      if (this._base && (this._base.width !== pw || this._base.height !== ph)) {
+        this._base.dispose();
+        this._base = null;
+      }
+      this._base ||= new THREE.WebGLRenderTarget(pw, ph, { type: THREE.HalfFloatType, depthBuffer: false });
+      this.post.copy(this.rtScene.texture, this._base);
+      this._baseSig = this._stillSig(true);
+      this._baseAt = performance.now();
+    }
+    this._baseOK = keepBase;
+
     this.glitter.update(this.clock.t);
     if (this.fxScene && !skip.fx) {
       const auto = r.autoClear;
@@ -2781,6 +2870,12 @@ export class App {
       r.autoClear = auto;
     }
 
+    this._post();
+  }
+
+  // bloom, edges, the picture to the screen
+  _post() {
+    const skip = this.skip;
     this.flash *= 0.86;
     this.post.compositeMat.uniforms.uFlash.value = this.flash;
     const bloom = skip.bloom ? this.post.rts[0].texture : this.post.bloom(this.rtScene.texture, this.size.pw, this.size.ph);

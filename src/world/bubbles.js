@@ -140,6 +140,7 @@ export class Bubbles {
     // surface, not a bubble) } - every cube its own count and size
     this.items = [];
     this.version = 0; // (bumped each reseed: the glitter keeps out of where they are)
+    this._upSig = NaN; // (how it all was when last sent up: see update)
     this._shape = [];
     this.want = [{ slot: 0, count: 34, scale: 1 }];
     this._wantKey = '';
@@ -321,6 +322,10 @@ export class Bubbles {
     // its row of the cube looks, see JellyView.setCubeLook)
     const D = app.jelly.cubeData;
     const ox = cam.position.x, oy = cam.position.y, oz = cam.position.z;
+    // (all of it still and seen from where it was: as they were - not worked out and sent up again each frame)
+    const J = app.jelly, sig = J.posVersion + ox * 1.31 + oy * 1.73 + oz * 2.07 + this.version * 3.1 + sb.topoVersion * 5.7 + J.cubeTex.version * 7.3 + this.items.length * 11.9;
+    if (!sb.anyAwake && sig === this._upSig) return;
+    this._upSig = sig;
     const tint = this._tint || (this._tint = new THREE.Color());
     let c = 0;
     for (const b of this.items) {
