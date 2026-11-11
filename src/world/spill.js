@@ -140,10 +140,11 @@ export class Spill {
       fl.add(px, py, pz, vol0[t], vx, vy, vz, col.r, col.g, col.b, 0.03, 0, 0.03 + 0.92 * Math.pow(visc, 1.2), 30 * visc * visc);
       this.drained += vol0[t];
     }
-    // (the glitter in it runs out with it, onto the drops just let go - see Glitter.poolFrom; and the last of
-    // a piece's liquid flushes out what had settled in it, above the rim - on the skin's inner layer, kept)
+    // (the glitter and the bubbles in it run out with it, onto the drops just let go - see Glitter.poolFrom,
+    // Bubbles.poolFrom; and the last of a piece's liquid flushes out what had settled in it, above the rim - on
+    // the skin's inner layer, kept)
     let flush = drain;
-    if (done.length && app.glitter?.poolN !== undefined) {
+    if (done.length) {
       flush = new Set(drain);
       for (let t = 0; t < sb.nT; t++) {
         const k = tp[t];
@@ -153,6 +154,7 @@ export class Spill {
       }
     }
     app.glitter?.poolFrom(flush, p0, fl.n);
+    app.bubbles?.poolFrom(flush, p0, fl.n);
     removeTets(sb, (t) => drain.has(t), app.allAnchors());
     app.onTopologyChanged();
     // (what that laid bare is the inside of it: seen, not a rim)

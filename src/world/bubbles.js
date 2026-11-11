@@ -172,6 +172,8 @@ export class Bubbles {
     // this tick, and a scratch for finding one in the mesh)
     this._lt = -1;
     this._looseV = 0;
+    this._poolV = 0; // (moves in a spill's pool: see poolTick)
+    this._remapOn = false;
     this.looseMoved = false;
     this._out = { tet: -1, b0: 0, b1: 0, b2: 0, b3: 0 };
   }
@@ -300,7 +302,8 @@ export class Bubbles {
         const r = sb.locateRest(x + slot * REST_STEP, y, z);
         // (and, loose: how it's moving, whether it's up against the top, how much of it's left - a burst's
         // shrinking - gone: run into another, or burst)
-        this.items.push({ slot, u: P.u, r: P.r, scale: w.scale, R, c: [x, y, z], a: r ? { tet: r.tet, b: r.bary, lost: false } : { tet: -1, b: [0, 0, 0, 0], lost: false }, open: false, v: [0, 0, 0], top: false, life: 1, gone: false });
+        // (and run out with a spill, into its pool - see poolFrom: its drop, where it is, foam or not, its time)
+        this.items.push({ slot, u: P.u, r: P.r, scale: w.scale, R, c: [x, y, z], a: r ? { tet: r.tet, b: r.bary, lost: false } : { tet: -1, b: [0, 0, 0, 0], lost: false }, open: false, v: [0, 0, 0], top: false, life: 1, gone: false, pool: false, p: -1, w: [0, 0, 0], foam: false, popT: 0 });
       }
     }
   }
@@ -432,6 +435,7 @@ export class Bubbles {
           B.top = A.top = false;
           B.life = 1;
           B.gone = false;
+          B.pool = false;
           this._locate(A);
           this._locate(B);
           changed = true;
@@ -473,9 +477,9 @@ export class Bubbles {
 
   // a bubble to break another into: one that's gone, else a new one, while there's room
   _spare() {
-    for (const b of this.items) if (b.gone && !b.open) return b;
+    for (const b of this.items) if (b.gone && !b.open && !b.pool) return b;
     if (this.items.length >= MAX) return null;
-    const b = { slot: 0, u: [0, 0, 0], r: 0, scale: 1, R: 0, c: [0, 0, 0], a: { tet: -1, b: [0, 0, 0, 0], lost: false }, open: false, v: [0, 0, 0], top: false, life: 1, gone: true };
+    const b = { slot: 0, u: [0, 0, 0], r: 0, scale: 1, R: 0, c: [0, 0, 0], a: { tet: -1, b: [0, 0, 0, 0], lost: false }, open: false, v: [0, 0, 0], top: false, life: 1, gone: true, pool: false, p: -1, w: [0, 0, 0], foam: false, popT: 0 };
     this.items.push(b);
     return b;
   }
@@ -491,6 +495,88 @@ export class Bubbles {
       P.spawn(t[0] + q * Math.cos(th) * r, t[1] + z * r, t[2] + q * Math.sin(th) * r, q * Math.cos(th) * s, z * s + 0.15, q * Math.sin(th) * s, 0.16 + 0.12 * Math.random(), 0.0035, 0.001, [1, 1, 1, 0.75], [1, 1, 1, 0], 4, 0);
     }
     app.audio?.bubble?.(r, app._pan ? app._pan(t[0], t[1], t[2]) : 0);
+  }
+
+  // A spill (see Spill): the bubbles in the tets it drained run out with it, into its pool - each onto the
+  // nearest of the drops [p0, p1) just let go there (none, the nearest in the pool). Out of the jelly now:
+  // no anchor in it (a cut after mustn't put it back).
+  poolFrom(tets, p0, p1) {
+    const fl = this.app.fluid, sb = this.app.sb;
+    if (!fl.n || !this.items.length) return 0;
+    if (p1 <= p0) (p0 = 0), (p1 = fl.n);
+    let n = 0;
+    for (const b of this.items) {
+      if (b.gone || b.open || b.pool || b.a.lost || b.a.tet < 0 || !tets.has(b.a.tet)) continue;
+      sb.embedPoint(b.a.tet, b.a.b, this._t);
+      let best = p0, bd = Infinity;
+      for (let q = p0; q < p1; q++) {
+        const dx = fl.x[q * 3] - this._t[0], dy = fl.x[q * 3 + 1] - this._t[1], dz = fl.x[q * 3 + 2] - this._t[2], d2 = dx * dx + dy * dy + dz * dz;
+        if (d2 < bd) (bd = d2), (best = q);
+      }
+      b.pool = true;
+      b.p = best;
+      b.w[0] = this._t[0]; b.w[1] = this._t[1]; b.w[2] = this._t[2];
+      b.a.tet = -1;
+      b.a.lost = true;
+      b.a.wx = undefined;
+      // (some stay as foam on the pool a good while; the rest burst soon after reaching its top)
+      b.foam = Math.random() < 0.35;
+      b.popT = b.foam ? 20 + Math.random() * 40 : 0.3 + Math.random() * 2.2;
+      b.v[0] = b.v[1] = b.v[2] = 0;
+      b.life = 1;
+      n++;
+    }
+    if (n && !this._remapOn) {
+      this._remapOn = true;
+      fl.onRemap.push((map, nn) => {
+        for (const b of this.items) if (b.pool && !b.gone) b.p = map && b.p < nn ? map[b.p] : -1;
+      });
+    }
+    if (n) this._poolV++;
+    return n;
+  }
+
+  // The pool's bubbles, a frame (App.frame, after the liquid's step): each borne up to the liquid's top where
+  // its drop is - over the highest of it and its neighbours - and carried along with it; at the
+  // top, after a while, it bursts (foam lasts). Its drop gone (set, flown home), it goes.
+  poolTick(dt) {
+    const fl = this.app.fluid, x = fl.x, NS = fl.nbStart, NB = fl.nb, D = 0.065;
+    let any = false;
+    for (const b of this.items) {
+      if (!b.pool || b.gone) continue;
+      any = true;
+      const p = b.p;
+      if (p < 0 || p >= fl.n) {
+        this._popAt(b);
+        continue;
+      }
+      let top = x[p * 3 + 1];
+      for (let e = NS[p], e1 = NS[p + 1]; e < e1; e++) top = Math.max(top, x[NB[e] * 3 + 1]);
+      // (its surface, as drawn, is 1.1 spacings over its drops' middles - the splats are wide: see Fluid._remesh)
+      const tx = x[p * 3] + b.u[0] * 0.4 * D, tz = x[p * 3 + 2] + b.u[2] * 0.4 * D, ty = top + 1.1 * D - 0.2 * b.R;
+      const k = Math.min(1, dt * 6), w = b.w;
+      w[0] += (tx - w[0]) * k;
+      w[2] += (tz - w[2]) * k;
+      w[1] += Math.max(-0.5 * dt, Math.min(0.6 * dt, (ty - w[1]) * k));
+      if (w[1] > ty - 0.5 * b.R) {
+        b.popT -= dt;
+        if (b.popT <= 0) this._popAt(b);
+      }
+    }
+    if (any) this._poolV++;
+  }
+
+  // a pool bubble bursting: a pinch of spray and a tiny 'plip', where it is
+  _popAt(b) {
+    const app = this.app, r = b.R, t = b.w, P = app.particles?.add;
+    b.gone = true;
+    b.pool = false;
+    for (let i = 0; P && i < 5; i++) {
+      const z = Math.random() * 2 - 1, th = Math.random() * Math.PI * 2, q = Math.sqrt(1 - z * z), s = 0.25 + 0.35 * Math.random();
+      P.spawn(t[0] + q * Math.cos(th) * r, t[1] + z * r, t[2] + q * Math.sin(th) * r, q * Math.cos(th) * s, Math.abs(z) * s + 0.15, q * Math.sin(th) * s, 0.16 + 0.12 * Math.random(), 0.0035, 0.001, [1, 1, 1, 0.75], [1, 1, 1, 0], 4, 0);
+    }
+    app.audio?.bubble?.(r, app._pan ? app._pan(t[0], t[1], t[2]) : 0);
+    this._poolV++;
   }
 
   // (how deep a cube's surface map's hollows go, m)
@@ -530,24 +616,35 @@ export class Bubbles {
     const D = app.jelly.cubeData;
     const ox = cam.position.x, oy = cam.position.y, oz = cam.position.z;
     // (all of it still and seen from where it was: as they were - not worked out and sent up again each frame)
-    const J = app.jelly, sig = J.posVersion + ox * 1.31 + oy * 1.73 + oz * 2.07 + this.version * 3.1 + sb.topoVersion * 5.7 + J.cubeTex.version * 7.3 + this.items.length * 11.9 + this._looseV * 13.7;
+    const J = app.jelly, sig = J.posVersion + ox * 1.31 + oy * 1.73 + oz * 2.07 + this.version * 3.1 + sb.topoVersion * 5.7 + J.cubeTex.version * 7.3 + this.items.length * 11.9 + this._looseV * 13.7 + this._poolV * 17.3;
     if (!sb.anyAwake && sig === this._upSig) return;
     this._upSig = sig;
     const tint = this._tint || (this._tint = new THREE.Color());
     let c = 0;
     for (const b of this.items) {
-      if (b.a.tet < 0 || b.a.tet >= sb.nT || b.a.lost || b.open || b.gone) continue;
-      const k = sb.tCube[b.a.tet], row = k * CUBE_TEX_W * 4;
-      const haze = D[row + 7], vis = (1 - haze) * (1 - haze);
-      if (vis <= 0.01) continue;
-      sb.embedPoint(b.a.tet, b.a.b, this._t);
-      const px = this._t[0], py = this._t[1], pz = this._t[2];
-      // where the line of sight enters this piece's bounding box
-      const bb = sb.pieces[sb.tPiece[b.a.tet]]?.bbox;
+      let row, vis, px, py, pz, bb = null;
+      if (b.pool) {
+        // (in a spill's pool, at its top: no jelly in front of it - its cube's colours, clear)
+        if (b.gone) continue;
+        row = b.slot * CUBE_TEX_W * 4;
+        vis = 1;
+        px = b.w[0]; py = b.w[1]; pz = b.w[2];
+      } else {
+        if (b.a.tet < 0 || b.a.tet >= sb.nT || b.a.lost || b.open || b.gone) continue;
+        const k = sb.tCube[b.a.tet];
+        row = k * CUBE_TEX_W * 4;
+        const haze = D[row + 7];
+        vis = (1 - haze) * (1 - haze);
+        if (vis <= 0.01) continue;
+        sb.embedPoint(b.a.tet, b.a.b, this._t);
+        px = this._t[0]; py = this._t[1]; pz = this._t[2];
+        // where the line of sight enters this piece's bounding box
+        bb = sb.pieces[sb.tPiece[b.a.tet]]?.bbox;
+      }
       let dx = px - ox, dy = py - oy, dz = pz - oz;
       const len = Math.hypot(dx, dy, dz);
       dx /= len; dy /= len; dz /= len;
-      let t0 = 0;
+      let t0 = b.pool ? len : 0;
       if (bb) {
         let tmin = -Infinity;
         const sl = (o, d, lo, hi) => {
