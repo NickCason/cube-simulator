@@ -349,8 +349,10 @@ export class Bubbles {
       u[1] = (u[1] + h * (fy / DRAG_T + uy * rise)) * id;
       u[2] = (u[2] + h * (fz / DRAG_T + uz * rise)) * id;
       x += u[0] * h; y += u[1] * h; z += u[2] * h;
-      // the walls: inside the rounded box, its radius and a little in
-      const m = b.R + 0.004 * st.size, core = st.half - Math.max(st.b, m), rad = Math.max(0, st.b - m);
+      // the walls: inside the rounded box - and a full cube's skin - far enough in that the whole of it stays
+      // under the skin with the jelly squeezed (its radius and a third, and its surface map's relief: just its
+      // radius in, one by the skin poked out through it)
+      const m = 1.33 * b.R + 0.006 * st.size + (st.skinD || 0) + this._relief(b.slot), core = st.half - Math.max(st.b, m), rad = Math.max(0, st.b - m);
       const cx = Math.max(-core, Math.min(core, x)), cy = Math.max(-core, Math.min(core, y)), cz = Math.max(-core, Math.min(core, z));
       const dx = x - cx, dy = y - cy, dz = z - cz, d2 = dx * dx + dy * dy + dz * dz;
       let top = false;

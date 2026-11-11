@@ -45,6 +45,10 @@ export class Glitter {
     this.ln = new Float32Array(MAX * 3);
     this.lw = new Float32Array(MAX * 3);
     this.lz = new Uint8Array(MAX);
+    // (whether each flake's loose place is its own still - kept through a cut, a re-cube, a change of how many:
+    // see _anchor - and the size each cube was when they were placed)
+    this.lpOK = new Uint8Array(MAX);
+    this._anSize = new Float64Array(8);
     // (each flake's own drift's phases, as sines and cosines: k, 1.7k, 0.7k - its drift then a sum, not three
     // sines a flake a frame; and where in its tet it was found last)
     this.lph = new Float32Array(MAX * 6);
@@ -341,7 +345,7 @@ export class Glitter {
     this.groups = cubes.filter((c) => c.style.glitter && c.style.glitter !== 'off').map((c) => ({ slot: c.slot, mode: GLITTER_MODES[c.style.glitter] ?? 0, loose: false }));
     // the cubes with water in them - a snow globe's, or any cube full of liquid (how thick: 0 water .. 1 near
     // solid; a snow globe's water) - and so every flake in them loose, whatever its kind
-    this.waters = cubes.filter((c) => c.style.glitter === 'snow' || c.tune?.liquid > 0.5).map((c) => ({ slot: c.slot, visc: c.tune?.liquid > 0.5 ? (c.tune.liqVisc ?? 0.15) : 0 }));
+    this.waters = cubes.filter((c) => c.style.glitter === 'snow' || c.tune?.liquid > 0.5).map((c) => ({ slot: c.slot, visc: c.tune?.liquid > 0.5 ? (c.tune.liqVisc ?? 0.15) : 0, skin: c.tune?.liquid > 0.5 ? (c.tune.liqSkin ?? 0.5) : -1 }));
     for (const g of this.groups) g.loose = this.waters.some((w) => w.slot === g.slot);
     this.anyCubic = this.groups.some((g) => g.mode === 4);
     this.anySnow = this.groups.some((g) => g.loose);
@@ -355,6 +359,13 @@ export class Glitter {
     const sb = this.app.sb, B = this.app.bubbles;
     // (and where the bubbles are: the flakes keep out of them)
     return `${this.count}|${this.size.toFixed(3)}|${this.groups.map((g) => g.slot + ':' + g.mode + ':' + (g.loose ? 'l' : '') + sb.cSize[g.slot].toFixed(4)).join(',')}|${B ? B.version : ''}`;
+  }
+
+  // How far in a full cube's skin reaches (m): what's in the liquid stops there - ultrathin, half a percent of
+  // its size; medium, a twenty-fifth; thick, nearly a twelfth. 0: no skin (solid, a snow globe's).
+  _skinDepth(slot) {
+    const w = this.waters.find((x) => x.slot === slot);
+    return w && w.skin >= 0 ? this.app.sb.cSize[slot] * (0.006 + 0.07 * w.skin) : 0;
   }
 
   // The bubbles, cube by cube, in a grid of their rest places - for the
@@ -380,16 +391,22 @@ export class Glitter {
     const grid = this._bubbleGrid();
     const out = { tet: -1, b0: 0, b1: 0, b2: 0, b3: 0 };
     const n = this.count, G = this.groups.length ? this.groups : [{ slot: 0, mode: 0 }];
+    const RK0 = this.aRestK.array, MD0 = this.aMode.array, OK = this.lpOK;
     for (let k = 0; k < n; k++) {
       // (shared out among the glittery cubes, each in its own rest space)
       const grp = G[k % G.length];
-      // (each cube its own size)
-      const half = sb.cSize[grp.slot] / 2, m = Math.min(0.03, half * 0.06);
-      let px = this.u[k * 3] * (half - m), py = this.u[k * 3 + 1] * (half - m), pz = this.u[k * 3 + 2] * (half - m);
+      // (each cube its own size - a full one's flakes inside its skin)
+      const half = sb.cSize[grp.slot] / 2, m = Math.min(0.03, half * 0.06) + this._skinDepth(grp.slot);
+      // Loose, and placed in this same cube, as this kind, at this size: where it is now - a cut, a re-cube, a
+      // change in how many there are left it where it was (a cut put a snow globe's flakes back where they
+      // started, its bubbles staying put); else where its own sequence puts it
+      const kept = grp.loose && OK[k] && RK0[k * 4 + 3] === grp.slot && MD0[k] === grp.mode && this._anSize[grp.slot] === sb.cSize[grp.slot];
+      let px = kept ? this.lp[k * 3] : this.u[k * 3] * (half - m), py = kept ? this.lp[k * 3 + 1] : this.u[k * 3 + 1] * (half - m), pz = kept ? this.lp[k * 3 + 2] : this.u[k * 3 + 2] * (half - m);
+      OK[k] = 0;
       // (not in a bubble, nor touching one: a flake that would be is moved -
       // to the first of a few other places, in its own sequence, clear of
       // them all - or, none clear, it's left out)
-      const bg = grid[grp.slot];
+      const bg = kept ? null : grid[grp.slot];
       if (bg) {
         const fr = 0.0072 * this.size * sb.cSize[grp.slot] * this.seed[k * 3] * 1.4 + 0.004;
         const clear = (x, y, z) => {
@@ -443,12 +460,16 @@ export class Glitter {
       this.aInfo.array[k * 2 + 1] = sb.tPiece[t];
       this.aRestK.array.set([px, py, pz, grp.slot], k * 4);
       if (grp.loose) {
-        this.lp[k * 3] = px; this.lp[k * 3 + 1] = py; this.lp[k * 3 + 2] = pz;
-        this.lv[k * 3] = this.lv[k * 3 + 1] = this.lv[k * 3 + 2] = 0;
-        this.ln[k * 3] = nx; this.ln[k * 3 + 1] = ny; this.ln[k * 3 + 2] = nz;
-        this.lz[k] = 0;
+        OK[k] = 1;
+        if (!kept) {
+          this.lp[k * 3] = px; this.lp[k * 3 + 1] = py; this.lp[k * 3 + 2] = pz;
+          this.lv[k * 3] = this.lv[k * 3 + 1] = this.lv[k * 3 + 2] = 0;
+          this.ln[k * 3] = nx; this.ln[k * 3 + 1] = ny; this.ln[k * 3 + 2] = nz;
+          this.lz[k] = 0;
+        }
       }
     }
+    for (const g of G) this._anSize[g.slot] = sb.cSize[g.slot];
     this.globes.clear();
     this.lt.fill(-1); // (the mesh is new: each loose flake found in it afresh)
     for (const at of [this.aTet, this.aBary, this.aM, this.aSeed, this.aInfo, this.aMode, this.aRestK]) at.needsUpdate = true;
@@ -479,9 +500,10 @@ export class Glitter {
       let pc = null, np = 0;
       for (const p of sb.pieces) if (p.cube === slot && ++np === 1) pc = p;
       let st = this.globes.get(slot);
-      if (!st) this.globes.set(slot, (st = { vel: null, w: [0, 0, 0], spin: [0, 0, 0], stir: 0, down: [0, -1, 0], wake: true, on: false, ph: Math.random() * 6, stirred: false, pull: null, gmag: 0, size: 0, half: 0, b: 0, k: 0, visc: 0 }));
+      if (!st) this.globes.set(slot, (st = { vel: null, w: [0, 0, 0], spin: [0, 0, 0], stir: 0, down: [0, -1, 0], wake: true, on: false, ph: Math.random() * 6, stirred: false, pull: null, gmag: 0, size: 0, half: 0, b: 0, k: 0, visc: 0, skinD: 0 }));
       st.on = np === 1;
       st.visc = visc;
+      st.skinD = wat.skin >= 0 ? sb.cSize[slot] * (0.006 + 0.07 * wat.skin) : 0;
       if (!st.on) continue;
       const F = frameOf(sb, pc.verts), ax = F.ax, v = pc.vel;
       const acc = st.vel ? [(v[0] - st.vel[0]) / dt, (v[1] - st.vel[1]) / dt, (v[2] - st.vel[2]) / dt] : [0, 0, 0];
@@ -587,8 +609,8 @@ export class Glitter {
       uy = (uy + dt * (fy / DRAG_T + pl[1] * own)) * id;
       uz = (uz + dt * (fz / DRAG_T + pl[2] * own)) * id;
       x += ux * dt; y += uy * dt; z += uz * dt;
-      // the walls: inside the rounded box, a flake's width in
-      const m = Math.min(0.03, st.half * 0.06), core = st.half - Math.max(st.b, m), rad = Math.max(0, st.b - m);
+      // the walls: inside the rounded box, a flake's width in - and a full cube's skin
+      const m = Math.min(0.03, st.half * 0.06) + st.skinD, core = st.half - Math.max(st.b, m), rad = Math.max(0, st.b - m);
       const cx = Math.max(-core, Math.min(core, x)), cy = Math.max(-core, Math.min(core, y)), cz = Math.max(-core, Math.min(core, z));
       const dx = x - cx, dy = y - cy, dz = z - cz, d2 = dx * dx + dy * dy + dz * dz;
       let wall = false;
