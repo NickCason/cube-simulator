@@ -10,9 +10,10 @@ import { SWIRL } from './glitter.js';
 const MAX = 240;
 // Loose in a snow globe's water (see tick; the water's Glitter._loose): how hard a bubble's borne up (a share of
 // the pull the flakes sink by, felt the other way - a big one more), how quickly the water drags it its way
-// (s), how long one that's reached the top lasts there before it bursts (s, at random between), how many stay
-// there for good (till a shake sends them off again), and how long a burst takes (s).
-const BUOY = 0.16, DRAG_T = 0.12, POP_T = [0.3, 3], STAY = 0.3, BURST = 0.07;
+// (s). Shut in, none of their air gets out: two that touch run together into one (MERGE: how often a second,
+// the film between them drained - each as big as the cube's size times BIG at most), and the water churned
+// up past CHURN breaks a big one in two (SPLIT: how often a second, for one twice SPLIT_R across).
+const BUOY = 0.16, DRAG_T = 0.12, MERGE = 0.6, BIG = 0.1, CHURN = 0.6, SPLIT = 1.6, SPLIT_R = 0.016;
 
 export class Bubbles {
   constructor(app) {
@@ -293,43 +294,31 @@ export class Bubbles {
         const d = roundBoxSDF(x, y, z, half, bev);
         if (d > -(R + spare)) R = -d - spare;
         if (!(R > 0.0015 * size)) continue; // (no room for it)
-        const r = sb.locateRest(x + slot * REST_STEP, y, z), q = (j + slot * 61) % MAX;
-        // (and, loose: how it's moving, whether it's one that stays at the top - a hash of its place in the
-        // pattern, not the pattern's own draws, which would move every cube's bubbles - whether it's up there,
-        // when it bursts, how much of it's left bursting, gone)
-        this.items.push({ slot, u: P.u, r: P.r, scale: w.scale, R, c: [x, y, z], a: r ? { tet: r.tet, b: r.bary, lost: false } : { tet: -1, b: [0, 0, 0, 0], lost: false }, open: false, v: [0, 0, 0], stay: (Math.imul(q + 1, 2654435761) >>> 0) % 1000 < STAY * 1000, top: false, popAt: 0, life: 1, gone: false });
+        const r = sb.locateRest(x + slot * REST_STEP, y, z);
+        // (and, loose: how it's moving, whether it's up against the top, how much of it's left - a burst's
+        // shrinking - gone: run into another, or burst)
+        this.items.push({ slot, u: P.u, r: P.r, scale: w.scale, R, c: [x, y, z], a: r ? { tet: r.tet, b: r.bary, lost: false } : { tet: -1, b: [0, 0, 0, 0], lost: false }, open: false, v: [0, 0, 0], top: false, life: 1, gone: false });
       }
     }
   }
 
   // A snow globe's bubbles, loose in its water (App.frame, just after the flakes' step - Glitter.tick, the
   // globe's water as it is this frame): borne up, carried by its swirl, kept off the walls - each one's place
-  // at rest moved, as the flakes' are, and found again in the mesh. Those that reach the top burst after a
-  // moment, but for a few that stay there; a shake sends those off again. (Cut up, they're left where they
-  // are - the water's gone with the globe.)
+  // at rest moved, as the flakes' are, and found again in the mesh. Shut in, none of their air gets out: they
+  // gather under the top, crowd into a layer there and run together into bigger ones; a good shake breaks
+  // the big ones up (see _crowd). (Cut up, they're left where they are - the water's gone with the globe.)
   tick(time) {
     const app = this.app, sb = app.sb, globes = app.glitter?.globes;
     const dt = this._lt < 0 ? 0 : Math.min(0.05, time - this._lt);
     this._lt = time;
     this.looseMoved = false;
     if (!(dt > 0) || app.paused || !globes?.size || !this.items.length) return;
-    const h = dt * (app.timeScale ?? 1), id = 1 / (1 + h / DRAG_T), X = sb.X, T = sb.T, B = sb.B, nT = sb.nT;
+    const h = dt * (app.timeScale ?? 1), id = 1 / (1 + h / DRAG_T);
     let moved = false;
     for (const b of this.items) {
       if (b.gone || b.open || b.a.lost || b.a.tet < 0) continue;
       const st = globes.get(b.slot);
       if (!st || !st.on || !st.pull || !(st.gmag > 0)) continue;
-      // bursting: gone in a blink
-      if (b.popAt && time >= b.popAt) {
-        b.life -= h / BURST;
-        moved = true;
-        if (b.life <= 0) {
-          b.life = 0;
-          b.gone = true;
-          this._burst(b);
-        }
-        continue;
-      }
       const u = b.v;
       // (up at the top and still there, the water calm, up still up: left be)
       if (b.top && !st.stirred && !u[0] && !u[1] && !u[2]) continue;
@@ -378,36 +367,115 @@ export class Bubbles {
           if (!st.stirred && u[0] * u[0] + u[1] * u[1] + u[2] * u[2] < lim * lim) u[0] = u[1] = u[2] = 0;
         }
       }
-      // up there: its moment counted out - unless it's one that stays; swept off again, not
-      if (top && !b.top && !b.stay) b.popAt = time + POP_T[0] + Math.random() * (POP_T[1] - POP_T[0]);
-      else if (!top) b.popAt = 0;
       b.top = top;
       c[0] = x; c[1] = y; c[2] = z;
-      // found in the mesh: still in its tet (most frames), else looked up
-      const RX = x + b.slot * REST_STEP, a = b.a, t0 = a.tet;
-      let found = false;
-      if (t0 < nT) {
-        const i = T[t0 * 4] * 3, o = t0 * 9, rx = RX - X[i], ry = y - X[i + 1], rz = z - X[i + 2];
-        const b1 = B[o] * rx + B[o + 1] * ry + B[o + 2] * rz, b2 = B[o + 3] * rx + B[o + 4] * ry + B[o + 5] * rz, b3 = B[o + 6] * rx + B[o + 7] * ry + B[o + 8] * rz, b0 = 1 - b1 - b2 - b3;
-        if (b0 >= -1e-6 && b1 >= -1e-6 && b2 >= -1e-6 && b3 >= -1e-6) {
-          a.b[0] = b0; a.b[1] = b1; a.b[2] = b2; a.b[3] = b3;
-          found = true;
-        }
-      }
-      if (!found) {
-        const r = sb.locateRestFast(RX, y, z, this._out);
-        if (r) {
-          a.tet = r.tet;
-          a.b[0] = r.b0; a.b[1] = r.b1; a.b[2] = r.b2; a.b[3] = r.b3;
-        }
-      }
+      this._locate(b);
       moved = true;
     }
+    if (this._crowd(h, globes)) moved = true;
     if (moved) this._looseV++;
     this.looseMoved = moved;
   }
 
-  // a bubble bursting: a pinch of spray and a tiny 'plip', where it was
+  // found in the mesh where it is now: still in its tet (most frames), else looked up
+  _locate(b) {
+    const sb = this.app.sb, X = sb.X, T = sb.T, B = sb.B, c = b.c, RX = c[0] + b.slot * REST_STEP, y = c[1], z = c[2], a = b.a, t0 = a.tet;
+    if (t0 >= 0 && t0 < sb.nT) {
+      const i = T[t0 * 4] * 3, o = t0 * 9, rx = RX - X[i], ry = y - X[i + 1], rz = z - X[i + 2];
+      const b1 = B[o] * rx + B[o + 1] * ry + B[o + 2] * rz, b2 = B[o + 3] * rx + B[o + 4] * ry + B[o + 5] * rz, b3 = B[o + 6] * rx + B[o + 7] * ry + B[o + 8] * rz, b0 = 1 - b1 - b2 - b3;
+      if (b0 >= -1e-6 && b1 >= -1e-6 && b2 >= -1e-6 && b3 >= -1e-6) {
+        a.b[0] = b0; a.b[1] = b1; a.b[2] = b2; a.b[3] = b3;
+        return;
+      }
+    }
+    const r = sb.locateRestFast(RX, y, z, this._out);
+    if (r) {
+      a.tet = r.tet;
+      a.b[0] = r.b0; a.b[1] = r.b1; a.b[2] = r.b2; a.b[3] = r.b3;
+    }
+  }
+
+  // Shut in, their air's all kept. Two touching run together into one - now and then, not at once: the film
+  // between them has to drain - as much air as the two, where they were (the bigger's way); short of that,
+  // they're kept apart, so a crowd under the top spreads into a layer. The water churned up hard breaks a big
+  // one in two - each half its air - side by side. (Whether anything moved.)
+  _crowd(h, globes) {
+    const items = this.items, n = items.length, pm = 1 - Math.exp(-MERGE * h);
+    let changed = false;
+    for (let i = 0; i < n; i++) {
+      const A = items[i];
+      if (A.gone || A.open || A.a.lost || A.a.tet < 0) continue;
+      const st = globes.get(A.slot);
+      if (!st || !st.on || !st.pull) continue;
+      // churned up: a big one in two
+      const rs = SPLIT_R * st.size;
+      if (st.stir > CHURN && A.R > rs && Math.random() < 1 - Math.exp(-SPLIT * (st.stir - CHURN) * (A.R / rs - 1) * h)) {
+        const B = this._spare();
+        if (B) {
+          const R = A.R / Math.cbrt(2), z = Math.random() * 2 - 1, th = Math.random() * 6.2832, q = Math.sqrt(1 - z * z);
+          const ox = q * Math.cos(th) * R, oy = z * R, oz = q * Math.sin(th) * R;
+          B.slot = A.slot;
+          B.u = [Math.random() * 2 - 1, Math.random() * 2 - 1, Math.random() * 2 - 1];
+          B.r = A.r;
+          B.scale = A.scale;
+          B.R = A.R = R;
+          B.c = [A.c[0] + ox, A.c[1] + oy, A.c[2] + oz];
+          A.c[0] -= ox; A.c[1] -= oy; A.c[2] -= oz;
+          B.a = { tet: A.a.tet, b: [...A.a.b], lost: false };
+          B.open = false;
+          B.v = [A.v[0], A.v[1], A.v[2]];
+          B.top = A.top = false;
+          B.life = 1;
+          B.gone = false;
+          this._locate(A);
+          this._locate(B);
+          changed = true;
+        }
+      }
+      for (let j = i + 1; j < n; j++) {
+        const B = items[j];
+        if (B.gone || B.slot !== A.slot || B.open || B.a.lost || B.a.tet < 0) continue;
+        const dx = B.c[0] - A.c[0], dy = B.c[1] - A.c[1], dz = B.c[2] - A.c[2], d2 = dx * dx + dy * dy + dz * dz, rr = A.R + B.R;
+        if (d2 >= rr * rr) continue;
+        // (touching: run together, now and then - into the bigger, where the two were, weighed by their air)
+        const R = Math.cbrt(A.R * A.R * A.R + B.R * B.R * B.R);
+        if (R < BIG * st.size && Math.random() < pm) {
+          const [K, L] = A.R >= B.R ? [A, B] : [B, A], wk = K.R * K.R * K.R, wl = L.R * L.R * L.R, wt = wk + wl;
+          for (let k = 0; k < 3; k++) {
+            K.c[k] = (K.c[k] * wk + L.c[k] * wl) / wt;
+            K.v[k] = (K.v[k] * wk + L.v[k] * wl) / wt;
+          }
+          K.R = R;
+          K.top = false;
+          L.gone = true;
+          this._locate(K);
+          changed = true;
+          if (L === A) break;
+          continue;
+        }
+        // (else kept apart: each moved off half of how far they're in each other - till they're nearly clear)
+        const d = Math.sqrt(d2);
+        if (d > 0.9 * rr) continue;
+        const ux = d > 1e-6 ? dx / d : 1, uy = d > 1e-6 ? dy / d : 0, uz = d > 1e-6 ? dz / d : 0, push = (0.9 * rr - d) / 2;
+        A.c[0] -= ux * push; A.c[1] -= uy * push; A.c[2] -= uz * push;
+        B.c[0] += ux * push; B.c[1] += uy * push; B.c[2] += uz * push;
+        A.top = B.top = false;
+        changed = true;
+      }
+    }
+    return changed;
+  }
+
+  // a bubble to break another into: one that's gone, else a new one, while there's room
+  _spare() {
+    for (const b of this.items) if (b.gone && !b.open) return b;
+    if (this.items.length >= MAX) return null;
+    const b = { slot: 0, u: [0, 0, 0], r: 0, scale: 1, R: 0, c: [0, 0, 0], a: { tet: -1, b: [0, 0, 0, 0], lost: false }, open: false, v: [0, 0, 0], top: false, life: 1, gone: true };
+    this.items.push(b);
+    return b;
+  }
+
+  // a bubble bursting where it meets the open air (a cut's spill - to come): a pinch of spray and a tiny 'plip'
   _burst(b) {
     const app = this.app, sb = app.sb, t = this._t;
     if (!(b.a.tet >= 0 && b.a.tet < sb.nT)) return;

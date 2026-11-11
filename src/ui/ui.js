@@ -239,6 +239,7 @@ export class UI {
           <label class="row tiles"><span class="name">Subdivide</span><input type="range" min="1" max="${MAX_TILES}" step="1" aria-label="The cube as little cubes, each with the whole gradient"><span class="word"></span></label>
         </div>
         <div class="sec"><span class="lbl">Material</span><div class="mats" role="group" aria-label="Material"></div></div>
+        <div class="sec"><span class="lbl">Filling <em>the liquid and its skin in Settings</em></span><div class="seg fill" role="group" aria-label="Filling"></div></div>
         <div class="sec"><span class="lbl">Glitter</span><div class="seg glit"></div></div>
         <div class="sec"><span class="lbl">Edges</span><div class="seg edges"></div></div>
         <div class="sec"><span class="lbl">Trim <em>size and depth in Settings</em></span><div class="mats trims" role="group" aria-label="Trim"></div></div>
@@ -404,6 +405,23 @@ export class UI {
         app.setTexture(id);
       });
       this.matsEl.appendChild(b);
+    }
+    // solid jelly, or a skin of it full of liquid (Settings > Liquid: the same switch)
+    const fillSeg = this.paletteEl.querySelector('.seg.fill');
+    for (const [id, name] of [['solid', 'Solid'], ['liquid', 'Liquid']]) {
+      const b = document.createElement('button');
+      b.className = 'opt';
+      b.dataset.fill = id;
+      b.textContent = name;
+      b.addEventListener('click', () => {
+        app.audio.ui();
+        const on = id === 'liquid';
+        if (on === app.settings.liquid > 0.5) return;
+        app.setSetting('liquid', on ? 1 : 0, true);
+        this._showLiquid?.();
+        this.hint(on ? 'Full of liquid · how thick, and its skin, in Settings' : 'Solid jelly again', 2400);
+      });
+      fillSeg.appendChild(b);
     }
     const glitSeg = this.paletteEl.querySelector('.seg.glit');
     for (const gl of GLITTERS) {
@@ -966,6 +984,9 @@ export class UI {
     this._surfHex = hex;
     if (this._surfsPainted) this._tintSurfaces();
     for (const b of this.paletteEl.querySelectorAll('.opt[data-glit]')) b.classList.toggle('active', b.dataset.glit === style.glitter);
+    const liquid = this.app.settings.liquid > 0.5;
+    for (const b of this.paletteEl.querySelectorAll('.opt[data-fill]')) b.classList.toggle('active', (b.dataset.fill === 'liquid') === liquid);
+    this._showLiquid?.();
   }
 
   // the logo gives a jiggle (a new jelly; the splash's name landing in it)
