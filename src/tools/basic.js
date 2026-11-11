@@ -861,6 +861,8 @@ export class HoleGunTool extends NailGunTool {
       return false;
     }
     const power = app.st?.gunPower ?? 1;
+    // (a cube full of liquid: what's crushed out is its liquid - a splash of it, not beads of jelly)
+    const hitPc = sb.pieces[segs[0][2]], wet = !!hitPc && sb.cLiq[hitPc.cube] > 0;
     const at = (t) => new THREE.Vector3(o.x + d.x * t, o.y + d.y * t, o.z + d.z * t);
     const entry = at(segs[0][0]);
     // frozen there: it shatters (as under the mallet)
@@ -916,11 +918,14 @@ export class HoleGunTool extends NailGunTool {
     // of a blind hole), a splash back out of the entry
     const out = through ? B : A, outDir = through ? d : d.clone().negate();
     let k = 0;
+    const col = wet ? new THREE.Color(app.flavorColorAt(out.x, out.y, out.z)) : null;
     for (let v = vol * 0.8; v > 0 && k < 26; k++) {
       const rr = 0.012 + Math.random() * 0.022;
       v -= (4 / 3) * Math.PI * rr ** 3;
       const dir = outDir.clone().add(new THREE.Vector3(Math.random() - 0.5, Math.random() - 0.3, Math.random() - 0.5).multiplyScalar(0.7)).normalize();
-      app.droplets.spawn(out.clone().addScaledVector(dir, 0.03), dir.multiplyScalar((through ? 5 : 2.5) + Math.random() * 4), rr);
+      const p0 = out.clone().addScaledVector(dir, 0.03), vel = dir.multiplyScalar((through ? 5 : 2.5) + Math.random() * 4);
+      if (wet) app.fluid.add(p0.x, p0.y, p0.z, (4 / 3) * Math.PI * rr ** 3 * 3, vel.x * 0.6, vel.y * 0.6, vel.z * 0.6, col.r, col.g, col.b, 0.04, 0, 0.03);
+      else app.droplets.spawn(p0, vel, rr);
     }
     for (let j = 0; j < 3; j++) {
       const dir = d.clone().negate().add(new THREE.Vector3(Math.random() - 0.5, Math.random() * 0.6, Math.random() - 0.5).multiplyScalar(0.8)).normalize();

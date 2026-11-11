@@ -133,8 +133,9 @@ export class SoftBody {
     this.tPr = null; // per tet: how much more than its volume it wants (a liquid-filled cube's inside: its skin kept taut)
     this._liqTopo = -1; // (the mesh tLq was made for, and whether a cube's liquid's changed since)
     this._liqDirty = true;
-    this._skinT = null; // (scratch for _liquidTets: the skin's tets, its vertices)
+    this._skinT = null; // (scratch for _liquidTets: the skin's tets, its vertices, and which pieces lie open)
     this._skinV = null;
+    this._liqOpen = null;
     this._bpNV = 0; // vertex count at the last _buildPieces (0: nothing carries over)
     this._carried = null; // per piece: carried over unchanged by the last rebuild (see _buildPieces)
     // Every field the physics ever sets, here and in this order - each a placeholder of the kind it will hold.
@@ -863,6 +864,18 @@ export class SoftBody {
       // was, the liquid sank out from under its top and it dished in like a bowl)
       Pr[t] = s ? 0 : 0.06;
     }
+    // (opened - liquid lying bare anywhere in a piece - none of its liquid's pushing out any more: it bulged
+    // up out of the cut, and what was left in a cup stood in a hump)
+    const open = this._liqOpen && this._liqOpen.length >= this.pieces.length ? this._liqOpen : (this._liqOpen = new Uint8Array(Math.max(64, this.pieces.length * 2)));
+    open.fill(0, 0, this.pieces.length);
+    let anyOpen = false;
+    for (let f = 0; f < this.nF; f++) {
+      const t = sTet[f];
+      if (sTag[f] === TAG_EXTERIOR || !liq[tc[t]] || Pr[t] === 0) continue;
+      open[this.tPiece[t]] = 1;
+      anyOpen = true;
+    }
+    if (anyOpen) for (let t = 0; t < nT; t++) if (open[this.tPiece[t]]) Pr[t] = 0;
   }
 
   // Cube k becomes cube j (a free slot): its rest shape moves over with it,

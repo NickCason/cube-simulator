@@ -27,7 +27,7 @@ export const SETTINGS = [
   // Full of liquid (the switch at the head of the group: see Ui), how thick that is, how thick its skin (see
   // SoftBody._liquidTets): each cube its own, kept through a change of material
   { id: 'liquid', group: 'Liquid', label: 'Filled', key: 'liquid', def: 0, ...linMap(0, 1), hidden: true, words: ['Off', 'On'] },
-  { id: 'liqVisc', group: 'Liquid', label: 'Liquid', key: 'liqVisc', def: 0.15, ...linMap(0, 1), words: ['Water', 'Syrup', 'Glue', 'Gel', 'Near solid'] },
+  { id: 'liqVisc', group: 'Liquid', label: 'Viscosity', key: 'liqVisc', def: 0.15, ...linMap(0, 1), words: ['Water', 'Syrup', 'Glue', 'Gel', 'Near solid'] },
   { id: 'liqSkin', group: 'Liquid', label: 'Skin', key: 'liqSkin', def: 0.5, ...linMap(0, 1), words: ['Ultrathin', 'Thin', 'Medium', 'Thick'] },
   { id: 'opacity', group: 'Look', label: 'Opacity', key: 'opacity', mat: true, ...linMap(0, 1), words: ['Clear', 'Hazy', 'Cloudy', 'Milky', 'Solid'] },
   { id: 'translucency', group: 'Look', label: 'Translucency', key: 'glow', mat: true, ...linMap(0, 1), words: ['Dull', 'Soft', 'Glowing', 'Radiant'] },

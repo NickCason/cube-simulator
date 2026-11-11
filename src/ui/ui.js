@@ -239,7 +239,10 @@ export class UI {
           <label class="row tiles"><span class="name">Subdivide</span><input type="range" min="1" max="${MAX_TILES}" step="1" aria-label="The cube as little cubes, each with the whole gradient"><span class="word"></span></label>
         </div>
         <div class="sec"><span class="lbl">Material</span><div class="mats" role="group" aria-label="Material"></div></div>
-        <div class="sec"><span class="lbl">Filling <em>the liquid and its skin in Settings</em></span><div class="seg fill" role="group" aria-label="Filling"></div></div>
+        <div class="sec"><span class="lbl">Filling</span><div class="seg fill" role="group" aria-label="Filling"></div>
+          <label class="row liqVisc" hidden><span class="name">Viscosity</span><input type="range" min="0" max="1" step="0.001" aria-label="How thick the liquid is"><span class="word"></span></label>
+          <label class="row liqSkin" hidden><span class="name">Skin</span><input type="range" min="0" max="1" step="0.001" aria-label="How thick its skin is"><span class="word"></span></label>
+        </div>
         <div class="sec"><span class="lbl">Glitter</span><div class="seg glit"></div></div>
         <div class="sec"><span class="lbl">Edges</span><div class="seg edges"></div></div>
         <div class="sec"><span class="lbl">Trim <em>size and depth in Settings</em></span><div class="mats trims" role="group" aria-label="Trim"></div></div>
@@ -419,9 +422,23 @@ export class UI {
         if (on === app.settings.liquid > 0.5) return;
         app.setSetting('liquid', on ? 1 : 0, true);
         this._showLiquid?.();
-        this.hint(on ? 'Full of liquid · how thick, and its skin, in Settings' : 'Solid jelly again', 2400);
+        this.hint(on ? 'Full of liquid · how thick it is, and its skin, just below' : 'Solid jelly again', 2400);
       });
       fillSeg.appendChild(b);
+    }
+    // (and, full of liquid, how thick it is and its skin - the same as Settings > Liquid's, here where it's chosen)
+    this.fillRows = [];
+    for (const key of ['liqVisc', 'liqSkin']) {
+      const st = SETTINGS.find((x) => x.key === key), row = this.paletteEl.querySelector(`.row.${key}`);
+      const input = row.querySelector('input'), word = row.querySelector('.word');
+      input.addEventListener('input', () => {
+        const v = st.to(+input.value);
+        readout(word, settingWord(st, v), settingNum(st, v));
+        input.style.setProperty('--p', `${input.value * 100}%`);
+        app.setSetting(key, v, !st.release);
+      });
+      if (st.release) input.addEventListener('change', () => app.setSetting(key, st.to(+input.value), true));
+      this.fillRows.push({ st, input, word, row });
     }
     const glitSeg = this.paletteEl.querySelector('.seg.glit');
     for (const gl of GLITTERS) {
@@ -567,7 +584,11 @@ export class UI {
         sw.classList.toggle('on', on);
         word.textContent = on ? 'On' : 'Off';
       };
-      this._showLiquid = () => show(app.settings.liquid > 0.5);
+      this._showLiquid = () => {
+        const on = app.settings.liquid > 0.5;
+        show(on);
+        for (const r of this.fillRows) r.row.hidden = !on;
+      };
       this._showLiquid();
       sw.addEventListener('click', () => {
         app.audio.ui();
@@ -832,8 +853,8 @@ export class UI {
   }
 
   setSettings(st, tex) {
-    for (const key in this.rows) {
-      const { st: def, input, word } = this.rows[key];
+    for (const { st: def, input, word } of [...Object.values(this.rows), ...this.fillRows]) {
+      const key = def.key;
       const v = st[key];
       const t = Math.min(1, Math.max(0, def.from(v)));
       if (document.activeElement !== input) input.value = t;

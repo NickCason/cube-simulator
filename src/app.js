@@ -1515,6 +1515,8 @@ export class App {
       this._selRing(dt);
       this.room.update(dt);
       this.cubiplication.update(dt);
+      // (a cube full of liquid cut open: its liquid out of it before the step - not stepped as jelly once more)
+      if (this.intro.done) this.spill.update(sdt);
       const nS = Math.max(4, Math.min(36, Math.round(this.substepRate * sdt)));
       this.sb.p.substeps = nS;
       const p0 = performance.now();
@@ -1541,7 +1543,6 @@ export class App {
       }
       this.nails.update(sdt);
       this.droplets.update(sdt);
-      this.spill.update(sdt);
       this.fluid.update(sdt);
       this.glitter.poolTick(sdt);
       this.bubbles.poolTick(sdt);

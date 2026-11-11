@@ -57,6 +57,13 @@ export class Fluid {
     this._map = null;
     this.visc = new Float32Array(N).fill(VISC);
     this.thick = new Float32Array(N);
+    // (and how much of it each carries, in particles' worth - more than one, a spill bigger than the pool has
+    // room for: they sit that much further apart, so it fills as much as it did - see Spill)
+    this.mass = new Float32Array(N).fill(1);
+    // (this substep's pushes out of the jelly, per particle, and how fast the jelly there was coming its way -
+    // see _collide: a push out of it isn't a kick)
+    this.cpush = new Float32Array(N * 3);
+    this.cjv = new Float32Array(N);
     this.age = new Float32Array(N);
     this.lam = new Float32Array(N);
     this.dp = new Float32Array(N * 3);
@@ -210,12 +217,13 @@ export class Fluid {
   // Melted jelly in: volume (m^3) at a point, moving at v, its colour (and
   // how strong an acid it is: see AcidTool). Volume collects until there's
   // a particle's worth.
-  add(x, y, z, vol, vx, vy, vz, r, g, b, spread = 0.03, acid = 0, visc = VISC, thick = 0) {
+  add(x, y, z, vol, vx, vy, vz, r, g, b, spread = 0.03, acid = 0, visc = VISC, thick = 0, mass = 1) {
     this.bank += vol;
     spread = Math.max(spread, 0.004); // (never two in one spot)
-    if (this.bank >= this.vol) this.wake();
-    while (this.bank >= this.vol && this.n < this.max) {
-      this.bank -= this.vol;
+    const pv = this.vol * mass, sp2 = D * D * Math.cbrt(mass * mass);
+    if (this.bank >= pv) this.wake();
+    while (this.bank >= pv && this.n < this.max) {
+      this.bank -= pv;
       const i = this.n++, o = i * 3;
       // (the best of a few spots: the one furthest from the liquid already there)
       let best = -1;
@@ -231,7 +239,7 @@ export class Fluid {
           best = m;
           this.x[o] = cx; this.x[o + 1] = cy; this.x[o + 2] = cz;
         }
-        if (m > D * D) break;
+        if (m > sp2) break;
       }
       this.v[o] = vx; this.v[o + 1] = vy; this.v[o + 2] = vz;
       this.col[o] = r; this.col[o + 1] = g; this.col[o + 2] = b;
@@ -241,6 +249,7 @@ export class Fluid {
       this.acidTet[i] = -1;
       this.visc[i] = visc;
       this.thick[i] = thick;
+      this.mass[i] = mass;
     }
     if (this.n >= this.max) this.bank = 0;
     this.mesh.visible = this.n > 0;
@@ -383,6 +392,7 @@ export class Fluid {
         this.acidTet[w] = this.acidTet[i];
         this.visc[w] = this.visc[i];
         this.thick[w] = this.thick[i];
+        this.mass[w] = this.mass[i];
         R.t0[w] = R.t0[i];
         R.T[w] = R.T[i];
         R.h[w] = R.h[i];
@@ -419,6 +429,7 @@ export class Fluid {
         this.acidTet[w] = this.acidTet[i];
         this.visc[w] = this.visc[i];
         this.thick[w] = this.thick[i];
+        this.mass[w] = this.mass[i];
       }
       w++;
     }
@@ -475,9 +486,15 @@ export class Fluid {
       const h = Math.min(dt, 1 / 30) / SUB;
       for (let s = 0; s < SUB; s++) this._step(h);
       const v = this.v;
-      let v2 = 0;
-      for (let o = 0; o < this.n * 3; o += 3) v2 = Math.max(v2, v[o] * v[o] + v[o + 1] * v[o + 1] + v[o + 2] * v[o + 2]);
-      this.stillT = v2 < 0.04 * 0.04 && !this.keepAwake ? this.stillT + dt : 0;
+      let v2 = 0, nMove = 0;
+      for (let o = 0; o < this.n * 3; o += 3) {
+        const s2 = v[o] * v[o] + v[o + 1] * v[o + 1] + v[o + 2] * v[o + 2];
+        if (s2 > v2) v2 = s2;
+        if (s2 > 0.04 * 0.04) nMove++;
+      }
+      // (still: all but a few of it under 4 cm/s, none over half a metre - a big pool's edges kept creeping
+      // for many seconds after the rest was still, and it never slept)
+      this.stillT = v2 < 0.5 * 0.5 && nMove <= Math.max(2, this.n * 0.05) && !this.keepAwake ? this.stillT + dt : 0;
       if (this.stillT > 0.6) {
         this.asleep = true;
         v.fill(0, 0, this.n * 3);
@@ -610,12 +627,14 @@ export class Fluid {
       v[o + 1] += g * h;
       q[o] = x[o] + v[o] * h; q[o + 1] = x[o + 1] + v[o + 1] * h; q[o + 2] = x[o + 2] + v[o + 2] * h;
     }
+    this.cpush.fill(0, 0, n * 3);
+    this.cjv.fill(0, 0, n);
     this._collide(q);
     this._grid(q);
     this._neighbours(q);
     const K6 = this.K6, KS = this.KS, irho = 1 / this.rho0, H2 = H * H, W0 = K6 * H2 * H2 * H2;
     const lam = this.lam, dp = this.dp, NB = this.nb, NS = this.nbStart, eps = this.eps, lim = 0.25 * D;
-    const iDq = 1 / this.wDq, kC = this.kCorr, age = this.age, PW = this.pw, PC = this.pc;
+    const iDq = 1 / this.wDq, kC = this.kCorr, age = this.age, PW = this.pw, PC = this.pc, MS = this.mass;
     // (a lot of it: two rounds - it settles a little lower, but at a third less)
     const rounds = n > 900 ? 2 : ITER;
     for (let it = 0; it < rounds; it++) {
@@ -641,7 +660,9 @@ export class Fluid {
           s2 += w * w * d2;
         }
         // (packed: push apart; thin - the surface - pull together, gently)
-        const C = r * irho - 1;
+        // (one carrying more sits at a lower density - its target 1/mass of the rest's: scaling C by its mass
+        // instead, not its gradient, over-corrected twice over, and flung drops about at metres a second)
+        const C = r * irho - 1 / MS[i];
         lam[i] = -(C > 0 ? C : COH * Math.max(C, -0.35)) / (s2 + gx * gx + gy * gy + gz * gz + eps);
       }
       for (let i = 0; i < n; i++) {
@@ -679,6 +700,18 @@ export class Fluid {
         const k = vm / Math.sqrt(s2);
         vx *= k; vy *= k; vz *= k;
       }
+      // (pushed out of the jelly this substep: no faster out of it than 0.3 m/s, or than the jelly came at it -
+      // pressed into a cut cube's wall by the liquid behind, drops were shoved out through it at metres a second)
+      const cpx = this.cpush[o], cpy = this.cpush[o + 1], cpz = this.cpush[o + 2], cpl = Math.sqrt(cpx * cpx + cpy * cpy + cpz * cpz);
+      // (and none into it - against a wall, at rest, it stays at rest: else each substep it sank back into the
+      // wall and was pushed out again, and a pool in a cut cube churned for ever - a little friction along it)
+      if (cpl > 1e-7) {
+        const nx = cpx / cpl, ny = cpy / cpl, nz = cpz / cpl, vn = vx * nx + vy * ny + vz * nz, cap = Math.max(0.3, this.cjv[o / 3]);
+        const k = vn > cap ? vn - cap : vn < 0 ? vn : 0;
+        vx -= nx * k; vy -= ny * k; vz -= nz * k;
+        const vn2 = vn - k, fr2 = 0.92;
+        vx = nx * vn2 + (vx - nx * vn2) * fr2; vy = ny * vn2 + (vy - ny * vn2) * fr2; vz = nz * vn2 + (vz - nz * vn2) * fr2;
+      }
       v[o] = vx; v[o + 1] = vy; v[o + 2] = vz;
     }
     const dv = this.dp;
@@ -694,11 +727,14 @@ export class Fluid {
       }
       dv[o] = ax; dv[o + 1] = ay; dv[o + 2] = az;
     }
-    const damp = Math.exp(-1.2 * h), fr = 1 - Math.min(1, 6 * h), slush = Math.exp(-14 * h), temp = this.temp, VI = this.visc, TK = this.thick;
+    const damp = Math.exp(-1.2 * h), fr = 1 - Math.min(1, 6 * h), slush = Math.exp(-14 * h), settle = Math.exp(-5 * h), temp = this.temp, VI = this.visc, TK = this.thick;
     for (let o = 0; o < n * 3; o += 3) {
       // (cold enough to set: slush - it hardly flows; thick stuff - glue - drags too)
       const i = o / 3, vi = VI[i], tk = TK[i] > 0 ? Math.exp(-TK[i] * h) : 1;
-      const dm = (temp[i] < SET_T ? slush : damp) * tk;
+      // (slow, it settles: a pool barely moving had a slow churn - drops sinking into the walls and floor and
+      // pushed back - that never died away, and never slept; flowing, it's left be)
+      const sp2 = v[o] * v[o] + v[o + 1] * v[o + 1] + v[o + 2] * v[o + 2];
+      const dm = (temp[i] < SET_T ? slush : damp) * tk * (sp2 < 0.0625 ? settle : 1);
       v[o] = (v[o] + vi * dv[o]) * dm; v[o + 1] = (v[o + 1] + vi * dv[o + 1]) * (temp[i] < SET_T ? damp * tk : dm); v[o + 2] = (v[o + 2] + vi * dv[o + 2]) * dm;
       // (floor friction: thick stuff drags)
       if (q[o + 1] <= R_P * 1.05) {
@@ -894,6 +930,9 @@ export class Fluid {
           }
         }
         q[o] += wx * step; q[o + 1] += wy * step; q[o + 2] += wz * step;
+        const cp = this.cpush, jv = (sb.v[a3] + sb.v[b3] + sb.v[c3] + sb.v[d3]) * 0.25 * wx + (sb.v[a3 + 1] + sb.v[b3 + 1] + sb.v[c3 + 1] + sb.v[d3 + 1]) * 0.25 * wy + (sb.v[a3 + 2] + sb.v[b3 + 2] + sb.v[c3 + 2] + sb.v[d3 + 2]) * 0.25 * wz;
+        cp[o] += wx * step; cp[o + 1] += wy * step; cp[o + 2] += wz * step;
+        if (jv > this.cjv[i]) this.cjv[i] = jv;
         break;
       }
     }
@@ -979,6 +1018,7 @@ export class Fluid {
         this.acidTet[w] = this.acidTet[i];
         this.visc[w] = this.visc[i];
         this.thick[w] = this.thick[i];
+        this.mass[w] = this.mass[i];
       }
       w++;
     }
@@ -1064,7 +1104,9 @@ export class Fluid {
         }
     cand.sort((p, q) => score[q] - score[p]);
     // (a little over: rounding the outline takes some back)
-    const want = Math.round((1.2 * ids.length * this.vol) / (vs * vs * vs));
+    let mv = 0;
+    for (const i of ids) mv += this.mass[i];
+    const want = Math.round((1.2 * mv * this.vol) / (vs * vs * vs));
     const full = new Uint8Array(NV);
     for (let c = 0; c < Math.min(want, cand.length); c++) full[cand[c]] = 1;
     // (bits a voxel or three on their own: dropped - too small to be jelly)
@@ -1223,10 +1265,11 @@ export class Fluid {
       this.geo.setDrawRange(0, 0);
       return;
     }
-    const R = SPLAT_R * D, R2 = R * R;
-    let x0 = Infinity, y0 = Infinity, z0 = Infinity, x1 = -Infinity, y1 = -Infinity, z1 = -Infinity;
+    const R = SPLAT_R * D;
+    let x0 = Infinity, y0 = Infinity, z0 = Infinity, x1 = -Infinity, y1 = -Infinity, z1 = -Infinity, mMax = 1;
     for (let i = 0; i < n; i++) {
       const o = i * 3;
+      if (this.mass[i] > mMax) mMax = this.mass[i];
       x0 = Math.min(x0, x[o]); x1 = Math.max(x1, x[o]);
       y0 = Math.min(y0, x[o + 1]); y1 = Math.max(y1, x[o + 1]);
       z0 = Math.min(z0, x[o + 2]); z1 = Math.max(z1, x[o + 2]);
@@ -1235,7 +1278,7 @@ export class Fluid {
     let c = this.cell * Math.min(1.6, Math.max(1, Math.sqrt(n / 500)));
     // (two cells' margin past the splats; nothing below the floor - the
     // floor hides it, and while draining cuts it off)
-    const pad = R + 2 * c;
+    const pad = R * Math.cbrt(mMax) + 2 * c;
     x0 -= pad; z0 -= pad; x1 += pad; z1 += pad; y1 += pad;
     y0 = Math.max(y0 - pad, 0);
     if (y1 <= y0 + c) {
@@ -1262,8 +1305,10 @@ export class Fluid {
     // (only the grid points near a particle are filled, and only the cells
     // round the ones that come out inside are marched)
     let nt = 0;
-    const ic = 1 / c, rr = Math.ceil(R * ic);
+    const ic = 1 / c;
     for (let p = 0; p < n; p++) {
+      // (one carrying more: as much wider as it sits further from the rest - their splats meet as others' do)
+      const Rp = R * Math.cbrt(this.mass[p]), R2 = Rp * Rp, rr = Math.ceil(Rp * ic);
       const o = p * 3;
       const px = x[o], py = x[o + 1], pz = x[o + 2];
       const ci = Math.round((px - x0) * ic), cj = Math.round((py - y0) * ic), ck = Math.round((pz - z0) * ic);
