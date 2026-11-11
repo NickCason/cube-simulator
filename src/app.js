@@ -1541,9 +1541,11 @@ export class App {
       this.fluid.update(sdt);
       this.flour.update(sdt);
       this.strands.update(sdt);
-      this.bubbles.update();
       this.eyes.update(sdt);
       this.glitter.tick(this.clock.t);
+      // (a snow globe's bubbles move in its water - the flakes' step just made it this frame's)
+      this.bubbles.tick(this.clock.t);
+      this.bubbles.update();
       for (const k in this.tools) if (this.tools[k] !== this.tool && this.tools[k].background) this.tools[k].update(sdt, dt);
       this.particles.update(sdt);
       this._impactSounds();
@@ -1698,7 +1700,7 @@ export class App {
     if (this.sb.anyAwake) return 'moving';
     if (this.healer.active || this.swapper.active || this.cubiplication.active || this._edgeMorph || this._themeAnim || this._placeAnim) return 'changing';
     if (this.flash > 0.004 || this.fireLevel > 0.004 || this._hitStop > 0 || this._shake > 1e-4) return 'light';
-    if (this.glitter.looseMoved || this.eyes.flights.size) return 'flakes';
+    if (this.glitter.looseMoved || this.bubbles.looseMoved || this.eyes.flights.size) return 'flakes';
     if (this.jelly.portraits || this.jelly.warmPending(this.sb)) return 'shaders';
     return '';
   }
@@ -1718,6 +1720,8 @@ export class App {
     arr(cam.matrixWorld.elements, 16);
     arr(cam.projectionMatrix.elements, 16);
     const each = (o) => {
+      // (look - the scene kept for frames of flakes only: what's drawn over it each of those frames, left out)
+      if (look && o.userData.overlay) return;
       arr(o.matrixWorld.elements, 16);
       if (o.isInstancedMesh) {
         this._sigAdd(o.count);

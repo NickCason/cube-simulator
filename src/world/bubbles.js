@@ -5,8 +5,14 @@ import { TAG_FRESH } from '../sim/softbody.js';
 import { MAX_CAVITIES } from '../render/jellyMaterials.js';
 import { closestOnTriangle } from '../sim/geom.js';
 import { roundBoxSDF, roundBoxNormal } from '../sim/mesh.js';
+import { SWIRL } from './glitter.js';
 
 const MAX = 240;
+// Loose in a snow globe's water (see tick; the water's Glitter._loose): how hard a bubble's borne up (a share of
+// the pull the flakes sink by, felt the other way - a big one more), how quickly the water drags it its way
+// (s), how long one that's reached the top lasts there before it bursts (s, at random between), how many stay
+// there for good (till a shake sends them off again), and how long a burst takes (s).
+const BUOY = 0.16, DRAG_T = 0.12, POP_T = [0.3, 3], STAY = 0.3, BURST = 0.07;
 
 export class Bubbles {
   constructor(app) {
@@ -124,6 +130,7 @@ export class Bubbles {
     geo.setAttribute('aBoxLo', this.boxLo);
     geo.setAttribute('aBoxHi', this.boxHi);
     this.mesh.renderOrder = 5; // (after the glitter: see above)
+    this.mesh.userData.overlay = true; // (drawn over the scene as kept - see App._liteNow - moving or not)
     app.fxScene.add(this.mesh);
     let seed = 7;
     const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
@@ -157,6 +164,12 @@ export class Bubbles {
     this._s = new THREE.Vector3();
     this._p = new THREE.Vector3();
     this._t = [0, 0, 0];
+    // (loose in a snow globe - see tick: the clock, a count of moves for update's signature, whether any moved
+    // this tick, and a scratch for finding one in the mesh)
+    this._lt = -1;
+    this._looseV = 0;
+    this.looseMoved = false;
+    this._out = { tet: -1, b0: 0, b1: 0, b2: 0, b3: 0 };
   }
 
   // Each cube's bubbles: [{ slot, count, scale }].
@@ -196,7 +209,7 @@ export class Bubbles {
     let any = false;
     for (let n = 0; n < nb; n++) {
       const bub = items[n];
-      if (bub.a.tet < 0 || bub.a.tet >= sb.nT || bub.a.lost) continue;
+      if (bub.a.tet < 0 || bub.a.tet >= sb.nT || bub.a.lost || bub.gone) continue;
       let cx = 0, cy = 0, cz = 0;
       for (let k = 0; k < 4; k++) {
         const i = T[bub.a.tet * 4 + k] * 3, w = bub.a.b[k];
@@ -280,10 +293,131 @@ export class Bubbles {
         const d = roundBoxSDF(x, y, z, half, bev);
         if (d > -(R + spare)) R = -d - spare;
         if (!(R > 0.0015 * size)) continue; // (no room for it)
-        const r = sb.locateRest(x + slot * REST_STEP, y, z);
-        this.items.push({ slot, u: P.u, r: P.r, scale: w.scale, R, c: [x, y, z], a: r ? { tet: r.tet, b: r.bary, lost: false } : { tet: -1, b: [0, 0, 0, 0] }, open: false });
+        const r = sb.locateRest(x + slot * REST_STEP, y, z), q = (j + slot * 61) % MAX;
+        // (and, loose: how it's moving, whether it's one that stays at the top - a hash of its place in the
+        // pattern, not the pattern's own draws, which would move every cube's bubbles - whether it's up there,
+        // when it bursts, how much of it's left bursting, gone)
+        this.items.push({ slot, u: P.u, r: P.r, scale: w.scale, R, c: [x, y, z], a: r ? { tet: r.tet, b: r.bary, lost: false } : { tet: -1, b: [0, 0, 0, 0], lost: false }, open: false, v: [0, 0, 0], stay: (Math.imul(q + 1, 2654435761) >>> 0) % 1000 < STAY * 1000, top: false, popAt: 0, life: 1, gone: false });
       }
     }
+  }
+
+  // A snow globe's bubbles, loose in its water (App.frame, just after the flakes' step - Glitter.tick, the
+  // globe's water as it is this frame): borne up, carried by its swirl, kept off the walls - each one's place
+  // at rest moved, as the flakes' are, and found again in the mesh. Those that reach the top burst after a
+  // moment, but for a few that stay there; a shake sends those off again. (Cut up, they're left where they
+  // are - the water's gone with the globe.)
+  tick(time) {
+    const app = this.app, sb = app.sb, globes = app.glitter?.globes;
+    const dt = this._lt < 0 ? 0 : Math.min(0.05, time - this._lt);
+    this._lt = time;
+    this.looseMoved = false;
+    if (!(dt > 0) || app.paused || !globes?.size || !this.items.length) return;
+    const h = dt * (app.timeScale ?? 1), id = 1 / (1 + h / DRAG_T), X = sb.X, T = sb.T, B = sb.B, nT = sb.nT;
+    let moved = false;
+    for (const b of this.items) {
+      if (b.gone || b.open || b.a.lost || b.a.tet < 0) continue;
+      const st = globes.get(b.slot);
+      if (!st || !st.on || !st.pull || !(st.gmag > 0)) continue;
+      // bursting: gone in a blink
+      if (b.popAt && time >= b.popAt) {
+        b.life -= h / BURST;
+        moved = true;
+        if (b.life <= 0) {
+          b.life = 0;
+          b.gone = true;
+          this._burst(b);
+        }
+        continue;
+      }
+      const u = b.v;
+      // (up at the top and still there, the water calm, up still up: left be)
+      if (b.top && !st.stirred && !u[0] && !u[1] && !u[2]) continue;
+      const c = b.c, ux = -st.down[0], uy = -st.down[1], uz = -st.down[2];
+      let x = c[0], y = c[1], z = c[2];
+      // the water here, as the flakes feel it (the turning, and the stir's eddies)
+      const sp = st.spin, kk = st.k, ph = st.ph, amp = st.stir * SWIRL * st.size;
+      let fx = sp[1] * z - sp[2] * y, fy = sp[2] * x - sp[0] * z, fz = sp[0] * y - sp[1] * x;
+      if (amp > 0) {
+        const k2 = kk * 2.6, a2 = amp * 0.55;
+        fx += amp * (Math.sin(kk * z + ph) + Math.cos(kk * y + 1.3 * ph)) + a2 * (Math.sin(k2 * z - 1.7 * ph + 1) + Math.cos(k2 * y + 2.1 * ph));
+        fy += amp * (Math.sin(kk * x + 0.7 * ph) + Math.cos(kk * z + ph)) + a2 * (Math.sin(k2 * x + 1.9 * ph + 2) + Math.cos(k2 * z - 1.3 * ph));
+        fz += amp * (Math.sin(kk * y + 1.3 * ph) + Math.cos(kk * x + 0.7 * ph)) + a2 * (Math.sin(k2 * y - 2.3 * ph + 3) + Math.cos(k2 * x + 1.1 * ph));
+      }
+      // (the water churned up: the ones under the top pushed down off it, most so the nearer they are - as the
+      // flakes on the bottom are lifted - and each, rising, rocking from side to side as a bubble does)
+      if (st.stir > 0.15) {
+        const hgt = (x * ux + y * uy + z * uz) / st.half, press = (st.stir - 0.15) * 1.1 * SWIRL * st.size * Math.max(0, 0.5 + 0.5 * hgt);
+        fx -= ux * press; fy -= uy * press; fz -= uz * press;
+      }
+      if (!b.top) {
+        const w = 0.012 * st.size, ph2 = time * (5 + b.r * 300) + b.u[0] * 9;
+        fx += w * Math.sin(ph2); fz += w * Math.cos(ph2 * 0.83 + b.u[2] * 5);
+      }
+      // borne up - a big one faster - and dragged along with the water
+      const rise = st.gmag * BUOY * (0.6 + 0.4 * Math.min(2.5, b.R / (0.008 * st.size)));
+      u[0] = (u[0] + h * (fx / DRAG_T + ux * rise)) * id;
+      u[1] = (u[1] + h * (fy / DRAG_T + uy * rise)) * id;
+      u[2] = (u[2] + h * (fz / DRAG_T + uz * rise)) * id;
+      x += u[0] * h; y += u[1] * h; z += u[2] * h;
+      // the walls: inside the rounded box, its radius and a little in
+      const m = b.R + 0.004 * st.size, core = st.half - Math.max(st.b, m), rad = Math.max(0, st.b - m);
+      const cx = Math.max(-core, Math.min(core, x)), cy = Math.max(-core, Math.min(core, y)), cz = Math.max(-core, Math.min(core, z));
+      const dx = x - cx, dy = y - cy, dz = z - cz, d2 = dx * dx + dy * dy + dz * dz;
+      let top = false;
+      if (d2 > rad * rad && d2 > 0) {
+        const d = Math.sqrt(d2), nx = dx / d, ny = dy / d, nz = dz / d;
+        x = cx + nx * rad; y = cy + ny * rad; z = cz + nz * rad;
+        const un = u[0] * nx + u[1] * ny + u[2] * nz;
+        if (un > 0) { u[0] -= un * nx; u[1] -= un * ny; u[2] -= un * nz; }
+        // (borne up against the top: it slides up along it, slowing, to where it's highest - and there stays)
+        if (nx * ux + ny * uy + nz * uz > 0.55) {
+          top = true;
+          u[0] *= 0.9; u[1] *= 0.9; u[2] *= 0.9;
+          const lim = 0.02 * st.size;
+          if (!st.stirred && u[0] * u[0] + u[1] * u[1] + u[2] * u[2] < lim * lim) u[0] = u[1] = u[2] = 0;
+        }
+      }
+      // up there: its moment counted out - unless it's one that stays; swept off again, not
+      if (top && !b.top && !b.stay) b.popAt = time + POP_T[0] + Math.random() * (POP_T[1] - POP_T[0]);
+      else if (!top) b.popAt = 0;
+      b.top = top;
+      c[0] = x; c[1] = y; c[2] = z;
+      // found in the mesh: still in its tet (most frames), else looked up
+      const RX = x + b.slot * REST_STEP, a = b.a, t0 = a.tet;
+      let found = false;
+      if (t0 < nT) {
+        const i = T[t0 * 4] * 3, o = t0 * 9, rx = RX - X[i], ry = y - X[i + 1], rz = z - X[i + 2];
+        const b1 = B[o] * rx + B[o + 1] * ry + B[o + 2] * rz, b2 = B[o + 3] * rx + B[o + 4] * ry + B[o + 5] * rz, b3 = B[o + 6] * rx + B[o + 7] * ry + B[o + 8] * rz, b0 = 1 - b1 - b2 - b3;
+        if (b0 >= -1e-6 && b1 >= -1e-6 && b2 >= -1e-6 && b3 >= -1e-6) {
+          a.b[0] = b0; a.b[1] = b1; a.b[2] = b2; a.b[3] = b3;
+          found = true;
+        }
+      }
+      if (!found) {
+        const r = sb.locateRestFast(RX, y, z, this._out);
+        if (r) {
+          a.tet = r.tet;
+          a.b[0] = r.b0; a.b[1] = r.b1; a.b[2] = r.b2; a.b[3] = r.b3;
+        }
+      }
+      moved = true;
+    }
+    if (moved) this._looseV++;
+    this.looseMoved = moved;
+  }
+
+  // a bubble bursting: a pinch of spray and a tiny 'plip', where it was
+  _burst(b) {
+    const app = this.app, sb = app.sb, t = this._t;
+    if (!(b.a.tet >= 0 && b.a.tet < sb.nT)) return;
+    sb.embedPoint(b.a.tet, b.a.b, t);
+    const P = app.particles?.add, r = b.R;
+    for (let i = 0; P && i < 5; i++) {
+      const z = Math.random() * 2 - 1, th = Math.random() * Math.PI * 2, q = Math.sqrt(1 - z * z), s = 0.25 + 0.35 * Math.random();
+      P.spawn(t[0] + q * Math.cos(th) * r, t[1] + z * r, t[2] + q * Math.sin(th) * r, q * Math.cos(th) * s, z * s + 0.15, q * Math.sin(th) * s, 0.16 + 0.12 * Math.random(), 0.0035, 0.001, [1, 1, 1, 0.75], [1, 1, 1, 0], 4, 0);
+    }
+    app.audio?.bubble?.(r, app._pan ? app._pan(t[0], t[1], t[2]) : 0);
   }
 
   // (how deep a cube's surface map's hollows go, m)
@@ -323,13 +457,13 @@ export class Bubbles {
     const D = app.jelly.cubeData;
     const ox = cam.position.x, oy = cam.position.y, oz = cam.position.z;
     // (all of it still and seen from where it was: as they were - not worked out and sent up again each frame)
-    const J = app.jelly, sig = J.posVersion + ox * 1.31 + oy * 1.73 + oz * 2.07 + this.version * 3.1 + sb.topoVersion * 5.7 + J.cubeTex.version * 7.3 + this.items.length * 11.9;
+    const J = app.jelly, sig = J.posVersion + ox * 1.31 + oy * 1.73 + oz * 2.07 + this.version * 3.1 + sb.topoVersion * 5.7 + J.cubeTex.version * 7.3 + this.items.length * 11.9 + this._looseV * 13.7;
     if (!sb.anyAwake && sig === this._upSig) return;
     this._upSig = sig;
     const tint = this._tint || (this._tint = new THREE.Color());
     let c = 0;
     for (const b of this.items) {
-      if (b.a.tet < 0 || b.a.tet >= sb.nT || b.a.lost || b.open) continue;
+      if (b.a.tet < 0 || b.a.tet >= sb.nT || b.a.lost || b.open || b.gone) continue;
       const k = sb.tCube[b.a.tet], row = k * CUBE_TEX_W * 4;
       const haze = D[row + 7], vis = (1 - haze) * (1 - haze);
       if (vis <= 0.01) continue;
@@ -362,7 +496,7 @@ export class Bubbles {
       } else {
         lo[c * 3] = hi[c * 3] = px; lo[c * 3 + 1] = hi[c * 3 + 1] = py; lo[c * 3 + 2] = hi[c * 3 + 2] = pz;
       }
-      const fade = vis * Math.exp(-D[row + 3] * L * 0.8);
+      const fade = vis * Math.exp(-D[row + 3] * L * 0.8) * b.life;
       tint.setRGB(
         (0.25 + 0.75 * D[row + 4]) * Math.exp(-D[row] * L) * fade,
         (0.25 + 0.75 * D[row + 5]) * Math.exp(-D[row + 1] * L) * fade,
@@ -370,7 +504,7 @@ export class Bubbles {
       );
       this.mesh.setColorAt(c, tint);
       this._p.set(px, py, pz);
-      this._s.setScalar(b.R);
+      this._s.setScalar(b.R * (1 + 0.35 * (1 - b.life)));
       this._m.compose(this._p, this._q, this._s);
       this.mesh.setMatrixAt(c++, this._m);
     }

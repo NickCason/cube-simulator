@@ -169,6 +169,9 @@ export class Particles {
     this.alpha = new Layer(1500, false);
     this.scene = new THREE.Scene();
     this.scene.add(this.alpha.points, this.add.points);
+    // (drawn over the scene as kept for frames of flakes only - see App._liteNow: a bubble's burst, sparks, mist
+    // don't need it all drawn again)
+    this.alpha.points.userData.overlay = this.add.points.userData.overlay = true;
   }
 
   update(dt) {

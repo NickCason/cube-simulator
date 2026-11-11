@@ -317,6 +317,16 @@ export class AudioEngine {
     this._noise(t, 0.008, 'bandpass', 2600, 2600, 3, g * 0.5, 0.0005, out);
   }
 
+  // A bubble bursting at the top of a snow globe's water: a tiny bright 'plip' - the smaller, the higher - and
+  // a breath of a click (see Bubbles.tick)
+  bubble(size = 0.006, pan = 0) {
+    if (!this.ctx || this.muted || this.impactLevel <= 0 || !this._bucket('bubble', 6, 3)) return;
+    const t = this.ctx.currentTime, out = this._panned(pan);
+    const f = rnd(1300, 1900) * Math.pow(0.006 / Math.max(0.002, size), 0.35), g = 0.03 * this.impactLevel;
+    this._tone(t, 'sine', f, f * 1.9, 0.035, g, 0.001, out);
+    this._noise(t, 0.006, 'bandpass', 3800, 3800, 4, g * 0.35, 0.0005, out);
+  }
+
   // big wet splat (bombs)
   splat(amount = 0.5) {
     if (!this._ok('splat', 0.09)) return;

@@ -16,7 +16,7 @@ const SNOW = 5;
 // way (s), how long it keeps turning once set turning (s), how long a stir
 // lasts (s), and how fast it swirls them, stirred right up (a share of the
 // cube's size, a second).
-const SINK = 0.045, DRAG_T = 0.12, SPIN_T = 2.2, STIR_T = 1.7, SWIRL = 0.32;
+export const SINK = 0.045, DRAG_T = 0.12, SPIN_T = 2.2, STIR_T = 1.7, SWIRL = 0.32;
 
 // Glitter suspended in the jelly. Each flake is anchored barycentrically in a
 // tet; the GPU reads the simulated vertex positions from a float texture, so
@@ -473,7 +473,7 @@ export class Glitter {
       let pc = null, np = 0;
       for (const p of sb.pieces) if (p.cube === slot && ++np === 1) pc = p;
       let st = this.globes.get(slot);
-      if (!st) this.globes.set(slot, (st = { vel: null, w: [0, 0, 0], spin: [0, 0, 0], stir: 0, down: [0, -1, 0], wake: true, on: false, ph: Math.random() * 6 }));
+      if (!st) this.globes.set(slot, (st = { vel: null, w: [0, 0, 0], spin: [0, 0, 0], stir: 0, down: [0, -1, 0], wake: true, on: false, ph: Math.random() * 6, stirred: false, pull: null, gmag: 0, size: 0, half: 0, b: 0, k: 0 }));
       st.on = np === 1;
       if (!st.on) continue;
       const F = frameOf(sb, pc.verts), ax = F.ax, v = pc.vel;
@@ -484,6 +484,7 @@ export class Glitter {
       const pw = [-acc[0] * ak, gy - acc[1] * ak, -acc[2] * ak];
       const pull = [0, 1, 2].map((i) => ax[i].x * pw[0] + ax[i].y * pw[1] + ax[i].z * pw[2]);
       const pl = Math.hypot(pull[0], pull[1], pull[2]) || 1, down = pull.map((c) => c / pl);
+      st.gmag = pl; // (how hard: the bubbles are borne up by it - see Bubbles.tick)
       // (turned since: the water lags it, turning the other way - and what's
       // settled slides off, the floor's not the floor any more)
       const w = [0, 1, 2].map((i) => ax[i].x * pc.omega[0] + ax[i].y * pc.omega[1] + ax[i].z * pc.omega[2]);
