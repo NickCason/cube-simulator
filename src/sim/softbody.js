@@ -1903,14 +1903,18 @@ export class SoftBody {
     const NPp = this.pieces.length;
     if (!this._pressP || this._pressP.length < NPp) this._pressP = new Float64Array(Math.max(NPp, 64));
     this._pressP.fill(0, 0, NPp);
+    // (substeps a look for contact candidates covers - see _hashSegs)
+    let segN = nS;
     if (multi) {
       // A frame's worth (or more) of motion: short frames (slow motion)
       // keep using the candidates until it is used up - unless something
-      // moved the pieces some other way meanwhile.
-      const age = this._hashAge + dt;
-      if (this._hashDirty || age > this._hashSpan * 1.0001 || this.grabs.length || this.pushers.length || this.attract || this._hashTopo !== this.topoVersion) {
-        this._hashSpan = Math.max(dt, 1 / 60);
-        this._hashAge = dt;
+      // moved the pieces some other way meanwhile. A long frame with
+      // something fast in it: looked for afresh every segN substeps.
+      const age = this._hashAge + dt, segs = this._hashSegs(dt, aw);
+      if (segs > 1 || this._hashDirty || age > this._hashSpan * 1.0001 || this.grabs.length || this.pushers.length || this.attract || this._hashTopo !== this.topoVersion) {
+        segN = Math.ceil(nS / segs);
+        this._hashSpan = segs > 1 ? segN * h : Math.max(dt, 1 / 60);
+        this._hashAge = segs > 1 ? segN * h : dt;
         this._hashTopo = this.topoVersion;
         this._hashDirty = false;
         if (lap) lap(0);
@@ -1923,6 +1927,11 @@ export class SoftBody {
       PT[10] += nS;
     }
     for (let s = 0; s < nS; s++) {
+      if (multi && s && s % segN === 0) {
+        this._hashSpan = this._hashAge = Math.min(segN, nS - s) * h;
+        this._buildCollisionHash();
+        if (lap) lap(1);
+      }
       this._integrate(h);
       if (lap) lap(2);
       // (the hand pulls first, then the jelly answers: pulled after its
@@ -1951,6 +1960,36 @@ export class SoftBody {
     this._untangle(dt);
     this._emitImpacts(dt, h);
     if (lap) lap(9);
+  }
+
+  // How many looks for contact candidates this frame: one - or, a piece moving fast against another it could
+  // meet, over a long frame, one for each cell or so of that move (up to 6). The candidates cover all the motion
+  // until the next look, so one look over a phone's 50 ms frame had a cube thrown onto another find every tet
+  // half a metre down through it, for every probe on both: 600k candidates, a 180 ms frame as it landed. (By
+  // the pieces' own speeds, as of the last step - a wobble doesn't count, nor pieces flying apart.)
+  _hashSegs(dt, aw) {
+    const P = this.pieces, NP = P.length;
+    let reach = 0;
+    for (let a = 0; a < NP; a++) {
+      const A = P[a], va = A.vel, ba = A.bbox, ca = A.com;
+      // (a small piece's few probes, and few tets, can't run up many candidates however fast: a pile of diced
+      // bits flying about was looked over again and again for nothing)
+      if (A.verts.length < 150) continue;
+      for (let b = a + 1; b < NP; b++) {
+        if (!aw[a] && !aw[b]) continue;
+        const B = P[b], vb = B.vel, bb = B.bbox;
+        if (B.verts.length < 150) continue;
+        const rx = (va[0] - vb[0]) * dt, ry = (va[1] - vb[1]) * dt, rz = (va[2] - vb[2]) * dt, m = Math.abs(rx) + Math.abs(ry) + Math.abs(rz);
+        // (only two that could meet this frame)
+        if (ba[0] - m > bb[3] || bb[0] - m > ba[3] || ba[1] - m > bb[4] || bb[1] - m > ba[4] || ba[2] - m > bb[5] || bb[2] - m > ba[5]) continue;
+        // (its whole move against b - unless that's clearly away from it)
+        const cb = B.com, dx = cb[0] - ca[0], dy = cb[1] - ca[1], dz = cb[2] - ca[2], d = Math.sqrt(dx * dx + dy * dy + dz * dz) || 1;
+        const r = Math.sqrt(rx * rx + ry * ry + rz * rz);
+        if ((rx * dx + ry * dy + rz * dz) / d > -0.25 * r && r > reach) reach = r;
+      }
+    }
+    reach /= 1.2 * this.hCell;
+    return reach > 1 ? Math.min(6, Math.ceil(reach)) : 1;
   }
 
   // Impacts for sound, from the impulse floor, walls and other pieces gave
@@ -2867,7 +2906,7 @@ export class SoftBody {
       this._wfF = new Int32Array(Math.max(this.nF, 1)).fill(-1);
       this._warmVersion = this.topoVersion;
     }
-    this._hashTets();
+    this._hashTets(ptL);
     this._gatherProbes(ptL);
   }
 
@@ -3552,9 +3591,10 @@ export class SoftBody {
 
   // Hash the swept boxes of the active pieces' tets, keyed by cell + piece
   // (a table sized to the entries: clearing and summing a big one costs).
-  _hashTets() {
+  _hashTets(ptL) {
     const { x, T } = this;
     const nT = this.nT, D = this._disp, sw = this._sweep, pcs = this._pcs, act = this._pieceActive, selfOK = this._selfOK;
+    const bb = this._pbb, pV = this._pVel, ptS = this._ptS, fdt = this._hashSpan;
     const counts = this._hCount && this._hCount.length === (1 << 15) + 1 ? this._hCount : (this._hCount = new Int32Array((1 << 15) + 1));
     const tbox = this._tBox0 && this._tBox0.length >= nT * 6 ? this._tBox0 : (this._tBox0 = new Float32Array(this.tCap * 6));
     const ranges = this._hRanges && this._hRanges.length >= nT * 6 ? this._hRanges : (this._hRanges = new Int32Array(this.tCap * 6));
@@ -3591,6 +3631,20 @@ export class SoftBody {
       const x0 = Math.min(sw[a], sw[b], sw[c], sw[d]), y0 = Math.min(sw[a + 1], sw[b + 1], sw[c + 1], sw[d + 1]), z0 = Math.min(sw[a + 2], sw[b + 2], sw[c + 2], sw[d + 2]);
       const x1 = Math.max(sw[a + 3], sw[b + 3], sw[c + 3], sw[d + 3]), y1 = Math.max(sw[a + 4], sw[b + 4], sw[c + 4], sw[d + 4]), z1 = Math.max(sw[a + 5], sw[b + 5], sw[c + 5], sw[d + 5]);
       tbox[r] = x0; tbox[r + 1] = y0; tbox[r + 2] = z0; tbox[r + 3] = x1; tbox[r + 4] = y1; tbox[r + 5] = z1;
+      // (only what a probe of another piece could reach: within that piece's box swept by how it moves against
+      // this one (as _gatherProbes sweeps its probes) - a cube touching another had its every tet hashed, the
+      // far side too, for a few probes along the seam. Its own probes look at it only where it can fold.)
+      const k = tp[t];
+      if (!selfOK[k]) {
+        let near = false;
+        for (let e = ptS[k]; e < ptS[k + 1] && !near; e++) {
+          const pb = ptL[e], B = pb * 6;
+          const rx = (pV[pb * 3] - pV[k * 3]) * fdt, ry = (pV[pb * 3 + 1] - pV[k * 3 + 1]) * fdt, rz = (pV[pb * 3 + 2] - pV[k * 3 + 2]) * fdt;
+          const rm = 0.12 * (Math.abs(rx) + Math.abs(ry) + Math.abs(rz)) + 0.002;
+          near = !(x1 < bb[B] + Math.min(0, rx) - rm || x0 > bb[B + 3] + Math.max(0, rx) + rm || y1 < bb[B + 1] + Math.min(0, ry) - rm || y0 > bb[B + 4] + Math.max(0, ry) + rm || z1 < bb[B + 2] + Math.min(0, rz) - rm || z0 > bb[B + 5] + Math.max(0, rz) + rm);
+        }
+        if (!near) continue;
+      }
       const ix0 = Math.floor(x0 * inv), ix1 = Math.floor(x1 * inv);
       const iy0 = Math.floor(y0 * inv), iy1 = Math.floor(y1 * inv);
       const iz0 = Math.floor(z0 * inv), iz1 = Math.floor(z1 * inv);
