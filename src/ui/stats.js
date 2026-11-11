@@ -421,12 +421,21 @@ export function attachStats(app) {
   const report = () => {
     const w = app.warmStats;
     for (const [id, p] of pts) flush(id, p);
+    // (frame pacing - App._drawNow: what's drawn, held back for the GPU, left still; how often the browser
+    // gives frames while busy and while still; the fence's check, and the longest step a frame may take)
+    const pacingLine = () => {
+      const P = app.pacing, T = Math.max(1, now());
+      if (!P) return '';
+      const r = (n) => (n / T).toFixed(1);
+      return `pacing: drawn ${r(P.drawn)}/s, held back ${r(P.heldBack)}/s, still ${r(P.still)}/s${P.present ? `, still frames re-shown (${P.presents})` : ''} | browser frames ${(P.gapBusy * 1000).toFixed(0)} ms busy, ${(P.gapStill * 1000).toFixed(0)} ms still | fence ${P.fence ? 'on' : 'off'} (check ${(P.waitMs / Math.max(1, P.waits)).toFixed(2)} ms) | step up to ${((app._dtCap || 1 / 30) * 1000).toFixed(0)} ms`;
+    };
     return [
       `Cube Simulator stats v2   build ${typeof __BUILD__ === 'string' ? __BUILD__ : 'dev'}`,
       `${navigator.userAgent}`,
       `gpu: ${gpu}   dpr ${window.devicePixelRatio}   cores ${navigator.hardwareConcurrency || '?'}   screen ${innerWidth}x${innerHeight}`,
       w ? `warm-up at load: ${Math.round(w.ms)} ms, ${w.programs} shaders; intro hold ${Math.round(app.introMs || 0)} ms` : '',
       `session ${now().toFixed(0)} s, ${frames} frames: median ${pct(all, 0.5).toFixed(1)} ms, 95th ${pct(all, 0.95).toFixed(1)} ms, 99th ${pct(all, 0.99).toFixed(1)} ms`,
+      pacingLine(),
       ...summary(),
       ...sceneLines(),
       `log (the last ${LOG_S} s; t = s since load; x y = 0..1 across and down the canvas; move: ms:x,y from the line's t):`,

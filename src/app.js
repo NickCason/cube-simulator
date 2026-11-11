@@ -242,7 +242,14 @@ export class App {
     this._idleN = 0;
     this._sigW = 1;
     this._sig = 0;
-    this.pacing = { drawn: 0, heldBack: 0, still: 0, why: '', busy: true, busyAt: 0 };
+    this.pacing = { drawn: 0, heldBack: 0, still: 0, why: '', busy: true, busyAt: 0, fence: true, waitMs: 0, waits: 0, present: false, presents: 0, gapStill: 0, gapBusy: 0, nStill: 0, nBusy: 0 };
+    // (the longest step a frame may take: a twentieth of a second when the browser's holding frames to a slower
+    // rate - see _loop - and the last frames' lengths it's judged by; the bloom the last frame was drawn with)
+    this._dtCap = 1 / 30;
+    this._dtRing = new Float32Array(8);
+    this._dtSort = new Float32Array(8);
+    this._dtN = 0;
+    this._lastBloom = null;
     this.substepRate = 720; // physics substeps per second
     this.isTouch = false;
     this._panV = new THREE.Vector3();
@@ -1442,7 +1449,17 @@ export class App {
     this.clock.last = now;
     if (!(dt > 0)) dt = 1 / 60;
     this._rawDt = dt; // (unclamped: what the resolution adapts to)
-    dt = Math.min(dt, 1 / 30);
+    // (frames held to a slower rate by the browser - Low Power Mode, a hot phone, a page it thinks idle -
+    // each a longer step, up to a twentieth of a second: capped at a thirtieth, every frame of 46 ms played
+    // the jelly at 72% speed, the hand's moves in slow motion)
+    // (judged by the last 8 frames' middle one: a lone long frame - a hitch - is still capped)
+    const R = this._dtRing, S = this._dtSort;
+    R[this._dtN++ & 7] = Math.min(dt, 0.25);
+    S.set(R);
+    S.sort();
+    const m = S[4];
+    this._dtCap = m > 0.036 ? Math.min(0.05, m * 1.1) : 1 / 30;
+    dt = Math.min(dt, this._dtCap);
     this.frame(dt);
   }
 
@@ -1459,7 +1476,8 @@ export class App {
     // 30 fps - iOS's Low Power Mode - otherwise ran everything at two-thirds
     // speed; back to 1/45 as it gets heavy, so a busy scene keeps its frame rate)
     const heavy = Math.min(1, Math.max(0, (this.stats.physMs - 14) / 10));
-    let sdt = Math.min(dt, 1 / 30 + (1 / 45 - 1 / 30) * heavy) * this.timeScale;
+    const cap = this._dtCap;
+    let sdt = Math.min(dt, cap - (cap / 3) * heavy) * this.timeScale;
     if (this._hitStop > 0) {
       this._hitStop -= dt;
       sdt *= 0.1;
@@ -1475,7 +1493,7 @@ export class App {
       this._selRing(dt);
       this.room.update(dt);
       this.cubiplication.update(dt);
-      const nS = Math.max(4, Math.min(24, Math.round(this.substepRate * sdt)));
+      const nS = Math.max(4, Math.min(36, Math.round(this.substepRate * sdt)));
       this.sb.p.substeps = nS;
       const p0 = performance.now();
       if (!this.intro.done) this._introStep(dt);
@@ -1537,6 +1555,7 @@ export class App {
       this.render();
       this._fence();
     }
+    this._gapTally(drawn);
     if (this.benchSync) {
       const gl = this.renderer.getContext();
       gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, this._px);
@@ -1574,12 +1593,21 @@ export class App {
   _drawNow(now) {
     const P = this.pacing, F = this._fences;
     if (F.length >= 2) {
-      const gl = this.renderer.getContext();
-      if (gl.clientWaitSync(F[0], 0, 0) === gl.TIMEOUT_EXPIRED) {
+      const gl = this.renderer.getContext(), t0 = performance.now();
+      const busy = gl.clientWaitSync(F[0], 0, 0) === gl.TIMEOUT_EXPIRED;
+      P.waitMs += performance.now() - t0;
+      P.waits++;
+      if (busy) {
         P.heldBack++;
         return false;
       }
       gl.deleteSync(F.shift());
+      // (where asking costs - a round trip to another process each frame - the GPU's left to pace itself)
+      if (P.waits > 120 && P.waitMs / P.waits > 0.4) {
+        P.fence = false;
+        for (const f of F) gl.deleteSync(f);
+        F.length = 0;
+      }
     }
     const why = this._busy(now);
     P.why = why;
@@ -1603,16 +1631,42 @@ export class App {
     const hz = this._idleHz();
     if (hz && now - this._drawnAt >= 1000 / hz - 4) return true;
     P.still++;
+    // (a browser that slows a page down once it stops drawing - frames coming half as often still - left the
+    // hand's next moves slow: there, the last picture's shown again each frame, a single cheap pass)
+    if (P.present) this._present();
     return false;
+  }
+
+  // the rate the browser gives frames while still, against while something's going on (_loop's raw dt)
+  _gapTally(drawn) {
+    const P = this.pacing, g = Math.min(this._rawDt || 0, 0.25);
+    if (!(g > 0)) return;
+    if (drawn && P.busy) {
+      P.gapBusy += (g - P.gapBusy) * 0.05;
+      P.nBusy++;
+    } else if (!drawn) {
+      P.gapStill += (g - P.gapStill) * 0.05;
+      P.nStill++;
+    }
+    if (!P.present && P.nStill > 240 && P.nBusy > 240 && P.gapStill > P.gapBusy * 1.6) P.present = true;
+  }
+
+  // the last picture, shown again (only its last pass: the scene and its bloom are where they were left)
+  _present() {
+    if (!this._lastBloom || this.recording) return;
+    const src = this.rtAA && !this.skip.aa ? this.rtAA.texture : this.rtScene.texture;
+    this.post.composite(src, this._lastBloom, this.clock.t);
+    this.pacing.presents++;
   }
 
   // (a frame drawn: its fence, for _drawNow to see when the GPU's done with it)
   _fence() {
+    this.pacing.drawn++;
+    if (!this.pacing.fence) return;
     const gl = this.renderer.getContext(), f = gl.fenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE, 0);
     if (!f) return;
     this._fences.push(f);
     gl.flush();
-    this.pacing.drawn++;
   }
 
   // What's going on that must be seen as it happens ('' if nothing)
@@ -2730,6 +2784,7 @@ export class App {
     this.flash *= 0.86;
     this.post.compositeMat.uniforms.uFlash.value = this.flash;
     const bloom = skip.bloom ? this.post.rts[0].texture : this.post.bloom(this.rtScene.texture, this.size.pw, this.size.ph);
+    this._lastBloom = bloom;
     if (this.rtAA && !skip.aa) {
       this.post.fxaa(this.rtScene.texture, this.rtAA);
       this.post.composite(this.rtAA.texture, bloom, this.clock.t);
