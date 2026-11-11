@@ -232,6 +232,8 @@ export class App {
     // (a clip being recorded: its mark drawn over each frame - see ui/clips.js)
     this.recording = false;
     this.markTex = null;
+    // (?stats' log, while it's open: what else has something to say puts it there - see ui/stats.js)
+    this.statsSay = null;
     this.benchSync = false;
     this._px = new Uint8Array(4);
     // (frame pacing - see _drawNow: the fences of the frames the GPU may still be drawing, when the last was
@@ -1826,7 +1828,8 @@ export class App {
   // seconds of smooth frames. A step up that soon has to be undone puts that
   // level off the table.
   _adaptResolution(dt, cpuMs = 0) {
-    if (this.opts.preserve || this.skip.adapt) return;
+    // (nor while a clip's recording: the picture it copies from kept one size, start to end)
+    if (this.opts.preserve || this.skip.adapt || this.recording) return;
     const raw = Math.min(this._rawDt || dt, 0.25);
     const a = (this._adapt ||= { t: 0, slow: 0, fast: 0, ceiling: this.maxPixelRatio, upAt: -1e9, floor: 0, capDt: 0, ring: new Float32Array(48), n: 0, trial: null, cSlow: 0, cFast: 0 });
     a.t += dt;

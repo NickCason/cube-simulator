@@ -39,6 +39,7 @@ export function attachStats(app) {
     log.push([t, text]);
     while (log.length && (log[0][0] < t - LOG_S || log.length > 6000)) log.shift();
   };
+  app.statsSay = (text) => say(text);
 
   // ---- the scene: every cube's code, the settings, the view
   const cubeCode = (cb) => {
@@ -436,6 +437,7 @@ export function attachStats(app) {
       w ? `warm-up at load: ${Math.round(w.ms)} ms, ${w.programs} shaders; intro hold ${Math.round(app.introMs || 0)} ms` : '',
       `session ${now().toFixed(0)} s, ${frames} frames: median ${pct(all, 0.5).toFixed(1)} ms, 95th ${pct(all, 0.95).toFixed(1)} ms, 99th ${pct(all, 0.99).toFixed(1)} ms`,
       pacingLine(),
+      app.ui?.clips?.diagLine?.() || '',
       ...summary(),
       ...sceneLines(),
       `log (the last ${LOG_S} s; t = s since load; x y = 0..1 across and down the canvas; move: ms:x,y from the line's t):`,

@@ -31,6 +31,9 @@ export class Clips {
     this._tick = 0;
     this._wait = 0;
     this._mt = null;
+    // (?stats: the last recording's own account - how many frames went in, the picture's size, the tracks'
+    // say, what came out, and whether its picture keeps moving to the end: see _say, _check, diagLine)
+    this.diag = null;
     // (can't record here: no button)
     const cv = document.createElement('canvas');
     this.able = !!(cv.captureStream && window.MediaRecorder && window.MediaStream && TYPES.some((t) => MediaRecorder.isTypeSupported?.(t)));
@@ -61,6 +64,7 @@ export class Clips {
     this.btn.addEventListener('click', () => (this.rec ? this.stop() : this.start()));
     root.querySelector('.clip-del').addEventListener('click', () => this._close());
     this.shareEl.addEventListener('click', () => this._share());
+    this.saveEl.addEventListener('click', () => this._say('saved'));
     this.modal.addEventListener('click', (e) => e.target === this.modal && this._close());
     window.addEventListener('keydown', (e) => e.key === 'Escape' && !this.modal.hidden && this._close());
   }
@@ -92,8 +96,90 @@ export class Clips {
     const now = performance.now();
     if (now - S.last < 1000 / FPS - 4) return;
     S.last = now;
-    S.g.drawImage(this.app.renderer.domElement, 0, 0, S.cv.width, S.cv.height);
+    const gl = this.app.renderer.domElement;
+    S.g.drawImage(gl, 0, 0, S.cv.width, S.cv.height);
     if (S.manual) S.track.requestFrame();
+    const D = this.diag;
+    if (D) {
+      D.copies++;
+      if (gl.width !== D.gw || gl.height !== D.gh) {
+        D.gw = gl.width;
+        D.gh = gl.height;
+        this._event(`the screen's picture now ${gl.width}x${gl.height}`);
+      }
+    }
+  }
+
+  // (?stats: said in its log, and kept for the report's clip line)
+  _say(text) {
+    this.app.statsSay?.(`clip ${text}`);
+  }
+
+  _event(text) {
+    const D = this.diag;
+    if (D) D.events.push(`${((performance.now() - D.t0) / 1000).toFixed(1)} s ${text}`);
+    this._say(text);
+  }
+
+  // the report's line: the last recording, start to what came out
+  diagLine() {
+    const D = this.diag;
+    if (!D) return '';
+    const secs = ((D.end || performance.now()) - D.t0) / 1000;
+    return `clip (last): ${secs.toFixed(1)} s, ${D.copies} frames copied (${(D.copies / Math.max(secs, 0.1)).toFixed(0)}/s), ${D.size} from ${D.from}, ${D.type || '?'}, frames ${D.manual ? 'asked for' : '30/s'}, sound ${D.sound}${D.events.length ? ` | ${D.events.slice(-6).join('; ')}` : ''}${D.file ? ` | made ${D.file}` : ''}${D.moved ? ` | picture moved, second by second: ${D.moved}` : ''}`;
+  }
+
+  // What came out, looked at (?stats): every second of it, a little picture - did it change since the one
+  // before? (A clip whose frames stopped coming has the same one from there on: '0's.)
+  async _check(blob) {
+    const D = this.diag, url = URL.createObjectURL(blob), v = document.createElement('video');
+    const once = (ev, ms) => new Promise((res) => {
+      const t = setTimeout(() => res(false), ms);
+      v.addEventListener(ev, () => (clearTimeout(t), res(true)), { once: true });
+    });
+    try {
+      v.muted = true;
+      v.playsInline = true;
+      v.preload = 'auto';
+      v.src = url;
+      if (!(await once('loadedmetadata', 5000))) return this._say('check: it would not load');
+      let dur = v.duration;
+      // (webm from MediaRecorder: its length unknown till it's looked at the end)
+      if (!Number.isFinite(dur)) {
+        v.currentTime = 1e6;
+        await once('seeked', 4000);
+        dur = v.duration;
+      }
+      if (!(dur > 0)) return this._say('check: no length');
+      const c = document.createElement('canvas');
+      c.width = c.height = 32;
+      const g = c.getContext('2d', { willReadFrequently: true });
+      let prev = null, marks = '', lit = 0;
+      for (let i = 0; i < Math.min(120, Math.ceil(dur)); i++) {
+        v.currentTime = Math.min(dur - 0.05, i + 0.5);
+        if (!(await once('seeked', 3000))) {
+          marks += '?';
+          continue;
+        }
+        g.drawImage(v, 0, 0, 32, 32);
+        const px = g.getImageData(0, 0, 32, 32).data;
+        let d = 0;
+        for (let k = 0; k < px.length; k += 4) lit = Math.max(lit, px[k], px[k + 1], px[k + 2]);
+        if (prev) for (let k = 0; k < px.length; k += 4) d = Math.max(d, Math.abs(px[k] - prev[k]), Math.abs(px[k + 1] - prev[k + 1]), Math.abs(px[k + 2] - prev[k + 2]));
+        marks += prev ? (d > 1 ? '1' : '0') : '|';
+        prev = px;
+      }
+      // (every picture black: its frames couldn't be read here, not a clip of black)
+      const note = lit < 4 ? ', but every picture read black - not a fair look' : '';
+      if (D) D.moved = `${marks} (${dur.toFixed(1)} s long${note})`;
+      this._say(`check: ${dur.toFixed(1)} s long; picture moved, second by second: ${marks}${note}`);
+    } catch (e) {
+      this._say(`check failed: ${e?.message || e}`);
+    } finally {
+      v.removeAttribute('src');
+      v.load?.();
+      URL.revokeObjectURL(url);
+    }
   }
 
   start() {
@@ -133,9 +219,21 @@ export class Clips {
       const chunks = [];
       rec.ondataavailable = (e) => e.data && e.data.size && chunks.push(e.data);
       rec.onstop = () => this._done(chunks, type);
-      rec.onerror = () => this.stop();
+      rec.onerror = (e) => {
+        this._event(`recorder error ${e?.error?.name || ''}`);
+        this.stop();
+      };
       rec.start();
       this.rec = rec;
+      this.diag = { t0: performance.now(), end: 0, copies: 0, copies0: 0, at: 0, gw: gl.width, gh: gl.height, from: `${gl.width}x${gl.height}`, size: `${w}x${h}`, type, manual: S.manual, sound: tracks.length > 1 ? A.ctx.state : 'none', events: [], file: '', moved: '' };
+      const watch = (tr, name) => {
+        tr.onmute = () => this._event(`${name} muted`);
+        tr.onunmute = () => this._event(`${name} unmuted`);
+        tr.onended = () => this._event(`${name} ended`);
+      };
+      watch(S.track, 'picture track');
+      for (const tr of tracks.slice(1)) watch(tr, 'sound track');
+      this._say(`start: ${type || '?'}, ${w}x${h} from the screen's ${gl.width}x${gl.height}, frames ${S.manual ? 'asked for' : '30/s'}, sound ${this.diag.sound}`);
     } catch (e) {
       console.warn('clip: could not start', e);
       this._unhook();
@@ -157,6 +255,11 @@ export class Clips {
     const rec = this.rec;
     if (!rec) return;
     this.rec = null;
+    const D = this.diag;
+    if (D) {
+      D.end = performance.now();
+      this._say(`stop at ${((D.end - D.t0) / 1000).toFixed(1)} s, ${D.copies} frames copied`);
+    }
     clearInterval(this._tick);
     this.app.recording = false;
     this.btn.classList.remove('on');
@@ -177,6 +280,14 @@ export class Clips {
   _time() {
     const s = (performance.now() - this.t0) / 1000;
     if (s >= MAX_S) return this.stop();
+    // (?stats: every 2 s, frames copied a second, the tracks, the sound, the recorder)
+    const D = this.diag, S = this.src;
+    if (D && this.app.statsSay && s - D.at >= 2) {
+      const n = D.copies - D.copies0, st = (tr) => `${tr.readyState}${tr.muted ? ' muted' : ''}${tr.enabled ? '' : ' off'}`;
+      this._say(`${s.toFixed(1)} s: ${(n / (s - D.at)).toFixed(0)} frames/s copied, picture track ${st(S.track)}, sound ${this.app.audio?.ctx?.state || 'none'}, recorder ${this.rec?.state}`);
+      D.copies0 = D.copies;
+      D.at = s;
+    }
     this.timeEl.textContent = `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
     this.ringEl.style.strokeDashoffset = `${(RING * (1 - s / MAX_S)).toFixed(2)}`;
   }
@@ -200,10 +311,16 @@ export class Clips {
     if (!chunks.length) {
       // (a recording's finishing - the one that never said - or one's going)
       if (!this.rec && this.modal.hidden) this.ui.hint?.("That clip didn't come out - try again");
+      this._say('made nothing');
       return;
     }
     const base = (type || chunks[0].type || 'video/webm').split(';')[0], ext = base.includes('mp4') ? 'mp4' : 'webm';
     const blob = new Blob(chunks, { type: base });
+    if (this.diag) {
+      this.diag.file = `${(blob.size / 1e6).toFixed(1)} MB ${base} in ${chunks.length} piece${chunks.length === 1 ? '' : 's'}`;
+      this._say(`made ${this.diag.file}`);
+      if (this.app.statsSay) this._check(blob);
+    }
     const d = new Date(), p = (n) => String(n).padStart(2, '0');
     const name = `cube-simulator-${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}.${ext}`;
     this.file = new File([blob], name, { type: base });
@@ -219,6 +336,7 @@ export class Clips {
   }
 
   async _share() {
+    this._say('shared');
     try {
       await navigator.share({ files: [this.file], title: 'Cube Simulator' });
     } catch (e) {
