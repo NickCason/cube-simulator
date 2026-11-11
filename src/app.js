@@ -1543,6 +1543,7 @@ export class App {
       this.droplets.update(sdt);
       this.spill.update(sdt);
       this.fluid.update(sdt);
+      this.glitter.poolTick(sdt);
       this.flour.update(sdt);
       this.strands.update(sdt);
       this.eyes.update(sdt);

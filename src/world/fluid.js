@@ -53,6 +53,8 @@ export class Fluid {
     this.keepAwake = false; // (acid still working: the pool mustn't sleep)
     // (how runny each is: XSPH share of its neighbours' velocity, and a drag of its own - molten jelly
     // VISC and none; what spills from a cube full of liquid, water to glue: see Spill)
+    this.onRemap = []; // (told of each compaction: map[old] = new, -1 gone - null, all gone; and how many there were)
+    this._map = null;
     this.visc = new Float32Array(N).fill(VISC);
     this.thick = new Float32Array(N);
     this.age = new Float32Array(N);
@@ -359,9 +361,11 @@ export class Fluid {
     const R = this.rc, x = this.x;
     R.t += dt;
     let w = 0;
+    const map = this._mapFor(this.n);
     for (let i = 0; i < this.n; i++) {
       const u = (R.t - R.t0[i]) / R.T[i];
       if (u >= 1) continue;
+      map[i] = w;
       if (u > 0) {
         const e = u * u * (3 - 2 * u), lift = R.h[i] * 4 * u * (1 - u);
         for (let c = 0; c < 3; c++) x[i * 3 + c] = R.p0[i * 3 + c] + (R.p1[i * 3 + c] - R.p0[i * 3 + c]) * e + (c === 1 ? lift : 0);
@@ -385,6 +389,7 @@ export class Fluid {
       }
       w++;
     }
+    if (w !== this.n) this._mapDone(map, this.n);
     this.n = w;
     this.v.fill(0, 0, w * 3);
     if (!w) {
@@ -398,8 +403,10 @@ export class Fluid {
   // Particles gone where drop(i) says (spent acid fuming off: see AcidTool).
   removeWhere(drop) {
     let w = 0;
+    const map = this._mapFor(this.n);
     for (let i = 0; i < this.n; i++) {
       if (drop(i)) continue;
+      map[i] = w;
       if (w !== i) {
         for (let c = 0; c < 3; c++) {
           this.x[w * 3 + c] = this.x[i * 3 + c];
@@ -416,13 +423,27 @@ export class Fluid {
       w++;
     }
     if (w === this.n) return;
+    this._mapDone(map, this.n);
     this.n = w;
     this.mesh.visible = w > 0;
     if (!w) this.geo.setDrawRange(0, 0);
     this.wake();
   }
 
+  // (what became of each particle in a compaction: map[old] = new, -1 gone - for what rides on them, the
+  // pool's glitter: see Glitter.toPool)
+  _mapFor(n) {
+    if (!this._map || this._map.length < n) this._map = new Int32Array(Math.max(n, this.max));
+    this._map.fill(-1, 0, n);
+    return this._map;
+  }
+
+  _mapDone(map, n) {
+    for (const f of this.onRemap) f(map, n);
+  }
+
   clear() {
+    if (this.n) this._mapDone(null, this.n); // (all gone)
     this.n = 0;
     this.bank = 0;
     this.drainT = 0;
@@ -942,8 +963,10 @@ export class Fluid {
     if (!made && !dust) return;
     // (compact what's left)
     let w = 0;
+    const map = this._mapFor(n);
     for (let i = 0; i < n; i++) {
       if (gone[i]) continue;
+      map[i] = w;
       if (w !== i) {
         for (let c = 0; c < 3; c++) {
           this.x[w * 3 + c] = this.x[i * 3 + c];
@@ -959,6 +982,7 @@ export class Fluid {
       }
       w++;
     }
+    if (w !== n) this._mapDone(map, n);
     this.n = w;
     this.mesh.visible = w > 0;
     this.wake();

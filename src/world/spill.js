@@ -87,7 +87,7 @@ export class Spill {
       P.liq.push(t, y);
       if (y > P.top) P.top = y;
     }
-    const g = Math.abs(sb.p.gravity ?? -22), drain = new Set(), out = [];
+    const g = Math.abs(sb.p.gravity ?? -22), drain = new Set(), out = [], done = [];
     for (const [k, P] of byP) {
       if (!P.liq.length) continue;
       const visc = sb.cVisc[tc[P.liq[0]]], kv = KV * Math.pow(Math.max(0, 1 - visc), 3);
@@ -108,19 +108,22 @@ export class Spill {
       const L = [];
       for (let n = 0; n < P.liq.length; n += 2) L.push(n);
       L.sort((p, q) => P.liq[q + 1] - P.liq[p + 1]);
+      let taken = 0;
       for (const n of L) {
         if (want <= 0) break;
         const t = P.liq[n];
         drain.add(t);
         want -= vol0[t];
         out.push(t, k);
+        taken++;
       }
+      if (taken === L.length) done.push(k);
       P.W = W; P.wsum = wsum; P.vOut = Math.min(vOut * (1 - visc), 1.6);
     }
     if (!drain.size) return;
     // each drained tet's liquid out through the opening: at a spot on it (by the weights above), just
     // outside, moving as the piece there and out along it, in its colour - as runny as the cube says
-    const fl = app.fluid, col = this._c, v = sb.v;
+    const fl = app.fluid, col = this._c, v = sb.v, p0 = fl.n;
     for (let n = 0; n < out.length; n += 2) {
       const t = out[n], P = byP.get(out[n + 1]), visc = sb.cVisc[tc[t]];
       let r = Math.random() * P.wsum, q = 0;
@@ -137,6 +140,19 @@ export class Spill {
       fl.add(px, py, pz, vol0[t], vx, vy, vz, col.r, col.g, col.b, 0.03, 0, 0.03 + 0.92 * Math.pow(visc, 1.2), 30 * visc * visc);
       this.drained += vol0[t];
     }
+    // (the glitter in it runs out with it, onto the drops just let go - see Glitter.poolFrom; and the last of
+    // a piece's liquid flushes out what had settled in it, above the rim - on the skin's inner layer, kept)
+    let flush = drain;
+    if (done.length && app.glitter?.poolN !== undefined) {
+      flush = new Set(drain);
+      for (let t = 0; t < sb.nT; t++) {
+        const k = tp[t];
+        if (!done.includes(k) || !liqC[tc[t]] || skin[t] || !(vol0[t] > 0) || drain.has(t)) continue;
+        const y = (x[T[t * 4] * 3 + 1] + x[T[t * 4 + 1] * 3 + 1] + x[T[t * 4 + 2] * 3 + 1] + x[T[t * 4 + 3] * 3 + 1]) / 4;
+        if (y >= lo[k]) flush.add(t);
+      }
+    }
+    app.glitter?.poolFrom(flush, p0, fl.n);
     removeTets(sb, (t) => drain.has(t), app.allAnchors());
     app.onTopologyChanged();
     // (what that laid bare is the inside of it: seen, not a rim)

@@ -58,6 +58,18 @@ export class Glitter {
       this.lph[k * 6 + 4] = Math.sin(0.7 * k); this.lph[k * 6 + 5] = Math.cos(0.7 * k);
     }
     this.lt = new Int32Array(MAX).fill(-1);
+    // (flakes run out with a spill, in its pool: each riding a particle of the liquid - its flake, its
+    // particle, where it sits off it, which way it faces and tumbles: see toPool, poolTick)
+    this.pooled = new Uint8Array(MAX);
+    this.poolN = 0;
+    this.poolK = new Int32Array(MAX);
+    this.poolP = new Int32Array(MAX);
+    this.poolO = new Float32Array(MAX * 3);
+    this.poolNr = new Float32Array(MAX * 3);
+    this.poolW = new Float32Array(MAX * 3);
+    this._poolCV = -1;
+    this._poolDirty = false;
+    this._remapOn = false;
     this.globes = new Map();
     this._gs = []; // (the globes by slot, for a tick: a look-up a flake, not a Map's)
     this._gBusy = new Int32Array(64);
@@ -154,11 +166,16 @@ export class Glitter {
         uniform highp sampler2D uBB; // (each piece's bounding box: its low corner, row 0; its high, row 1)
         uniform float uTime;
         ${CUBE_GLSL}
+        #ifdef POOL
+        attribute vec3 aPosW; // (run out into a spill's pool: where it is, which way it faces - see Glitter.poolTick)
+        attribute vec3 aNrmW;
+        #else
         attribute vec4 aTet;
         attribute vec4 aBary;
         attribute vec3 aM;
-        attribute vec3 aSeed;
         attribute vec2 aInfo;
+        #endif
+        attribute vec3 aSeed;
         attribute float aMode;
         attribute vec4 aRestK;
         varying float vMode;
@@ -181,12 +198,17 @@ export class Glitter {
           #endif
           if (aSeed.x <= 0.0 || other) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); return; }
           vMode = aMode;
+          #ifdef POOL
+          vec3 c = aPosW;
+          vec3 n = normalize(aNrmW + 1e-9);
+          #else
           vec3 x0 = P(aTet.x), x1 = P(aTet.y), x2 = P(aTet.z), x3 = P(aTet.w);
           vec3 c = x0 * aBary.x + x1 * aBary.y + x2 * aBary.z + x3 * aBary.w;
           vec3 e1 = x1 - x0, e2 = x2 - x0, e3 = x3 - x0;
           // flake normal follows the deformation: cofactor(Ds) * (Dm^T n0)
           vec3 n = cross(e2, e3) * aM.x + cross(e3, e1) * aM.y + cross(e1, e2) * aM.z;
           n = normalize(n + 1e-9);
+          #endif
           // a whisper of shimmer so resting glitter still twinkles
           float ph = aSeed.z * 6.2831 + uTime * (0.5 + aSeed.z * 0.8);
           n = normalize(n + 0.03 * vec3(sin(ph), cos(ph * 1.3), sin(ph * 0.7 + 1.0)));
@@ -214,6 +236,11 @@ export class Glitter {
           vec3 d = c - o;
           float len = length(d);
           d /= len;
+          #ifdef POOL
+          // (in the pool: drawn with the room, before the liquid - seen through it, as the room is, refracted
+          // and tinted by it: see App.render - so where it is, no jelly in front)
+          float tEntry = len;
+          #else
           int pi = int(aInfo.y + 0.5);
           float tEntry = 0.0;
           if (pi < textureSize(uBB, 0).x) {
@@ -222,6 +249,7 @@ export class Glitter {
             vec3 tm = min(ta, tb);
             tEntry = clamp(max(max(tm.x, tm.y), tm.z), 0.0, len);
           }
+          #endif
           float L = len - tEntry;
           // (tinted by its own cube's colour where it sits - its gradient,
           // its Rubik sticker - and dimmed by its haze)
@@ -303,6 +331,33 @@ export class Glitter {
     this.meshCube.renderOrder = 4;
     this.meshCube.visible = false;
     app.fxScene.add(this.meshCube);
+    // (the pool's flakes: their own instances, drawn as these - see poolTick)
+    const pa = (n) => new THREE.InstancedBufferAttribute(new Float32Array(MAX * n), n);
+    // (dynamic: moving, they're seen as moving - see App._stillSig)
+    this.pPos = pa(3).setUsage(THREE.DynamicDrawUsage);
+    this.pNrm = pa(3).setUsage(THREE.DynamicDrawUsage);
+    this.pSeed = pa(3);
+    this.pMode = pa(1);
+    this.pRestK = pa(4);
+    const pool = (base, keys) => {
+      const q = new THREE.InstancedBufferGeometry();
+      for (const k of keys) q.setAttribute(k, base.getAttribute(k));
+      q.setIndex(base.getIndex());
+      for (const [k, at] of [['aPosW', this.pPos], ['aNrmW', this.pNrm], ['aSeed', this.pSeed], ['aMode', this.pMode], ['aRestK', this.pRestK]]) q.setAttribute(k, at);
+      q.instanceCount = 0;
+      return q;
+    };
+    const pm = (defines) => new THREE.ShaderMaterial({ uniforms: this.uniforms, transparent: true, depthWrite: false, depthTest: true, blending: THREE.AdditiveBlending, vertexShader: mat.vertexShader, fragmentShader: mat.fragmentShader, defines });
+    this.poolGeo = pool(g, ['position']);
+    this.poolGeoCube = pool(box, ['position', 'normal', 'uv']);
+    this.poolMesh = new THREE.Mesh(this.poolGeo, pm({ POOL: '' }));
+    this.poolMeshCube = new THREE.Mesh(this.poolGeoCube, pm({ POOL: '', CUBE: '' }));
+    for (const m of [this.poolMesh, this.poolMeshCube]) {
+      m.frustumCulled = false;
+      m.renderOrder = 4;
+      m.visible = false;
+      app.scene.add(m);
+    }
     this.groups = [];
     // (the cubes with water in them - snow globes, and every cube full of liquid - and how thick it is: see
     // configure, _loose)
@@ -392,7 +447,17 @@ export class Glitter {
     const out = { tet: -1, b0: 0, b1: 0, b2: 0, b3: 0 };
     const n = this.count, G = this.groups.length ? this.groups : [{ slot: 0, mode: 0 }];
     const RK0 = this.aRestK.array, MD0 = this.aMode.array, OK = this.lpOK;
+    // (a new cube - a re-cube - has all its flakes back: the pool's are gone with it)
+    if (sb.cubeVersion !== this._poolCV) {
+      this._poolCV = sb.cubeVersion;
+      this.pooled.fill(0);
+      this.poolN = 0;
+    }
     for (let k = 0; k < n; k++) {
+      if (this.pooled[k]) {
+        this.aSeed.array[k * 3] = 0;
+        continue;
+      }
       // (shared out among the glittery cubes, each in its own rest space)
       const grp = G[k % G.length];
       // (each cube its own size - a full one's flakes inside its skin)
@@ -706,6 +771,151 @@ export class Glitter {
     const sb = app.sb;
     if (on && (sb.topoVersion !== this.topo || this.anchoredFor !== this._key())) this._anchor();
     this._loose(dt * (app.timeScale ?? 1), time, on && this.anySnow);
+  }
+
+  // A spill (see Spill): the flakes in the tets it drained, run out with them - into the pool, each onto
+  // the nearest of the particles [p0, p1) just let go there (the pool full - none let go - the nearest in it).
+  poolFrom(tets, p0, p1) {
+    const fl = this.app.fluid;
+    if (!fl.n || !this.count || !this.groups.length) return 0;
+    if (p1 <= p0) (p0 = 0), (p1 = fl.n);
+    const sb = this.app.sb, T = sb.T, key = (a, b, c, d) => {
+      const q = [a, b, c, d].sort((x, y) => x - y);
+      return q[0] + ',' + q[1] + ',' + q[2] + ',' + q[3];
+    };
+    const in_ = new Set();
+    for (const t of tets) in_.add(key(T[t * 4], T[t * 4 + 1], T[t * 4 + 2], T[t * 4 + 3]));
+    const A = this.aTet.array, B = this.aBary.array, S = this.aSeed.array, x = sb.x, fx = fl.x;
+    let moved = 0;
+    for (let k = 0; k < this.count; k++) {
+      if (this.pooled[k] || S[k * 3] <= 0 || !in_.has(key(A[k * 4], A[k * 4 + 1], A[k * 4 + 2], A[k * 4 + 3]))) continue;
+      let px = 0, py = 0, pz = 0;
+      for (let j = 0; j < 4; j++) {
+        const o = A[k * 4 + j] * 3, b = B[k * 4 + j];
+        px += x[o] * b; py += x[o + 1] * b; pz += x[o + 2] * b;
+      }
+      let best = p0, bd = Infinity;
+      for (let q = p0; q < p1; q++) {
+        const dx = fx[q * 3] - px, dy = fx[q * 3 + 1] - py, dz = fx[q * 3 + 2] - pz, d2 = dx * dx + dy * dy + dz * dz;
+        if (d2 < bd) (bd = d2), (best = q);
+      }
+      this.toPool(k, best);
+      moved++;
+    }
+    if (moved) this.aSeed.needsUpdate = true;
+    return moved;
+  }
+
+  // Flake k into the pool on particle p: gone from its cube, a little way off the particle, facing as it
+  // did, tumbling its own way.
+  toPool(k, p) {
+    if (!this._remapOn) {
+      this._remapOn = true;
+      // (the liquid's particles renumbered - some set, fumed off, flown home: each flake after its own, or gone)
+      this.app.fluid.onRemap.push((map, n) => {
+        for (let i = 0; i < this.poolN; i++) {
+          const q = this.poolP[i];
+          this.poolP[i] = map && q < n ? map[q] : -1;
+        }
+      });
+    }
+    const i = this.poolN++;
+    this.pooled[k] = 1;
+    this.aSeed.array[k * 3] = 0;
+    this.poolK[i] = k;
+    this.poolP[i] = p;
+    let ox, oy, oz;
+    do (ox = Math.random() * 2 - 1), (oy = Math.random() * 2 - 1), (oz = Math.random() * 2 - 1);
+    while (ox * ox + oy * oy + oz * oz > 1);
+    const r = 0.022 * this.app.sb.p.size;
+    this.poolO[i * 3] = ox * r; this.poolO[i * 3 + 1] = oy * r; this.poolO[i * 3 + 2] = oz * r;
+    for (let c = 0; c < 3; c++) {
+      this.poolNr[i * 3 + c] = this.n0[k * 3 + c];
+      this.poolW[i * 3 + c] = this.lw[k * 3 + c] * (0.5 + this.seed[k * 3 + 2]);
+    }
+    const md = this.aMode.array[k];
+    this.pSeed.array[i * 3] = this.seed[k * 3] * (md === SNOW ? 1.6 : 1);
+    this.pSeed.array[i * 3 + 1] = this.seed[k * 3 + 1];
+    this.pSeed.array[i * 3 + 2] = this.seed[k * 3 + 2];
+    this.pMode.array[i] = md;
+    for (let c = 0; c < 4; c++) this.pRestK.array[i * 4 + c] = this.aRestK.array[k * 4 + c];
+    this._poolDirty = true;
+  }
+
+  // The pool's flakes, a frame: each where its particle is (gone with it, if it's gone - set into jelly,
+  // fumed off, flown home), tumbling as fast as the liquid round it moves; the pool stilled, they settle,
+  // lying flat a little way down. (App.frame, after the liquid's step.)
+  poolTick(dt) {
+    const fl = this.app.fluid, N = this.poolN;
+    if (!N) {
+      this.poolMesh.visible = this.poolMeshCube.visible = false;
+      return;
+    }
+    const x = fl.x, v = fl.v, P = this.poolP, K = this.poolK, O = this.poolO, NR = this.poolNr, W = this.poolW;
+    const PS = this.pSeed.array, PM = this.pMode.array, PR = this.pRestK.array, PP = this.pPos.array, PN = this.pNrm.array;
+    const still = fl.asleep, low = -0.018 * this.app.sb.p.size;
+    let w = 0, anyFlat = false, anyCube = false;
+    for (let i = 0; i < N; i++) {
+      const p = P[i];
+      if (p < 0 || p >= fl.n) {
+        this._poolDirty = true;
+        continue;
+      }
+      if (w !== i) {
+        P[w] = p; K[w] = K[i];
+        for (let c = 0; c < 3; c++) {
+          O[w * 3 + c] = O[i * 3 + c]; NR[w * 3 + c] = NR[i * 3 + c]; W[w * 3 + c] = W[i * 3 + c];
+          PS[w * 3 + c] = PS[i * 3 + c];
+        }
+        PM[w] = PM[i];
+        for (let c = 0; c < 4; c++) PR[w * 4 + c] = PR[i * 4 + c];
+      }
+      const o = w * 3, q = p * 3;
+      if (!still) {
+        const sp = Math.hypot(v[q], v[q + 1], v[q + 2]);
+        // (tumbling: about its own axis, as fast as the liquid's running - Rodrigues, then kept unit)
+        const wx = W[o], wy = W[o + 1], wz = W[o + 2], wl = Math.hypot(wx, wy, wz) || 1;
+        const ang = (0.4 + 7 * sp) * dt, kx = wx / wl, ky = wy / wl, kz = wz / wl, cs = Math.cos(ang), sn = Math.sin(ang);
+        let nx = NR[o], ny = NR[o + 1], nz = NR[o + 2];
+        const kd = kx * nx + ky * ny + kz * nz;
+        let rx = nx * cs + (ky * nz - kz * ny) * sn + kx * kd * (1 - cs);
+        let ry = ny * cs + (kz * nx - kx * nz) * sn + ky * kd * (1 - cs);
+        let rz = nz * cs + (kx * ny - ky * nx) * sn + kz * kd * (1 - cs);
+        // (slow, it lies down: flat, facing up or down, and sinks a little)
+        if (sp < 0.08) {
+          const e = Math.min(1, dt * 1.5 * (1 - sp / 0.08));
+          rx -= rx * e; rz -= rz * e; ry += ((ry < 0 ? -1 : 1) - ry) * e;
+          O[o + 1] += (low - O[o + 1]) * Math.min(1, dt * 0.8);
+        }
+        const rl = Math.hypot(rx, ry, rz) || 1;
+        NR[o] = rx / rl; NR[o + 1] = ry / rl; NR[o + 2] = rz / rl;
+      }
+      PP[o] = x[q] + O[o]; PP[o + 1] = x[q + 1] + O[o + 1]; PP[o + 2] = x[q + 2] + O[o + 2];
+      PN[o] = NR[o]; PN[o + 1] = NR[o + 1]; PN[o + 2] = NR[o + 2];
+      if (Math.abs(PM[w] - 4) < 0.5) anyCube = true;
+      else anyFlat = true;
+      w++;
+    }
+    this.poolN = w;
+    this.poolGeo.instanceCount = this.poolGeoCube.instanceCount = w;
+    this.poolMesh.visible = w > 0 && anyFlat;
+    this.poolMeshCube.visible = w > 0 && anyCube;
+    // (sent up: where each is and faces, while the liquid moves; what each is, when the pool's changed)
+    const up = (at, len) => {
+      at.clearUpdateRanges();
+      at.addUpdateRange(0, len);
+      at.needsUpdate = true;
+    };
+    if (!still || this._poolDirty) {
+      up(this.pPos, w * 3);
+      up(this.pNrm, w * 3);
+    }
+    if (this._poolDirty) {
+      up(this.pSeed, w * 3);
+      up(this.pMode, w);
+      up(this.pRestK, w * 4);
+      this._poolDirty = false;
+    }
   }
 
   update(time) {
