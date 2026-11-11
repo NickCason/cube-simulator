@@ -51,6 +51,10 @@ export class Fluid {
     this.acid = new Float32Array(N);
     this.acidTet = new Int32Array(N).fill(-1);
     this.keepAwake = false; // (acid still working: the pool mustn't sleep)
+    // (how runny each is: XSPH share of its neighbours' velocity, and a drag of its own - molten jelly
+    // VISC and none; what spills from a cube full of liquid, water to glue: see Spill)
+    this.visc = new Float32Array(N).fill(VISC);
+    this.thick = new Float32Array(N);
     this.age = new Float32Array(N);
     this.lam = new Float32Array(N);
     this.dp = new Float32Array(N * 3);
@@ -204,7 +208,7 @@ export class Fluid {
   // Melted jelly in: volume (m^3) at a point, moving at v, its colour (and
   // how strong an acid it is: see AcidTool). Volume collects until there's
   // a particle's worth.
-  add(x, y, z, vol, vx, vy, vz, r, g, b, spread = 0.03, acid = 0) {
+  add(x, y, z, vol, vx, vy, vz, r, g, b, spread = 0.03, acid = 0, visc = VISC, thick = 0) {
     this.bank += vol;
     spread = Math.max(spread, 0.004); // (never two in one spot)
     if (this.bank >= this.vol) this.wake();
@@ -233,6 +237,8 @@ export class Fluid {
       this.age[i] = 0;
       this.acid[i] = acid;
       this.acidTet[i] = -1;
+      this.visc[i] = visc;
+      this.thick[i] = thick;
     }
     if (this.n >= this.max) this.bank = 0;
     this.mesh.visible = this.n > 0;
@@ -371,6 +377,8 @@ export class Fluid {
         this.age[w] = this.age[i];
         this.acid[w] = this.acid[i];
         this.acidTet[w] = this.acidTet[i];
+        this.visc[w] = this.visc[i];
+        this.thick[w] = this.thick[i];
         R.t0[w] = R.t0[i];
         R.T[w] = R.T[i];
         R.h[w] = R.h[i];
@@ -402,6 +410,8 @@ export class Fluid {
         this.age[w] = this.age[i];
         this.acid[w] = this.acid[i];
         this.acidTet[w] = this.acidTet[i];
+        this.visc[w] = this.visc[i];
+        this.thick[w] = this.thick[i];
       }
       w++;
     }
@@ -663,11 +673,12 @@ export class Fluid {
       }
       dv[o] = ax; dv[o + 1] = ay; dv[o + 2] = az;
     }
-    const damp = Math.exp(-1.2 * h), fr = 1 - Math.min(1, 6 * h), slush = Math.exp(-14 * h), temp = this.temp;
+    const damp = Math.exp(-1.2 * h), fr = 1 - Math.min(1, 6 * h), slush = Math.exp(-14 * h), temp = this.temp, VI = this.visc, TK = this.thick;
     for (let o = 0; o < n * 3; o += 3) {
-      // (cold enough to set: slush - it hardly flows)
-      const dm = temp[o / 3] < SET_T ? slush : damp;
-      v[o] = (v[o] + VISC * dv[o]) * dm; v[o + 1] = (v[o + 1] + VISC * dv[o + 1]) * (dm === slush ? damp : dm); v[o + 2] = (v[o + 2] + VISC * dv[o + 2]) * dm;
+      // (cold enough to set: slush - it hardly flows; thick stuff - glue - drags too)
+      const i = o / 3, vi = VI[i], tk = TK[i] > 0 ? Math.exp(-TK[i] * h) : 1;
+      const dm = (temp[i] < SET_T ? slush : damp) * tk;
+      v[o] = (v[o] + vi * dv[o]) * dm; v[o + 1] = (v[o + 1] + vi * dv[o + 1]) * (temp[i] < SET_T ? damp * tk : dm); v[o + 2] = (v[o + 2] + vi * dv[o + 2]) * dm;
       // (floor friction: thick stuff drags)
       if (q[o + 1] <= R_P * 1.05) {
         v[o] *= fr;
@@ -943,6 +954,8 @@ export class Fluid {
         this.age[w] = this.age[i];
         this.acid[w] = this.acid[i];
         this.acidTet[w] = this.acidTet[i];
+        this.visc[w] = this.visc[i];
+        this.thick[w] = this.thick[i];
       }
       w++;
     }

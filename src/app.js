@@ -33,6 +33,7 @@ import { makeMaterials, makeBomb } from './world/models.js';
 import { physicsWarmJob } from './sim/warm.js';
 import { Droplets } from './world/droplets.js';
 import { Fluid } from './world/fluid.js';
+import { Spill } from './world/spill.js';
 import { Flour } from './world/flour.js';
 import { Strands } from './world/strands.js';
 import { Bubbles } from './world/bubbles.js';
@@ -198,6 +199,7 @@ export class App {
     this.onColor = [];
     this.droplets = new Droplets(this);
     this.fluid = new Fluid(this); // (molten jelly: see TorchTool, FreezeTool)
+    this.spill = new Spill(this); // (a cube full of liquid, cut open, running out into it)
     this.strands = new Strands(this); // (strings of goo: torn, dripping)
     this.healZoom = 0;
     this.flash = 0;
@@ -1539,6 +1541,7 @@ export class App {
       }
       this.nails.update(sdt);
       this.droplets.update(sdt);
+      this.spill.update(sdt);
       this.fluid.update(sdt);
       this.flour.update(sdt);
       this.strands.update(sdt);
