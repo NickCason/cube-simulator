@@ -105,6 +105,7 @@ export class Fluid {
     this.coolT = 9; // (s) since the cryo last touched the liquid
     this.nbStart = new Int32Array(N + 1);
     this._g = new Float64Array(12);
+    this._bs = new Float64Array(4);
     this._vv = new Float32Array(8);
     this._ex = new Float32Array(36);
     this._en = new Float32Array(36);
@@ -887,18 +888,39 @@ export class Fluid {
         const a3 = ia * 3, b3 = ib * 3, c3 = ic * 3, d3 = id * 3;
         let wx = 0, wy = 1, wz = 0, step = 0.004;
         const mk = fm[t];
-        if (mk) {
-          // barycentric gradients: -grad b_k leaves through the face opposite k, b_k/|grad b_k| away
-          const e1x = X[b3] - X[a3], e1y = X[b3 + 1] - X[a3 + 1], e1z = X[b3 + 2] - X[a3 + 2];
-          const e2x = X[c3] - X[a3], e2y = X[c3 + 1] - X[a3 + 1], e2z = X[c3 + 2] - X[a3 + 2];
-          const e3x = X[d3] - X[a3], e3y = X[d3 + 1] - X[a3 + 1], e3z = X[d3 + 2] - X[a3 + 2];
-          const g = this._g;
-          g[3] = e2y * e3z - e2z * e3y; g[4] = e2z * e3x - e2x * e3z; g[5] = e2x * e3y - e2y * e3x;
-          g[6] = e3y * e1z - e3z * e1y; g[7] = e3z * e1x - e3x * e1z; g[8] = e3x * e1y - e3y * e1x;
-          g[9] = e1y * e2z - e1z * e2y; g[10] = e1z * e2x - e1x * e2z; g[11] = e1x * e2y - e1y * e2x;
-          const det = e1x * g[3] + e1y * g[4] + e1z * g[5];
-          g[0] = -(g[3] + g[6] + g[9]); g[1] = -(g[4] + g[7] + g[10]); g[2] = -(g[5] + g[8] + g[11]);
-          const bs = [ct.b0, ct.b1, ct.b2, ct.b3];
+        // barycentric gradients: -grad b_k leaves through the face opposite k, b_k/|grad b_k| away
+        const e1x = X[b3] - X[a3], e1y = X[b3 + 1] - X[a3 + 1], e1z = X[b3 + 2] - X[a3 + 2];
+        const e2x = X[c3] - X[a3], e2y = X[c3 + 1] - X[a3 + 1], e2z = X[c3 + 2] - X[a3 + 2];
+        const e3x = X[d3] - X[a3], e3y = X[d3 + 1] - X[a3 + 1], e3z = X[d3 + 2] - X[a3 + 2];
+        const g = this._g;
+        g[3] = e2y * e3z - e2z * e3y; g[4] = e2z * e3x - e2x * e3z; g[5] = e2x * e3y - e2y * e3x;
+        g[6] = e3y * e1z - e3z * e1y; g[7] = e3z * e1x - e3x * e1z; g[8] = e3x * e1y - e3y * e1x;
+        g[9] = e1y * e2z - e1z * e2y; g[10] = e1z * e2x - e1x * e2z; g[11] = e1x * e2y - e1y * e2x;
+        const det = e1x * g[3] + e1y * g[4] + e1z * g[5];
+        g[0] = -(g[3] + g[6] + g[9]); g[1] = -(g[4] + g[7] + g[10]); g[2] = -(g[5] + g[8] + g[11]);
+        const bs = this._bs;
+        bs[0] = ct.b0; bs[1] = ct.b1; bs[2] = ct.b2; bs[3] = ct.b3;
+        // Come into it this substep - where it began, outside this tet: back out the way it came, through the
+        // face it crossed (the last of the planes it's now on the inside of). Pushed out through the nearest
+        // surface face instead, one pressed deep into a cut cube's wall by the liquid behind it came out of the
+        // wall's far side: the cube leaked from everywhere - under its walls, through its sides - not just at
+        // the cut or the hole.
+        let entry = -1, tIn = -1;
+        if (det > 1e-12) {
+          const px = this.x[o] - q[o], py = this.x[o + 1] - q[o + 1], pz = this.x[o + 2] - q[o + 2];
+          for (let k = 0; k < 4; k++) {
+            const bx = bs[k] + (g[k * 3] * px + g[k * 3 + 1] * py + g[k * 3 + 2] * pz) / det;
+            if (bx < 0) {
+              const tk = bx / (bx - bs[k]);
+              if (tk > tIn) (tIn = tk), (entry = k);
+            }
+          }
+        }
+        if (entry >= 0) {
+          const k = entry, gl = Math.sqrt(g[k * 3] * g[k * 3] + g[k * 3 + 1] * g[k * 3 + 1] + g[k * 3 + 2] * g[k * 3 + 2]) / det, s = -1 / (gl * det);
+          wx = g[k * 3] * s; wy = g[k * 3 + 1] * s; wz = g[k * 3 + 2] * s;
+          step = Math.min(bs[k] / gl, 0.08) + 0.002;
+        } else if (mk) {
           let best = Infinity;
           for (let k = 0; k < 4; k++) {
             if (!(mk & (1 << k))) continue;
@@ -912,7 +934,7 @@ export class Fluid {
           }
           step = Math.min(best, 0.03) + 0.002;
         } else {
-          const b0 = ct.b0, b1 = ct.b1, b2 = ct.b2, b3w = ct.b3;
+          const b0 = bs[0], b1 = bs[1], b2 = bs[2], b3w = bs[3];
           const ex = E[a3] * b0 + E[b3] * b1 + E[c3] * b2 + E[d3] * b3w;
           const ey = E[a3 + 1] * b0 + E[b3 + 1] * b1 + E[c3 + 1] * b2 + E[d3 + 1] * b3w;
           const ez = E[a3 + 2] * b0 + E[b3 + 2] * b1 + E[c3 + 2] * b2 + E[d3 + 2] * b3w;
