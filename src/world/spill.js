@@ -24,6 +24,13 @@ const UNDER = 0.6; // (cells) how far under the rim's lowest point it turns liqu
 const SEEP_W0 = 0.005;
 const SEEP_OPEN = 0.3;
 const DRY = 0.45; // (its liquid let down to this share of what it was: spent - see _seepLook)
+// (drops a second a slit lets out at the least, water: close enough, one after another, to be drawn as one
+// stream - a short nick, one up near the liquid's top, let out a few a second, each lost in the puddle at its
+// foot: it did nothing, it looked)
+const SEEP_MIN = 10;
+// (drops let go together, a bead: one on its own is too thin for the liquid's surface to be drawn round it -
+// a slit's dribble fell unseen, and only the puddle it made showed)
+const BEAD = 4;
 
 export class Spill {
   constructor(app) {
@@ -45,7 +52,7 @@ export class Spill {
     this._oldN = 0;
     this._grid = new Map();
     this._gh = 0.1;
-    // (a slit's seep - see _seepLook: its mouth's pairs [vertex, partner, m^3/s, cube, m/s] - what's waiting to
+    // (a slit's seep - see _seepLook: its mouth's pairs [vertex, partner, m^3/s, cube, m/s, share] - what's waiting to
     // come out, what's come out of each cube since it was last let down, and which are spent)
     this.seep = [];
     this.bank = 0;
@@ -195,9 +202,10 @@ export class Spill {
   // it came out the back and the bottom too - most of it, those being lower: out of everywhere but the slit,
   // it looked) - as fast as the head of liquid over it, how far it's open and how runny it is let it
   // (Torricelli, through a crack): a dribble down the side as it rests, a pour pulled open. Each mouth pair:
-  // [vertex, partner, m^3/s, cube, how fast it comes out]. And what's come out, out of the cube: all its
-  // liquid let down a share (its tets' tVS - the cube sags as it empties; taken off its top a few tets at a
-  // time, the liquid's top inside was a gap of jagged shards, and each bite a rebuild), down to DRY: spent.
+  // [vertex, partner, m^3/s, cube, how fast it comes out, its share of where it comes out]. And what's come
+  // out, out of the cube: all its liquid let down a share (its tets' tVS - the cube sags as it empties; taken
+  // off its top a few tets at a time, the liquid's top inside was a gap of jagged shards, and each bite a
+  // rebuild), down to DRY: spent.
   _seepLook(sb, isLiq) {
     const x = sb.x, so = sb.slitOf, onSkin = sb._skinV, T = sb.T, tp = sb.tPiece, S = this.seep, VS = sb.tVS, seen = this.seen;
     // what's come out since the last look, out of each cube's liquid
@@ -240,8 +248,22 @@ export class Spill {
       // counted no wider than a hand's: torn wide open, its pairs a metre apart, it emptied in half a second)
       const gap = Math.min(SEEP_OPEN, Math.hypot(x[i * 3] - x[p * 3], x[i * 3 + 1] - x[p * 3 + 1], x[i * 3 + 2] - x[p * 3 + 2]));
       const open = Math.min(1, gap / SEEP_OPEN), w = SEEP_W0 + gap * open, v = Math.sqrt(2 * g * head);
-      const rate = 0.5 * sb.cH[cube] * w * v * 0.6 * Math.pow(Math.max(0, 1 - sb.cVisc[cube]), 3);
-      if (rate > 0) S.push(i, p, rate, cube, open * v);
+      const rate = 0.5 * sb.cH[cube] * w * v * 0.6 * thin(sb.cVisc[cube]);
+      if (rate > 0) S.push(i, p, rate, cube, open * v, rate * head * head);
+    }
+    // (and each cube's slits at least SEEP_MIN drops a second, all told - less only just under its liquid's top,
+    // less for thicker stuff - the pairs made up to it)
+    const tot = new Float64Array(MAX_CUBES), deep = new Float64Array(MAX_CUBES);
+    for (let n = 0; n < S.length; n += 6) {
+      const c = S[n + 3], i = S[n], p = S[n + 1], k = sb.vPiece[i];
+      tot[c] += S[n + 2];
+      deep[c] = Math.max(deep[c], top[k] - (x[i * 3 + 1] + x[p * 3 + 1]) / 2);
+    }
+    for (let c = 0; c < MAX_CUBES; c++) {
+      const want = SEEP_MIN * this.app.fluid.vol * thin(sb.cVisc[c]) * Math.min(1, deep[c] / 0.1);
+      if (!(tot[c] > 0) || tot[c] >= want) continue;
+      const f = want / tot[c];
+      for (let n = 0; n < S.length; n += 6) if (S[n + 3] === c) S[n + 2] *= f;
     }
   }
 
@@ -253,26 +275,29 @@ export class Spill {
       S.length = 0; // (a new cube: no slit)
       return;
     }
-    let total = 0;
-    for (let n = 0; n < S.length; n += 5) total += S[n + 2];
-    this.bank = Math.min(this.bank + total * dt, fl.vol * 8);
-    while (this.bank >= fl.vol && fl.n < fl.max && total > 0) {
-      let r = Math.random() * total, n = 0;
-      while (n < S.length - 5 && (r -= S[n + 2]) > 0) n += 5;
-      const i = S[n], p = S[n + 1], cube = S[n + 3], jet = 0.25 + 0.5 * S[n + 4];
-      this.bank -= fl.vol;
+    // (how much, all told; where along the mouth, by its pairs' heads of liquid: down a slit's length it runs
+    // out of its foot - let out anywhere along it, a few drops a second, each one alone, it read as nothing)
+    let total = 0, wsum = 0;
+    for (let n = 0; n < S.length; n += 6) (total += S[n + 2]), (wsum += S[n + 5]);
+    this.bank = Math.min(this.bank + total * dt, fl.vol * BEAD * 4);
+    while (this.bank >= fl.vol * BEAD && fl.n + BEAD <= fl.max && wsum > 0) {
+      let r = Math.random() * wsum, n = 0;
+      while (n < S.length - 6 && (r -= S[n + 5]) > 0) n += 6;
+      const i = S[n], p = S[n + 1], cube = S[n + 3], jet = 0.5 * S[n + 4];
+      this.bank -= fl.vol * BEAD;
       if (!sb.alive[i] || !sb.alive[p]) continue;
-      // (out of the cube: away from its piece's middle, along the floor)
+      // (out of the cube: away from its piece's middle, along the floor - just clear of its face, to run down it;
+      // thrown clear of it, only as it's pulled open)
       const pc = sb.pieces[sb.vPiece[i]], mx = (x[i * 3] + x[p * 3]) / 2, my = (x[i * 3 + 1] + x[p * 3 + 1]) / 2, mz = (x[i * 3 + 2] + x[p * 3 + 2]) / 2;
       let ox = pc ? mx - pc.com[0] : 0, oz = pc ? mz - pc.com[2] : 0;
       const ol = Math.hypot(ox, oz) || 1;
       ox /= ol; oz /= ol;
       const visc = sb.cVisc[cube];
       col.set(this.app.flavorColorAtVertex(i));
-      fl.add(mx + ox * 0.045, my, mz + oz * 0.045, fl.vol, (v[i * 3] + v[p * 3]) / 2 + ox * jet, (v[i * 3 + 1] + v[p * 3 + 1]) / 2, (v[i * 3 + 2] + v[p * 3 + 2]) / 2 + oz * jet,
-        col.r, col.g, col.b, 0.004, 0, 0.12 + 0.83 * Math.pow(visc, 1.2), 30 * visc * visc, 1);
-      this.debt[cube] += fl.vol;
-      this.drained += fl.vol;
+      fl.add(mx + ox * 0.045, my, mz + oz * 0.045, fl.vol * BEAD, (v[i * 3] + v[p * 3]) / 2 + ox * jet, (v[i * 3 + 1] + v[p * 3 + 1]) / 2, (v[i * 3 + 2] + v[p * 3 + 2]) / 2 + oz * jet,
+        col.r, col.g, col.b, 0.05, 0, 0.12 + 0.83 * Math.pow(visc, 1.2), 30 * visc * visc, 1);
+      this.debt[cube] += fl.vol * BEAD;
+      this.drained += fl.vol * BEAD;
     }
   }
 
@@ -437,6 +462,12 @@ export class Spill {
     }
     return 0;
   }
+}
+
+// (how freely it runs, by how thick it is: water all of it, syrup ~0.65, glue ~0.35, a gel a trickle, near
+// solid none - the cube's own thickness cubed, glue's let out an eighth and looked shut)
+function thin(visc) {
+  return Math.pow(Math.max(0, 1 - visc), 1.5);
 }
 
 // (a grid cell's key: a hash - two cells sharing one only add a face to look at)

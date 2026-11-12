@@ -996,6 +996,19 @@ html.dark .palette .gdie {
   background: rgba(0, 0, 0, 0.09);
 }
 
+/* (which version this is - to tell a stale copy from a new one) */
+.tune-foot .build {
+  padding: 6px 0 2px;
+  text-align: center;
+  font-size: 10.5px;
+  color: rgba(28, 28, 31, 0.4);
+  font-variant-numeric: tabular-nums;
+}
+
+html.dark .tune-foot .build {
+  color: rgba(255, 255, 255, 0.38);
+}
+
 .heal {
   white-space: nowrap;
   height: 42px;

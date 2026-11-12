@@ -250,7 +250,7 @@ export class UI {
       </div>
       <div class="palette tune" hidden>
         <div class="tune-scroll"></div>
-        <div class="tune-foot"><button class="reset"></button></div>
+        <div class="tune-foot"><button class="reset"></button><div class="build">${typeof __BUILD__ === 'string' ? 'Build ' + __BUILD__ : ''}</div></div>
       </div>`;
     this.toolsEl = root.querySelector('.tools');
     this.hintEl = root.querySelector('.hint');
