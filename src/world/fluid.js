@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { edgeTable, triTable } from 'three/examples/jsm/objects/MarchingCubes.js';
 import { removeTets } from '../sim/cutting.js';
-import { TAG_EXTERIOR } from '../sim/softbody.js';
+import { TAG_EXTERIOR, MAX_CUBES } from '../sim/softbody.js';
 
 // Molten jelly. The torch turns the hottest jelly to liquid (see
 // TorchTool): its tets go, and particles carry their volume on - position-
@@ -18,6 +18,7 @@ import { TAG_EXTERIOR } from '../sim/softbody.js';
 let D = 0.065;
 let H = D * 1.75;
 let R_P = D * 0.5;
+const CUT_R = 0.3; // (off a cut's faces, a drop's only this much of its radius wide: see _radius)
 // marching cubes: corner offsets, edges' end corners
 const MC_CX = [0, 1, 1, 0, 0, 1, 1, 0], MC_CY = [0, 0, 1, 1, 0, 0, 1, 1], MC_CZ = [0, 0, 0, 0, 1, 1, 1, 1];
 const MC_EA = [0, 1, 2, 3, 4, 5, 6, 7, 0, 1, 2, 3], MC_EB = [1, 2, 3, 0, 5, 6, 7, 4, 4, 5, 6, 7];
@@ -61,6 +62,13 @@ export class Fluid {
     this.acid = new Float32Array(N);
     this.acidTet = new Int32Array(N).fill(-1);
     this.own = new Int32Array(N); // (the cube full of liquid it was filled into, by SoftBody.cHid - 0, none: see Spill)
+    // (the cube full of liquid it's in, its slot + 1 - 0, none; 255, not looked yet: as of its surface last made,
+    // see _splat - for the bubbles in it, see Bubbles.poolTick)
+    this.dIn = new Uint8Array(N);
+    // (each cube's liquid drawn only up to this height - being put back into it, re-cubed: see Injector - and how
+    // many are; Infinity, all of it)
+    this.revealY = new Float32Array(MAX_CUBES).fill(Infinity);
+    this.revealOn = 0;
     this.keepAwake = false; // (acid still working: the pool mustn't sleep)
     // (how runny each is: XSPH share of its neighbours' velocity, and a drag of its own - molten jelly
     // VISC and none; what spills from a cube full of liquid, water to glue: see Spill)
@@ -135,6 +143,7 @@ export class Fluid {
     this._ex = new Float32Array(36);
     this._en = new Float32Array(36);
     this._ec = new Float32Array(36);
+    this._ei = new Float32Array(12);
     this.asleep = false;
     this.stillT = 0;
     // the jelly's tets near the liquid (hashed by cells of 0.1 m)
@@ -148,6 +157,7 @@ export class Fluid {
     // as it's needed - see _remesh)
     this.faceMask = null;
     this.innerMask = null;
+    this.cutMask = null; // (each tet on a cut into a cube full of liquid's wall - a hole's, a slit's: see _radius)
     this.field = this.fcol = this.touch = this.tList = this.cList = this.fdep = this.fnew = this.fo = this.fmask = this.fmL = null;
     this._colN = new Int32Array(1024); // (the outside faces' crossings, column by column - see _envelope)
     this._colY = new Float32Array(4096);
@@ -160,10 +170,16 @@ export class Fluid {
     this.pos = new Float32Array(this.maxV * 3);
     this.nrm = new Float32Array(this.maxV * 3);
     this.rgb = new Float32Array(this.maxV * 3);
+    // (each point of it in a cube full of liquid, or out - see the shadow, below)
+    this.inn = new Float32Array(this.maxV);
+    this.inN = 0; // (how many of them, last time)
+    this.meshVer = 0; // (how many times it's been made - the light's view of it follows: see JellyView.renderFloorFx)
     this.aPos = new THREE.BufferAttribute(this.pos, 3).setUsage(THREE.DynamicDrawUsage);
     this.aNrm = new THREE.BufferAttribute(this.nrm, 3).setUsage(THREE.DynamicDrawUsage);
     this.aCol = new THREE.BufferAttribute(this.rgb, 3).setUsage(THREE.DynamicDrawUsage);
+    this.aIn = new THREE.BufferAttribute(this.inn, 1).setUsage(THREE.DynamicDrawUsage);
     geo.setAttribute('position', this.aPos);
+    geo.setAttribute('aIn', this.aIn);
     geo.setAttribute('normal', this.aNrm);
     geo.setAttribute('color', this.aCol);
     geo.setDrawRange(0, 0);
@@ -236,6 +252,24 @@ export class Fluid {
     this.shadow = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ colorWrite: false, depthWrite: false }));
     this.shadow.frustumCulled = false;
     this.shadow.castShadow = true;
+    // (only what's out of its cube: what's in one has its shadow with it - the jelly's coloured shadow and the
+    // light it bends, which see it as part of the cube; this hard grey one over the top of them blacked out
+    // all the light under a cube full of liquid, so its shadow was a grey patch, no colour, no caustics)
+    this.shadow.customDepthMaterial = new THREE.ShaderMaterial({
+      vertexShader: /* glsl */ `
+        attribute float aIn;
+        varying float vIn;
+        void main() {
+          vIn = aIn;
+          gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        }`,
+      fragmentShader: /* glsl */ `
+        varying float vIn;
+        void main() {
+          if (vIn > 0.5) discard;
+          gl_FragColor = vec4(1.0);
+        }`,
+    });
     this.shadow.visible = false;
     app.scene.add(this.shadow);
     this.drainT = 0; // (s) left of draining away (the heal)
@@ -291,6 +325,13 @@ export class Fluid {
     return D;
   }
 
+  // (cube slot's liquid drawn only up to y: see revealY)
+  setReveal(slot, y) {
+    const R = this.revealY, was = R[slot] < Infinity, now = y < Infinity;
+    R[slot] = y;
+    this.revealOn += (now ? 1 : 0) - (was ? 1 : 0);
+  }
+
   // Melted jelly in: volume (m^3) at a point, moving at v, its colour (and
   // how strong an acid it is: see AcidTool). Volume collects until there's
   // a particle's worth.
@@ -327,6 +368,7 @@ export class Fluid {
       this.visc[i] = visc;
       this.thick[i] = thick;
       this.own[i] = 0;
+      this.dIn[i] = 255;
       this.mass[i] = mass;
       this.lastOut[o] = this.x[o]; this.lastOut[o + 1] = this.x[o + 1]; this.lastOut[o + 2] = this.x[o + 2];
     }
@@ -418,18 +460,33 @@ export class Fluid {
   // it goes, gone into the cube as it gets there. target(out): somewhere to
   // go; retarget (the cube's holes known: see Healer._sendDroplets) sends
   // those still to go into them.
-  recall(target, delay = 1) {
+  // (into: drawn up into a syringe's needle - see Injector - faster and faster, and smaller, as it goes in:
+  // slowing to a stop there, they all piled up under its tip, a ball of it half the cube's size)
+  // (pick(i): only those - the rest stay, and run on as ever: another cube's liquid still in it, while one's re-cubed)
+  recall(target, delay = 1, into = false, pick = null) {
     this.drainT = 0;
     if (!this.n) return;
     const n = this.n, P = new THREE.Vector3(), x = this.x;
-    this.rc = { t: 0, p0: Float32Array.from(x.subarray(0, n * 3)), p1: new Float32Array(this.max * 3), t0: new Float32Array(this.max), T: new Float32Array(this.max), h: new Float32Array(this.max) };
+    this.rc = { t: 0, p0: Float32Array.from(x.subarray(0, n * 3)), p1: new Float32Array(this.max * 3), t0: new Float32Array(this.max), T: new Float32Array(this.max), h: new Float32Array(this.max), into, m0: Float32Array.from(this.mass.subarray(0, this.max)), partial: !!pick, left: 0 };
     for (let i = 0; i < n; i++) {
-      target(P);
+      if (pick && !pick(i)) {
+        this.rc.t0[i] = Infinity;
+        this.rc.T[i] = 1;
+        continue;
+      }
+      this.rc.left++;
+      target(P, i);
       this.rc.p1.set([P.x, P.y, P.z], i * 3);
       const d = Math.hypot(P.x - x[i * 3], P.z - x[i * 3 + 2]);
       this.rc.t0[i] = delay * (0.75 + 0.35 * Math.random()) + Math.min(0.5, d * 0.12);
       this.rc.T[i] = 0.7 + 0.25 * Math.random() + Math.min(0.5, d * 0.15);
       this.rc.h[i] = 0.15 + 0.25 * Math.min(1.5, d);
+      // (on its way: no cube's - none to keep it in)
+      if (pick) (this.own[i] = 0), (this.dIn[i] = 0);
+    }
+    if (!this.rc.left) {
+      this.rc = null;
+      return;
     }
     this.asleep = false;
     this.mesh.visible = true;
@@ -446,17 +503,23 @@ export class Fluid {
 
   // (a frame of it flowing home: along its arc, eased; there - gone)
   _recallStep(dt) {
-    const R = this.rc, x = this.x;
+    const R = this.rc, x = this.x, v = this.v;
     R.t += dt;
-    let w = 0;
+    let w = 0, left = 0;
     const map = this._mapFor(this.n);
     for (let i = 0; i < this.n; i++) {
       const u = (R.t - R.t0[i]) / R.T[i];
       if (u >= 1) continue;
       map[i] = w;
+      if (R.t0[i] < Infinity) left++;
       if (u > 0) {
-        const e = u * u * (3 - 2 * u), lift = R.h[i] * 4 * u * (1 - u);
+        v[i * 3] = v[i * 3 + 1] = v[i * 3 + 2] = 0;
+        const e = R.into ? u * u : u * u * (3 - 2 * u), lift = R.h[i] * 4 * u * (1 - u);
         for (let c = 0; c < 3; c++) x[i * 3 + c] = R.p0[i * 3 + c] + (R.p1[i * 3 + c] - R.p0[i * 3 + c]) * e + (c === 1 ? lift : 0);
+        if (R.into) {
+          const s = Math.min(1, Math.max(0, (u - 0.45) / 0.55));
+          this.mass[i] = R.m0[i] * Math.max(0.02, 1 - s * s * (3 - 2 * s));
+        }
       }
       if (w !== i) {
         for (let c = 0; c < 3; c++) {
@@ -472,22 +535,30 @@ export class Fluid {
         this.visc[w] = this.visc[i];
         this.thick[w] = this.thick[i];
         this.own[w] = this.own[i];
+        this.dIn[w] = this.dIn[i];
         this.mass[w] = this.mass[i];
         for (let c = 0; c < 3; c++) this.lastOut[w * 3 + c] = this.lastOut[i * 3 + c];
         R.t0[w] = R.t0[i];
         R.T[w] = R.T[i];
         R.h[w] = R.h[i];
+        R.m0[w] = R.m0[i];
       }
       w++;
     }
-    if (w !== this.n) this._mapDone(map, this.n);
+    if (w !== this.n) {
+      // (the rest of it, running on: its velocities with it)
+      if (R.partial) for (let i = 0; i < this.n; i++) if (map[i] >= 0 && map[i] !== i) for (let c = 0; c < 3; c++) v[map[i] * 3 + c] = v[i * 3 + c];
+      this._mapDone(map, this.n);
+    }
     this.n = w;
-    this.v.fill(0, 0, w * 3);
+    R.left = left;
+    if (!R.partial) v.fill(0, 0, w * 3);
     if (!w) {
       this.rc = null;
       this.clear();
       return;
     }
+    if (!left) this.rc = null;
     this._remesh();
   }
 
@@ -511,6 +582,7 @@ export class Fluid {
         this.visc[w] = this.visc[i];
         this.thick[w] = this.thick[i];
         this.own[w] = this.own[i];
+        this.dIn[w] = this.dIn[i];
         this.mass[w] = this.mass[i];
         for (let c = 0; c < 3; c++) this.lastOut[w * 3 + c] = this.lastOut[i * 3 + c];
       }
@@ -520,7 +592,7 @@ export class Fluid {
     this._mapDone(map, this.n);
     this.n = w;
     this.mesh.visible = w > 0;
-    if (!w) this.geo.setDrawRange(0, 0);
+    if (!w) this.geo.setDrawRange(0, 0), (this.inN = 0);
     this.wake();
   }
 
@@ -543,13 +615,14 @@ export class Fluid {
     this.drainT = 0;
     this.rc = null;
     this.geo.setDrawRange(0, 0);
+    this.inN = 0;
     this.mesh.visible = false;
   }
 
   // A frame: dt long - the liquid moved on just its last part of it (phys: see App.frame, stepPart).
   update(dt, phys = dt) {
     if (!this.n) return;
-    if (this.rc) return this._recallStep(dt);
+    if (this.rc && !this.rc.partial) return this._recallStep(dt);
     if (this.drainT > 0) {
       // (the heal: it sinks away into the floor)
       this.drainT -= dt;
@@ -609,8 +682,11 @@ export class Fluid {
         v.fill(0, 0, this.n * 3);
       }
       // (a lot of it, creeping: its surface every other frame)
-      if (this.asleep || this.n < 500 || v2 > 0.5 * 0.5 || (this._rmTick ^= 1)) this._remesh();
-    }
+      if (!this.rc && (this.revealOn || this.asleep || this.n < 500 || v2 > 0.5 * 0.5 || (this._rmTick ^= 1))) this._remesh();
+    } else if (this.revealOn && !this.rc) this._remesh();
+    // (some of it flying home, the rest running on: see recall's pick)
+    if (this.rc) this._recallStep(dt);
+    if (!this.n) return;
     this.coolT += dt;
     // cooling to the room, and setting
     for (let i = 0; i < this.n; i++) {
@@ -811,7 +887,7 @@ export class Fluid {
 
   // One part of a long frame (see App.frame): just the liquid moved on - none of update's looking after it.
   stepPart(dt) {
-    if (!this.n || this.rc || this.drainT > 0 || this.asleep || !(dt > 0)) return;
+    if (!this.n || (this.rc && !this.rc.partial) || this.drainT > 0 || this.asleep || !(dt > 0)) return;
     this._jellyCells();
     this._advance(dt);
   }
@@ -1096,11 +1172,12 @@ export class Fluid {
     }
     if (this._maskVer !== sb.topoVersion || !this.faceMask || this.faceMask.length < sb.nT) {
       this._maskVer = sb.topoVersion;
-      if (!this.faceMask || this.faceMask.length < sb.nT) (this.faceMask = new Uint8Array(Math.ceil(sb.nT * 1.25))), (this.innerMask = new Uint8Array(this.faceMask.length));
+      if (!this.faceMask || this.faceMask.length < sb.nT) (this.faceMask = new Uint8Array(Math.ceil(sb.nT * 1.25))), (this.innerMask = new Uint8Array(this.faceMask.length)), (this.cutMask = new Uint8Array(this.faceMask.length));
       // (and which of those aren't the cube's outside - a hollow's walls, a cut's faces: see _clip)
-      const fm = this.faceMask, im = this.innerMask, T = sb.T, S = sb.sTri, ST = sb.sTet, tag = sb.sTag;
+      const fm = this.faceMask, im = this.innerMask, cm = this.cutMask, T = sb.T, S = sb.sTri, ST = sb.sTet, tag = sb.sTag, XR = sb.X, HB = sb.cHole, so = sb.slitOf;
       fm.fill(0, 0, sb.nT);
       im.fill(0, 0, sb.nT);
+      cm.fill(0, 0, sb.nT);
       for (let f = 0; f < sb.nF; f++) {
         const t = ST[f], a = S[f * 3], b = S[f * 3 + 1], c = S[f * 3 + 2];
         for (let k = 0; k < 4; k++) {
@@ -1111,6 +1188,23 @@ export class Fluid {
             break;
           }
         }
+        // (a cut's: not its outside, nor its hollow's - in its rest shape, out past the hollow's box by more than
+        // a quarter of a cell - see _contain; and not a slit's: a slit seeps as it's meant to, see _gaps)
+        const kc = sb.tCube[t];
+        if (tag[f] === TAG_EXTERIOR || !sb.cHollow[kc]) continue;
+        let slit = false;
+        for (let k = 0; k < 4 && !slit; k++) {
+          const u = T[t * 4 + k];
+          slit = !!so[u] && so[u] - 1 !== u;
+        }
+        if (slit) continue;
+        const h6 = kc * 6, q4 = 0.25 * sb.cH[kc];
+        let o2 = 0;
+        for (let ax = 0; ax < 3; ax++) {
+          const r = (XR[a * 3 + ax] + XR[b * 3 + ax] + XR[c * 3 + ax]) / 3, out = Math.max(HB[h6 + ax] - r, 0, r - HB[h6 + 3 + ax]);
+          o2 += out * out;
+        }
+        if (o2 > q4 * q4) cm[t] = 1;
       }
     }
     const n = this.n, x = this.x;
@@ -1349,7 +1443,7 @@ export class Fluid {
   // cube's liquid stood half as tall.)
   _radius(q) {
     if (!this.cellsN) return;
-    const sb = this.app.sb, r = R_P, A = NB6, cp = this.cpush, cv = this.cvel, sv = sb.v, g = this._g, bs = this._bs, T = sb.T, X = sb.x;
+    const sb = this.app.sb, r = R_P, A = NB6, cp = this.cpush, cv = this.cvel, sv = sb.v, g = this._g, bs = this._bs, T = sb.T, X = sb.x, CM = this.cutMask;
     for (let i = 0; i < this.n; i++) {
       const o = i * 3;
       let px = q[o], py = q[o + 1], pz = q[o + 2], mx = 0, my = 0, mz = 0, jx = 0, jy = 0, jz = 0, nj = 0;
@@ -1360,6 +1454,16 @@ export class Fluid {
         let rr = r, t = this._inTet(px + ax * r, py + ay * r, pz + az * r);
         if (t < 0) (rr = 0.5 * r), (t = this._inTet(px + ax * rr, py + ay * rr, pz + az * rr));
         if (t < 0 || sb.cLiq[sb.tCube[t]] !== 1) continue;
+        // (off a cut's faces - a hole's, a slit's - only a third as far: a drop's as wide as a bullet's hole, and
+        // they jammed in its mouth, the liquid stood where it was over it; and one by them moving on keeps the
+        // liquid awake, as in a slit - see _gaps: it trickles out slowly, and fell asleep part way down)
+        let rc = r;
+        if (CM[t]) {
+          this._gapSeen[i] = 1;
+          rc = rr = CUT_R * r;
+          t = this._inTet(px + ax * rr, py + ay * rr, pz + az * rr);
+          if (t < 0 || sb.cLiq[sb.tCube[t]] !== 1) continue;
+        }
         // (how far in: back along the line from there to where it came into that tet - exactly)
         const det = this._grads(T, X, t, px + ax * rr, py + ay * rr, pz + az * rr);
         if (!(Math.abs(det) > 1e-15)) continue;
@@ -1368,7 +1472,7 @@ export class Fluid {
           const rate = (g[qq * 3] * ax + g[qq * 3 + 1] * ay + g[qq * 3 + 2] * az) / det;
           if (rate > 1e-9) back = Math.min(back, bs[qq] / rate);
         }
-        const pen = Math.min(r, r - rr + back);
+        const pen = Math.min(rc, rc - rr + back);
         if (!(pen > 0)) continue;
         mx -= ax * pen; my -= ay * pen; mz -= az * pen;
         // (and how that wall's moving)
@@ -1597,6 +1701,7 @@ export class Fluid {
         this.visc[w] = this.visc[i];
         this.thick[w] = this.thick[i];
         this.own[w] = this.own[i];
+        this.dIn[w] = this.dIn[i];
         this.mass[w] = this.mass[i];
         for (let c = 0; c < 3; c++) this.lastOut[w * 3 + c] = this.lastOut[i * 3 + c];
       }
@@ -1972,6 +2077,7 @@ export class Fluid {
     const n = this.n, x = this.x;
     if (!n) {
       this.geo.setDrawRange(0, 0);
+      this.inN = 0;
       return;
     }
     const R = SPLAT_R * D;
@@ -1994,6 +2100,7 @@ export class Fluid {
     y0 = Math.max(y0 - pad, 0);
     if (y1 <= y0 + c) {
       this.geo.setDrawRange(0, 0);
+      this.inN = 0;
       this.mesh.visible = false;
       return;
     }
@@ -2038,7 +2145,7 @@ export class Fluid {
   // outside only onto points outside: a sealed one's own drops are inside it, the rest by the point they're at. A
   // wall thinner than the grid's cells is missed by it - ultrathin, thin, its liquid was drawn out through it.)
   _splat(F, FC, touch, tList, x0, y0, z0, c, gx, gy, gz, R, nm) {
-    const n = this.n, x = this.x, gxy = gx * gy, M = this.fmask, sb = this.app.sb, own = this.own;
+    const n = this.n, x = this.x, gxy = gx * gy, M = this.fmask, sb = this.app.sb, own = this.own, DI = this.dIn, RY = this.revealY, RON = this.revealOn;
     let nt = 0;
     const ic = 1 / c;
     for (let p = 0; p < n; p++) {
@@ -2050,6 +2157,17 @@ export class Fluid {
           const i = Math.round((x[p * 3] - x0) * ic), j = Math.round((x[p * 3 + 1] - y0) * ic), kk = Math.round((x[p * 3 + 2] - z0) * ic);
           if (i >= 0 && j >= 0 && kk >= 0 && i < gx && j < gy && kk < gz) mp = M[kk * gxy + j * gx + i];
         }
+      }
+      DI[p] = mp;
+      // (being put back, re-cubed: drawn as high as it's got to - those above it fading out over a drop's width)
+      let sw = 1;
+      if (RON && own[p]) {
+        for (let k = 0; k < MAX_CUBES; k++)
+          if (sb.cHid[k] === own[p]) {
+            if (RY[k] < Infinity) sw = Math.min(1, (RY[k] - x[p * 3 + 1]) / D + 0.5);
+            break;
+          }
+        if (!(sw > 0)) continue;
       }
       // (one carrying more: as much wider as it sits further from the rest - their splats meet as others' do)
       const Rp = R * Math.cbrt(this.mass[p]), R2 = Rp * Rp, rr = Math.ceil(Rp * ic);
@@ -2070,7 +2188,7 @@ export class Fluid {
             const dx = x0 + i * c - px;
             const d2 = dx * dx + dyz;
             if (d2 >= R2) continue;
-            const u = 1 - d2 / R2, w = u * u * u;
+            const u = 1 - d2 / R2, w = u * u * u * sw;
             const q = row + i;
             if (nm && M[q] !== mp) continue;
             if (!touch[q]) {
@@ -2117,8 +2235,8 @@ export class Fluid {
     OFF[0] = 0; OFF[1] = 1; OFF[2] = 1 + gx; OFF[3] = gx; OFF[4] = gxy; OFF[5] = 1 + gxy; OFF[6] = 1 + gx + gxy; OFF[7] = gx + gxy;
     const CX = MC_CX, CY = MC_CY, CZ = MC_CZ, EA = MC_EA, EB = MC_EB;
     const pos = this.pos, nrm = this.nrm, rgb = this.rgb, maxV = this.maxV;
-    const vv = this._vv, ex = this._ex, en = this._en, ec = this._ec;
-    let nv = 0;
+    const vv = this._vv, ex = this._ex, en = this._en, ec = this._ec, ei = this._ei, inn = this.inn, M = this.fmask;
+    let nv = 0, nIn = 0;
     for (let a = 0; a < nc && nv + 15 <= maxV; a++) {
       const cell = cList[a];
       const k = (cell / gxy) | 0, j = ((cell - k * gxy) / gx) | 0, i = cell - k * gxy - j * gx;
@@ -2136,6 +2254,8 @@ export class Fluid {
         const A = EA[e], B = EB[e], qa = cell + OFF[A], qb = cell + OFF[B];
         const t = (iso - vv[A]) / (vv[B] - vv[A] || 1e-9);
         const o = e * 3;
+        // (in a cube full of liquid, as its inside corner is)
+        ei[e] = M[vv[A] > iso ? qa : qb] ? 1 : 0;
         ex[o] = x0 + (i + CX[A] + (CX[B] - CX[A]) * t) * c;
         ex[o + 1] = y0 + (j + CY[A] + (CY[B] - CY[A]) * t) * c;
         ex[o + 2] = z0 + (k + CZ[A] + (CZ[B] - CZ[A]) * t) * c;
@@ -2159,6 +2279,7 @@ export class Fluid {
         pos[o] = ex[e3]; pos[o + 1] = ex[e3 + 1]; pos[o + 2] = ex[e3 + 2];
         nrm[o] = en[e3]; nrm[o + 1] = en[e3 + 1]; nrm[o + 2] = en[e3 + 2];
         rgb[o] = ec[e3]; rgb[o + 1] = ec[e3 + 1]; rgb[o + 2] = ec[e3 + 2];
+        nIn += inn[nv] = ei[triTable[base + tIdx]];
         nv++;
       }
     }
@@ -2171,9 +2292,11 @@ export class Fluid {
       FO[q] = 0;
     }
     this.geo.setDrawRange(0, nv);
-    for (const a of [this.aPos, this.aNrm, this.aCol]) {
+    this.inN = nIn;
+    this.meshVer++;
+    for (const a of [this.aPos, this.aNrm, this.aCol, this.aIn]) {
       a.clearUpdateRanges();
-      a.addUpdateRange(0, nv * 3);
+      a.addUpdateRange(0, nv * a.itemSize);
       a.needsUpdate = true;
     }
     this.mesh.visible = nv > 0;

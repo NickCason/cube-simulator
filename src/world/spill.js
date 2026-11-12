@@ -141,11 +141,10 @@ export class Spill {
     sb.cHid[k] = ++this.hid;
     for (let i = p0; i < fl.n; i++) (fl.age[i] = 1), (fl.own[i] = this.hid);
     this.drained += (fl.n - p0) * fl.vol;
-    // (what's in it - the glitter, the bubbles - on the nearest of them)
-    if (fl.n > p0) {
-      app.glitter?.poolFrom(inner, p0, fl.n);
-      app.bubbles?.poolFrom(new Set(inner), p0, fl.n, true);
-    }
+    // (what's in it - the glitter on the nearest of them; its bubbles all through it, none left in its wall or
+    // hollow: see Bubbles.intoLiquid)
+    if (fl.n > p0) app.glitter?.poolFrom(inner, p0, fl.n);
+    app.bubbles?.intoLiquid(k);
     // its wall thinned to that: each of its hollow's vertices (kept, off its skin) out to that depth - straight out
     // from each face it's on (along the line from its middle, its faces dished or bulged), but never shallower than
     // that under a rounded edge or corner - in its rest shape and as it stands (turned so); a vertex that would
@@ -233,6 +232,8 @@ export class Spill {
     if (cb) cb.liqLook = app.liquidLook(cb);
     sb._liquidTets();
     this._seal(sb, k);
+    // (re-cubed: its liquid put back by the syringe that drew it up - see Injector)
+    if (app.injector?.wants(k)) app.injector.begin(k);
   }
 
   // Each hollow cube's hollow - its faces that aren't its outside, joined edge to edge, the part of them it is

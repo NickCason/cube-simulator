@@ -12,6 +12,7 @@ import {
   createLightViewMaterial,
   createMaskMaterial,
   createTintMaterial,
+  createLiquidViewMaterial,
   createHeightMaterial,
   createReflectMaterial,
   createGlowMaterial,
@@ -491,6 +492,12 @@ export class JellyView {
     this.causticMat.uniforms.tExitRest.value = this.lightView[2].rt.textures[1];
     // (and the exit's a third: its normal, for the light bent again going out)
     this.causticMat.uniforms.tExitN.value = this.lightView[2].rt.textures[2];
+    // (and the liquid in a cube full of it, as the light sees it: where the
+    // light's bent going into it - see createLiquidViewMaterial)
+    this.liqView = { rt: new THREE.WebGLRenderTarget(lvRes, lvRes, { ...lvOpts, count: 2 }), mat: createLiquidViewMaterial() };
+    this.liquid = null; // (the Fluid: App sets it)
+    this.causticMat.uniforms.tLiq.value = this.liqView.rt.textures[0];
+    this.causticMat.uniforms.tLiqN.value = this.liqView.rt.textures[1];
     // (on a desktop, the caustics drawn a colour at a time, each bent its own
     // amount: their edges split into rainbows)
     this.disperse = !coarse;
@@ -1573,7 +1580,7 @@ export class JellyView {
     // smooths their finest lines - half what they cost, and never still long
     // enough to see it; settled, once more with it.)
     const L = this.lightDir, moving = this.forceMoving ?? (!!sb && sb.pieces.some((p) => !p.asleep));
-    const sig = sb ? `${sb.topoVersion}|${sb.nV}|${this._ps}|${this._ts}|${this._ds}|${this.lookVersion}|${L.x},${L.y},${L.z}|${Math.round(this.causticLevel * 200)}|${this.multiCube}|${this.disperse}|${sb.fill ? performance.now() : 0}|${moving}|${this.skipCaustics}|${this.causticLow}` : '';
+    const sig = sb ? `${sb.topoVersion}|${sb.nV}|${this._ps}|${this._ts}|${this._ds}|${this.lookVersion}|${L.x},${L.y},${L.z}|${Math.round(this.causticLevel * 200)}|${this.multiCube}|${this.disperse}|${sb.fill ? performance.now() : 0}|${this.liquid?.inN ? this.liquid.meshVer : 0}|${moving}|${this.skipCaustics}|${this.causticLow}` : '';
     if (sig && sig === this._fxSig) {
       this._renderGlowMap();
       return;
@@ -1596,6 +1603,19 @@ export class JellyView {
         r.render(this.scene, this.lightCam);
       }
       this.scene.overrideMaterial = null;
+    }
+    // (the liquid in cubes full of it, as the light sees it)
+    const LQ = this.liquid, liq = !!(lit && LQ && LQ.inN > 0 && LQ.mesh.visible);
+    this.causticMat.uniforms.uLiqOn.value = liq ? 1 : 0;
+    if (liq) {
+      const m = this.liqView.mat;
+      m.uniforms.uOrigin.value.copy(this.lightOrigin);
+      m.uniforms.uLightDir.value.copy(L);
+      r.setRenderTarget(this.liqView.rt);
+      r.clear(true, true, false);
+      LQ.scene.overrideMaterial = m;
+      r.render(LQ.scene, this.lightCam);
+      LQ.scene.overrideMaterial = null;
     }
     // (several cubes: the jelly looks up the light's view for their shadows on each other)
     const F = this.frontMat.uniforms;

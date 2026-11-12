@@ -1578,6 +1578,7 @@ export function createLightViewMaterial(kind) {
     side: kind === 2 ? THREE.BackSide : THREE.FrontSide,
     uniforms: { uOrigin: { value: new THREE.Vector3() }, uCubeTex: { value: null }, uGradTex: { value: null }, uFreeTex: { value: null }, uSurfAtlas: { value: null } },
     vertexShader: /* glsl */ `
+      ${kind === 2 ? 'uniform highp sampler2D uCubeTex;' : ''}
       attribute vec3 aRest;
       attribute vec4 aData;
       attribute float aCube;
@@ -1606,6 +1607,10 @@ export function createLightViewMaterial(kind) {
         vTemp = aData.x;
         vCubeK = aCube;
         gl_Position = projectionMatrix * viewMatrix * wp;
+        ${kind === 2 ? `// (a cube full of liquid's way out the far side of it - its depth turned over, the farthest of its faces
+        // turned away from the light the nearest: else it was its hollow's ceiling, just under its top - its light
+        // through one thin wall, no caustics, and a grey shadow. Its liquid bends the light much as the jelly does.)
+        if (texelFetch(uCubeTex, ivec2(35, int(aCube + 0.5)), 0).x > 0.5) gl_Position.z = -gl_Position.z;` : ''}
       }`,
     fragmentShader: /* glsl */ `
       uniform vec3 uOrigin;
@@ -1670,6 +1675,42 @@ export const LIGHT_VIEW_GLSL = /* glsl */ `
 // what survives the jelly along the way - through the layers the ray really
 // crosses, from where it enters to where it leaves. The detail no longer
 // depends on the size of the mesh's triangles.
+// ...and the liquid in a cube full of it, as the key light sees it: the nearest of its surface (world position,
+// relative to uOrigin, and 1 where there's some) and its normal there, turned to the light - only what's in its
+// cube (see Fluid: aIn; out of it, it casts a plain shadow of its own)
+export function createLiquidViewMaterial() {
+  return new THREE.ShaderMaterial({
+    side: THREE.DoubleSide,
+    uniforms: { uOrigin: { value: new THREE.Vector3() }, uLightDir: { value: new THREE.Vector3(0, 1, 0) } },
+    vertexShader: /* glsl */ `
+      attribute float aIn;
+      varying vec3 vW;
+      varying vec3 vN;
+      varying float vIn;
+      void main() {
+        vec4 wp = modelMatrix * vec4(position, 1.0);
+        vW = wp.xyz;
+        vN = mat3(modelMatrix) * normal;
+        vIn = aIn;
+        gl_Position = projectionMatrix * viewMatrix * wp;
+      }`,
+    fragmentShader: /* glsl */ `
+      uniform vec3 uOrigin;
+      uniform vec3 uLightDir;
+      varying vec3 vW;
+      varying vec3 vN;
+      varying float vIn;
+      layout(location = 1) out highp vec4 oNrm;
+      void main() {
+        if (vIn < 0.5) discard;
+        vec3 n = normalize(vN);
+        if (dot(n, uLightDir) < 0.0) n = -n;
+        gl_FragColor = vec4(vW - uOrigin, 1.0);
+        oNrm = vec4(n, 1.0);
+      }`,
+  });
+}
+
 export function createCausticMaterial(layerUniforms) {
   return new THREE.ShaderMaterial({
     side: THREE.DoubleSide,
@@ -1690,6 +1731,9 @@ export function createCausticMaterial(layerUniforms) {
       tEntryRest: { value: null },
       tExitRest: { value: null },
       tExitN: { value: null },
+      tLiq: { value: null },
+      tLiqN: { value: null },
+      uLiqOn: { value: 0 },
       uGradTex: { value: null },
       uFreeTex: { value: null },
       uOrigin: { value: new THREE.Vector3() },
@@ -1707,6 +1751,9 @@ export function createCausticMaterial(layerUniforms) {
       uniform sampler2D tEntryRest;
       uniform sampler2D tExitRest;
       uniform sampler2D tExitN;
+      uniform sampler2D tLiq;
+      uniform sampler2D tLiqN;
+      uniform float uLiqOn;
       ${CUBE_GLSL}
       uniform vec3 uOrigin;
       uniform mat4 uLightInvVP;
@@ -1818,24 +1865,60 @@ export function createCausticMaterial(layerUniforms) {
           float nl = dot(Ns, Ns);
           vec3 N = nl > 1e-12 ? Ns * inversesqrt(nl) : vec3(0.0, 1.0, 0.0);
           vec4 X = texelFetch(tExit, ij, 0);
-          vec3 r = refract(Ld, N, 1.0 / ior);
+          // A cube full of liquid: its top wall's thin, both its faces bent
+          // alike - the light goes on through it as it came, to the liquid's
+          // surface, and is bent there instead, then on through the liquid
+          // and out of the far side of the cube (see createLightViewMaterial,
+          // kind 2: that's its exit); where the line misses the liquid - the
+          // air over it, or a cube run dry - only through its walls, straight
+          // on, a little dimmed and tinted.
+          vec4 lq = texelFetch(uCubeTex, ivec2(35, int(kA)), 0);
+          vec3 P1 = P, N1 = N;
+          float wf = 0.0, span = X.w > 0.5 ? max(dot(X.xyz - E.xyz, Ld), 0.01) : 0.05;
+          bool straight = false;
+          if (lq.x > 0.5) {
+            // (its walls' share of the way through: see Spill._hollow)
+            wf = lq.y <= 0.5 ? 0.05 + 0.08 * lq.y : 0.09 + 0.18 * (lq.y - 0.5);
+            vec4 Lq = texelFetch(tLiq, ij, 0);
+            if (uLiqOn > 0.5 && Lq.w > 0.5 && dot(Lq.xyz - E.xyz, Ld) > -0.01) {
+              P1 = Lq.xyz + uOrigin;
+              // (its normal smoothed as the jelly's is)
+              vec3 Nl = vec3(0.0);
+              for (int dy = -2; dy <= 2; dy++)
+                for (int dx = -2; dx <= 2; dx++) {
+                  ivec2 q = clamp(ij + ivec2(dx, dy) * stp, ivec2(0), sz - 1);
+                  if (texelFetch(tLiq, q, 0).w > 0.5) Nl += texelFetch(tLiqN, q, 0).xyz * (3.0 - 0.5 * float(abs(dx) + abs(dy)));
+                }
+              N1 = dot(Nl, Nl) > 1e-12 ? normalize(Nl) : vec3(0.0, 1.0, 0.0);
+            } else straight = true;
+          }
+          vec3 r = refract(Ld, N1, 1.0 / ior);
           if (dot(r, r) < 1e-6) r = Ld;
           // Through it, to where it comes out (marched along the bent ray in
           // the light's view: past the far side there, or off its edge, it's
           // out), and bent again there by the far side - out through the
           // bottom it goes back to the light's slant, out through a side
           // it's thrown wide (all the more so up in the air, or squashed).
-          float th = X.w > 0.5 ? max(dot(X.xyz - E.xyz, Ld), 0.01) : 0.05;
-          vec3 Q = marchOut(P, r, th / max(dot(r, Ld), 0.3), Ld);
+          float th = X.w > 0.5 ? max(dot(X.xyz + uOrigin - P1, Ld), 0.01) : 0.05;
+          vec3 Q = straight ? X.xyz + uOrigin : marchOut(P1, r, th / max(dot(r, Ld), 0.3), Ld);
           vec3 n1 = exitNormal(Q);
           if (dot(r, n1) < 0.0) n1 = -n1; // (a ray going out goes out through it)
           vec3 r2 = refract(r, -n1, ior);
           vec2 xuv = lightUV(Q);
           float tOut;
-          if (dot(r2, r2) > 1e-6) {
+          if (straight) {
+            // (through the walls alone: landing where it would have, no
+            // focusing, just two walls' worth of the colour)
+            F = P + Ld * (-P.y / Ld.y);
+            vPath = 2.0 * wf * span;
+            vThrow = length(F - Q);
+            tOut = 0.85;
+            xuv = tuv;
+          } else if (dot(r2, r2) > 1e-6) {
             F = Q + r2 * (max(Q.y, 0.0) / -min(r2.y, -0.06));
-            // (its colour deepens with the way through the jelly - only that)
-            vPath = length(Q - P);
+            // (its colour deepens with the way through the jelly - only that;
+            // a cube full of liquid's, from the liquid, and its top wall)
+            vPath = length(Q - P1) + wf * span;
             // (and how far it falls from the jelly to the floor: the further,
             // the softer it lands - see floor.js)
             vThrow = length(F - Q);
@@ -1849,9 +1932,9 @@ export function createCausticMaterial(layerUniforms) {
             // gets out somewhere, the light of a soft, uneven, slightly hazy
             // jelly. Drawn going on as it was, to the floor - the glow
             // through the shadow - a little dimmer.
-            float t = max(P.y, 0.0) / -min(r.y, -0.08);
-            F = P + r * t;
-            vPath = t;
+            float t = max(P1.y, 0.0) / -min(r.y, -0.08);
+            F = P1 + r * t;
+            vPath = t + wf * span;
             // (bounced round inside, it comes out low down: half the way)
             vThrow = 0.5 * t;
             tOut = 0.85;
@@ -1884,7 +1967,7 @@ export function createCausticMaterial(layerUniforms) {
           // or none gets through at all)
           vValid *= (1.0 - 0.94 * cvr) * cubeT(16).a;
           vThrow = mix(vThrow, max(vThrow, 1.6), cvr);
-          vNdL = dot(N, normalize(uLightDir));
+          vNdL = dot(N1, normalize(uLightDir));
           vTemp = Nt.w;
         }
         vec2 cuv = (F.xz - uCausRect.xy) * uCausRect.zw;

@@ -362,7 +362,8 @@ export class Healer {
       this.cz = 0;
       this.yaw = 0;
       this.plan = [];
-      app.fluid?.recall?.((out) => out.set(0, LIFT_FUSE + sb.p.size * 0.6, 0), 0.1);
+      if (this._syringe(0, 0)) app.fluid?.recall?.((out) => this._toTip(out, app.cubes[0]?.slot ?? 0), 0.1, true);
+      else app.fluid?.recall?.((out) => out.set(0, LIFT_FUSE + sb.p.size * 0.6, 0), 0.1);
       this._fuse();
       return;
     }
@@ -413,8 +414,12 @@ export class Healer {
     app.droplets.heal(this.cW.clone(), TL.flyStart - 0.35, 1.15);
     // ...and the jelly that melted (and any that set again: melted back -
     // see Fluid._healStart) flows home after them, into the holes (once
-    // they're known: _sendDroplets) - pouring in as they fill
-    app.fluid?.recall?.((out) => out.set(this.cx, LIFT_FUSE + sb.p.size * 0.75, this.cz), TL.flyStart + 0.35);
+    // they're known: _sendDroplets) - pouring in as they fill. (A cube full
+    // of liquid's liquid - or its liquid out in the room - drawn up into a
+    // syringe over where it's to be, at once, to go back in once it's made:
+    // see Injector.)
+    if (this._syringe(this.cx, this.cz)) app.fluid?.recall?.((out) => this._toTip(out, app.cubes[0]?.slot ?? 0), 0.15, true);
+    else app.fluid?.recall?.((out) => out.set(this.cx, LIFT_FUSE + sb.p.size * 0.75, this.cz), TL.flyStart + 0.35);
     app.audio?.healStart();
   }
 
@@ -444,7 +449,74 @@ export class Healer {
       sb.glow[i] = Math.max(sb.glow[i], sb.rTag[r] === 0 ? 0.45 : 0.22);
     }
     app.droplets.heal(this.cW.clone(), TL.flyStart - 0.35, 1.15);
+    this._syringes();
     app.audio?.healStart();
+  }
+
+  // (the one cube, full of liquid - or its liquid out in the room: a syringe over where it's to be, its top at
+  // (cx, LIFT_FUSE + its size, cz) - see Injector; true if so)
+  _syringe(cx, cz) {
+    const app = this.app, sb = app.sb, fl = app.fluid, inj = app.injector, slot = app.cubes[0]?.slot ?? 0;
+    if (!inj || !fl) return false;
+    let owned = false;
+    for (let i = 0; i < fl.n && !owned; i++) owned = fl.own[i] !== 0;
+    if (!owned && !(sb.cLiq[slot] && sb.cFill[slot] > 0)) return false;
+    inj.start(slot, cx, LIFT_FUSE + sb.p.size, cz, sb.p.size, fl.n);
+    return true;
+  }
+
+  // (a drop flying up into cube slot's syringe: its needle's tip, give or take a centimetre)
+  _toTip(out, slot) {
+    const t = this.app.injector.tip(slot);
+    if (t) out.set(t.x + (Math.random() - 0.5) * 0.02, t.y, t.z + (Math.random() - 0.5) * 0.02);
+  }
+
+  // Several cubes: a syringe over each re-forming that's full of liquid (see Injector) - and if all the liquid in
+  // the room is theirs (or nobody's), it's drawn up into them, each its own; else only theirs (and nobody's) goes,
+  // and theirs comes back fresh: another cube's still in it, left be. (It all drained away into the floor, a
+  // cube re-cubed on its own taking every other cube's liquid with it.)
+  _syringes() {
+    const app = this.app, sb = app.sb, fl = app.fluid, inj = app.injector, only = this.only;
+    if (!inj || !fl || !this.homes) return;
+    const forming = new Map(), slots = [];
+    for (const [slot] of this.homes) {
+      if (only >= 0 && slot !== only) continue;
+      const id = sb.cHid[slot];
+      if (id) forming.set(id, slot);
+      let owned = false;
+      for (let i = 0; i < fl.n && !owned && id; i++) owned = fl.own[i] === id;
+      if (owned || (sb.cLiq[slot] && sb.cFill[slot] > 0)) slots.push(slot);
+    }
+    let all = true;
+    for (let i = 0; i < fl.n && all; i++) all = !fl.own[i] || forming.has(fl.own[i]);
+    // (theirs and nobody's: drawn up - or, none of them to be filled, gone)
+    const theirs = (i) => !fl.own[i] || forming.has(fl.own[i]);
+    let drawn = 0;
+    for (let i = 0; i < fl.n; i++) if (theirs(i)) drawn++;
+    for (const slot of slots) {
+      const h = this.homes.get(slot), s = h.s ?? sb.cSize[slot];
+      inj.start(slot, h.cx, h.cy + (this.lift ?? LIFT_FUSE) + s, h.cz, s, drawn);
+    }
+    if (!slots.length) {
+      if (!all) {
+        fl.drainT = 0;
+        fl.removeWhere(theirs);
+      }
+      return;
+    }
+    if (!fl.n) return;
+    fl.recall((out, i) => {
+      let k = forming.get(fl.own[i]);
+      // (nobody's: the nearest)
+      if (k === undefined || !slots.includes(k)) {
+        let bd = Infinity;
+        for (const s of slots) {
+          const t = inj.tip(s), d = (t.x - fl.x[i * 3]) ** 2 + (t.z - fl.x[i * 3 + 2]) ** 2;
+          if (d < bd) (bd = d), (k = s);
+        }
+      }
+      this._toTip(out, k);
+    }, 0.15, true, all ? null : theirs);
   }
 
   // (one cube's own gravity, damping and passing-through: back to normal)
@@ -470,6 +542,7 @@ export class Healer {
     sb.collisionsEnabled = true;
     sb.dampBoost = 1;
     sb.gravityScale = 1;
+    app.injector?.cancel();
     this._unsolo();
   }
 
@@ -860,7 +933,8 @@ export class Healer {
       out.set(this.cx + c * X + s * Z, LIFT_FUSE + Y + half, this.cz - s * X + c * Z);
     };
     this.app.droplets.retarget(into);
-    this.app.fluid?.retarget?.(into);
+    // (not a cube full of liquid's: drawn up into its syringe - see Injector)
+    if (!this.app.injector?.active) this.app.fluid?.retarget?.(into);
   }
 
 

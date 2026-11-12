@@ -278,10 +278,15 @@ export class Bubbles {
     this.version++;
     this.items.length = 0;
     const total = this.want.reduce((t, w) => t + Math.max(0, Math.round(w.count)), 0);
-    const f = total > MAX ? MAX / total : 1;
+    const f = total > MAX ? MAX / total : 1, wet = [];
     for (const w of this.want) {
       const slot = w.slot, n = Math.floor(Math.max(0, Math.round(w.count)) * f);
       if (!(sb.cSize[slot] > 0)) continue;
+      // (a cube full of liquid: in that - see intoLiquid)
+      if (sb.cHollow[slot] && sb.cLiq[slot]) {
+        wet.push(slot);
+        continue;
+      }
       const size = sb.cSize[slot], half = size / 2, m = Math.min(0.07, half * 0.15), bev = sb.cBevel[slot];
       const relief = this._relief(slot);
       this._shape[slot] = `${bev}:${relief}`;
@@ -303,9 +308,79 @@ export class Bubbles {
         // (and, loose: how it's moving, whether it's up against the top, how much of it's left - a burst's
         // shrinking - gone: run into another, or burst)
         // (and run out with a spill, into its pool - see poolFrom: its drop, where it is, foam or not, its time)
-        this.items.push({ slot, u: P.u, r: P.r, scale: w.scale, R, c: [x, y, z], a: r ? { tet: r.tet, b: r.bary, lost: false } : { tet: -1, b: [0, 0, 0, 0], lost: false }, open: false, v: [0, 0, 0], top: false, life: 1, gone: false, pool: false, p: -1, w: [0, 0, 0], lp: [0, 0, 0], lpOK: false, foam: false, popT: 0 });
+        this.items.push({ slot, u: P.u, r: P.r, scale: w.scale, R, c: [x, y, z], a: r ? { tet: r.tet, b: r.bary, lost: false } : { tet: -1, b: [0, 0, 0, 0], lost: false }, open: false, v: [0, 0, 0], top: false, life: 1, gone: false, pool: false, p: -1, w: [0, 0, 0], lp: [0, 0, 0], lpOK: false, foam: false, popT: 0, held: false, hk: -1 });
       }
     }
+    for (const slot of wet) this.intoLiquid(slot);
+  }
+
+  // A cube full of liquid's bubbles: in its liquid, spread all through it, each on a drop of it (held there
+  // while that's in it: see poolTick) - as many as it's full (empty, none) - and none left in its wall or its
+  // hollow. (Left in the jelly that went to make its hollow, they hung there in the empty air, anchored past the
+  // wall's tets - and swung about with it, and out of it; and the jelly's own, crowded up under its top, were
+  // squeezed into its top wall, a band of foam along it.) Its own made again; any spilled out of it left be.
+  intoLiquid(slot) {
+    const app = this.app, sb = app.sb, fl = app.fluid;
+    for (const b of this.items)
+      if (b.slot === slot && !b.gone && (!b.pool || b.held)) {
+        b.gone = true;
+        b.pool = b.held = false;
+        b.a.tet = -1;
+        b.a.lost = true;
+        b.a.wx = undefined;
+      }
+    this._poolV++;
+    const w = this.want.find((q) => q.slot === slot);
+    if (!w || !fl || !fl.n || !(sb.cSize[slot] > 0)) return 0;
+    const own = [], DI = fl.dIn, id = sb.cHid[slot];
+    for (let i = 0; i < fl.n; i++) if (DI[i] === slot + 1 || (DI[i] === 255 && id && fl.own[i] === id)) own.push(i);
+    const total = this.want.reduce((t, q) => t + Math.max(0, Math.round(q.count)), 0), f = total > MAX ? MAX / total : 1;
+    const n = Math.min(own.length, Math.round(Math.floor(Math.max(0, Math.round(w.count)) * f) * Math.min(1, Math.max(0, sb.cFill[slot]))));
+    if (!n) return 0;
+    this._remapHook();
+    const x = fl.x, D = fl.D, size = sb.cSize[slot];
+    let made = 0;
+    for (let j = 0; j < n; j++) {
+      const b = this._spare();
+      if (!b) break;
+      const P = this.pattern[(j + slot * 61) % MAX];
+      // (evenly through it - its drops were laid bottom to top - each a little off its drop)
+      const p = own[Math.min(own.length - 1, Math.max(0, Math.floor(((j + 0.5 + 0.45 * P.u[0]) / n) * own.length)))], o = p * 3;
+      b.slot = slot;
+      b.u = P.u;
+      b.r = P.r;
+      b.scale = w.scale;
+      b.R = P.r * w.scale * size;
+      b.c[0] = b.c[1] = b.c[2] = 0;
+      b.a.tet = -1;
+      b.a.lost = true;
+      b.a.wx = undefined;
+      b.open = false;
+      b.v[0] = b.v[1] = b.v[2] = 0;
+      b.top = false;
+      b.life = 1;
+      b.gone = false;
+      b.pool = true;
+      b.p = p;
+      b.lp[0] = x[o]; b.lp[1] = x[o + 1]; b.lp[2] = x[o + 2];
+      b.lpOK = true;
+      b.w[0] = x[o] + P.u[0] * 0.4 * D; b.w[1] = x[o + 1] + P.u[1] * 0.4 * D; b.w[2] = x[o + 2] + P.u[2] * 0.4 * D;
+      b.foam = false;
+      b.popT = Infinity;
+      b.held = true;
+      b.hk = slot;
+      made++;
+    }
+    return made;
+  }
+
+  // (the liquid's drops renumbered - some set, fumed off, flown home: each bubble in it after its own, or gone)
+  _remapHook() {
+    if (this._remapOn) return;
+    this._remapOn = true;
+    this.app.fluid.onRemap.push((map, nn) => {
+      for (const b of this.items) if (b.pool && !b.gone) b.p = map && b.p < nn ? map[b.p] : -1;
+    });
   }
 
   // A snow globe's bubbles, loose in its water (App.frame, just after the flakes' step - Glitter.tick, the
@@ -479,7 +554,7 @@ export class Bubbles {
   _spare() {
     for (const b of this.items) if (b.gone && !b.open && !b.pool) return b;
     if (this.items.length >= MAX) return null;
-    const b = { slot: 0, u: [0, 0, 0], r: 0, scale: 1, R: 0, c: [0, 0, 0], a: { tet: -1, b: [0, 0, 0, 0], lost: false }, open: false, v: [0, 0, 0], top: false, life: 1, gone: true, pool: false, p: -1, w: [0, 0, 0], lp: [0, 0, 0], lpOK: false, foam: false, popT: 0 };
+    const b = { slot: 0, u: [0, 0, 0], r: 0, scale: 1, R: 0, c: [0, 0, 0], a: { tet: -1, b: [0, 0, 0, 0], lost: false }, open: false, v: [0, 0, 0], top: false, life: 1, gone: true, pool: false, p: -1, w: [0, 0, 0], lp: [0, 0, 0], lpOK: false, foam: false, popT: 0, held: false, hk: -1 };
     this.items.push(b);
     return b;
   }
@@ -519,6 +594,8 @@ export class Bubbles {
       b.p = best;
       b.w[0] = this._t[0]; b.w[1] = this._t[1]; b.w[2] = this._t[2];
       b.lpOK = false;
+      b.held = false;
+      b.hk = -1;
       b.a.tet = -1;
       b.a.lost = true;
       b.a.wx = undefined;
@@ -530,21 +607,18 @@ export class Bubbles {
       b.life = 1;
       n++;
     }
-    if (n && !this._remapOn) {
-      this._remapOn = true;
-      fl.onRemap.push((map, nn) => {
-        for (const b of this.items) if (b.pool && !b.gone) b.p = map && b.p < nn ? map[b.p] : -1;
-      });
-    }
+    if (n) this._remapHook();
     if (n) this._poolV++;
     return n;
   }
 
   // The pool's bubbles, a frame (App.frame, after the liquid's step): each borne up to the liquid's top where
   // its drop is - over the highest of it and its neighbours - and carried along with it; at the
-  // top, after a while, it bursts (foam lasts). Its drop gone (set, flown home), it goes.
+  // top, after a while, it bursts (foam lasts). Its drop gone (set, flown home), it goes. While its drop's still
+  // in its cube full of liquid, it stays where it is in it, carried along: not borne up, nor burst, nor foam -
+  // they rose to a layer at the top of it, and came out of it there.
   poolTick(dt) {
-    const fl = this.app.fluid, x = fl.x, NS = fl.nbStart, NB = fl.nb, D = fl.D;
+    const fl = this.app.fluid, x = fl.x, NS = fl.nbStart, NB = fl.nb, D = fl.D, DI = fl.dIn, own = fl.own;
     let any = false;
     for (const b of this.items) {
       if (!b.pool || b.gone) continue;
@@ -554,16 +628,32 @@ export class Bubbles {
         this._popAt(b);
         continue;
       }
-      let top = x[p * 3 + 1];
-      for (let e = NS[p], e1 = NS[p + 1]; e < e1; e++) top = Math.max(top, x[NB[e] * 3 + 1]);
-      // (its surface, as drawn, is 1.1 spacings over its drops' middles - the splats are wide: see Fluid._remesh)
-      const tx = x[p * 3] + b.u[0] * 0.4 * D, tz = x[p * 3 + 2] + b.u[2] * 0.4 * D, ty = top + 1.1 * D - 0.2 * b.R;
       const k = Math.min(1, dt * 6), w = b.w, L = b.lp;
       // (carried along with its drop first, then eased after it: eased alone - half a metre a second at most - a
       // cube full of liquid dropped in or swung about left its bubbles hanging in the air over it)
       if (b.lpOK) (w[0] += x[p * 3] - L[0]), (w[1] += x[p * 3 + 1] - L[1]), (w[2] += x[p * 3 + 2] - L[2]);
       L[0] = x[p * 3]; L[1] = x[p * 3 + 1]; L[2] = x[p * 3 + 2];
       b.lpOK = true;
+      // (in its cube: by its drop, where it was - its drop not looked at yet, by whose it is)
+      const din = DI[p], inCube = din === 255 ? own[p] !== 0 : din !== 0;
+      if (inCube) {
+        b.held = true;
+        if (din !== 255) b.hk = din - 1;
+        w[0] += (x[p * 3] + b.u[0] * 0.4 * D - w[0]) * k;
+        w[1] += (x[p * 3 + 1] + b.u[1] * 0.4 * D - w[1]) * k;
+        w[2] += (x[p * 3 + 2] + b.u[2] * 0.4 * D - w[2]) * k;
+        continue;
+      }
+      if (b.held) {
+        // (out now: as a spill's are - kept in its cube for good, foam a while or a moment)
+        b.held = false;
+        b.hk = -1;
+        if (b.popT === Infinity) (b.foam = Math.random() < 0.35), (b.popT = b.foam ? 20 + Math.random() * 40 : 0.3 + Math.random() * 2.2);
+      }
+      let top = x[p * 3 + 1];
+      for (let e = NS[p], e1 = NS[p + 1]; e < e1; e++) top = Math.max(top, x[NB[e] * 3 + 1]);
+      // (its surface, as drawn, is 1.1 spacings over its drops' middles - the splats are wide: see Fluid._remesh)
+      const tx = x[p * 3] + b.u[0] * 0.4 * D, tz = x[p * 3 + 2] + b.u[2] * 0.4 * D, ty = top + 1.1 * D - 0.2 * b.R;
       w[0] += (tx - w[0]) * k;
       w[2] += (tz - w[2]) * k;
       w[1] += Math.max(-0.5 * dt, Math.min(0.6 * dt, (ty - w[1]) * k));
@@ -633,11 +723,24 @@ export class Bubbles {
     for (const b of this.items) {
       let row, vis, px, py, pz, bb = null;
       if (b.pool) {
-        // (in a spill's pool, at its top: no jelly in front of it - its cube's colours, clear)
+        // (in a spill's pool, at its top: no jelly in front of it - its cube's colours, clear; still in its cube
+        // full of liquid, seen through that, as the jelly's own are)
         if (b.gone) continue;
         row = b.slot * CUBE_TEX_W * 4;
         vis = 1;
         px = b.w[0]; py = b.w[1]; pz = b.w[2];
+        // (its liquid being put back, re-cubed, not up to it yet: see Injector)
+        if (b.held && b.hk >= 0 && app.fluid.revealY[b.hk] < py) continue;
+        if (b.held && b.hk >= 0) {
+          const haze = D[b.hk * CUBE_TEX_W * 4 + 7];
+          vis = (1 - haze) * (1 - haze);
+          if (vis <= 0.01) continue;
+          for (const pc of sb.pieces)
+            if (pc.cube === b.hk && pc.bbox && px >= pc.bbox[0] && px <= pc.bbox[3] && py >= pc.bbox[1] && py <= pc.bbox[4] && pz >= pc.bbox[2] && pz <= pc.bbox[5]) {
+              bb = pc.bbox;
+              break;
+            }
+        }
       } else {
         if (b.a.tet < 0 || b.a.tet >= sb.nT || b.a.lost || b.open || b.gone) continue;
         const k = sb.tCube[b.a.tet];
@@ -653,7 +756,7 @@ export class Bubbles {
       let dx = px - ox, dy = py - oy, dz = pz - oz;
       const len = Math.hypot(dx, dy, dz);
       dx /= len; dy /= len; dz /= len;
-      let t0 = b.pool ? len : 0;
+      let t0 = b.pool && !bb ? len : 0;
       if (bb) {
         let tmin = -Infinity;
         const sl = (o, d, lo, hi) => {

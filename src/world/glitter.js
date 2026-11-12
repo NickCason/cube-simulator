@@ -69,6 +69,7 @@ export class Glitter {
     this.poolW = new Float32Array(MAX * 3);
     this._poolCV = -1;
     this._poolDirty = false;
+    this._revealed = false; // (a re-cube's liquid being put back, last frame: see poolTick)
     this._remapOn = false;
     this.globes = new Map();
     this._gs = []; // (the globes by slot, for a tick: a look-up a flake, not a Map's)
@@ -856,7 +857,7 @@ export class Glitter {
     }
     const x = fl.x, v = fl.v, P = this.poolP, K = this.poolK, O = this.poolO, NR = this.poolNr, W = this.poolW;
     const PS = this.pSeed.array, PM = this.pMode.array, PR = this.pRestK.array, PP = this.pPos.array, PN = this.pNrm.array;
-    const still = fl.asleep, low = -0.018 * this.app.sb.p.size;
+    const still = fl.asleep, low = -0.018 * this.app.sb.p.size, RY = fl.revealY, sb = this.app.sb, own = fl.own;
     let w = 0, anyFlat = false, anyCube = false;
     for (let i = 0; i < N; i++) {
       const p = P[i];
@@ -894,6 +895,13 @@ export class Glitter {
         NR[o] = rx / rl; NR[o + 1] = ry / rl; NR[o + 2] = rz / rl;
       }
       PP[o] = x[q] + O[o]; PP[o + 1] = x[q + 1] + O[o + 1]; PP[o + 2] = x[q + 2] + O[o + 2];
+      // (its liquid being put back, re-cubed, not up to it yet: out of sight under the floor - see Injector)
+      if (fl.revealOn && own[p])
+        for (let k = 0; k < RY.length; k++)
+          if (sb.cHid[k] === own[p]) {
+            if (RY[k] < x[q + 1]) PP[o + 1] = -100;
+            break;
+          }
       PN[o] = NR[o]; PN[o + 1] = NR[o + 1]; PN[o + 2] = NR[o + 2];
       if (Math.abs(PM[w] - 4) < 0.5) anyCube = true;
       else anyFlat = true;
@@ -909,7 +917,9 @@ export class Glitter {
       at.addUpdateRange(0, len);
       at.needsUpdate = true;
     };
-    if (!still || this._poolDirty) {
+    if (!still || this._poolDirty || fl.revealOn || this._revealed) {
+      // (and once more after a reveal: its last ones shown)
+      this._revealed = fl.revealOn > 0;
       up(this.pPos, w * 3);
       up(this.pNrm, w * 3);
     }

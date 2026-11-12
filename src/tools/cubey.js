@@ -237,9 +237,11 @@ export class DicerTool {
     // die - two or three, no finer than it is - and pulled apart along that
     // grid (SoftBody.remeshCube, splitCube): no cut tets, no slivers -
     // 125 dice are 5000 tets, not 26000, and the pile settles twice as soon.
-    // (One already cut, holed, melted: cut as ever.)
+    // (One already cut, holed, melted: cut as ever - and a shell, full of liquid or empty: built again it was
+    // solid jelly, its hollow gone - an empty cube diced came out solid dice; cut, its wall's in bits, its
+    // liquid let out.)
     const k = sb.pieces[hit.piece].cube, ps = sb.pieces.filter((p) => p.cube === k);
-    const whole = ps.length === 1 && ps[0].verts.length === sb.cN[k] && !ps[0].verts.some((i) => sb.melt[i]);
+    const whole = !sb.cHollow[k] && ps.length === 1 && ps[0].verts.length === sb.cN[k] && !ps[0].verts.some((i) => sb.melt[i]);
     const grid = whole ? { k, res: Math.max(2, Math.floor(sb.cRes[k] / n)) * n } : null;
     this.job = { t: 0, verts, n, iu, i1, i2, stage: 0, F, ext, grid };
     this.model.userData.setDice(n); // (its blades: as many as it's dicing)

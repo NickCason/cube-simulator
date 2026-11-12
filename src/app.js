@@ -34,6 +34,7 @@ import { physicsWarmJob } from './sim/warm.js';
 import { Droplets } from './world/droplets.js';
 import { Fluid } from './world/fluid.js';
 import { Spill } from './world/spill.js';
+import { Injector } from './world/injector.js';
 import { Flour } from './world/flour.js';
 import { Strands } from './world/strands.js';
 import { Bubbles } from './world/bubbles.js';
@@ -199,7 +200,9 @@ export class App {
     this.onColor = [];
     this.droplets = new Droplets(this);
     this.fluid = new Fluid(this); // (molten jelly: see TorchTool, FreezeTool)
+    this.jelly.liquid = this.fluid;
     this.spill = new Spill(this); // (a cube full of liquid, cut open, running out into it)
+    this.injector = new Injector(this); // (re-cubed, its liquid drawn up and put back by syringe)
     this.strands = new Strands(this); // (strings of goo: torn, dripping)
     this.healZoom = 0;
     this.flash = 0;
@@ -507,8 +510,12 @@ export class App {
       // (a shell full of liquid made solid again, or how full it's filled or how thick its skin changed - or its
       // colour, glitter or bubbles: they're in its liquid - built again in place and filled afresh, if it's whole
       // - see Spill; else at its next re-cube)
-      if (sb.cHollow[cb.slot] && ((cs.liquid > 0.5 ? 1 : 0) !== wasLiq || Math.abs(cs.liqFill - wasFill) > 1e-6 || Math.abs(cs.liqSkin - wasSkin) > 1e-6 || (cb.liqLook !== undefined && cb.liqLook !== this.liquidLook(cb))))
+      if (sb.cHollow[cb.slot] && ((cs.liquid > 0.5 ? 1 : 0) !== wasLiq || Math.abs(cs.liqFill - wasFill) > 1e-6 || Math.abs(cs.liqSkin - wasSkin) > 1e-6 || (cb.liqLook !== undefined && cb.liqLook !== this.liquidLook(cb)))) {
         (this._reshape ||= new Set()).add(cb.slot);
+        // (made solid again, cut or shot or battered: re-cubed now, not at its next re-cube - left a shell till
+        // then, its liquid let go, its bubbles risen out of it into a froth)
+        if ((cs.liquid > 0.5 ? 1 : 0) !== wasLiq) (this._reliq ||= new Set()).add(cb.slot);
+      }
       const L = this.shapeOf(cb, cs), k = cb.slot, shaped = L.bow || L.A > 0 || sb.cBow[k] || sb.cLobeA[k] > 0;
       if (Math.abs(L.bow - sb.cBow[k]) > 1e-6 || Math.abs(L.A - sb.cLobeA[k]) > 1e-6 || Math.abs(L.m - sb.cLobeP[k]) > 1e-6 || (L.A > 0 && sb.shapeOf(k)?.kind !== L.kind) || (shaped && Math.abs(this.bevelOf(cb) - sb.cBevel[k]) > 1e-6)) {
         sb.setShape(cb.slot, L.bow, L.A, L.m, L.kind);
@@ -518,8 +525,9 @@ export class App {
     }
     if (this._reshape?.size && !this._reshaping) {
       this._reshaping = true;
-      for (const slot of this._reshape) this._reformCube(slot);
+      for (const slot of this._reshape) if (!this._reformCube(slot) && this._reliq?.has(slot) && !this._whole(slot)) this.recubeOne(slot);
       this._reshape.clear();
+      this._reliq?.clear();
       this._reshaping = false;
     }
     this.jelly.multiCube = this.cubes.length > 1; // (their shadows on each other)
@@ -1596,6 +1604,7 @@ export class App {
       this.nails.update(sdt);
       this.droplets.update(sdt);
       this.fluid.update(sdt, sdt / parts);
+      this.injector.update(sdt);
       this.glitter.poolTick(sdt);
       this.bubbles.poolTick(sdt);
       this.flour.update(sdt);
