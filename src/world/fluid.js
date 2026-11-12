@@ -20,6 +20,8 @@ const MC_CX = [0, 1, 1, 0, 0, 1, 1, 0], MC_CY = [0, 0, 1, 1, 0, 0, 1, 1], MC_CZ 
 const MC_EA = [0, 1, 2, 3, 4, 5, 6, 7, 0, 1, 2, 3], MC_EB = [1, 2, 3, 0, 5, 6, 7, 4, 4, 5, 6, 7];
 const SET_T = -0.25; // colder than this it sets
 const SUB = 2; // substeps a frame
+// (m) how far out from a drop caught in a cube full of liquid's jelly it looks for free space - see _free
+const FREE_STEPS = [0.012, 0.025, 0.04, 0.06, 0.08, 0.1];
 const ITER = 3; // solver rounds a substep
 const MAXNB = 48; // neighbours kept per particle
 const CELL_HASH = 1 << 14; // buckets for the jelly's tets near the liquid
@@ -66,6 +68,21 @@ export class Fluid {
     this.cjv = new Float32Array(N);
     // (where each was last outside the jelly: out of it, it goes back that way - see _collide)
     this.lastOut = new Float32Array(N * 3);
+    // (drops caught deep in a cube full of liquid's jelly this frame, to soak back into it - and which cube's:
+    // see _collide, _soak)
+    this.soak = new Uint8Array(N);
+    this.soakCube = new Int8Array(N);
+    this._soakN = 0;
+    this._f3 = new Float64Array(3);
+    this._gapVer = -1;
+    this._anySlit = false;
+    // (26 ways out, unit: see _free)
+    const U = [];
+    for (let a = -1; a <= 1; a++) for (let b = -1; b <= 1; b++) for (let c = -1; c <= 1; c++) if (a || b || c) {
+      const l = Math.hypot(a, b, c);
+      U.push(a / l, b / l, c / l);
+    }
+    this._dirs26 = Float64Array.from(U);
     this.age = new Float32Array(N);
     this.lam = new Float32Array(N);
     this.dp = new Float32Array(N * 3);
@@ -253,6 +270,7 @@ export class Fluid {
       this.visc[i] = visc;
       this.thick[i] = thick;
       this.mass[i] = mass;
+      this.soak[i] = 0;
       this.lastOut[o] = this.x[o]; this.lastOut[o + 1] = this.x[o + 1]; this.lastOut[o + 2] = this.x[o + 2];
     }
     if (this.n >= this.max) this.bank = 0;
@@ -397,6 +415,8 @@ export class Fluid {
         this.visc[w] = this.visc[i];
         this.thick[w] = this.thick[i];
         this.mass[w] = this.mass[i];
+        this.soak[w] = this.soak[i];
+        this.soakCube[w] = this.soakCube[i];
         for (let c = 0; c < 3; c++) this.lastOut[w * 3 + c] = this.lastOut[i * 3 + c];
         R.t0[w] = R.t0[i];
         R.T[w] = R.T[i];
@@ -435,6 +455,8 @@ export class Fluid {
         this.visc[w] = this.visc[i];
         this.thick[w] = this.thick[i];
         this.mass[w] = this.mass[i];
+        this.soak[w] = this.soak[i];
+        this.soakCube[w] = this.soakCube[i];
         for (let c = 0; c < 3; c++) this.lastOut[w * 3 + c] = this.lastOut[i * 3 + c];
       }
       w++;
@@ -461,6 +483,8 @@ export class Fluid {
 
   clear() {
     if (this.n) this._mapDone(null, this.n); // (all gone)
+    this.soak.fill(0);
+    this._soakN = 0;
     this.n = 0;
     this.bank = 0;
     this.drainT = 0;
@@ -491,6 +515,8 @@ export class Fluid {
       this._jellyCells();
       const h = Math.min(dt, 1 / 30) / SUB;
       for (let s = 0; s < SUB; s++) this._step(h);
+      this._gaps();
+      if (this._soakN) this._soak();
       const v = this.v;
       let v2 = 0, nMove = 0;
       for (let o = 0; o < this.n * 3; o += 3) {
@@ -898,7 +924,13 @@ export class Fluid {
       // a tet with none, its nearest face - and on). (Pushed out each tet's own way, a drop between two of a
       // wall's tets went back and forth between them for ever - and out the nearest face, one deep in a wall
       // came out its far side: the cube leaked all round.)
-      let dirSet = false, dx = 0, dy = 0, dz = 0;
+      // In a cube full of liquid's jelly, never through it: back where it was last outside, if that's near and
+      // clear still, else out the nearest bare face of the tet it's in - a drop's width at most; deeper than
+      // that, or nowhere bare to go, it soaks back into the cube's liquid (see _soak). (Out along the way the
+      // jelly was moving, drops just made in a cut cube, or a puddle a cube slid over, went 20-50 cm in a
+      // frame - out through its top, its sides, its bottom: it leaked where it wasn't cut.)
+      if (this.soak[i]) continue;
+      let dirSet = false, dx = 0, dy = 0, dz = 0, went = 0, liq = false;
       for (let pass = 0; pass < 8; pass++) {
         const t = this._inTet(q[o], q[o + 1], q[o + 2]);
         if (t < 0) {
@@ -911,11 +943,25 @@ export class Fluid {
         if (!(Math.abs(det) > 1e-12)) break;
         if (!dirSet) {
           dirSet = true;
+          liq = sb.cLiq[sb.tCube[t]] === 1;
           const LO = this.lastOut, lx = LO[o] - q[o], ly = LO[o + 1] - q[o + 1], lz = LO[o + 2] - q[o + 2], ll = Math.sqrt(lx * lx + ly * ly + lz * lz);
           const Vx = sb.v[a3] + sb.v[b3] + sb.v[c3] + sb.v[d3], Vy = sb.v[a3 + 1] + sb.v[b3 + 1] + sb.v[c3 + 1] + sb.v[d3 + 1], Vz = sb.v[a3 + 2] + sb.v[b3 + 2] + sb.v[c3 + 2] + sb.v[d3 + 2];
           const Vl = Math.sqrt(Vx * Vx + Vy * Vy + Vz * Vz);
-          if (ll > 1e-5 && this._inTet(LO[o], LO[o + 1], LO[o + 2]) < 0) {
+          if (ll > 1e-5 && (!liq || ll < 2 * D) && this._inTet(LO[o], LO[o + 1], LO[o + 2]) < 0) {
             dx = lx / ll; dy = ly / ll; dz = lz / ll;
+          } else if (liq) {
+            // (out to the nearest free space round it - a drop and a half at most - straight there; none: soaked
+            // up. A wall that came down on it - a cut cube's emptied shell falling in on its liquid - pushes it
+            // back the way it's barely in, not on through the wall.)
+            const F = this._f3;
+            if (this._free(q[o], q[o + 1], q[o + 2], F)) {
+              const cp = this.cpush, ex = F[0] - q[o], ey = F[1] - q[o + 1], ez = F[2] - q[o + 2];
+              q[o] = F[0]; q[o + 1] = F[1]; q[o + 2] = F[2];
+              cp[o] += ex; cp[o + 1] += ey; cp[o + 2] += ez;
+              const el = Math.sqrt(ex * ex + ey * ey + ez * ez) || 1, jv = (Vx * ex + Vy * ey + Vz * ez) / (4 * el);
+              if (jv > this.cjv[i]) this.cjv[i] = jv;
+            } else this._soakAt(i, t);
+            break;
           } else if (Vl > 4 * 0.02) {
             dx = Vx / Vl; dy = Vy / Vl; dz = Vz / Vl;
           } else {
@@ -943,12 +989,87 @@ export class Fluid {
         }
         if (!(sOut < Infinity)) sOut = 0.004;
         const step = Math.min(sOut, 0.12) + 0.002;
+        if (liq && (went += step) > D) {
+          this._soakAt(i, t);
+          break;
+        }
         q[o] += dx * step; q[o + 1] += dy * step; q[o + 2] += dz * step;
         const cp = this.cpush, jv = ((sb.v[a3] + sb.v[b3] + sb.v[c3] + sb.v[d3]) * dx + (sb.v[a3 + 1] + sb.v[b3 + 1] + sb.v[c3 + 1] + sb.v[d3 + 1]) * dy + (sb.v[a3 + 2] + sb.v[b3 + 2] + sb.v[c3 + 2] + sb.v[d3 + 2]) * dz) * 0.25;
         cp[o] += dx * step; cp[o + 1] += dy * step; cp[o + 2] += dz * step;
         if (jv > this.cjv[i]) this.cjv[i] = jv;
       }
     }
+  }
+
+  // The nearest free space round (px, py, pz) - out of the jelly, above the floor - within a drop and a half,
+  // 26 ways (straight, edgewise, cornerwise) a few steps out each, the nearest first; into out (x, y, z), true -
+  // or false, none.
+  _free(px, py, pz, out) {
+    const U = this._dirs26;
+    for (const r of FREE_STEPS)
+      for (let k = 0; k < U.length; k += 3) {
+        const cx = px + U[k] * r, cy = py + U[k + 1] * r, cz = pz + U[k + 2] * r;
+        if (cy < R_P || this._inTet(cx, cy, cz) >= 0) continue;
+        out[0] = cx + U[k] * 0.002; out[1] = cy + U[k + 1] * 0.002; out[2] = cz + U[k + 2] * 0.002;
+        return true;
+      }
+    return false;
+  }
+
+  // (drop i, caught in tet t of a cube full of liquid with no short way out: to soak back into it at the end
+  // of the frame - meanwhile left where it is, out of the jelly's way)
+  _soakAt(i, t) {
+    if (this.soak[i]) return;
+    this.soak[i] = 1;
+    this.soakCube[i] = this.app.sb.tCube[t];
+    this._soakN++;
+  }
+
+  // Drops in a slit in a cube full of liquid - its two sides either side of them, within a drop's width -
+  // soak back into it: the slit closed on them. (Left there, they ran along inside the cut, as along a pipe,
+  // and out at its far end - the back of the cube, under it.) Not between two pieces - a cut right through:
+  // that's its liquid pouring out.
+  _gaps() {
+    const sb = this.app.sb, x = this.x, r = 0.6 * D, T = sb.T, so = sb.slitOf, tp = sb.tPiece;
+    if (!this.cellsN) return;
+    // (no slit in a cube full of liquid: nothing to look for - as of its topology)
+    if (this._gapVer !== sb.topoVersion) {
+      this._gapVer = sb.topoVersion;
+      this._anySlit = false;
+      for (let v = 0; v < sb.nV; v++) if (so[v] && so[v] - 1 !== v && sb.cLiq[sb.vCube[v]]) (this._anySlit = true), (v = sb.nV);
+    }
+    if (!this._anySlit) return;
+    const slit = (t) => {
+      for (let k = 0; k < 4; k++) {
+        const v = T[t * 4 + k];
+        if (so[v] && so[v] - 1 !== v) return true;
+      }
+      return false;
+    };
+    for (let i = 0; i < this.n; i++) {
+      if (this.soak[i] || this.acid[i] !== 0) continue;
+      const o = i * 3, px = x[o], py = x[o + 1], pz = x[o + 2];
+      for (let ax = 0; ax < 3; ax += 2) {
+        const ux = ax === 0 ? r : 0, uz = ax === 2 ? r : 0;
+        const a = this._inTet(px + ux, py, pz + uz);
+        if (a < 0 || sb.cLiq[sb.tCube[a]] !== 1) continue;
+        const b = this._inTet(px - ux, py, pz - uz);
+        if (b < 0 || tp[b] !== tp[a] || !(slit(a) || slit(b))) continue;
+        this._soakAt(i, a);
+        break;
+      }
+    }
+  }
+
+  // The drops caught in a cube full of liquid's jelly (see _collide, _gaps) gone back into its liquid: its
+  // inside that much fuller again (see Spill.soak)
+  _soak() {
+    const back = new Float64Array(16), S = this.soak, C = this.soakCube;
+    for (let i = 0; i < this.n; i++) if (S[i]) back[C[i]] += this.vol * this.mass[i];
+    this.removeWhere((i) => S[i] === 1);
+    S.fill(0);
+    this._soakN = 0;
+    for (let c = 0; c < back.length; c++) if (back[c] > 0) this.app.spill?.soak(c, back[c]);
   }
 
   // The jelly's tet p is in (of those hashed near the liquid - see _jellyCells), or -1.
@@ -1060,6 +1181,8 @@ export class Fluid {
         this.visc[w] = this.visc[i];
         this.thick[w] = this.thick[i];
         this.mass[w] = this.mass[i];
+        this.soak[w] = this.soak[i];
+        this.soakCube[w] = this.soakCube[i];
         for (let c = 0; c < 3; c++) this.lastOut[w * 3 + c] = this.lastOut[i * 3 + c];
       }
       w++;

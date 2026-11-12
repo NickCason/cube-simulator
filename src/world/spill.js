@@ -267,6 +267,19 @@ export class Spill {
     }
   }
 
+  // Liquid back into cube c (drops caught in its jelly - see Fluid._collide): its inside that much fuller, up to
+  // full - what it had let out, less
+  soak(c, vol) {
+    const sb = this.app.sb, VS = sb.tVS;
+    if (!sb.cLiq[c] || !sb._skinT || sb._liqTopo !== sb.topoVersion) return;
+    let V = 0;
+    for (let t = 0; t < sb.nT; t++) if (sb.tCube[t] === c && this._liq(sb, t)) V += sb.vol0[t] * VS[t];
+    if (!(V > 0)) return;
+    const f = 1 + vol / V;
+    for (let t = 0; t < sb.nT; t++) if (sb.tCube[t] === c && this._liq(sb, t)) VS[t] = Math.min(1, VS[t] * f);
+    this.drained = Math.max(0, this.drained - vol);
+  }
+
   // A frame of the seep: its drops let go at the mouth, by each pair's rate - just outside it, moving as the
   // jelly there and out of it (a dribble's barely, pulled open a jet's), as runny as the cube says
   _seepTick(dt) {
