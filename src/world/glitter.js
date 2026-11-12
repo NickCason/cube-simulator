@@ -400,7 +400,8 @@ export class Glitter {
     this.groups = cubes.filter((c) => c.style.glitter && c.style.glitter !== 'off').map((c) => ({ slot: c.slot, mode: GLITTER_MODES[c.style.glitter] ?? 0, loose: false }));
     // the cubes with water in them - a snow globe's, or any cube full of liquid (how thick: 0 water .. 1 near
     // solid; a snow globe's water) - and so every flake in them loose, whatever its kind
-    this.waters = cubes.filter((c) => c.style.glitter === 'snow' || c.tune?.liquid > 0.5).map((c) => ({ slot: c.slot, visc: c.tune?.liquid > 0.5 ? (c.tune.liqVisc ?? 0.15) : 0, skin: c.tune?.liquid > 0.5 ? (c.tune.liqSkin ?? 0.5) : -1 }));
+    // (a cube full of liquid isn't one: its liquid's real - the Fluid's, its flakes riding it: see Spill)
+    this.waters = cubes.filter((c) => c.style.glitter === 'snow' && !(c.tune?.liquid > 0.5)).map((c) => ({ slot: c.slot, visc: 0, skin: -1 }));
     for (const g of this.groups) g.loose = this.waters.some((w) => w.slot === g.slot);
     this.anyCubic = this.groups.some((g) => g.mode === 4);
     this.anySnow = this.groups.some((g) => g.loose);
@@ -778,6 +779,8 @@ export class Glitter {
   poolFrom(tets, p0, p1) {
     const fl = this.app.fluid;
     if (!fl.n || !this.count || !this.groups.length) return 0;
+    // (in the cube as it is: just made, or its glitter just put on, they're not in it yet)
+    if (this.app.sb.topoVersion !== this.topo || this.anchoredFor !== this._key()) this._anchor();
     if (p1 <= p0) (p0 = 0), (p1 = fl.n);
     const sb = this.app.sb, T = sb.T, key = (a, b, c, d) => {
       const q = [a, b, c, d].sort((x, y) => x - y);

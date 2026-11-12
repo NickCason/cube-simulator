@@ -500,7 +500,6 @@ export class JellyView {
     // (how many times the jelly's drawn positions have changed: what else that follows them - its glitter -
     // sends them to the GPU again only when this has moved on)
     this.posVersion = 0;
-    this._lvl = new Float64Array(64); // (per piece: its liquid's level, and how flat it's drawn - see _level)
     // (and of anything of its look sent up: its warmth, glow, coat - a frame of flakes only needs it the same)
     this.dataVersion = 0;
     this.skipCaustics = false; // (?stats' bench: see App.skip)
@@ -1325,7 +1324,6 @@ export class JellyView {
     const pos = this.pos, nrm = this.nrm, data = this.data;
     sb.writeRender(pos, nrm, data, this.coat, this.coatM);
     if (fill) this._fill(sb, sb.fill);
-    if (sb.liqTop && sb.liqTop.topo === sb.topoVersion) this._level(sb, sb.liqTop);
     tessellate(pos, nrm, data, this.mids1, this.nBase, this.disp1, this.coat, this.coatM, this._formTri ? this.disp31 : null, this._formTri ? this.twin1 : null);
     tessellate(pos, nrm, data, this.mids2, this.nL1, this.disp2, this.coat, this.coatM, this._formTri ? this.disp32 : null, this._formTri ? this.twin2 : null);
     if (this._formTri) this._formNormals(pos, nrm);
@@ -1371,61 +1369,6 @@ export class JellyView {
       moved = true;
     }
     if (moved) this._renormal(sb);
-  }
-
-  // A cube full of liquid that's lost some (see Spill): the top of what's left of it - its tets' faces, bared as
-  // the ones over them went - is jagged, a row of white shards; drawn flat, as a liquid's top lies: each piece's
-  // squashed onto its level (their mean height), a tenth of the jag left (all of it, and its folds turned over
-  // onto each other), facing straight up (their normals worked out again, where a thin gap's floor met its
-  // ceiling - faces up and down, squashed together - they summed to nothing: specks of black and white). The
-  // gap's ceiling and walls, within half a cell over it, come down onto it too (less the higher): where it's
-  // thin, shut - where its ceiling came down to the floor, its last few centimetres stood up from it in white
-  // tents. Only as far as it lies level, though - its faces, all told, facing up: tipped 15 degrees, less; 35,
-  // not at all (a cube rolled over, its top stood on end, squashed flat across its middle).
-  _level(sb, L) {
-    const pos = this.pos, nrm = this.nrm, rSim = sb.rSim, nB = this.nBase, x = sb.x, vp = sb.vPiece, on = L.on, V = L.v, FF = L.f, NP = sb.pieces.length;
-    // (per piece: its floor's heights summed, how many, and its faces' normals summed - the sideways of a jagged
-    // floor's cancel out: what's left is how it's tipped - then its level, and how far it's drawn so)
-    if (this._lvl.length < NP * 5) this._lvl = new Float64Array(NP * 10);
-    const lv = this._lvl;
-    lv.fill(0, 0, NP * 5);
-    for (let n = 0; n < V.length; n++) {
-      const i = V[n], k = vp[i];
-      if (k < 0 || k >= NP || on[i] !== 1) continue;
-      lv[k * 5] += x[i * 3 + 1];
-      lv[k * 5 + 1]++;
-    }
-    for (let n = 0; n < FF.length; n += 3) {
-      const a = FF[n] * 3, b = FF[n + 1] * 3, c = FF[n + 2] * 3, k = vp[FF[n]];
-      if (k < 0 || k >= NP) continue;
-      const ux = x[b] - x[a], uy = x[b + 1] - x[a + 1], uz = x[b + 2] - x[a + 2];
-      const wx = x[c] - x[a], wy = x[c + 1] - x[a + 1], wz = x[c + 2] - x[a + 2];
-      lv[k * 5 + 2] += uy * wz - uz * wy;
-      lv[k * 5 + 3] += uz * wx - ux * wz;
-      lv[k * 5 + 4] += ux * wy - uy * wx;
-    }
-    for (let k = 0; k < NP; k++) {
-      const o = k * 5, nl = Math.sqrt(lv[o + 2] * lv[o + 2] + lv[o + 3] * lv[o + 3] + lv[o + 4] * lv[o + 4]);
-      const up = nl > 0 ? lv[o + 3] / nl : 0, e = Math.min(1, Math.max(0, (up - 0.82) / (0.966 - 0.82)));
-      lv[o] = lv[o + 1] ? lv[o] / lv[o + 1] : 0;
-      lv[o + 1] = e * e * (3 - 2 * e);
-    }
-    for (let r = 0; r < nB; r++) {
-      const i = rSim[r];
-      if (!on[i]) continue;
-      const k = vp[i];
-      if (k < 0 || k >= NP) continue;
-      let s = lv[k * 5 + 1];
-      const y = lv[k * 5], o = r * 3;
-      if (on[i] === 2) {
-        const u = Math.min(1, Math.max(0, (pos[o + 1] - y) / (0.5 * L.h)));
-        s *= 1 - u * u * (3 - 2 * u);
-      }
-      if (!(s > 0)) continue;
-      pos[o + 1] += (y - pos[o + 1]) * 0.9 * s;
-      const nx = nrm[o] * (1 - s), ny = nrm[o + 1] * (1 - s) + s, nz = nrm[o + 2] * (1 - s), l = Math.sqrt(nx * nx + ny * ny + nz * nz) || 1;
-      nrm[o] = nx / l; nrm[o + 1] = ny / l; nrm[o + 2] = nz / l;
-    }
   }
 
   // (the base render vertices' area-weighted normals again, from pos as it is now)

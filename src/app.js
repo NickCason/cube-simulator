@@ -53,7 +53,7 @@ const SETTING_BY_KEY = Object.fromEntries(SETTINGS.map((s) => [s.key, s]));
 // each cube's own settings: its material's, and its size (the rest - gravity,
 // the sound, the tools - are the room's, the same in every cube)
 // (its own: its material's sliders, its size, its bubbles)
-const PER_CUBE = (k) => !!SETTING_BY_KEY[k]?.mat || k === 'size' || k === 'bubbles' || k === 'bubbleSize' || k === 'surfDepth' || k === 'surfScale' || k === 'trimSize' || k === 'trimDepth' || k === 'faces' || k === 'liquid' || k === 'liqVisc' || k === 'liqSkin';
+const PER_CUBE = (k) => !!SETTING_BY_KEY[k]?.mat || k === 'size' || k === 'bubbles' || k === 'bubbleSize' || k === 'surfDepth' || k === 'surfScale' || k === 'trimSize' || k === 'trimDepth' || k === 'faces' || k === 'liquid' || k === 'liqVisc' || k === 'liqSkin' || k === 'liqFill';
 import { DiceWatch } from './dice.js';
 import { Alive } from './alive.js';
 import { Tilt } from './tilt.js';
@@ -493,16 +493,22 @@ export class App {
       const ct = TEXTURES[cb.style.texture], cs = resolveSettings(cb.tune, ct);
       fizz.push({ slot: cb.slot, count: cs.bubbles, scale: cs.bubbleSize });
       // (its surface map holds on better, or slides: see surfaces.js grip)
+      const wasLiq = sb.cLiq[cb.slot], wasFill = sb.cFill[cb.slot];
       sb.setCube(cb.slot, {
         mu: App.safeMu(cs.mu, cs.weight, sb.cSize[cb.slot], cs.lambda, cs.gravity),
         damping: cs.damping, lambdaRatio: cs.lambda, bounce: cs.bounce, friction: cs.grip * (SURFACE[cb.style.surface]?.grip ?? 1),
         rigidity: cs.rigidity, density: cs.weight, airDrag: cs.airDrag,
-        liquid: cs.liquid > 0.5, liqVisc: cs.liqVisc, liqSkin: cs.liqSkin,
+        liquid: cs.liquid > 0.5, liqVisc: cs.liqVisc, liqSkin: cs.liqSkin, liqFill: cs.liqFill,
       });
       this.jelly.setCubeLook(cb.slot, resolveFlavor(cb.style), { ...ct, ...cs, surface: cb.style.surface, trim: cb.style.trim, bevelRatio: (EDGES[cb.style.edges] || EDGES[DEFAULT_STYLE.edges]).bevel }, sb.cSize[cb.slot]);
       // (its own shape - faces dished or bulged, scalloped edges: built
       // again in place if that's changed and it's whole; else at its next
       // re-cube)
+      // (a shell full of liquid made solid again, or how full it's filled changed - or its colour, glitter or
+      // bubbles: they're in its liquid - built again in place and filled afresh, if it's whole - see Spill; else
+      // at its next re-cube. Its skin's just how firm the shell is.)
+      if (sb.cHollow[cb.slot] && ((cs.liquid > 0.5 ? 1 : 0) !== wasLiq || Math.abs(cs.liqFill - wasFill) > 1e-6 || (cb.liqLook !== undefined && cb.liqLook !== this.liquidLook(cb))))
+        (this._reshape ||= new Set()).add(cb.slot);
       const L = this.shapeOf(cb, cs), k = cb.slot, shaped = L.bow || L.A > 0 || sb.cBow[k] || sb.cLobeA[k] > 0;
       if (Math.abs(L.bow - sb.cBow[k]) > 1e-6 || Math.abs(L.A - sb.cLobeA[k]) > 1e-6 || Math.abs(L.m - sb.cLobeP[k]) > 1e-6 || (L.A > 0 && sb.shapeOf(k)?.kind !== L.kind) || (shaped && Math.abs(this.bevelOf(cb) - sb.cBevel[k]) > 1e-6)) {
         sb.setShape(cb.slot, L.bow, L.A, L.m, L.kind);
@@ -824,6 +830,8 @@ export class App {
       if (final) this.setCubeSize(value);
       return;
     }
+    // (how full: the cube's filled again for it - when the slider's let go)
+    if (key === 'liqFill' && !final) return;
     this.applyStyle();
   }
 
@@ -1003,6 +1011,12 @@ export class App {
   flavorColorAtVertex(i) {
     const X = this.sb.X;
     return this.flavorColorAtRest(X[i * 3], X[i * 3 + 1], X[i * 3 + 2], this.sb.vCube[i]);
+  }
+
+  // (what a cube full of liquid's liquid looks like - its colours, glitter, bubbles: see Spill)
+  liquidLook(cb) {
+    const st = cb.style, cs = resolveSettings(cb.tune, TEXTURES[st.texture]);
+    return JSON.stringify([st.flavor, st.flavor === 'layers' || st.flavor === 'rainbow' ? st.layers : 0, st.rubik, st.glitter, cs.bubbles, cs.bubbleSize]);
   }
 
   flavorColorAtTet(t) {

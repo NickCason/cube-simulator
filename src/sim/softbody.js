@@ -244,13 +244,22 @@ export class SoftBody {
     this.cLiq = new Uint8Array(MAX_CUBES);
     this.cVisc = new Float64Array(MAX_CUBES).fill(0.15);
     this.cSkin = new Float64Array(MAX_CUBES).fill(0.5);
+    // (and a cube full of liquid is a shell, once its inside's been let out to be real liquid - the Fluid's: see
+    // Spill: how full it was filled, whether it's hollow yet, and its hollow while it's sealed - see
+    // _solveCavities)
+    this.cFill = new Float64Array(MAX_CUBES).fill(1);
+    this.cHollow = new Uint8Array(MAX_CUBES);
+    this.cav = new Array(MAX_CUBES).fill(null);
+    // (and where its hollow is in it as made - a box, rest coordinates: lo xyz, hi xyz - see Fluid._collide; and
+    // the liquid it was filled with, its drops marked so: gone - the cube taken out or made afresh - they go too)
+    this.cHole = new Float64Array(MAX_CUBES * 6);
+    this.cHid = new Int32Array(MAX_CUBES);
     this.ghostCube = -1;
     for (let k = 0; k < MAX_CUBES; k++) this.setCube(k, this.p, true);
     this.heatActive = false;
     this._heatResidual = 0;
     this.weld = null; // set by the heal: distances to the healed seams
     this.fill = null; // set by the heal: what was missing, rising to fill its holes (see JellyView)
-    this.liqTop = null; // set by the spill: the top of what's left of a cube's liquid (see JellyView._level)
     // (the partners across a liquid cube's slits, pairs of vertices - see _solveStitches - as of a topology)
     this._stitch = new Int32Array(64);
     this._stN = 0;
@@ -475,6 +484,9 @@ export class SoftBody {
   loadCube(ox = 0, oy = 0, oz = 0, yaw = 0) {
     this.cubeVersion++;
     if (this.slitOf) this.slitOf.fill(0);
+    this.cHollow.fill(0);
+    this.cav.fill(null);
+    this.cHid.fill(0);
     this.cBevel[0] = this.p.bevel;
     const mesh = buildCubeMesh(this.p.res, this.p.size, this.p.bevel, this.shapeOf(0));
     this.cN[0] = mesh.nV;
@@ -507,6 +519,9 @@ export class SoftBody {
   addCube(k, ox = 0, oy = 0, oz = 0, yaw = 0, bevel = this.p.bevel, size = this.p.size, res = this.p.res) {
     this.cubeVersion++;
     if (this.slitOf) this.slitOf.fill(0, this.nV);
+    this.cHollow[k] = 0;
+    this.cav[k] = null;
+    this.cHid[k] = 0;
     this.cBevel[k] = bevel;
     const mesh = buildCubeMesh(res, size, bevel, this.shapeOf(k));
     this.cN[k] = mesh.nV;
@@ -581,6 +596,9 @@ export class SoftBody {
   // keeping where it is and how it moves). rebuild() after.
   removeCube(k) {
     this._removeVerts((i) => this.vCube[i] === k);
+    this.cHollow[k] = 0;
+    this.cav[k] = null;
+    this.cHid[k] = 0;
   }
 
   // Take whole pieces out (their ids: a Set) - the gel gun's blobs.
@@ -867,6 +885,12 @@ export class SoftBody {
         continue;
       }
       const th = this.cSkin[k];
+      // (hollow - its liquid real, the Fluid's: all that's left is its shell, as firm as its skin)
+      if (this.cHollow[k]) {
+        L[t] = th <= 0.5 ? 0.1 * Math.pow(10, 2 * th) : Math.pow(2.5, 2 * th - 1);
+        Pr[t] = 0;
+        continue;
+      }
       let s = skin[t];
       if (!s && th > 0.33) {
         const q = t * 4;
@@ -910,7 +934,13 @@ export class SoftBody {
       this.vCube[i] = j;
       this.X[i * 3] += d;
     }
-    for (const a of [this.cMu, this.cLam, this.cDens, this.cDamp, this.cFric, this.cBounce, this.cRigid, this.cAir, this.cBevel, this.cN, this.cGrav, this.cBoost, this.cSize, this.cRes, this.cH, this.cBow, this.cLobeA, this.cLobeP, this.cTrimK, this.cLiq, this.cVisc, this.cSkin]) a[j] = a[k];
+    for (const a of [this.cMu, this.cLam, this.cDens, this.cDamp, this.cFric, this.cBounce, this.cRigid, this.cAir, this.cBevel, this.cN, this.cGrav, this.cBoost, this.cSize, this.cRes, this.cH, this.cBow, this.cLobeA, this.cLobeP, this.cTrimK, this.cLiq, this.cVisc, this.cSkin, this.cFill, this.cHollow, this.cav, this.cHid]) a[j] = a[k];
+    this.cHollow[k] = 0;
+    this.cav[k] = null;
+    this.cHid[k] = 0;
+    this.cHole.copyWithin(j * 6, k * 6, k * 6 + 6);
+    this.cHole[j * 6] += d;
+    this.cHole[j * 6 + 3] += d;
     this._liqDirty = true;
     this.embeds.length = 0;
     this.grabs.length = 0;
@@ -931,6 +961,7 @@ export class SoftBody {
     if (q.liquid !== undefined && (q.liquid ? 1 : 0) !== this.cLiq[k]) (this.cLiq[k] = q.liquid ? 1 : 0), (this._liqDirty = true);
     if (q.liqVisc !== undefined && q.liqVisc !== this.cVisc[k]) (this.cVisc[k] = q.liqVisc), (this._liqDirty = true);
     if (q.liqSkin !== undefined && q.liqSkin !== this.cSkin[k]) (this.cSkin[k] = q.liqSkin), (this._liqDirty = true);
+    if (q.liqFill !== undefined) this.cFill[k] = q.liqFill;
     if (q.density !== undefined && q.density !== this.cDens[k]) {
       this.cDens[k] = q.density;
       if (!quiet && this.nT) {
@@ -2057,6 +2088,7 @@ export class SoftBody {
       this._solveTets(h);
       if (lap) lap(4);
       this._solveStitches(h);
+      this._solveCavities(h);
       if (this._anyRigid) this._solveRigidity(h);
       if (this.embeds.length) this._solveEmbeds(h);
       if (this.attract) this._solveAttract(h);
@@ -2294,6 +2326,69 @@ export class SoftBody {
         }
       }
     }
+  }
+
+  // A hollow cube's hollow, sealed - its liquid and the air over it shut in: its volume held (an air-filled
+  // balloon's, its liquid's, neither going anywhere), so a part-full or empty one stands as it was made; cut
+  // into, it's let be - its walls stand on what they're made of, and what's in it runs out (see Spill). cav[k]:
+  // { v: its vertices, f: its faces (as indices into v, wound out of the jelly - into the hollow), V0: its
+  // volume, sealed } - see setCavity.
+  _solveCavities(h) {
+    const x = this.x, w = this.w, aw = this._awake, vp = this.vPiece;
+    for (let k = 0; k < MAX_CUBES; k++) {
+      const c = this.cav[k];
+      if (!c || !c.sealed) continue;
+      const V = c.v, F = c.f, G = c.g;
+      // (not when all of it's asleep: nothing's moved)
+      let awake = false;
+      for (let n = 0; n < V.length && !awake; n += 7) if (aw[vp[V[n]]]) awake = true;
+      if (!awake) continue;
+      // its volume now, and its gradient (the hollow's - the faces wound into it: minus theirs)
+      let vol = 0;
+      G.fill(0);
+      for (let n = 0; n < F.length; n += 3) {
+        const a = V[F[n]] * 3, b = V[F[n + 1]] * 3, cc = V[F[n + 2]] * 3;
+        const ax = x[a], ay = x[a + 1], az = x[a + 2], bx = x[b], by = x[b + 1], bz = x[b + 2], cx = x[cc], cy = x[cc + 1], cz = x[cc + 2];
+        vol -= (ax * (by * cz - bz * cy) + ay * (bz * cx - bx * cz) + az * (bx * cy - by * cx)) / 6;
+        const ga = F[n] * 3, gb = F[n + 1] * 3, gc = F[n + 2] * 3;
+        G[ga] -= (by * cz - bz * cy) / 6; G[ga + 1] -= (bz * cx - bx * cz) / 6; G[ga + 2] -= (bx * cy - by * cx) / 6;
+        G[gb] -= (cy * az - cz * ay) / 6; G[gb + 1] -= (cz * ax - cx * az) / 6; G[gb + 2] -= (cx * ay - cy * ax) / 6;
+        G[gc] -= (ay * bz - az * by) / 6; G[gc + 1] -= (az * bx - ax * bz) / 6; G[gc + 2] -= (ax * by - ay * bx) / 6;
+      }
+      // (held - a little give, and no more than a share of it put right a substep: a squeeze shouldn't kick)
+      const C = Math.max(-0.02 * c.V0, Math.min(0.02 * c.V0, vol - c.V0));
+      let den = 0;
+      for (let n = 0; n < V.length; n++) {
+        const o = n * 3;
+        den += w[V[n]] * (G[o] * G[o] + G[o + 1] * G[o + 1] + G[o + 2] * G[o + 2]);
+      }
+      if (!(den > 1e-18)) continue;
+      const dl = -C / (den + 1e-7 / (h * h));
+      for (let n = 0; n < V.length; n++) {
+        const i = V[n], wi = w[i];
+        if (!wi) continue;
+        const o = n * 3, q = i * 3;
+        x[q] += wi * dl * G[o]; x[q + 1] += wi * dl * G[o + 1]; x[q + 2] += wi * dl * G[o + 2];
+      }
+    }
+  }
+
+  // Cube k's hollow (see _solveCavities): its faces - vertex triples, wound out of the jelly - and how much it
+  // held when made (V0; or null, keep what it had); sealed or not. Null: none.
+  setCavity(k, tri, V0, sealed) {
+    if (!tri) {
+      this.cav[k] = null;
+      return;
+    }
+    const map = new Map(), V = [], F = new Int32Array(tri.length);
+    for (let n = 0; n < tri.length; n++) {
+      const i = tri[n];
+      let j = map.get(i);
+      if (j === undefined) map.set(i, (j = V.length)), V.push(i);
+      F[n] = j;
+    }
+    const prev = this.cav[k];
+    this.cav[k] = { v: Int32Array.from(V), f: F, g: new Float64Array(V.length * 3), V0: V0 ?? prev?.V0 ?? 0, sealed };
   }
 
   // A cut part way through a cube full of liquid sticks to itself: each vertex and its partner across the cut

@@ -242,6 +242,7 @@ export class UI {
         <div class="sec"><span class="lbl">Filling</span><div class="seg fill" role="group" aria-label="Filling"></div>
           <label class="row liqVisc" hidden><span class="name">Viscosity</span><input type="range" min="0" max="1" step="0.001" aria-label="How thick the liquid is"><span class="word"></span></label>
           <label class="row liqSkin" hidden><span class="name">Skin</span><input type="range" min="0" max="1" step="0.001" aria-label="How thick its skin is"><span class="word"></span></label>
+          <label class="row liqFill" hidden><span class="name">Fill</span><input type="range" min="0" max="1" step="0.001" aria-label="How full of liquid it is"><span class="word"></span></label>
         </div>
         <div class="sec"><span class="lbl">Glitter</span><div class="seg glit"></div></div>
         <div class="sec"><span class="lbl">Edges</span><div class="seg edges"></div></div>
@@ -428,7 +429,7 @@ export class UI {
     }
     // (and, full of liquid, how thick it is and its skin - the same as Settings > Liquid's, here where it's chosen)
     this.fillRows = [];
-    for (const key of ['liqVisc', 'liqSkin']) {
+    for (const key of ['liqVisc', 'liqSkin', 'liqFill']) {
       const st = SETTINGS.find((x) => x.key === key), row = this.paletteEl.querySelector(`.row.${key}`);
       const input = row.querySelector('input'), word = row.querySelector('.word');
       input.addEventListener('input', () => {

@@ -500,8 +500,10 @@ export class Bubbles {
   // A spill (see Spill): the bubbles in the tets it drained run out with it, into its pool - each onto the
   // nearest of the drops [p0, p1) just let go there (none, the nearest in the pool). Out of the jelly now:
   // no anchor in it (a cut after mustn't put it back).
-  poolFrom(tets, p0, p1) {
+  poolFrom(tets, p0, p1, keep = false) {
     const fl = this.app.fluid, sb = this.app.sb;
+    // (in the cube as it is: just made again, they're still where they were in the one before)
+    if (this._cubeVer !== sb.cubeVersion) this.reseed();
     if (!fl.n || !this.items.length) return 0;
     if (p1 <= p0) (p0 = 0), (p1 = fl.n);
     let n = 0;
@@ -519,9 +521,10 @@ export class Bubbles {
       b.a.tet = -1;
       b.a.lost = true;
       b.a.wx = undefined;
-      // (some stay as foam on the pool a good while; the rest burst soon after reaching its top)
-      b.foam = Math.random() < 0.35;
-      b.popT = b.foam ? 20 + Math.random() * 40 : 0.3 + Math.random() * 2.2;
+      // (some stay as foam on the pool a good while; the rest burst soon after reaching its top - keep: a cube
+      // full of liquid's, filled, all of them stay, a layer under its top)
+      b.foam = keep || Math.random() < 0.35;
+      b.popT = keep ? Infinity : b.foam ? 20 + Math.random() * 40 : 0.3 + Math.random() * 2.2;
       b.v[0] = b.v[1] = b.v[2] = 0;
       b.life = 1;
       n++;
@@ -540,7 +543,7 @@ export class Bubbles {
   // its drop is - over the highest of it and its neighbours - and carried along with it; at the
   // top, after a while, it bursts (foam lasts). Its drop gone (set, flown home), it goes.
   poolTick(dt) {
-    const fl = this.app.fluid, x = fl.x, NS = fl.nbStart, NB = fl.nb, D = 0.065;
+    const fl = this.app.fluid, x = fl.x, NS = fl.nbStart, NB = fl.nb, D = fl.D;
     let any = false;
     for (const b of this.items) {
       if (!b.pool || b.gone) continue;
