@@ -1013,6 +1013,33 @@ export class App {
     return this.flavorColorAtRest(X[i * 3], X[i * 3 + 1], X[i * 3 + 2], this.sb.vCube[i]);
   }
 
+  // (m/s: the fastest any hollow cube full of liquid's shell is moving against the rest of it - its vertices
+  // against their mean - as of the last step)
+  _shellSpeed() {
+    const sb = this.sb, v = sb.v, vc = sb.vCube, al = sb.alive;
+    let best = 0;
+    for (const cb of this.cubes) {
+      const k = cb.slot;
+      if (!sb.cHollow[k]) continue;
+      let mx = 0, my = 0, mz = 0, n = 0;
+      for (let i = 0; i < sb.nV; i++) {
+        if (vc[i] !== k || !al[i]) continue;
+        mx += v[i * 3]; my += v[i * 3 + 1]; mz += v[i * 3 + 2];
+        n++;
+      }
+      if (!n) continue;
+      mx /= n; my /= n; mz /= n;
+      let m2 = 0;
+      for (let i = 0; i < sb.nV; i++) {
+        if (vc[i] !== k || !al[i]) continue;
+        const dx = v[i * 3] - mx, dy = v[i * 3 + 1] - my, dz = v[i * 3 + 2] - mz, d2 = dx * dx + dy * dy + dz * dz;
+        if (d2 > m2) m2 = d2;
+      }
+      best = Math.max(best, Math.sqrt(m2));
+    }
+    return best;
+  }
+
   // (what a cube full of liquid's liquid looks like - its colours, glitter, bubbles: see Spill)
   liquidLook(cb) {
     const st = cb.style, cs = resolveSettings(cb.tune, TEXTURES[st.texture]);
@@ -1534,9 +1561,20 @@ export class App {
       const nS = Math.max(4, Math.min(36, Math.round(this.substepRate * sdt)));
       this.sb.p.substeps = nS;
       const p0 = performance.now();
+      // (a long frame - a slow phone's - in parts of a 60th of a second at most while there's liquid moving, the
+      // liquid moved on after each: a twentieth ahead of it, a cube falling, landing or swung about had its walls
+      // sweep clean past its liquid - out through them, nothing seen to cross. And in as many more as keep a cube
+      // full of liquid's shell from moving more than 4 cm against the rest of it a part: springing back from a
+      // landing, its top went clean past its liquid at 6 m/s, a 60th of a second at a time)
+      let parts = 1;
       if (!this.intro.done) this._introStep(dt);
       else if (sdt > 0) {
-        this.sb.step(sdt);
+        if (this.fluid.n && !this.fluid.asleep) parts = Math.min(6, Math.max(1, Math.ceil(sdt * 60 - 0.05), Math.ceil((this._shellSpeed() * sdt) / 0.04)));
+        this.sb.p.substeps = Math.max(4, Math.round(nS / parts));
+        for (let k = 0; k < parts; k++) {
+          this.sb.step(sdt / parts);
+          if (k < parts - 1) this.fluid.stepPart(sdt / parts);
+        }
         this._stackHold(sdt);
       }
       const pm = performance.now() - p0;
@@ -1557,7 +1595,7 @@ export class App {
       }
       this.nails.update(sdt);
       this.droplets.update(sdt);
-      this.fluid.update(sdt);
+      this.fluid.update(sdt, sdt / parts);
       this.glitter.poolTick(sdt);
       this.bubbles.poolTick(sdt);
       this.flour.update(sdt);

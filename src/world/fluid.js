@@ -21,7 +21,7 @@ let R_P = D * 0.5;
 const MC_CX = [0, 1, 1, 0, 0, 1, 1, 0], MC_CY = [0, 0, 1, 1, 0, 0, 1, 1], MC_CZ = [0, 0, 0, 0, 1, 1, 1, 1];
 const MC_EA = [0, 1, 2, 3, 4, 5, 6, 7, 0, 1, 2, 3], MC_EB = [1, 2, 3, 0, 5, 6, 7, 4, 4, 5, 6, 7];
 const SET_T = -0.25; // colder than this it sets
-const SUB = 2; // substeps a frame, at least (see update)
+const STEP = 1 / 120; // (s) a substep, always (see _advance)
 // (m) how far out from a drop caught in a cube full of liquid's jelly it looks for free space - see _free
 const FREE_STEPS = [0.012, 0.025, 0.04, 0.06, 0.08, 0.1];
 // (1/s) how hard drops in a narrow slit are held back - see _gaps
@@ -70,14 +70,21 @@ export class Fluid {
     // (and how much of it each carries, in particles' worth - more than one, a spill bigger than the pool has
     // room for: they sit that much further apart, so it fills as much as it did - see Spill)
     this.mass = new Float32Array(N).fill(1);
-    // (this substep's pushes out of the jelly, per particle, and how fast the jelly there was coming its way -
-    // see _collide: a push out of it isn't a kick)
+    // (this substep's pushes out of the jelly, per particle, and the jelly's velocity where it pushed - summed,
+    // and how many pushes: see _collide, _radius, _step - a push out of it isn't a kick, and it moves with what
+    // it's against)
     this.cpush = new Float32Array(N * 3);
-    this.cjv = new Float32Array(N);
+    this.cvel = new Float32Array(N * 3);
+    this.cvn = new Float32Array(N);
     // (where each was last outside the jelly: out of it, it goes back that way - see _collide)
     this.lastOut = new Float32Array(N * 3);
     this._f3 = new Float64Array(3);
     this._carry = 0; // (s the jelly's moved on for since the liquid last looked: a frame's, at its first - see _collide)
+    this._acc = 0; // (s of liquid time still to step: it's stepped in whole substeps of STEP - see _advance)
+    // (a sealed hollow's faces in a grid over x, z - see _contain - and how many drops it's put back, all told)
+    this._contained = 0;
+    this._cgStart = new Int32Array(1024);
+    this._cgList = new Int32Array(4096);
     // (going nowhere: where each was half a second ago, how long since, how many windows running it's stayed
     // put, how many there were - see update)
     this._nwX = new Float32Array(N * 3);
@@ -522,7 +529,8 @@ export class Fluid {
     this.mesh.visible = false;
   }
 
-  update(dt) {
+  // A frame: dt long - the liquid moved on just its last part of it (phys: see App.frame, stepPart).
+  update(dt, phys = dt) {
     if (!this.n) return;
     if (this.rc) return this._recallStep(dt);
     if (this.drainT > 0) {
@@ -542,12 +550,8 @@ export class Fluid {
     if (this.asleep && (this.keepAwake || this._stirred())) this.wake();
     if (!this.asleep) {
       this._jellyCells();
-      // (a substep no longer than a 120th of a second, however long the frame: twice as long, at 30 fps, the
-      // liquid in a full cube stood a seventh lower - and jostled on, never sleeping)
-      const F = Math.min(dt, 1 / 30), nS = Math.max(SUB, Math.ceil(F * 120 - 0.05)), h = F / nS;
-      this._carry = F;
-      for (let s = 0; s < nS; s++) this._step(h);
-      this._gaps(dt);
+      this._advance(phys);
+      this._contain();
       const v = this.v;
       let v2 = 0, nMove = 0;
       for (let o = 0; o < this.n * 3; o += 3) {
@@ -603,9 +607,117 @@ export class Fluid {
     }
   }
 
+  // A sealed cube full of liquid's own drops are all inside it: any found outside its hollow - not in its walls,
+  // not in it - came out through a wall that wasn't cut (a few, at worst, in a hard landing: its shell swept past
+  // them faster than they were looked at), and is put back just inside the nearest of its hollow's faces, moving
+  // as that is. Inside: a ray straight up crosses its hollow's faces an odd number of times (looked up in a grid
+  // of them over x, z).
+  _contain() {
+    const sb = this.app.sb, own = this.own, x = this.x, v = this.v, X = sb.x, SV = sb.v, n = this.n;
+    for (let k = 0; k < sb.cav.length; k++) {
+      const c = sb.cav[k], id = sb.cHid[k];
+      if (!c || !c.sealed || !id) continue;
+      let any = false;
+      for (let i = 0; i < n && !any; i++) any = own[i] === id;
+      if (!any) continue;
+      const VV = c.v, F = c.f, nf = F.length / 3;
+      let x0 = Infinity, z0 = Infinity, x1 = -Infinity, z1 = -Infinity;
+      for (let j = 0; j < VV.length; j++) {
+        const a = VV[j] * 3;
+        if (X[a] < x0) x0 = X[a];
+        if (X[a] > x1) x1 = X[a];
+        if (X[a + 2] < z0) z0 = X[a + 2];
+        if (X[a + 2] > z1) z1 = X[a + 2];
+      }
+      const cell = Math.max(0.06, Math.max(x1 - x0, z1 - z0) / 24), gx = Math.floor((x1 - x0) / cell) + 1, gz = Math.floor((z1 - z0) / cell) + 1;
+      if (this._cgStart.length < gx * gz + 1) this._cgStart = new Int32Array((gx * gz + 1) * 2);
+      const cs = this._cgStart;
+      cs.fill(0, 0, gx * gz + 1);
+      // (each face into the cells its x, z box covers: counted, then filled)
+      let total = 0;
+      for (let pass = 0; pass < 2; pass++) {
+        if (pass) {
+          for (let q = 0; q < gx * gz; q++) cs[q + 1] += cs[q];
+          total = cs[gx * gz];
+          if (this._cgList.length < total) this._cgList = new Int32Array(total * 2);
+          for (let q = gx * gz; q > 0; q--) cs[q] = cs[q - 1];
+          cs[0] = 0;
+        }
+        for (let f = 0; f < nf; f++) {
+          const a = VV[F[f * 3]] * 3, b = VV[F[f * 3 + 1]] * 3, d = VV[F[f * 3 + 2]] * 3;
+          const i0 = Math.floor((Math.min(X[a], X[b], X[d]) - x0) / cell), i1 = Math.floor((Math.max(X[a], X[b], X[d]) - x0) / cell);
+          const j0 = Math.floor((Math.min(X[a + 2], X[b + 2], X[d + 2]) - z0) / cell), j1 = Math.floor((Math.max(X[a + 2], X[b + 2], X[d + 2]) - z0) / cell);
+          for (let jj = j0; jj <= j1; jj++)
+            for (let ii = i0; ii <= i1; ii++) {
+              const q = jj * gx + ii;
+              if (pass) this._cgList[cs[q + 1]++] = f;
+              else cs[q + 1]++;
+            }
+        }
+      }
+      const L = this._cgList;
+      for (let i = 0; i < n; i++) {
+        if (own[i] !== id) continue;
+        const o = i * 3, px = x[o] + 1.234e-7, py = x[o + 1], pz = x[o + 2] + 2.345e-7;
+        let cross = 0;
+        if (px >= x0 && px <= x1 && pz >= z0 && pz <= z1) {
+          const q = Math.floor((pz - z0) / cell) * gx + Math.floor((px - x0) / cell);
+          for (let e = cs[q]; e < cs[q + 1]; e++) {
+            const f = L[e], a = VV[F[f * 3]] * 3, b = VV[F[f * 3 + 1]] * 3, d = VV[F[f * 3 + 2]] * 3;
+            const ax = X[a] - px, az = X[a + 2] - pz, bx = X[b] - px, bz = X[b + 2] - pz, dx = X[d] - px, dz = X[d + 2] - pz;
+            const wa = bx * dz - bz * dx, wb = dx * az - dz * ax, wd = ax * bz - az * bx, sum = wa + wb + wd;
+            if (!(Math.abs(sum) > 1e-12) || !((wa >= 0 && wb >= 0 && wd >= 0) || (wa <= 0 && wb <= 0 && wd <= 0))) continue;
+            if ((wa * X[a + 1] + wb * X[b + 1] + wd * X[d + 1]) / sum > py) cross++;
+          }
+        }
+        if (cross & 1 || this._inTet(px, py, pz) >= 0) continue;
+        // (out: back in, by the nearest of its faces)
+        let best = -1, bd = Infinity;
+        for (let f = 0; f < nf; f++) {
+          const a = VV[F[f * 3]] * 3, b = VV[F[f * 3 + 1]] * 3, d = VV[F[f * 3 + 2]] * 3;
+          const cx = (X[a] + X[b] + X[d]) / 3 - px, cy = (X[a + 1] + X[b + 1] + X[d + 1]) / 3 - py, cz = (X[a + 2] + X[b + 2] + X[d + 2]) / 3 - pz, d2 = cx * cx + cy * cy + cz * cz;
+          if (d2 < bd) (bd = d2), (best = f);
+        }
+        if (best < 0) continue;
+        const a = VV[F[best * 3]] * 3, b = VV[F[best * 3 + 1]] * 3, d = VV[F[best * 3 + 2]] * 3;
+        const ux = X[b] - X[a], uy = X[b + 1] - X[a + 1], uz = X[b + 2] - X[a + 2], wx = X[d] - X[a], wy = X[d + 1] - X[a + 1], wz = X[d + 2] - X[a + 2];
+        let nx = uy * wz - uz * wy, ny = uz * wx - ux * wz, nz = ux * wy - uy * wx;
+        const nl = Math.sqrt(nx * nx + ny * ny + nz * nz) || 1, r = R_P + 0.005;
+        nx /= nl; ny /= nl; nz /= nl;
+        x[o] = (X[a] + X[b] + X[d]) / 3 + nx * r; x[o + 1] = (X[a + 1] + X[b + 1] + X[d + 1]) / 3 + ny * r; x[o + 2] = (X[a + 2] + X[b + 2] + X[d + 2]) / 3 + nz * r;
+        v[o] = (SV[a] + SV[b] + SV[d]) / 3; v[o + 1] = (SV[a + 1] + SV[b + 1] + SV[d + 1]) / 3; v[o + 2] = (SV[a + 2] + SV[b + 2] + SV[d + 2]) / 3;
+        this.lastOut[o] = x[o]; this.lastOut[o + 1] = x[o + 1]; this.lastOut[o + 2] = x[o + 2];
+        this._contained++;
+      }
+    }
+  }
+
+  // One part of a long frame (see App.frame): just the liquid moved on - none of update's looking after it.
+  stepPart(dt) {
+    if (!this.n || this.rc || this.drainT > 0 || this.asleep || !(dt > 0)) return;
+    this._jellyCells();
+    this._advance(dt);
+  }
+
+  // The liquid moved on dt - as long as the jelly's just moved (up to a twentieth of a second, a slow phone's
+  // frame: held to a 30th, behind it, a falling or swung cube left its liquid behind, its walls sweeping out
+  // through it) - in whole substeps of STEP, what's over carried to the next. (Each frame in as many as fit it:
+  // at 30 fps, twice as long, a full cube's liquid stood a seventh lower; at 90 or 120, shorter, it churned at a
+  // metre a second for ever, never sleeping.)
+  _advance(dt) {
+    const F = Math.min(dt, 0.05);
+    this._acc = Math.min(this._acc + F, 0.1);
+    this._carry += F;
+    const nS = Math.floor(this._acc / STEP + 1e-6);
+    this._acc -= nS * STEP;
+    for (let s = 0; s < nS; s++) this._step(STEP);
+    this._gaps(F);
+  }
+
   wake() {
     this.asleep = false;
     this.stillT = 0;
+    this._acc = this._carry = 0;
   }
 
   // Jelly awake within reach of the (sleeping) pool?
@@ -721,7 +833,8 @@ export class Fluid {
       q[o] = x[o] + v[o] * h; q[o + 1] = x[o + 1] + v[o + 1] * h; q[o + 2] = x[o + 2] + v[o + 2] * h;
     }
     this.cpush.fill(0, 0, n * 3);
-    this.cjv.fill(0, 0, n);
+    this.cvel.fill(0, 0, n * 3);
+    this.cvn.fill(0, 0, n);
     this._collide(q);
     this._radius(q);
     this._grid(q);
@@ -794,17 +907,28 @@ export class Fluid {
         const k = vm / Math.sqrt(s2);
         vx *= k; vy *= k; vz *= k;
       }
-      // (pushed out of the jelly this substep: no faster out of it than 0.3 m/s, or than the jelly came at it -
-      // pressed into a cut cube's wall by the liquid behind, drops were shoved out through it at metres a second)
+      // (pushed out of the jelly this substep: no faster out of it than 0.3 m/s - pressed into a cut cube's wall
+      // by the liquid behind, drops were shoved out through it at metres a second - and none into it - against a
+      // wall, at rest, it stays at rest: else each substep it sank back into the wall and was pushed out again,
+      // and a pool in a cut cube churned for ever - a little friction along it. All as against the jelly there,
+      // moving as it is: held to a standstill, a falling cube's liquid fell at a third of its speed - its top
+      // swept down through it - and a cube swung about left its liquid behind, out through its walls.)
       const cpx = this.cpush[o], cpy = this.cpush[o + 1], cpz = this.cpush[o + 2], cpl = Math.sqrt(cpx * cpx + cpy * cpy + cpz * cpz);
-      // (and none into it - against a wall, at rest, it stays at rest: else each substep it sank back into the
-      // wall and was pushed out again, and a pool in a cut cube churned for ever - a little friction along it)
       if (cpl > 1e-7) {
-        const nx = cpx / cpl, ny = cpy / cpl, nz = cpz / cpl, vn = vx * nx + vy * ny + vz * nz, cap = Math.max(0.3, this.cjv[o / 3]);
-        const k = vn > cap ? vn - cap : vn < 0 ? vn : 0;
-        vx -= nx * k; vy -= ny * k; vz -= nz * k;
+        const nc = this.cvn[o / 3], cv = this.cvel, jx = nc ? cv[o] / nc : 0, jy = nc ? cv[o + 1] / nc : 0, jz = nc ? cv[o + 2] / nc : 0;
+        let rx = vx - jx, ry = vy - jy, rz = vz - jz;
+        const nx = cpx / cpl, ny = cpy / cpl, nz = cpz / cpl, vn = rx * nx + ry * ny + rz * nz;
+        const k = vn > 0.3 ? vn - 0.3 : vn < 0 ? vn : 0;
+        rx -= nx * k; ry -= ny * k; rz -= nz * k;
         const vn2 = vn - k, fr2 = 0.92;
-        vx = nx * vn2 + (vx - nx * vn2) * fr2; vy = ny * vn2 + (vy - ny * vn2) * fr2; vz = nz * vn2 + (vz - nz * vn2) * fr2;
+        vx = jx + nx * vn2 + (rx - nx * vn2) * fr2; vy = jy + ny * vn2 + (ry - ny * vn2) * fr2; vz = jz + nz * vn2 + (rz - nz * vn2) * fr2;
+        // (no faster than ever, though: carried off a cube's top springing back from a landing at 12 m/s, drops
+        // went clean through it)
+        const s3 = vx * vx + vy * vy + vz * vz;
+        if (s3 > VMAX * VMAX) {
+          const k3 = VMAX / Math.sqrt(s3);
+          vx *= k3; vy *= k3; vz *= k3;
+        }
       }
       v[o] = vx; v[o + 1] = vy; v[o + 2] = vz;
     }
@@ -976,6 +1100,18 @@ export class Fluid {
         this.lastOut[o] = q[o]; this.lastOut[o + 1] = q[o + 1]; this.lastOut[o + 2] = q[o + 2];
         continue;
       }
+      // (moving further this substep than a wall's thinnest - 2 cm looks along its way, from where it was, clear
+      // of the jelly: stopped short of the first that's in it - it can't pass clean through between looks)
+      const x = this.x, ex = q[o] - x[o], ey = q[o + 1] - x[o + 1], ez = q[o + 2] - x[o + 2], e2 = ex * ex + ey * ey + ez * ez;
+      if (e2 > 0.03 * 0.03 && this._inTet(x[o], x[o + 1], x[o + 2]) < 0) {
+        const ns = Math.ceil(Math.sqrt(e2) / 0.02);
+        for (let s = 1; s < ns; s++) {
+          if (this._inTet(x[o] + (ex * s) / ns, x[o + 1] + (ey * s) / ns, x[o + 2] + (ez * s) / ns) < 0) continue;
+          const u = (s - 1) / ns;
+          q[o] = x[o] + ex * u; q[o + 1] = x[o + 1] + ey * u; q[o + 2] = x[o + 2] + ez * u;
+          break;
+        }
+      }
       // In the jelly: out of it along one line, tet after tet, till it's clear - the line chosen once:
       // back toward where it was last outside the jelly, if that's outside it still; else, the jelly moving,
       // the way it's going (a wall swung onto it pushes it on ahead); else out its nearest bare face (or, in
@@ -1033,8 +1169,9 @@ export class Fluid {
               // it went on out the wall's far side)
               LO[o] = F[0]; LO[o + 1] = F[1]; LO[o + 2] = F[2];
               cp[o] += ex; cp[o + 1] += ey; cp[o + 2] += ez;
-              const el = Math.sqrt(ex * ex + ey * ey + ez * ez) || 1, jv = (Vx * ex + Vy * ey + Vz * ez) / (4 * el);
-              if (jv > this.cjv[i]) this.cjv[i] = jv;
+              const cv = this.cvel;
+              cv[o] += 0.25 * Vx; cv[o + 1] += 0.25 * Vy; cv[o + 2] += 0.25 * Vz;
+              this.cvn[i]++;
             }
             break;
           } else if (Vl > 4 * 0.02) {
@@ -1066,9 +1203,10 @@ export class Fluid {
         const step = Math.min(sOut, 0.12) + 0.002;
         if (liq && (went += step) > cap) break;
         q[o] += dx * step; q[o + 1] += dy * step; q[o + 2] += dz * step;
-        const cp = this.cpush, jv = ((sb.v[a3] + sb.v[b3] + sb.v[c3] + sb.v[d3]) * dx + (sb.v[a3 + 1] + sb.v[b3 + 1] + sb.v[c3 + 1] + sb.v[d3 + 1]) * dy + (sb.v[a3 + 2] + sb.v[b3 + 2] + sb.v[c3 + 2] + sb.v[d3 + 2]) * dz) * 0.25;
+        const cp = this.cpush, cv = this.cvel, sv = sb.v;
         cp[o] += dx * step; cp[o + 1] += dy * step; cp[o + 2] += dz * step;
-        if (jv > this.cjv[i]) this.cjv[i] = jv;
+        cv[o] += 0.25 * (sv[a3] + sv[b3] + sv[c3] + sv[d3]); cv[o + 1] += 0.25 * (sv[a3 + 1] + sv[b3 + 1] + sv[c3 + 1] + sv[d3 + 1]); cv[o + 2] += 0.25 * (sv[a3 + 2] + sv[b3 + 2] + sv[c3 + 2] + sv[d3 + 2]);
+        this.cvn[i]++;
       }
     }
   }
@@ -1081,10 +1219,10 @@ export class Fluid {
   // cube's liquid stood half as tall.)
   _radius(q) {
     if (!this.cellsN) return;
-    const sb = this.app.sb, r = R_P, A = NB6, cp = this.cpush, g = this._g, bs = this._bs, T = sb.T, X = sb.x;
+    const sb = this.app.sb, r = R_P, A = NB6, cp = this.cpush, cv = this.cvel, sv = sb.v, g = this._g, bs = this._bs, T = sb.T, X = sb.x;
     for (let i = 0; i < this.n; i++) {
       const o = i * 3;
-      let px = q[o], py = q[o + 1], pz = q[o + 2], mx = 0, my = 0, mz = 0;
+      let px = q[o], py = q[o + 1], pz = q[o + 2], mx = 0, my = 0, mz = 0, jx = 0, jy = 0, jz = 0, nj = 0;
       for (let k = 0; k < 6; k++) {
         const [ax, ay, az] = A[k];
         const t = this._inTet(px + ax * r, py + ay * r, pz + az * r);
@@ -1100,6 +1238,10 @@ export class Fluid {
         const pen = Math.min(r, back);
         if (!(pen > 0)) continue;
         mx -= ax * pen; my -= ay * pen; mz -= az * pen;
+        // (and how that wall's moving)
+        const t4 = t * 4, a3 = T[t4] * 3, b3 = T[t4 + 1] * 3, c3 = T[t4 + 2] * 3, d3 = T[t4 + 3] * 3;
+        jx += 0.25 * (sv[a3] + sv[b3] + sv[c3] + sv[d3]); jy += 0.25 * (sv[a3 + 1] + sv[b3 + 1] + sv[c3 + 1] + sv[d3 + 1]); jz += 0.25 * (sv[a3 + 2] + sv[b3 + 2] + sv[c3 + 2] + sv[d3 + 2]);
+        nj++;
       }
       if (mx === 0 && my === 0 && mz === 0) continue;
       mx *= RADIUS_K; my *= RADIUS_K; mz *= RADIUS_K;
@@ -1107,6 +1249,8 @@ export class Fluid {
       if (this._inTet(px + mx, py + my, pz + mz) >= 0) continue;
       q[o] = px + mx; q[o + 1] = py + my; q[o + 2] = pz + mz;
       cp[o] += mx; cp[o + 1] += my; cp[o + 2] += mz;
+      cv[o] += jx; cv[o + 1] += jy; cv[o + 2] += jz;
+      this.cvn[i] += nj;
     }
   }
 

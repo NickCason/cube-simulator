@@ -303,7 +303,7 @@ export class Bubbles {
         // (and, loose: how it's moving, whether it's up against the top, how much of it's left - a burst's
         // shrinking - gone: run into another, or burst)
         // (and run out with a spill, into its pool - see poolFrom: its drop, where it is, foam or not, its time)
-        this.items.push({ slot, u: P.u, r: P.r, scale: w.scale, R, c: [x, y, z], a: r ? { tet: r.tet, b: r.bary, lost: false } : { tet: -1, b: [0, 0, 0, 0], lost: false }, open: false, v: [0, 0, 0], top: false, life: 1, gone: false, pool: false, p: -1, w: [0, 0, 0], foam: false, popT: 0 });
+        this.items.push({ slot, u: P.u, r: P.r, scale: w.scale, R, c: [x, y, z], a: r ? { tet: r.tet, b: r.bary, lost: false } : { tet: -1, b: [0, 0, 0, 0], lost: false }, open: false, v: [0, 0, 0], top: false, life: 1, gone: false, pool: false, p: -1, w: [0, 0, 0], lp: [0, 0, 0], lpOK: false, foam: false, popT: 0 });
       }
     }
   }
@@ -479,7 +479,7 @@ export class Bubbles {
   _spare() {
     for (const b of this.items) if (b.gone && !b.open && !b.pool) return b;
     if (this.items.length >= MAX) return null;
-    const b = { slot: 0, u: [0, 0, 0], r: 0, scale: 1, R: 0, c: [0, 0, 0], a: { tet: -1, b: [0, 0, 0, 0], lost: false }, open: false, v: [0, 0, 0], top: false, life: 1, gone: true, pool: false, p: -1, w: [0, 0, 0], foam: false, popT: 0 };
+    const b = { slot: 0, u: [0, 0, 0], r: 0, scale: 1, R: 0, c: [0, 0, 0], a: { tet: -1, b: [0, 0, 0, 0], lost: false }, open: false, v: [0, 0, 0], top: false, life: 1, gone: true, pool: false, p: -1, w: [0, 0, 0], lp: [0, 0, 0], lpOK: false, foam: false, popT: 0 };
     this.items.push(b);
     return b;
   }
@@ -518,6 +518,7 @@ export class Bubbles {
       b.pool = true;
       b.p = best;
       b.w[0] = this._t[0]; b.w[1] = this._t[1]; b.w[2] = this._t[2];
+      b.lpOK = false;
       b.a.tet = -1;
       b.a.lost = true;
       b.a.wx = undefined;
@@ -557,7 +558,12 @@ export class Bubbles {
       for (let e = NS[p], e1 = NS[p + 1]; e < e1; e++) top = Math.max(top, x[NB[e] * 3 + 1]);
       // (its surface, as drawn, is 1.1 spacings over its drops' middles - the splats are wide: see Fluid._remesh)
       const tx = x[p * 3] + b.u[0] * 0.4 * D, tz = x[p * 3 + 2] + b.u[2] * 0.4 * D, ty = top + 1.1 * D - 0.2 * b.R;
-      const k = Math.min(1, dt * 6), w = b.w;
+      const k = Math.min(1, dt * 6), w = b.w, L = b.lp;
+      // (carried along with its drop first, then eased after it: eased alone - half a metre a second at most - a
+      // cube full of liquid dropped in or swung about left its bubbles hanging in the air over it)
+      if (b.lpOK) (w[0] += x[p * 3] - L[0]), (w[1] += x[p * 3 + 1] - L[1]), (w[2] += x[p * 3 + 2] - L[2]);
+      L[0] = x[p * 3]; L[1] = x[p * 3 + 1]; L[2] = x[p * 3 + 2];
+      b.lpOK = true;
       w[0] += (tx - w[0]) * k;
       w[2] += (tz - w[2]) * k;
       w[1] += Math.max(-0.5 * dt, Math.min(0.6 * dt, (ty - w[1]) * k));
