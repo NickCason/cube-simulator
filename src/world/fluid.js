@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { edgeTable, triTable } from 'three/examples/jsm/objects/MarchingCubes.js';
 import { removeTets } from '../sim/cutting.js';
+import { TAG_EXTERIOR } from '../sim/softbody.js';
 
 // Molten jelly. The torch turns the hottest jelly to liquid (see
 // TorchTool): its tets go, and particles carry their volume on - position-
@@ -133,7 +134,13 @@ export class Fluid {
     this._cFill = new Int32Array(CELL_HASH);
     this._cRange = new Int32Array(7 * 4096);
     this._tr = new Int32Array(6);
+    this.tBox = new Float32Array(6 * 4096); // (the boxes of the tets near it, by tet - see _jellyCells, _inTet)
     this._cov = new Float64Array(6);
+    // (the tets' bare faces, and those not the cube's outside - see _jellyCells; the surface's grid, made as big
+    // as it's needed - see _remesh)
+    this.faceMask = null;
+    this.innerMask = null;
+    this.field = this.fcol = this.touch = this.tList = this.cList = this.fdep = this.fnew = this.fq = this.fo = null;
     this.cellsN = 0;
     this._cellVer = -1;
     // surface
@@ -892,7 +899,9 @@ export class Fluid {
         dp[o] = ax; dp[o + 1] = ay; dp[o + 2] = az;
       }
       for (let k = 0; k < n * 3; k++) q[k] += dp[k];
-      this._collide(q);
+      // (out of the jelly after the last round: after every one, it took a fifth of the liquid's time - a held
+      // cube's, on a phone, its frame rate)
+      if (it === rounds - 1) this._collide(q);
     }
     // velocities, then the viscosity. (The solver may stop it dead, but
     // speeds it up only a little a substep - squeezed, it oozes rather than
@@ -977,15 +986,18 @@ export class Fluid {
     }
     if (this._maskVer !== sb.topoVersion || !this.faceMask || this.faceMask.length < sb.nT) {
       this._maskVer = sb.topoVersion;
-      if (!this.faceMask || this.faceMask.length < sb.nT) this.faceMask = new Uint8Array(Math.ceil(sb.nT * 1.25));
-      const fm = this.faceMask, T = sb.T, S = sb.sTri, ST = sb.sTet;
+      if (!this.faceMask || this.faceMask.length < sb.nT) (this.faceMask = new Uint8Array(Math.ceil(sb.nT * 1.25))), (this.innerMask = new Uint8Array(this.faceMask.length));
+      // (and which of those aren't the cube's outside - a hollow's walls, a cut's faces: see _clip)
+      const fm = this.faceMask, im = this.innerMask, T = sb.T, S = sb.sTri, ST = sb.sTet, tag = sb.sTag;
       fm.fill(0, 0, sb.nT);
+      im.fill(0, 0, sb.nT);
       for (let f = 0; f < sb.nF; f++) {
         const t = ST[f], a = S[f * 3], b = S[f * 3 + 1], c = S[f * 3 + 2];
         for (let k = 0; k < 4; k++) {
           const u = T[t * 4 + k];
           if (u !== a && u !== b && u !== c) {
             fm[t] |= 1 << k;
+            if (tag[f] !== TAG_EXTERIOR) im[t] |= 1 << k;
             break;
           }
         }
@@ -1009,48 +1021,55 @@ export class Fluid {
     const m = 0.25;
     x0 -= m; y0 -= m; z0 -= m; x1 += m; y1 += m; z1 += m;
     cv[0] = x0 + 0.1; cv[1] = y0 + 0.1; cv[2] = z0 + 0.1; cv[3] = x1 - 0.1; cv[4] = y1 - 0.1; cv[5] = z1 - 0.1;
-    // each tet's cells (counted, then filled: a counting sort into buckets)
-    const T = sb.T, X = sb.x, CM = CELL_HASH - 1;
+    // each tet's cells (counted, then filled: a counting sort into buckets) - and its box, for _inTet. (Each pass its
+    // own method: all in one, Safari's engine took five times as long over it.)
+    if (this.tBox.length < sb.nT * 6) this.tBox = new Float32Array(Math.ceil(sb.nT * 1.25) * 6);
     const cs = this.cStart;
     cs.fill(0);
+    const nL = this._countCells(x0, y0, z0, x1, y1, z1);
+    for (let k = 0; k < CELL_HASH; k++) cs[k + 1] += cs[k];
+    if (!this.cTets || this.cTets.length < cs[CELL_HASH]) this.cTets = new Int32Array(Math.ceil(cs[CELL_HASH] * 1.5) + 64);
+    this._cFill.set(cs.subarray(0, CELL_HASH));
+    this._fillCells(nL);
+    this.cellsN = nL;
+  }
+
+  // (the tets near (x0..x1, ...): each listed with its range of cells, its cells counted - how many)
+  _countCells(x0, y0, z0, x1, y1, z1) {
+    const sb = this.app.sb, T = sb.T, X = sb.x, CM = CELL_HASH - 1, cs = this.cStart, P = sb.pieces, v0 = sb.vol0;
     let nL = 0;
-    for (let pass = 0; pass < 2; pass++) {
-      if (pass === 1) {
-        for (let k = 0; k < CELL_HASH; k++) cs[k + 1] += cs[k];
-        if (!this.cTets || this.cTets.length < cs[CELL_HASH]) this.cTets = new Int32Array(Math.ceil(cs[CELL_HASH] * 1.5) + 64);
-        this._cFill.set(cs.subarray(0, CELL_HASH));
-      }
-      const fill = this._cFill, out = this.cTets;
-      for (let l = 0; l < (pass ? nL : sb.pieces.length); l++) {
-        if (pass === 0) {
-          const pc = sb.pieces[l], b = pc.bbox;
-          if (!(b[3] > b[0]) || b[0] > x1 || b[3] < x0 || b[1] > y1 || b[4] < y0 || b[2] > z1 || b[5] < z0) continue;
-          for (const t of pc.tets) {
-            if (sb.vol0[t] <= 0) continue;
-            if (this._near1(T, X, t, x0, y0, z0, x1, y1, z1)) {
-              const r = this._tr;
-              if (nL * 7 + 7 > this._cRange.length) {
-                const g = new Int32Array(this._cRange.length * 2);
-                g.set(this._cRange);
-                this._cRange = g;
-              }
-              const R = this._cRange, o = nL * 7;
-              R[o] = t; R[o + 1] = r[0]; R[o + 2] = r[1]; R[o + 3] = r[2]; R[o + 4] = r[3]; R[o + 5] = r[4]; R[o + 6] = r[5];
-              nL++;
-              for (let i = r[0]; i <= r[1]; i++)
-                for (let j = r[2]; j <= r[3]; j++)
-                  for (let k = r[4]; k <= r[5]; k++) cs[((Math.imul(i, 92837111) ^ Math.imul(j, 689287499) ^ Math.imul(k, 283923481)) & CM) + 1]++;
-            }
-          }
-        } else {
-          const R = this._cRange, o = l * 7, t = R[o];
-          for (let i = R[o + 1]; i <= R[o + 2]; i++)
-            for (let j = R[o + 3]; j <= R[o + 4]; j++)
-              for (let k = R[o + 5]; k <= R[o + 6]; k++) out[fill[(Math.imul(i, 92837111) ^ Math.imul(j, 689287499) ^ Math.imul(k, 283923481)) & CM]++] = t;
+    for (let l = 0; l < P.length; l++) {
+      const pc = P[l], b = pc.bbox, tets = pc.tets;
+      if (!(b[3] > b[0]) || b[0] > x1 || b[3] < x0 || b[1] > y1 || b[4] < y0 || b[2] > z1 || b[5] < z0) continue;
+      for (let m = 0; m < tets.length; m++) {
+        const t = tets[m];
+        if (v0[t] <= 0 || !this._near1(T, X, t, x0, y0, z0, x1, y1, z1)) continue;
+        const r = this._tr;
+        if (nL * 7 + 7 > this._cRange.length) {
+          const g = new Int32Array(this._cRange.length * 2);
+          g.set(this._cRange);
+          this._cRange = g;
         }
+        const R = this._cRange, o = nL * 7;
+        R[o] = t; R[o + 1] = r[0]; R[o + 2] = r[1]; R[o + 3] = r[2]; R[o + 4] = r[3]; R[o + 5] = r[4]; R[o + 6] = r[5];
+        nL++;
+        for (let i = r[0]; i <= r[1]; i++)
+          for (let j = r[2]; j <= r[3]; j++)
+            for (let k = r[4]; k <= r[5]; k++) cs[((Math.imul(i, 92837111) ^ Math.imul(j, 689287499) ^ Math.imul(k, 283923481)) & CM) + 1]++;
       }
     }
-    this.cellsN = nL;
+    return nL;
+  }
+
+  // (and each listed tet into its cells' buckets)
+  _fillCells(nL) {
+    const CM = CELL_HASH - 1, fill = this._cFill, out = this.cTets, R = this._cRange;
+    for (let l = 0; l < nL; l++) {
+      const o = l * 7, t = R[o];
+      for (let i = R[o + 1]; i <= R[o + 2]; i++)
+        for (let j = R[o + 3]; j <= R[o + 4]; j++)
+          for (let k = R[o + 5]; k <= R[o + 6]; k++) out[fill[(Math.imul(i, 92837111) ^ Math.imul(j, 689287499) ^ Math.imul(k, 283923481)) & CM]++] = t;
+    }
   }
 
   // Tet t's box overlaps (x0..x1, ...)? Its range of 0.1 m cells into this._tr.
@@ -1063,7 +1082,8 @@ export class Fluid {
     const tz0 = Math.min(X[a + 2], X[b + 2], X[c + 2], X[d + 2]), tz1 = Math.max(X[a + 2], X[b + 2], X[c + 2], X[d + 2]);
     if (tz0 > z1 || tz1 < z0) return false;
     // (a tet stretched past 8 cells a side is torn to bits: skip it)
-    const r = this._tr;
+    const r = this._tr, B = this.tBox, b6 = t * 6;
+    B[b6] = tx0; B[b6 + 1] = ty0; B[b6 + 2] = tz0; B[b6 + 3] = tx1; B[b6 + 4] = ty1; B[b6 + 5] = tz1;
     r[0] = Math.floor(tx0 * 10); r[1] = Math.floor(tx1 * 10);
     r[2] = Math.floor(ty0 * 10); r[3] = Math.floor(ty1 * 10);
     r[4] = Math.floor(tz0 * 10); r[5] = Math.floor(tz1 * 10);
@@ -1350,10 +1370,16 @@ export class Fluid {
   }
 
   // The jelly's tet p is in (of those hashed near the liquid - see _jellyCells), or -1.
+  // (each of its tets' boxes looked at first: tested whole, every one in a wall's cell, it took the drops' push off
+  // the walls a quarter of the liquid's time)
   _inTet(px, py, pz) {
-    const sb = this.app.sb, cs = this.cStart, ctl = this.cTets, CM = CELL_HASH - 1;
+    const sb = this.app.sb, cs = this.cStart, ctl = this.cTets, CM = CELL_HASH - 1, TB = this.tBox;
     const hb = (Math.imul(Math.floor(px * 10), 92837111) ^ Math.imul(Math.floor(py * 10), 689287499) ^ Math.imul(Math.floor(pz * 10), 283923481)) & CM;
-    for (let e = cs[hb], e1 = cs[hb + 1]; e < e1; e++) if (sb._tetGap(ctl[e], px, py, pz) < 0) return ctl[e];
+    for (let e = cs[hb], e1 = cs[hb + 1]; e < e1; e++) {
+      const t = ctl[e], b = t * 6;
+      if (px < TB[b] || py < TB[b + 1] || pz < TB[b + 2] || px > TB[b + 3] || py > TB[b + 4] || pz > TB[b + 5]) continue;
+      if (sb._tetGap(t, px, py, pz) < 0) return t;
+    }
     return -1;
   }
 
@@ -1697,15 +1723,18 @@ export class Fluid {
   }
 
   // ---------------------------------------------------------------- surface
-  // (the liquid's surface field, none of it inside the jelly: drawn up against a wall - a cube full of it - its
-  // splats reached on into the wall, and there, through the jelly in front, it showed as a pale blotch. Each tet
-  // near it over the grid points in its box - a point at a time, each looked up, it took twice as long; and on
-  // its own - in _remesh, the frame a cut was made took twice as long.)
-  _clip(F, touch, iso, x0, y0, z0, c, gx, gy, gz) {
+  // The liquid's surface field, none of it in the jelly: a point in the jelly - each tet near it over the grid
+  // points in its box (a point at a time, each looked up, took twice as long; and kept in _remesh, the frame a
+  // cut was made took twice as long) - takes the value that puts the surface just where the jelly starts, from
+  // how deep in it it is (to the nearest of its tet's faces on the hollow's side - bare, not the cube's outside;
+  // none, a whole cell) and its neighbours' values outside it. (Splatted on in, through the jelly in front of it
+  // a full cube's liquid showed as a pale blotch; cut down to half wherever it was in the jelly, it stood in a
+  // grid cell's staircase of shards and flecks all over a cube held up.)
+  _clip(F, touch, tList, nt, iso, x0, y0, z0, c, gx, gy, gz) {
     const gxy = gx * gy, ic = 1 / c;
-    const CR = this._cRange, T = this.app.sb.T, X = this.app.sb.x;
+    const CR = this._cRange, T = this.app.sb.T, X = this.app.sb.x, IM = this.innerMask, DEP = this.fdep, FN = this.fnew;
     for (let l = 0; l < this.cellsN; l++) {
-      const o = CR[l * 7] * 4, a = T[o] * 3, b = T[o + 1] * 3, d = T[o + 2] * 3, e = T[o + 3] * 3;
+      const t = CR[l * 7], o = t * 4, a = T[o] * 3, b = T[o + 1] * 3, d = T[o + 2] * 3, e = T[o + 3] * 3;
       const i0 = Math.max(0, Math.ceil((Math.min(X[a], X[b], X[d], X[e]) - x0) * ic)), i1 = Math.min(gx - 1, Math.floor((Math.max(X[a], X[b], X[d], X[e]) - x0) * ic));
       const j0 = Math.max(0, Math.ceil((Math.min(X[a + 1], X[b + 1], X[d + 1], X[e + 1]) - y0) * ic)), j1 = Math.min(gy - 1, Math.floor((Math.max(X[a + 1], X[b + 1], X[d + 1], X[e + 1]) - y0) * ic));
       const k0 = Math.max(0, Math.ceil((Math.min(X[a + 2], X[b + 2], X[d + 2], X[e + 2]) - z0) * ic)), k1 = Math.min(gz - 1, Math.floor((Math.max(X[a + 2], X[b + 2], X[d + 2], X[e + 2]) - z0) * ic));
@@ -1716,18 +1745,84 @@ export class Fluid {
       const g3x = e1y * e2z - e1z * e2y, g3y = e1z * e2x - e1x * e2z, g3z = e1x * e2y - e1y * e2x;
       const det = e1x * g1x + e1y * g1y + e1z * g1z;
       if (!(Math.abs(det) > 1e-12)) continue;
-      const id = 1 / det;
+      const id = 1 / det, mk = IM[t], ad = Math.abs(det);
+      // (its heights over its faces on the hollow's side: how far in a point is, from its share of the corner
+      // across from each)
+      const h0 = mk & 1 ? ad / Math.hypot(g1x + g2x + g3x, g1y + g2y + g3y, g1z + g2z + g3z) : 0;
+      const h1 = mk & 2 ? ad / Math.hypot(g1x, g1y, g1z) : 0, h2 = mk & 4 ? ad / Math.hypot(g2x, g2y, g2z) : 0, h3 = mk & 8 ? ad / Math.hypot(g3x, g3y, g3z) : 0;
       for (let k = k0; k <= k1; k++)
         for (let j = j0; j <= j1; j++)
           for (let i = i0; i <= i1; i++) {
             const q = k * gxy + j * gx + i;
-            if (!touch[q] || F[q] <= iso) continue;
+            if (!(touch[q] & 1)) continue;
             const rx = x0 + i * c - X[a], ry = y0 + j * c - X[a + 1], rz = z0 + k * c - X[a + 2];
-            const b1 = (g1x * rx + g1y * ry + g1z * rz) * id, b2 = (g2x * rx + g2y * ry + g2z * rz) * id, b3 = (g3x * rx + g3y * ry + g3z * rz) * id;
-            if (b1 >= 0 && b2 >= 0 && b3 >= 0 && b1 + b2 + b3 <= 1) F[q] = iso * 0.5;
+            const b1 = (g1x * rx + g1y * ry + g1z * rz) * id, b2 = (g2x * rx + g2y * ry + g2z * rz) * id, b3 = (g3x * rx + g3y * ry + g3z * rz) * id, b0 = 1 - b1 - b2 - b3;
+            if (b0 < 0 || b1 < 0 || b2 < 0 || b3 < 0) continue;
+            let dp = c;
+            if (mk & 1) dp = Math.min(dp, b0 * h0);
+            if (mk & 2) dp = Math.min(dp, b1 * h1);
+            if (mk & 4) dp = Math.min(dp, b2 * h2);
+            if (mk & 8) dp = Math.min(dp, b3 * h3);
+            if (!(touch[q] & 4)) (touch[q] |= 4), (DEP[q] = dp);
+            else if (dp < DEP[q]) DEP[q] = dp;
           }
     }
+    for (let n = 0; n < nt; n++) {
+      const q = tList[n];
+      if (!(touch[q] & 4)) continue;
+      const k = (q / gxy) | 0, j = ((q - k * gxy) / gx) | 0, i = q - k * gxy - j * gx;
+      let G = 0, ng = 0;
+      if (i > 0 && (touch[q - 1] & 5) === 1 && F[q - 1] > iso) (G += F[q - 1] - iso), ng++;
+      if (i < gx - 1 && (touch[q + 1] & 5) === 1 && F[q + 1] > iso) (G += F[q + 1] - iso), ng++;
+      if (j > 0 && (touch[q - gx] & 5) === 1 && F[q - gx] > iso) (G += F[q - gx] - iso), ng++;
+      if (j < gy - 1 && (touch[q + gx] & 5) === 1 && F[q + gx] > iso) (G += F[q + gx] - iso), ng++;
+      if (k > 0 && (touch[q - gxy] & 5) === 1 && F[q - gxy] > iso) (G += F[q - gxy] - iso), ng++;
+      if (k < gz - 1 && (touch[q + gxy] & 5) === 1 && F[q + gxy] > iso) (G += F[q + gxy] - iso), ng++;
+      const dp = DEP[q];
+      FN[n] = ng ? iso - ((G / ng) * dp) / Math.max(c - dp, 0.15 * c) : Math.min(F[q], 0.5 * iso);
+    }
+    // (its colour as it was: that's carried weighted by the field - see _remesh)
+    const FC = this.fcol;
+    for (let n = 0; n < nt; n++) {
+      const q = tList[n];
+      if (!(touch[q] & 4) || !(FN[n] < F[q])) continue;
+      const k = F[q] > 1e-9 ? FN[n] / F[q] : 0;
+      FC[q * 3] *= k; FC[q * 3 + 1] *= k; FC[q * 3 + 2] *= k;
+      F[q] = FN[n];
+    }
   }
+
+  // Only the liquid that's joined up to its drops (through grid points over the level, none in the jelly): a cube
+  // full of it's splats reached on out past its walls - and there, the far side of the jelly, stood as flecks on
+  // its outside.
+  _joined(F, touch, tList, nt, iso, x0, y0, z0, c, gx, gy, gz) {
+    const gxy = gx * gy, ic = 1 / c, x = this.x, Q = this.fq;
+    let qh = 0, qt = 0;
+    for (let p = 0; p < this.n; p++) {
+      const o = p * 3, i = Math.round((x[o] - x0) * ic), j = Math.round((x[o + 1] - y0) * ic), k = Math.round((x[o + 2] - z0) * ic);
+      if (i < 0 || j < 0 || k < 0 || i >= gx || j >= gy || k >= gz) continue;
+      const q = k * gxy + j * gx + i;
+      if (!(touch[q] & 8) && F[q] > iso) (touch[q] |= 8), (Q[qt++] = q);
+    }
+    while (qh < qt) {
+      const q = Q[qh++], k = (q / gxy) | 0, j = ((q - k * gxy) / gx) | 0, i = q - k * gxy - j * gx;
+      if (i > 0 && !(touch[q - 1] & 8) && F[q - 1] > iso) (touch[q - 1] |= 8), (Q[qt++] = q - 1);
+      if (i < gx - 1 && !(touch[q + 1] & 8) && F[q + 1] > iso) (touch[q + 1] |= 8), (Q[qt++] = q + 1);
+      if (j > 0 && !(touch[q - gx] & 8) && F[q - gx] > iso) (touch[q - gx] |= 8), (Q[qt++] = q - gx);
+      if (j < gy - 1 && !(touch[q + gx] & 8) && F[q + gx] > iso) (touch[q + gx] |= 8), (Q[qt++] = q + gx);
+      if (k > 0 && !(touch[q - gxy] & 8) && F[q - gxy] > iso) (touch[q - gxy] |= 8), (Q[qt++] = q - gxy);
+      if (k < gz - 1 && !(touch[q + gxy] & 8) && F[q + gxy] > iso) (touch[q + gxy] |= 8), (Q[qt++] = q + gxy);
+    }
+    const FC = this.fcol;
+    for (let n = 0; n < nt; n++) {
+      const q = tList[n];
+      if (!(F[q] > iso) || touch[q] & 8) continue;
+      const k = (0.5 * iso) / F[q];
+      FC[q * 3] *= k; FC[q * 3 + 1] *= k; FC[q * 3 + 2] *= k;
+      F[q] = 0.5 * iso;
+    }
+  }
+
 
   // The particles splatted into a field on a grid round them (each a smooth
   // bump out to 1.6 D), colours carried along; its level set by marching
@@ -1748,7 +1843,9 @@ export class Fluid {
       z0 = Math.min(z0, x[o + 2]); z1 = Math.max(z1, x[o + 2]);
     }
     // (a flood of it: coarser - a big flat pool needs no fine grid)
-    let c = this.cell * Math.min(1.6, Math.max(1, Math.sqrt(n / 500)));
+    // (as fine as the drops are: bigger drops - a cube full of liquid's - on the grid for the small ones, each
+    // splatted onto two and a half times as many points, and it took a third of the liquid's time)
+    let c = this.cell * (D / 0.065) * Math.min(1.6, Math.max(1, Math.sqrt(n / 500)));
     // (two cells' margin past the splats; nothing below the floor - the
     // floor hides it, and while draining cuts it off)
     const pad = R * Math.cbrt(mMax) + 2 * c;
@@ -1769,14 +1866,35 @@ export class Fluid {
     if (!this.field || this.field.length < G) {
       const cap = Math.ceil(G * 1.5);
       this.field = new Float32Array(cap); // (all 0 between calls: what's touched is cleared after)
+      this.fdep = new Float32Array(cap); // (how deep in the jelly each point is - see _clip)
+      this.fnew = new Float32Array(cap);
+      this.fq = new Int32Array(cap); // (a queue - see _joined)
+      this.fo = new Float32Array(cap); // (the field as splatted, for the normals - see _remesh)
       this.fcol = new Float32Array(cap * 3);
       this.touch = new Uint8Array(cap);
       this.tList = new Int32Array(cap);
       this.cList = new Int32Array(cap);
     }
     const F = this.field, FC = this.fcol, touch = this.touch, tList = this.tList, cList = this.cList;
-    // (only the grid points near a particle are filled, and only the cells
-    // round the ones that come out inside are marched)
+    // (only the grid points near a particle are filled, and only the cells round the ones that come out inside
+    // are marched - each its own method: all in one, Safari's engine never made it fast, and it took four times as
+    // long there)
+    const nt = this._splat(F, FC, touch, tList, x0, y0, z0, c, gx, gy, gz, R);
+    const iso = SPLAT_ISO;
+    // (the field as splatted, kept for the surface's normals: brought down to meet the jelly, its slope's a
+    // crumple of steps from tet to tet - lit so, a cube's liquid was crinkled foil all over)
+    const FO = this.fo;
+    for (let a = 0; a < nt; a++) FO[tList[a]] = F[tList[a]];
+    if (this.cellsN) {
+      this._clip(F, touch, tList, nt, iso, x0, y0, z0, c, gx, gy, gz);
+      this._joined(F, touch, tList, nt, iso, x0, y0, z0, c, gx, gy, gz);
+    }
+    this._march(F, FC, touch, tList, cList, nt, iso, x0, y0, z0, c, gx, gy, gz);
+  }
+
+  // (the drops splatted into the field and its colour - the points touched, listed: how many)
+  _splat(F, FC, touch, tList, x0, y0, z0, c, gx, gy, gz, R) {
+    const n = this.n, x = this.x, gxy = gx * gy;
     let nt = 0;
     const ic = 1 / c;
     for (let p = 0; p < n; p++) {
@@ -1812,10 +1930,12 @@ export class Fluid {
         }
       }
     }
-    const iso = SPLAT_ISO;
-    // (none of it inside the jelly: drawn up against a wall - a cube full of it - its splats reached on into the
-    // wall, and there, through the jelly in front, it showed as a pale blotch)
-    if (this.cellsN) this._clip(F, touch, iso, x0, y0, z0, c, gx, gy, gz);
+    return nt;
+  }
+
+  // (the cells with a corner inside, marched: the surface's triangles, coloured; and the grid left clean)
+  _march(F, FC, touch, tList, cList, nt, iso, x0, y0, z0, c, gx, gy, gz) {
+    const gxy = gx * gy, FO = this.fo;
     // the cells with an inside corner (the 8 round each inside point)
     let nc = 0;
     for (let a = 0; a < nt; a++) {
@@ -1867,13 +1987,13 @@ export class Fluid {
         ex[o + 2] = z0 + (k + CZ[A] + (CZ[B] - CZ[A]) * t) * c;
         // normal: down the field's gradient (central differences; one-sided at the floor)
         const ja = j + CY[A], jb = j + CY[B];
-        const ax = F[qa - 1] - F[qa + 1], ay = F[ja > 0 ? qa - gx : qa] - F[qa + gx], az = F[qa - gxy] - F[qa + gxy];
-        const bx = F[qb - 1] - F[qb + 1], by = F[jb > 0 ? qb - gx : qb] - F[qb + gx], bz = F[qb - gxy] - F[qb + gxy];
+        const ax = FO[qa - 1] - FO[qa + 1], ay = FO[ja > 0 ? qa - gx : qa] - FO[qa + gx], az = FO[qa - gxy] - FO[qa + gxy];
+        const bx = FO[qb - 1] - FO[qb + 1], by = FO[jb > 0 ? qb - gx : qb] - FO[qb + gx], bz = FO[qb - gxy] - FO[qb + gxy];
         const nx = ax + (bx - ax) * t, ny = ay + (by - ay) * t, nz = az + (bz - az) * t;
         const nl = Math.sqrt(nx * nx + ny * ny + nz * nz) || 1;
         en[o] = nx / nl; en[o + 1] = ny / nl; en[o + 2] = nz / nl;
         // (a corner the splat never reached has no colour: take the other's)
-        const ta = touch[qa] & 1, tb = touch[qb] & 1, wa = ta ? 1 / F[qa] : 0, wb = tb ? 1 / F[qb] : 0;
+        const ta = touch[qa] & 1 && Math.abs(F[qa]) > 1e-6, tb = touch[qb] & 1 && Math.abs(F[qb]) > 1e-6, wa = ta ? 1 / F[qa] : 0, wb = tb ? 1 / F[qb] : 0;
         for (let cc = 0; cc < 3; cc++) {
           const ca = FC[qa * 3 + cc] * wa, cb = FC[qb * 3 + cc] * wb;
           ec[o + cc] = !ta ? cb : !tb ? ca : ca + (cb - ca) * t;
@@ -1894,6 +2014,7 @@ export class Fluid {
       const q = tList[a];
       touch[q] = 0;
       F[q] = 0;
+      FO[q] = 0;
     }
     this.geo.setDrawRange(0, nv);
     for (const a of [this.aPos, this.aNrm, this.aCol]) {
