@@ -885,9 +885,10 @@ export class SoftBody {
         continue;
       }
       const th = this.cSkin[k];
-      // (hollow - its liquid real, the Fluid's: all that's left is its shell, as firm as its skin)
+      // (hollow - its liquid real, the Fluid's: all that's left is its shell, as firm as the jelly it is - its
+      // skin's how thick it is, thin ones floppy for that: see Spill)
       if (this.cHollow[k]) {
-        L[t] = th <= 0.5 ? 0.1 * Math.pow(10, 2 * th) : Math.pow(2.5, 2 * th - 1);
+        L[t] = 1;
         Pr[t] = 0;
         continue;
       }

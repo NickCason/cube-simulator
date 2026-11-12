@@ -82,8 +82,16 @@ export class Fluid {
     this._f3 = new Float64Array(3);
     this._carry = 0; // (s the jelly's moved on for since the liquid last looked: a frame's, at its first - see _collide)
     this._acc = 0; // (s of liquid time still to step: it's stepped in whole substeps of STEP - see _advance)
-    // (a sealed hollow's faces in a grid over x, z - see _contain - and how many drops it's put back, all told)
+    // (a hollow's faces, or its outside's, in a grid over x, z - see _contain, _xzBuild - and how many drops it's
+    // put back, all told; whether each was inside its cube's outside skin last time, 2 not known, and where)
     this._contained = 0;
+    this._tri = new Int32Array(3 * 1024);
+    this._cuts = new Float32Array(3 * 256);
+    this._xzTri = this._tri;
+    this._xzG = new Float64Array(6);
+    this.envIn = new Uint8Array(N);
+    this.envPrev = new Float32Array(N * 3);
+    this._envN = -1;
     this._cgStart = new Int32Array(1024);
     this._cgList = new Int32Array(4096);
     // (going nowhere: where each was half a second ago, how long since, how many windows running it's stayed
@@ -140,7 +148,9 @@ export class Fluid {
     // as it's needed - see _remesh)
     this.faceMask = null;
     this.innerMask = null;
-    this.field = this.fcol = this.touch = this.tList = this.cList = this.fdep = this.fnew = this.fq = this.fo = null;
+    this.field = this.fcol = this.touch = this.tList = this.cList = this.fdep = this.fnew = this.fo = this.fmask = this.fmL = null;
+    this._colN = new Int32Array(1024); // (the outside faces' crossings, column by column - see _envelope)
+    this._colY = new Float32Array(4096);
     this.cellsN = 0;
     this._cellVer = -1;
     // surface
@@ -614,89 +624,189 @@ export class Fluid {
     }
   }
 
-  // A sealed cube full of liquid's own drops are all inside it: any found outside its hollow - not in its walls,
-  // not in it - came out through a wall that wasn't cut (a few, at worst, in a hard landing: its shell swept past
-  // them faster than they were looked at), and is put back just inside the nearest of its hollow's faces, moving
-  // as that is. Inside: a ray straight up crosses its hollow's faces an odd number of times (looked up in a grid
-  // of them over x, z).
+  // A cube full of liquid's own drops stay inside it but where it's cut. Sealed, all of them: one found outside its
+  // hollow - not in its walls, not in it - came out through a wall that wasn't cut (a few, at worst, in a hard
+  // landing: its shell swept past them faster than they were looked at), and is put back just inside the nearest
+  // of its hollow's faces, moving as that is; inside, a ray straight up crosses its hollow's faces an odd number of
+  // times. Cut into but in one piece - slit, nicked - one that was inside its outside skin last time and isn't now,
+  // and isn't by any cut, went out through a wall too, and is put back where it was. (A thin skin's walls let
+  // dozens through, the cube dragged about with a slit in it.)
   _contain() {
-    const sb = this.app.sb, own = this.own, x = this.x, v = this.v, X = sb.x, SV = sb.v, n = this.n;
+    const sb = this.app.sb, own = this.own, x = this.x, v = this.v, X = sb.x, SV = sb.v, n = this.n, EI = this.envIn, EP = this.envPrev;
+    if (this._envN !== n) (this._envN = n), EI.fill(2, 0, n);
     for (let k = 0; k < sb.cav.length; k++) {
       const c = sb.cav[k], id = sb.cHid[k];
-      if (!c || !c.sealed || !id) continue;
+      if (!c || !id) continue;
       let any = false;
       for (let i = 0; i < n && !any; i++) any = own[i] === id;
       if (!any) continue;
-      const VV = c.v, F = c.f, nf = F.length / 3;
-      let x0 = Infinity, z0 = Infinity, x1 = -Infinity, z1 = -Infinity;
-      for (let j = 0; j < VV.length; j++) {
-        const a = VV[j] * 3;
-        if (X[a] < x0) x0 = X[a];
-        if (X[a] > x1) x1 = X[a];
-        if (X[a + 2] < z0) z0 = X[a + 2];
-        if (X[a + 2] > z1) z1 = X[a + 2];
-      }
-      const cell = Math.max(0.06, Math.max(x1 - x0, z1 - z0) / 24), gx = Math.floor((x1 - x0) / cell) + 1, gz = Math.floor((z1 - z0) / cell) + 1;
-      if (this._cgStart.length < gx * gz + 1) this._cgStart = new Int32Array((gx * gz + 1) * 2);
-      const cs = this._cgStart;
-      cs.fill(0, 0, gx * gz + 1);
-      // (each face into the cells its x, z box covers: counted, then filled)
-      let total = 0;
-      for (let pass = 0; pass < 2; pass++) {
-        if (pass) {
-          for (let q = 0; q < gx * gz; q++) cs[q + 1] += cs[q];
-          total = cs[gx * gz];
-          if (this._cgList.length < total) this._cgList = new Int32Array(total * 2);
-          for (let q = gx * gz; q > 0; q--) cs[q] = cs[q - 1];
-          cs[0] = 0;
+      if (c.sealed) {
+        const VV = c.v, F = c.f, m = F.length / 3;
+        if (this._tri.length < m * 3) this._tri = new Int32Array(m * 6);
+        const tri = this._tri;
+        for (let e = 0; e < m * 3; e++) tri[e] = VV[F[e]];
+        this._xzBuild(tri, m);
+        for (let i = 0; i < n; i++) {
+          if (own[i] !== id) continue;
+          const o = i * 3, px = x[o], py = x[o + 1], pz = x[o + 2];
+          if (this._xzOdd(px, py, pz) || this._inTet(px, py, pz) >= 0) continue;
+          // (out: back in, by the nearest of its faces)
+          let best = -1, bd = Infinity;
+          for (let f = 0; f < m; f++) {
+            const a = tri[f * 3] * 3, b = tri[f * 3 + 1] * 3, d = tri[f * 3 + 2] * 3;
+            const cx = (X[a] + X[b] + X[d]) / 3 - px, cy = (X[a + 1] + X[b + 1] + X[d + 1]) / 3 - py, cz = (X[a + 2] + X[b + 2] + X[d + 2]) / 3 - pz, d2 = cx * cx + cy * cy + cz * cz;
+            if (d2 < bd) (bd = d2), (best = f);
+          }
+          if (best < 0) continue;
+          const a = tri[best * 3] * 3, b = tri[best * 3 + 1] * 3, d = tri[best * 3 + 2] * 3;
+          const ux = X[b] - X[a], uy = X[b + 1] - X[a + 1], uz = X[b + 2] - X[a + 2], wx = X[d] - X[a], wy = X[d + 1] - X[a + 1], wz = X[d + 2] - X[a + 2];
+          let nx = uy * wz - uz * wy, ny = uz * wx - ux * wz, nz = ux * wy - uy * wx;
+          const nl = Math.sqrt(nx * nx + ny * ny + nz * nz) || 1, r = R_P + 0.005;
+          nx /= nl; ny /= nl; nz /= nl;
+          x[o] = (X[a] + X[b] + X[d]) / 3 + nx * r; x[o + 1] = (X[a + 1] + X[b + 1] + X[d + 1]) / 3 + ny * r; x[o + 2] = (X[a + 2] + X[b + 2] + X[d + 2]) / 3 + nz * r;
+          v[o] = (SV[a] + SV[b] + SV[d]) / 3; v[o + 1] = (SV[a + 1] + SV[b + 1] + SV[d + 1]) / 3; v[o + 2] = (SV[a + 2] + SV[b + 2] + SV[d + 2]) / 3;
+          this.lastOut[o] = x[o]; this.lastOut[o + 1] = x[o + 1]; this.lastOut[o + 2] = x[o + 2];
+          this._contained++;
         }
-        for (let f = 0; f < nf; f++) {
-          const a = VV[F[f * 3]] * 3, b = VV[F[f * 3 + 1]] * 3, d = VV[F[f * 3 + 2]] * 3;
-          const i0 = Math.floor((Math.min(X[a], X[b], X[d]) - x0) / cell), i1 = Math.floor((Math.max(X[a], X[b], X[d]) - x0) / cell);
-          const j0 = Math.floor((Math.min(X[a + 2], X[b + 2], X[d + 2]) - z0) / cell), j1 = Math.floor((Math.max(X[a + 2], X[b + 2], X[d + 2]) - z0) / cell);
-          for (let jj = j0; jj <= j1; jj++)
-            for (let ii = i0; ii <= i1; ii++) {
-              const q = jj * gx + ii;
-              if (pass) this._cgList[cs[q + 1]++] = f;
-              else cs[q + 1]++;
-            }
-        }
+        continue;
       }
-      const L = this._cgList;
+      // (cut into: only while it's in one piece - cut through, it's open, and pours)
+      let pieces = 0;
+      for (const pc of sb.pieces) if (pc.cube === k) pieces++;
+      if (pieces !== 1) continue;
+      // its outside skin, and its cuts' faces (not its outside, nor its hollow's - in its rest shape, out past the
+      // hollow's box by more than a quarter of a cell) where they are now
+      const S = sb.sTri, tag = sb.sTag, ST = sb.sTet, tc = sb.tCube, XR = sb.X, HB = sb.cHole, h6 = k * 6, q4 = 0.25 * sb.cH[k];
+      let m = 0, nc = 0;
+      if (this._tri.length < sb.nF * 3) this._tri = new Int32Array(sb.nF * 6);
+      if (this._cuts.length < sb.nF * 3) this._cuts = new Float32Array(sb.nF * 6);
+      const tri = this._tri, cuts = this._cuts;
+      for (let f = 0; f < sb.nF; f++) {
+        if (tc[ST[f]] !== k) continue;
+        const a = S[f * 3], b = S[f * 3 + 1], d = S[f * 3 + 2];
+        if (tag[f] === TAG_EXTERIOR) {
+          tri[m * 3] = a; tri[m * 3 + 1] = b; tri[m * 3 + 2] = d;
+          m++;
+          continue;
+        }
+        let o2 = 0;
+        for (let ax = 0; ax < 3; ax++) {
+          const r = (XR[a * 3 + ax] + XR[b * 3 + ax] + XR[d * 3 + ax]) / 3, out = Math.max(HB[h6 + ax] - r, 0, r - HB[h6 + 3 + ax]);
+          o2 += out * out;
+        }
+        if (o2 <= q4 * q4) continue;
+        for (let ax = 0; ax < 3; ax++) cuts[nc * 3 + ax] = (X[a * 3 + ax] + X[b * 3 + ax] + X[d * 3 + ax]) / 3;
+        nc++;
+      }
+      if (!m) continue;
+      this._xzBuild(tri, m);
+      const near2 = (0.9 * sb.cH[k]) ** 2;
       for (let i = 0; i < n; i++) {
         if (own[i] !== id) continue;
-        const o = i * 3, px = x[o] + 1.234e-7, py = x[o + 1], pz = x[o + 2] + 2.345e-7;
-        let cross = 0;
-        if (px >= x0 && px <= x1 && pz >= z0 && pz <= z1) {
-          const q = Math.floor((pz - z0) / cell) * gx + Math.floor((px - x0) / cell);
-          for (let e = cs[q]; e < cs[q + 1]; e++) {
-            const f = L[e], a = VV[F[f * 3]] * 3, b = VV[F[f * 3 + 1]] * 3, d = VV[F[f * 3 + 2]] * 3;
-            const ax = X[a] - px, az = X[a + 2] - pz, bx = X[b] - px, bz = X[b + 2] - pz, dx = X[d] - px, dz = X[d + 2] - pz;
-            const wa = bx * dz - bz * dx, wb = dx * az - dz * ax, wd = ax * bz - az * bx, sum = wa + wb + wd;
-            if (!(Math.abs(sum) > 1e-12) || !((wa >= 0 && wb >= 0 && wd >= 0) || (wa <= 0 && wb <= 0 && wd <= 0))) continue;
-            if ((wa * X[a + 1] + wb * X[b + 1] + wd * X[d + 1]) / sum > py) cross++;
-          }
+        const o = i * 3, px = x[o], py = x[o + 1], pz = x[o + 2], inside = this._xzOdd(px, py, pz), was = EI[i];
+        EI[i] = inside ? 1 : 0;
+        if (inside) {
+          EP[o] = px; EP[o + 1] = py; EP[o + 2] = pz;
+          continue;
         }
-        if (cross & 1 || this._inTet(px, py, pz) >= 0) continue;
-        // (out: back in, by the nearest of its faces)
-        let best = -1, bd = Infinity;
-        for (let f = 0; f < nf; f++) {
-          const a = VV[F[f * 3]] * 3, b = VV[F[f * 3 + 1]] * 3, d = VV[F[f * 3 + 2]] * 3;
-          const cx = (X[a] + X[b] + X[d]) / 3 - px, cy = (X[a + 1] + X[b + 1] + X[d + 1]) / 3 - py, cz = (X[a + 2] + X[b + 2] + X[d + 2]) / 3 - pz, d2 = cx * cx + cy * cy + cz * cz;
-          if (d2 < bd) (bd = d2), (best = f);
+        if (was !== 1) continue;
+        let near = false;
+        for (let e = 0; e < nc && !near; e++) {
+          const dx = cuts[e * 3] - px, dy = cuts[e * 3 + 1] - py, dz = cuts[e * 3 + 2] - pz;
+          near = dx * dx + dy * dy + dz * dz < near2;
         }
-        if (best < 0) continue;
-        const a = VV[F[best * 3]] * 3, b = VV[F[best * 3 + 1]] * 3, d = VV[F[best * 3 + 2]] * 3;
-        const ux = X[b] - X[a], uy = X[b + 1] - X[a + 1], uz = X[b + 2] - X[a + 2], wx = X[d] - X[a], wy = X[d + 1] - X[a + 1], wz = X[d + 2] - X[a + 2];
-        let nx = uy * wz - uz * wy, ny = uz * wx - ux * wz, nz = ux * wy - uy * wx;
-        const nl = Math.sqrt(nx * nx + ny * ny + nz * nz) || 1, r = R_P + 0.005;
-        nx /= nl; ny /= nl; nz /= nl;
-        x[o] = (X[a] + X[b] + X[d]) / 3 + nx * r; x[o + 1] = (X[a + 1] + X[b + 1] + X[d + 1]) / 3 + ny * r; x[o + 2] = (X[a + 2] + X[b + 2] + X[d + 2]) / 3 + nz * r;
-        v[o] = (SV[a] + SV[b] + SV[d]) / 3; v[o + 1] = (SV[a + 1] + SV[b + 1] + SV[d + 1]) / 3; v[o + 2] = (SV[a + 2] + SV[b + 2] + SV[d + 2]) / 3;
+        // (nor through a hole in its skin - out through a slit pulled wide, away from its sides - only through the
+        // skin itself: kept so, held open, it never drained)
+        if (near || !this._xzCrosses(EP[o], EP[o + 1], EP[o + 2], px, py, pz)) continue;
+        // (out through a wall: back where it was, still)
+        x[o] = EP[o]; x[o + 1] = EP[o + 1]; x[o + 2] = EP[o + 2];
+        v[o] = v[o + 1] = v[o + 2] = 0;
         this.lastOut[o] = x[o]; this.lastOut[o + 1] = x[o + 1]; this.lastOut[o + 2] = x[o + 2];
+        EI[i] = 1;
         this._contained++;
       }
     }
+  }
+
+  // (triangles - tri[0..m*3), their corners' vertex numbers - in a grid over x, z, for _xzOdd)
+  _xzBuild(tri, m) {
+    const X = this.app.sb.x;
+    let x0 = Infinity, z0 = Infinity, x1 = -Infinity, z1 = -Infinity;
+    for (let e = 0; e < m * 3; e++) {
+      const a = tri[e] * 3;
+      if (X[a] < x0) x0 = X[a];
+      if (X[a] > x1) x1 = X[a];
+      if (X[a + 2] < z0) z0 = X[a + 2];
+      if (X[a + 2] > z1) z1 = X[a + 2];
+    }
+    const cell = Math.max(0.06, Math.max(x1 - x0, z1 - z0) / 24), gx = Math.floor((x1 - x0) / cell) + 1, gz = Math.floor((z1 - z0) / cell) + 1;
+    if (this._cgStart.length < gx * gz + 1) this._cgStart = new Int32Array((gx * gz + 1) * 2);
+    const cs = this._cgStart;
+    cs.fill(0, 0, gx * gz + 1);
+    for (let pass = 0; pass < 2; pass++) {
+      if (pass) {
+        for (let q = 0; q < gx * gz; q++) cs[q + 1] += cs[q];
+        if (this._cgList.length < cs[gx * gz]) this._cgList = new Int32Array(cs[gx * gz] * 2);
+        for (let q = gx * gz; q > 0; q--) cs[q] = cs[q - 1];
+        cs[0] = 0;
+      }
+      for (let f = 0; f < m; f++) {
+        const a = tri[f * 3] * 3, b = tri[f * 3 + 1] * 3, d = tri[f * 3 + 2] * 3;
+        const i0 = Math.floor((Math.min(X[a], X[b], X[d]) - x0) / cell), i1 = Math.floor((Math.max(X[a], X[b], X[d]) - x0) / cell);
+        const j0 = Math.floor((Math.min(X[a + 2], X[b + 2], X[d + 2]) - z0) / cell), j1 = Math.floor((Math.max(X[a + 2], X[b + 2], X[d + 2]) - z0) / cell);
+        for (let jj = j0; jj <= j1; jj++)
+          for (let ii = i0; ii <= i1; ii++) {
+            const q = jj * gx + ii;
+            if (pass) this._cgList[cs[q + 1]++] = f;
+            else cs[q + 1]++;
+          }
+      }
+    }
+    this._xzTri = tri;
+    this._xzG[0] = x0; this._xzG[1] = z0; this._xzG[2] = x1; this._xzG[3] = z1; this._xzG[4] = cell; this._xzG[5] = gx;
+  }
+
+  // (does the way from a to b cross any of _xzBuild's triangles?)
+  _xzCrosses(ax0, ay0, az0, bx0, by0, bz0) {
+    const G = this._xzG, X = this.app.sb.x, tri = this._xzTri, cs = this._cgStart, L = this._cgList, gx = G[5];
+    const gz = cs.length, dx = bx0 - ax0, dy = by0 - ay0, dz = bz0 - az0;
+    const i0 = Math.max(0, Math.floor((Math.min(ax0, bx0) - G[0]) / G[4])), i1 = Math.min(gx - 1, Math.floor((Math.max(ax0, bx0) - G[0]) / G[4]));
+    const j0 = Math.max(0, Math.floor((Math.min(az0, bz0) - G[1]) / G[4])), j1 = Math.floor((Math.max(az0, bz0) - G[1]) / G[4]);
+    for (let jj = j0; jj <= j1; jj++)
+      for (let ii = i0; ii <= i1; ii++) {
+        const q = jj * gx + ii;
+        if (q + 1 >= gz) continue;
+        for (let e = cs[q]; e < cs[q + 1]; e++) {
+          const f = L[e], a = tri[f * 3] * 3, b = tri[f * 3 + 1] * 3, c = tri[f * 3 + 2] * 3;
+          const e1x = X[b] - X[a], e1y = X[b + 1] - X[a + 1], e1z = X[b + 2] - X[a + 2], e2x = X[c] - X[a], e2y = X[c + 1] - X[a + 1], e2z = X[c + 2] - X[a + 2];
+          const px = dy * e2z - dz * e2y, py = dz * e2x - dx * e2z, pz = dx * e2y - dy * e2x, det = e1x * px + e1y * py + e1z * pz;
+          if (Math.abs(det) < 1e-14) continue;
+          const inv = 1 / det, tx = ax0 - X[a], ty = ay0 - X[a + 1], tz = az0 - X[a + 2], u = (tx * px + ty * py + tz * pz) * inv;
+          if (u < 0 || u > 1) continue;
+          const qx = ty * e1z - tz * e1y, qy = tz * e1x - tx * e1z, qz = tx * e1y - ty * e1x, w = (dx * qx + dy * qy + dz * qz) * inv;
+          if (w < 0 || u + w > 1) continue;
+          const t = (e2x * qx + e2y * qy + e2z * qz) * inv;
+          if (t >= 0 && t <= 1) return true;
+        }
+      }
+    return false;
+  }
+
+  // (is (px, py, pz) under an odd number of _xzBuild's triangles? - nudged a hair, off their edges)
+  _xzOdd(px, py, pz) {
+    const G = this._xzG, X = this.app.sb.x, tri = this._xzTri, cs = this._cgStart, L = this._cgList;
+    px += 1.234e-7; pz += 2.345e-7;
+    if (px < G[0] || px > G[2] || pz < G[1] || pz > G[3]) return false;
+    const q = Math.floor((pz - G[1]) / G[4]) * G[5] + Math.floor((px - G[0]) / G[4]);
+    let cross = 0;
+    for (let e = cs[q]; e < cs[q + 1]; e++) {
+      const f = L[e], a = tri[f * 3] * 3, b = tri[f * 3 + 1] * 3, d = tri[f * 3 + 2] * 3;
+      const ax = X[a] - px, az = X[a + 2] - pz, bx = X[b] - px, bz = X[b + 2] - pz, dx = X[d] - px, dz = X[d + 2] - pz;
+      const wa = bx * dz - bz * dx, wb = dx * az - dz * ax, wd = ax * bz - az * bx, sum = wa + wb + wd;
+      if (!(Math.abs(sum) > 1e-12) || !((wa >= 0 && wb >= 0 && wd >= 0) || (wa <= 0 && wb <= 0 && wd <= 0))) continue;
+      if ((wa * X[a + 1] + wb * X[b + 1] + wd * X[d + 1]) / sum > py) cross++;
+    }
+    return (cross & 1) === 1;
   }
 
   // One part of a long frame (see App.frame): just the liquid moved on - none of update's looking after it.
@@ -1245,17 +1355,20 @@ export class Fluid {
       let px = q[o], py = q[o + 1], pz = q[o + 2], mx = 0, my = 0, mz = 0, jx = 0, jy = 0, jz = 0, nj = 0;
       for (let k = 0; k < 6; k++) {
         const [ax, ay, az] = A[k];
-        const t = this._inTet(px + ax * r, py + ay * r, pz + az * r);
+        // (half as far too: a wall thinner than a drop - a thin skin's - was looked right through, and its drops
+        // pressed on into it and out the far side)
+        let rr = r, t = this._inTet(px + ax * r, py + ay * r, pz + az * r);
+        if (t < 0) (rr = 0.5 * r), (t = this._inTet(px + ax * rr, py + ay * rr, pz + az * rr));
         if (t < 0 || sb.cLiq[sb.tCube[t]] !== 1) continue;
         // (how far in: back along the line from there to where it came into that tet - exactly)
-        const det = this._grads(T, X, t, px + ax * r, py + ay * r, pz + az * r);
+        const det = this._grads(T, X, t, px + ax * rr, py + ay * rr, pz + az * rr);
         if (!(Math.abs(det) > 1e-15)) continue;
         let back = Infinity;
         for (let qq = 0; qq < 4; qq++) {
           const rate = (g[qq * 3] * ax + g[qq * 3 + 1] * ay + g[qq * 3 + 2] * az) / det;
           if (rate > 1e-9) back = Math.min(back, bs[qq] / rate);
         }
-        const pen = Math.min(r, back);
+        const pen = Math.min(r, r - rr + back);
         if (!(pen > 0)) continue;
         mx -= ax * pen; my -= ay * pen; mz -= az * pen;
         // (and how that wall's moving)
@@ -1723,6 +1836,66 @@ export class Fluid {
   }
 
   // ---------------------------------------------------------------- surface
+  // Each hollow cube full of liquid's inside - inside its outside skin, its walls and all - over the surface's
+  // grid: its points marked with its slot and 1 (see _splat), listed (fmL) to be cleared after; how many. Each
+  // column of the grid crosses the cube's outside faces at heights: a point's inside if an odd number of those
+  // are over it.
+  _envelope(x0, y0, z0, c, gx, gy, gz) {
+    const sb = this.app.sb, M = this.fmask, L = this.fmL, S = sb.sTri, X = sb.x, tag = sb.sTag, ST = sb.sTet, tc = sb.tCube, ic = 1 / c, gxy = gx * gy, NC = gx * gz;
+    let nm = 0;
+    for (let k = 0; k < sb.cHollow.length; k++) {
+      if (!sb.cHollow[k] || !sb.cLiq[k]) continue;
+      if (this._colN.length < NC + 1) this._colN = new Int32Array((NC + 1) * 2);
+      const CN = this._colN;
+      CN.fill(0, 0, NC + 1);
+      // (each outside face, the columns under it: counted, then their heights in)
+      let total = 0;
+      for (let pass = 0; pass < 2; pass++) {
+        if (pass) {
+          for (let q = 0; q < NC; q++) CN[q + 1] += CN[q];
+          total = CN[NC];
+          if (!total) break;
+          if (this._colY.length < total) this._colY = new Float32Array(total * 2);
+          for (let q = NC; q > 0; q--) CN[q] = CN[q - 1];
+          CN[0] = 0;
+        }
+        for (let f = 0; f < sb.nF; f++) {
+          if (tag[f] !== TAG_EXTERIOR || tc[ST[f]] !== k) continue;
+          const a = S[f * 3] * 3, b = S[f * 3 + 1] * 3, d = S[f * 3 + 2] * 3;
+          const i0 = Math.max(0, Math.ceil((Math.min(X[a], X[b], X[d]) - x0) * ic)), i1 = Math.min(gx - 1, Math.floor((Math.max(X[a], X[b], X[d]) - x0) * ic));
+          const k0 = Math.max(0, Math.ceil((Math.min(X[a + 2], X[b + 2], X[d + 2]) - z0) * ic)), k1 = Math.min(gz - 1, Math.floor((Math.max(X[a + 2], X[b + 2], X[d + 2]) - z0) * ic));
+          for (let kk = k0; kk <= k1; kk++)
+            for (let i = i0; i <= i1; i++) {
+              const px = x0 + i * c + 1.234e-7, pz = z0 + kk * c + 2.345e-7;
+              const ax = X[a] - px, az = X[a + 2] - pz, bx = X[b] - px, bz = X[b + 2] - pz, dx = X[d] - px, dz = X[d + 2] - pz;
+              const wa = bx * dz - bz * dx, wb = dx * az - dz * ax, wd = ax * bz - az * bx, sum = wa + wb + wd;
+              if (!(Math.abs(sum) > 1e-12) || !((wa >= 0 && wb >= 0 && wd >= 0) || (wa <= 0 && wb <= 0 && wd <= 0))) continue;
+              const col = kk * gx + i;
+              if (pass) this._colY[CN[col + 1]++] = (wa * X[a + 1] + wb * X[b + 1] + wd * X[d + 1]) / sum;
+              else CN[col + 1]++;
+            }
+        }
+      }
+      if (!total) continue;
+      // (each column's points: inside between an odd and an even crossing, counted down from the top)
+      const CY = this._colY;
+      for (let col = 0; col < NC; col++) {
+        const e0 = CN[col], e1 = CN[col + 1];
+        if (e1 - e0 < 2) continue;
+        const ys = CY.subarray(e0, e1).sort();
+        const i = col % gx, kk = (col / gx) | 0;
+        for (let e = 0; e + 1 < ys.length; e += 2) {
+          const j0 = Math.max(0, Math.ceil((ys[e] - y0) * ic)), j1 = Math.min(gy - 1, Math.floor((ys[e + 1] - y0) * ic));
+          for (let j = j0; j <= j1; j++) {
+            const q = kk * gxy + j * gx + i;
+            if (!M[q]) (M[q] = k + 1), (L[nm++] = q);
+          }
+        }
+      }
+    }
+    return nm;
+  }
+
   // The liquid's surface field, none of it in the jelly: a point in the jelly - each tet near it over the grid
   // points in its box (a point at a time, each looked up, took twice as long; and kept in _remesh, the frame a
   // cut was made took twice as long) - takes the value that puts the surface just where the jelly starts, from
@@ -1792,38 +1965,6 @@ export class Fluid {
     }
   }
 
-  // Only the liquid that's joined up to its drops (through grid points over the level, none in the jelly): a cube
-  // full of it's splats reached on out past its walls - and there, the far side of the jelly, stood as flecks on
-  // its outside.
-  _joined(F, touch, tList, nt, iso, x0, y0, z0, c, gx, gy, gz) {
-    const gxy = gx * gy, ic = 1 / c, x = this.x, Q = this.fq;
-    let qh = 0, qt = 0;
-    for (let p = 0; p < this.n; p++) {
-      const o = p * 3, i = Math.round((x[o] - x0) * ic), j = Math.round((x[o + 1] - y0) * ic), k = Math.round((x[o + 2] - z0) * ic);
-      if (i < 0 || j < 0 || k < 0 || i >= gx || j >= gy || k >= gz) continue;
-      const q = k * gxy + j * gx + i;
-      if (!(touch[q] & 8) && F[q] > iso) (touch[q] |= 8), (Q[qt++] = q);
-    }
-    while (qh < qt) {
-      const q = Q[qh++], k = (q / gxy) | 0, j = ((q - k * gxy) / gx) | 0, i = q - k * gxy - j * gx;
-      if (i > 0 && !(touch[q - 1] & 8) && F[q - 1] > iso) (touch[q - 1] |= 8), (Q[qt++] = q - 1);
-      if (i < gx - 1 && !(touch[q + 1] & 8) && F[q + 1] > iso) (touch[q + 1] |= 8), (Q[qt++] = q + 1);
-      if (j > 0 && !(touch[q - gx] & 8) && F[q - gx] > iso) (touch[q - gx] |= 8), (Q[qt++] = q - gx);
-      if (j < gy - 1 && !(touch[q + gx] & 8) && F[q + gx] > iso) (touch[q + gx] |= 8), (Q[qt++] = q + gx);
-      if (k > 0 && !(touch[q - gxy] & 8) && F[q - gxy] > iso) (touch[q - gxy] |= 8), (Q[qt++] = q - gxy);
-      if (k < gz - 1 && !(touch[q + gxy] & 8) && F[q + gxy] > iso) (touch[q + gxy] |= 8), (Q[qt++] = q + gxy);
-    }
-    const FC = this.fcol;
-    for (let n = 0; n < nt; n++) {
-      const q = tList[n];
-      if (!(F[q] > iso) || touch[q] & 8) continue;
-      const k = (0.5 * iso) / F[q];
-      FC[q * 3] *= k; FC[q * 3 + 1] *= k; FC[q * 3 + 2] *= k;
-      F[q] = 0.5 * iso;
-    }
-  }
-
-
   // The particles splatted into a field on a grid round them (each a smooth
   // bump out to 1.6 D), colours carried along; its level set by marching
   // cubes, normals from the field's gradient.
@@ -1868,8 +2009,9 @@ export class Fluid {
       this.field = new Float32Array(cap); // (all 0 between calls: what's touched is cleared after)
       this.fdep = new Float32Array(cap); // (how deep in the jelly each point is - see _clip)
       this.fnew = new Float32Array(cap);
-      this.fq = new Int32Array(cap); // (a queue - see _joined)
       this.fo = new Float32Array(cap); // (the field as splatted, for the normals - see _remesh)
+      this.fmask = new Uint8Array(cap); // (which cube full of liquid's inside each point is in - see _envelope)
+      this.fmL = new Int32Array(cap);
       this.fcol = new Float32Array(cap * 3);
       this.touch = new Uint8Array(cap);
       this.tList = new Int32Array(cap);
@@ -1879,25 +2021,36 @@ export class Fluid {
     // (only the grid points near a particle are filled, and only the cells round the ones that come out inside
     // are marched - each its own method: all in one, Safari's engine never made it fast, and it took four times as
     // long there)
-    const nt = this._splat(F, FC, touch, tList, x0, y0, z0, c, gx, gy, gz, R);
+    const nm = this.cellsN ? this._envelope(x0, y0, z0, c, gx, gy, gz) : 0;
+    const nt = this._splat(F, FC, touch, tList, x0, y0, z0, c, gx, gy, gz, R, nm);
     const iso = SPLAT_ISO;
     // (the field as splatted, kept for the surface's normals: brought down to meet the jelly, its slope's a
     // crumple of steps from tet to tet - lit so, a cube's liquid was crinkled foil all over)
     const FO = this.fo;
     for (let a = 0; a < nt; a++) FO[tList[a]] = F[tList[a]];
-    if (this.cellsN) {
-      this._clip(F, touch, tList, nt, iso, x0, y0, z0, c, gx, gy, gz);
-      this._joined(F, touch, tList, nt, iso, x0, y0, z0, c, gx, gy, gz);
-    }
+    if (this.cellsN) this._clip(F, touch, tList, nt, iso, x0, y0, z0, c, gx, gy, gz);
     this._march(F, FC, touch, tList, cList, nt, iso, x0, y0, z0, c, gx, gy, gz);
+    for (let a = 0; a < nm; a++) this.fmask[this.fmL[a]] = 0;
   }
 
   // (the drops splatted into the field and its colour - the points touched, listed: how many)
-  _splat(F, FC, touch, tList, x0, y0, z0, c, gx, gy, gz, R) {
-    const n = this.n, x = this.x, gxy = gx * gy;
+  // (a drop inside a cube full of liquid - inside its outside skin - only onto points inside it too, and one
+  // outside only onto points outside: a sealed one's own drops are inside it, the rest by the point they're at. A
+  // wall thinner than the grid's cells is missed by it - ultrathin, thin, its liquid was drawn out through it.)
+  _splat(F, FC, touch, tList, x0, y0, z0, c, gx, gy, gz, R, nm) {
+    const n = this.n, x = this.x, gxy = gx * gy, M = this.fmask, sb = this.app.sb, own = this.own;
     let nt = 0;
     const ic = 1 / c;
     for (let p = 0; p < n; p++) {
+      let mp = 0;
+      if (nm) {
+        const id = own[p];
+        for (let k = 0; k < sb.cHid.length && id; k++) if (sb.cHid[k] === id && sb.cav[k]?.sealed) (mp = k + 1), (k = sb.cHid.length);
+        if (!mp) {
+          const i = Math.round((x[p * 3] - x0) * ic), j = Math.round((x[p * 3 + 1] - y0) * ic), kk = Math.round((x[p * 3 + 2] - z0) * ic);
+          if (i >= 0 && j >= 0 && kk >= 0 && i < gx && j < gy && kk < gz) mp = M[kk * gxy + j * gx + i];
+        }
+      }
       // (one carrying more: as much wider as it sits further from the rest - their splats meet as others' do)
       const Rp = R * Math.cbrt(this.mass[p]), R2 = Rp * Rp, rr = Math.ceil(Rp * ic);
       const o = p * 3;
@@ -1919,6 +2072,7 @@ export class Fluid {
             if (d2 >= R2) continue;
             const u = 1 - d2 / R2, w = u * u * u;
             const q = row + i;
+            if (nm && M[q] !== mp) continue;
             if (!touch[q]) {
               touch[q] = 1;
               tList[nt++] = q;

@@ -493,7 +493,7 @@ export class App {
       const ct = TEXTURES[cb.style.texture], cs = resolveSettings(cb.tune, ct);
       fizz.push({ slot: cb.slot, count: cs.bubbles, scale: cs.bubbleSize });
       // (its surface map holds on better, or slides: see surfaces.js grip)
-      const wasLiq = sb.cLiq[cb.slot], wasFill = sb.cFill[cb.slot];
+      const wasLiq = sb.cLiq[cb.slot], wasFill = sb.cFill[cb.slot], wasSkin = sb.cSkin[cb.slot];
       sb.setCube(cb.slot, {
         mu: App.safeMu(cs.mu, cs.weight, sb.cSize[cb.slot], cs.lambda, cs.gravity),
         damping: cs.damping, lambdaRatio: cs.lambda, bounce: cs.bounce, friction: cs.grip * (SURFACE[cb.style.surface]?.grip ?? 1),
@@ -504,10 +504,10 @@ export class App {
       // (its own shape - faces dished or bulged, scalloped edges: built
       // again in place if that's changed and it's whole; else at its next
       // re-cube)
-      // (a shell full of liquid made solid again, or how full it's filled changed - or its colour, glitter or
-      // bubbles: they're in its liquid - built again in place and filled afresh, if it's whole - see Spill; else
-      // at its next re-cube. Its skin's just how firm the shell is.)
-      if (sb.cHollow[cb.slot] && ((cs.liquid > 0.5 ? 1 : 0) !== wasLiq || Math.abs(cs.liqFill - wasFill) > 1e-6 || (cb.liqLook !== undefined && cb.liqLook !== this.liquidLook(cb))))
+      // (a shell full of liquid made solid again, or how full it's filled or how thick its skin changed - or its
+      // colour, glitter or bubbles: they're in its liquid - built again in place and filled afresh, if it's whole
+      // - see Spill; else at its next re-cube)
+      if (sb.cHollow[cb.slot] && ((cs.liquid > 0.5 ? 1 : 0) !== wasLiq || Math.abs(cs.liqFill - wasFill) > 1e-6 || Math.abs(cs.liqSkin - wasSkin) > 1e-6 || (cb.liqLook !== undefined && cb.liqLook !== this.liquidLook(cb))))
         (this._reshape ||= new Set()).add(cb.slot);
       const L = this.shapeOf(cb, cs), k = cb.slot, shaped = L.bow || L.A > 0 || sb.cBow[k] || sb.cLobeA[k] > 0;
       if (Math.abs(L.bow - sb.cBow[k]) > 1e-6 || Math.abs(L.A - sb.cLobeA[k]) > 1e-6 || Math.abs(L.m - sb.cLobeP[k]) > 1e-6 || (L.A > 0 && sb.shapeOf(k)?.kind !== L.kind) || (shaped && Math.abs(this.bevelOf(cb) - sb.cBevel[k]) > 1e-6)) {
@@ -830,8 +830,8 @@ export class App {
       if (final) this.setCubeSize(value);
       return;
     }
-    // (how full: the cube's filled again for it - when the slider's let go)
-    if (key === 'liqFill' && !final) return;
+    // (how full, how thick its skin: the cube's made again for them - when the slider's let go)
+    if ((key === 'liqFill' || key === 'liqSkin') && !final) return;
     this.applyStyle();
   }
 
