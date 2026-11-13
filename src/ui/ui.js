@@ -11,6 +11,7 @@ import { CubipliedCard } from './cubiplied.js';
 import { POWDERS } from '../world/powders.js';
 import { EYE_STYLES } from '../eyes.js';
 import { SURFACES, surfaceSwatch } from '../surfaces.js';
+import { buildLine } from './buildline.js';
 
 // (the googly eyes' chips: a little eye of each kind, its size, one or two)
 const EYE_PUPIL = { classic: 4, big: 5.6, tiny: 2.3, lashes: 3.8, angry: 3.6, sleepy: 3.4 };
@@ -254,7 +255,7 @@ export class UI {
       </div>
       <div class="palette tune" hidden>
         <div class="tune-scroll"></div>
-        <div class="tune-foot"><button class="reset"></button><div class="build">${typeof __BUILD__ === 'string' ? 'Build ' + __BUILD__ : ''}</div></div>
+        <div class="tune-foot"><button class="reset"></button><div class="build">${typeof __BUILD__ === 'string' ? buildLine(__BUILD__) : ''}</div></div>
       </div>`;
     this.toolsEl = root.querySelector('.tools');
     this.hintEl = root.querySelector('.hint');
