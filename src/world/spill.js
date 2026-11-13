@@ -134,9 +134,12 @@ export class Spill {
     P.sort((p, q) => p[1] - q[1]);
     const n = Math.min(room, P.length, Math.round(fill * ((OVER * V) / D ** 3)));
     const [fv, ft] = liquidVisc(sb.cVisc[k]), p0 = fl.n;
+    // (its colour: its own, if it's been given one - else its jelly's, each drop the colour where it was poured from)
+    const lc = app.cubes?.find((c) => c.slot === k)?.style?.liqColor || '';
+    if (lc) col.set(lc);
     for (let i = 0; i < n; i++) {
       const [px, py, pz, rx, ry, rz] = P[i];
-      col.set(app.flavorColorAtRest(rx, ry, rz, k));
+      if (!lc) col.set(app.flavorColorAtRest(rx, ry, rz, k));
       fl.add(px, py, pz, fl.vol * 1.000001, vm[0], vm[1], vm[2], col.r, col.g, col.b, 0.004, 0, fv, ft, 1);
     }
     // (settled liquid, not just made: the solver holds it up at full strength from the first - see Fluid's

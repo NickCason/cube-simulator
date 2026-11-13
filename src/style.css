@@ -711,7 +711,8 @@ html.dark .palette .gdie {
 
 /* (the glitters: more than fit a phone's width - each its own width, and
    the row scrolls sideways) */
-.palette .seg.glit {
+.palette .seg.glit,
+.palette .seg.liqcol {
   grid-auto-columns: auto;
   width: 0;
   min-width: 100%;
@@ -721,17 +722,44 @@ html.dark .palette .gdie {
   overscroll-behavior-x: contain;
 }
 
-.palette .seg.glit::-webkit-scrollbar {
+.palette .seg.glit::-webkit-scrollbar,
+.palette .seg.liqcol::-webkit-scrollbar {
   display: none;
 }
 
-.palette .seg.glit .opt {
+.palette .seg.glit .opt,
+.palette .seg.liqcol .opt {
   min-width: max-content;
   padding: 0 11px;
 }
 
+/* (a liquid's colour row: under Filling, a little apart from it; its own colour picked on a dot - a rainbow till then) */
+.palette .seg.liqcol {
+  margin-top: 8px;
+}
+
+.palette .seg.liqcol .opt.pick {
+  position: relative;
+  overflow: hidden;
+  cursor: pointer;
+}
+
+.palette .seg.liqcol .opt.pick .gdot {
+  background: conic-gradient(from 0deg, #ff3b3b, #ffcc12, #5fce1e, #12c8ff, #6b3bff, #ff3bbd, #ff3b3b);
+}
+
+.palette .seg.liqcol .opt.pick input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  cursor: pointer;
+}
+
 @media (max-width: 720px) {
-  .palette .seg.glit {
+  .palette .seg.glit,
+  .palette .seg.liqcol {
     -webkit-mask-image: linear-gradient(90deg, #000 calc(100% - 22px), transparent);
     mask-image: linear-gradient(90deg, #000 calc(100% - 22px), transparent);
   }

@@ -440,6 +440,7 @@ export const DEFAULT_STYLE = {
   rubik: 0, // (0: solved - picking Rubik scrambles it)
   eyes: [], // (googly eyes: see eyes.js - always a new array, never this one)
   surface: 'none', // (its surface map: see surfaces.js)
+  liqColor: '', // (full of liquid, its liquid's colour - '#rrggbb'; '': its jelly's, each drop the colour it was poured from - see Spill)
 };
 
 export function flavorById(id) {

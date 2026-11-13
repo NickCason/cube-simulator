@@ -131,3 +131,11 @@ test('gradients: stops and shape survive the round trip; codes without them read
   // (up and evenly spaced aren't written: a code says only what's different)
   assert.doesNotMatch(encodeCube(full), /~[ph]/);
 });
+
+test("a cube full of liquid's own colour survives the round trip; none, its jelly's", () => {
+  const c = decodeCube(encodeCube({ ...full, liqColor: '#1488FF' }));
+  assert.equal(c.liqColor, '#1488ff');
+  assert.equal(decodeCube(encodeCube(full)).liqColor, undefined);
+  // (a broken one's skipped)
+  assert.equal(decodeCube(encodeCube(full) + '~azz12').liqColor, undefined);
+});

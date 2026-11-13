@@ -177,6 +177,9 @@ function trimTile(id) {
   return `<svg viewBox="0 0 38 38" aria-hidden="true">${sq(0, 'fill="currentColor"')}${gloss}</svg>`;
 }
 
+// (a cube full of liquid's own colours for it: '' its jelly's; white, clear water)
+const LIQ_COLOURS = [['', 'Jelly'], ['#ffffff', 'Clear'], ['#e8132b', 'Red'], ['#ff7a12', 'Orange'], ['#ffd012', 'Yellow'], ['#22c55a', 'Green'], ['#1488ff', 'Blue'], ['#8a2be2', 'Purple'], ['#ff4fa3', 'Pink'], ['#1b1b26', 'Ink']];
+
 export class UI {
   constructor(app, root) {
     this.app = app;
@@ -243,6 +246,7 @@ export class UI {
         </div>
         <div class="sec"><span class="lbl">Material</span><div class="mats" role="group" aria-label="Material"></div></div>
         <div class="sec"><span class="lbl">Filling</span><div class="seg fill" role="group" aria-label="Filling"></div>
+          <div class="seg liqcol" role="group" aria-label="Liquid colour" hidden></div>
           <label class="row liqVisc" hidden><span class="name">Viscosity</span><input type="range" min="0" max="1" step="0.001" aria-label="How thick the liquid is"><span class="word"></span></label>
           <label class="row liqTension" hidden><span class="name">Surface tension</span><input type="range" min="0" max="1" step="0.001" aria-label="How much the liquid clings - to its walls and its bubbles"><span class="word"></span></label>
           <label class="row liqSkin" hidden><span class="name">Skin</span><input type="range" min="0" max="1" step="0.001" aria-label="How thick its skin is"><span class="word"></span></label>
@@ -431,6 +435,32 @@ export class UI {
       });
       fillSeg.appendChild(b);
     }
+    // (full of liquid, its colour: its jelly's - each drop the colour it was poured from - clear, a few, ink, or
+    // picked; filled afresh with it - see App.setLiquidColor)
+    this.liqColSeg = this.paletteEl.querySelector('.seg.liqcol');
+    for (const [hex, name] of LIQ_COLOURS) {
+      const b = document.createElement('button');
+      b.className = 'opt';
+      b.dataset.liqcol = hex;
+      b.innerHTML = `<i class="gdot"${hex ? ` style="background:${hex}"` : ''}></i>${name}`;
+      b.setAttribute('aria-label', hex ? `${name} liquid` : 'Liquid the colour of the jelly');
+      b.addEventListener('click', () => {
+        app.audio.ui();
+        app.setLiquidColor(hex);
+        this.hint(hex ? `${name} liquid` : 'Liquid the colour of the jelly', 1800);
+      });
+      this.liqColSeg.appendChild(b);
+    }
+    {
+      const pick = document.createElement('label');
+      pick.className = 'opt pick';
+      pick.innerHTML = '<i class="gdot"></i>Pick<input type="color" value="#1488ff" aria-label="The liquid\'s own colour">';
+      const input = pick.querySelector('input');
+      // (as it's dragged about: only when it's let go - each a fresh pour)
+      input.addEventListener('change', () => app.setLiquidColor(input.value));
+      this.liqColSeg.appendChild(pick);
+      this.liqPick = pick;
+    }
     // (and, full of liquid, how thick it is and its skin - the same as Settings > Liquid's, here where it's chosen)
     this.fillRows = [];
     for (const key of ['liqVisc', 'liqTension', 'liqSkin', 'liqFill']) {
@@ -597,6 +627,7 @@ export class UI {
         const on = app.settings.liquid > 0.5;
         show(on);
         for (const r of this.fillRows) r.row.hidden = !on;
+        if (this.liqColSeg) this.liqColSeg.hidden = !on;
       };
       this._showLiquid();
       sw.addEventListener('click', () => {
@@ -1015,6 +1046,17 @@ export class UI {
     this._surfHex = hex;
     if (this._surfsPainted) this._tintSurfaces();
     for (const b of this.paletteEl.querySelectorAll('.opt[data-glit]')) b.classList.toggle('active', b.dataset.glit === style.glitter);
+    // (its liquid's colour: the jelly's own dot in its colour; one picked, on its own dot)
+    const lc = style.liqColor || '', preset = LIQ_COLOURS.some(([h]) => h === lc);
+    for (const b of this.paletteEl.querySelectorAll('.opt[data-liqcol]')) {
+      b.classList.toggle('active', b.dataset.liqcol === lc);
+      if (!b.dataset.liqcol) b.firstChild.style.background = hex;
+    }
+    if (this.liqPick) {
+      this.liqPick.classList.toggle('active', !preset);
+      this.liqPick.firstChild.style.background = preset ? '' : lc;
+      if (!preset) this.liqPick.querySelector('input').value = lc;
+    }
     this.glitterStudio?.render(style);
     const liquid = this.app.settings.liquid > 0.5;
     for (const b of this.paletteEl.querySelectorAll('.opt[data-fill]')) b.classList.toggle('active', (b.dataset.fill === 'liquid') === liquid);

@@ -197,6 +197,81 @@ window.__kit = (() => {
     return { n, top, pokeOut: poke, middleOut: out, worstOutCm: +(100 * worst).toFixed(1), inWall: wall, wallWorstCm: +(100 * wallWorst).toFixed(1) };
   };
 
+  // The jelly as drawn against the jelly as it is: each drawn point's distance from the nearest of the physics'
+  // surface triangles (a hash of them, 5 cm cells, and ±1 cell round; past that, all of them). Smoothing and the
+  // shapes' snapping move points a centimetre or two; a shard stretched out of it, far more. How many past 3 and
+  // 6 cm, the worst, where, and which kind of point (base, first or second subdivision)
+  K.spikes = () => {
+    const a = A(), sb = a.sb, jv = a.jelly, P = jv.pos, n = jv.nRender, X = sb.x, S = sb.sTri, nF = sb.nF, h = 0.05;
+    if (!P || !n || !nF) return { none: true };
+    const cells = new Map(), key = (i, j, k) => i * 1000003 + j * 1009 + k;
+    for (let f = 0; f < nF; f++) {
+      const a3 = S[f * 3] * 3, b3 = S[f * 3 + 1] * 3, c3 = S[f * 3 + 2] * 3;
+      const lo = [0, 1, 2].map((q) => Math.floor(Math.min(X[a3 + q], X[b3 + q], X[c3 + q]) / h)), hi = [0, 1, 2].map((q) => Math.floor(Math.max(X[a3 + q], X[b3 + q], X[c3 + q]) / h));
+      for (let i = lo[0]; i <= hi[0]; i++) for (let j = lo[1]; j <= hi[1]; j++) for (let k = lo[2]; k <= hi[2]; k++) { const kk = key(i, j, k); let L = cells.get(kk); if (!L) cells.set(kk, (L = [])); L.push(f); }
+    }
+    // (closest point on a triangle: Ericson's)
+    const dist = (px, py, pz, f) => {
+      const a3 = S[f * 3] * 3, b3 = S[f * 3 + 1] * 3, c3 = S[f * 3 + 2] * 3;
+      const ax = X[a3], ay = X[a3 + 1], az = X[a3 + 2], abx = X[b3] - ax, aby = X[b3 + 1] - ay, abz = X[b3 + 2] - az, acx = X[c3] - ax, acy = X[c3 + 1] - ay, acz = X[c3 + 2] - az;
+      const apx = px - ax, apy = py - ay, apz = pz - az, d1 = abx * apx + aby * apy + abz * apz, d2 = acx * apx + acy * apy + acz * apz;
+      let qx, qy, qz;
+      if (d1 <= 0 && d2 <= 0) (qx = ax), (qy = ay), (qz = az);
+      else {
+        const bpx = px - X[b3], bpy = py - X[b3 + 1], bpz = pz - X[b3 + 2], d3 = abx * bpx + aby * bpy + abz * bpz, d4 = acx * bpx + acy * bpy + acz * bpz;
+        const cpx = px - X[c3], cpy = py - X[c3 + 1], cpz = pz - X[c3 + 2], d5 = abx * cpx + aby * cpy + abz * cpz, d6 = acx * cpx + acy * cpy + acz * cpz;
+        const vc = d1 * d4 - d3 * d2, vb = d5 * d2 - d1 * d6, va = d3 * d6 - d5 * d4;
+        if (d3 >= 0 && d4 <= d3) (qx = X[b3]), (qy = X[b3 + 1]), (qz = X[b3 + 2]);
+        else if (d6 >= 0 && d5 <= d6) (qx = X[c3]), (qy = X[c3 + 1]), (qz = X[c3 + 2]);
+        else if (vc <= 0 && d1 >= 0 && d3 <= 0) { const v = d1 / (d1 - d3); (qx = ax + abx * v), (qy = ay + aby * v), (qz = az + abz * v); }
+        else if (vb <= 0 && d2 >= 0 && d6 <= 0) { const w = d2 / (d2 - d6); (qx = ax + acx * w), (qy = ay + acy * w), (qz = az + acz * w); }
+        else if (va <= 0 && d4 - d3 >= 0 && d5 - d6 >= 0) { const w = (d4 - d3) / (d4 - d3 + (d5 - d6)); (qx = X[b3] + (X[c3] - X[b3]) * w), (qy = X[b3 + 1] + (X[c3 + 1] - X[b3 + 1]) * w), (qz = X[b3 + 2] + (X[c3 + 2] - X[b3 + 2]) * w); }
+        else { const dn = 1 / (va + vb + vc), v = vb * dn, w = vc * dn; (qx = ax + abx * v + acx * w), (qy = ay + aby * v + acy * w), (qz = az + abz * v + acz * w); }
+      }
+      return Math.hypot(px - qx, py - qy, pz - qz);
+    };
+    let over3 = 0, over6 = 0, worst = 0, at = null;
+    const kinds = { base: 0, l1: 0, l2: 0 };
+    for (let v = 0; v < n; v++) {
+      const px = P[v * 3], py = P[v * 3 + 1], pz = P[v * 3 + 2], ci = Math.floor(px / h), cj = Math.floor(py / h), ck = Math.floor(pz / h);
+      let best = Infinity;
+      for (let i = ci - 1; i <= ci + 1; i++) for (let j = cj - 1; j <= cj + 1; j++) for (let k = ck - 1; k <= ck + 1; k++) { const L = cells.get(key(i, j, k)); if (L) for (const f of L) best = Math.min(best, dist(px, py, pz, f)); }
+      if (best > h) for (let f = 0; f < nF; f++) best = Math.min(best, dist(px, py, pz, f));
+      if (best > 0.03) {
+        over3++;
+        kinds[v < jv.nBase ? 'base' : v < jv.nL1 ? 'l1' : 'l2']++;
+      }
+      if (best > 0.06) over6++;
+      if (best > worst) (worst = best), (at = { v, p: [px, py, pz].map((q) => +q.toFixed(3)), kind: v < jv.nBase ? 'base' : v < jv.nL1 ? 'l1' : 'l2' });
+    }
+    return { drawn: n, over3, over6, worstCm: +(100 * worst).toFixed(1), at, kinds };
+  };
+
+  // The jelly itself stretched: each tet's longest edge against the same edge at rest - how many past 1.8x and 3x,
+  // the worst, where, and its piece's size (verts)
+  K.stretch = () => {
+    const a = A(), sb = a.sb, T = sb.T, x = sb.x, X = sb.X;
+    let n18 = 0, n3 = 0, worst = 0, at = null;
+    const E = [[0, 1], [0, 2], [0, 3], [1, 2], [1, 3], [2, 3]];
+    for (let t = 0; t < sb.nT; t++) {
+      if (!(sb.vol0[t] > 0)) continue;
+      let r = 0, len = 0;
+      for (const [i, j] of E) {
+        const a3 = T[t * 4 + i] * 3, b3 = T[t * 4 + j] * 3;
+        const l = Math.hypot(x[a3] - x[b3], x[a3 + 1] - x[b3 + 1], x[a3 + 2] - x[b3 + 2]), L = Math.hypot(X[a3] - X[b3], X[a3 + 1] - X[b3 + 1], X[a3 + 2] - X[b3 + 2]) || 1e-9;
+        if (l / L > r) (r = l / L), (len = l);
+      }
+      if (r > 1.8) n18++;
+      if (r > 3) n3++;
+      if (r > worst) {
+        worst = r;
+        const v = T[t * 4] * 3, pc = sb.tPiece ? sb.pieces[sb.tPiece[t]] : null;
+        at = { t, p: [x[v], x[v + 1], x[v + 2]].map((q) => +q.toFixed(2)), lenCm: +(100 * len).toFixed(1), pieceVerts: pc ? pc.verts.length : null };
+      }
+    }
+    return { tets: sb.nT, over18: n18, over3: n3, worst: +worst.toFixed(2), at };
+  };
+
   // The liquid's drawn surface out past the jelly's box (its biggest piece's points' bounds, +1 cm): how many
   // points and how far - liquid through its walls, or poured out
   K.outside = () => {

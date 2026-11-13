@@ -412,6 +412,7 @@ export class App {
     const st = { ...DEFAULT_STYLE, ...saved };
     st.eyes = copyEyes(saved.eyes);
     st.surface = SURFACE[saved.surface] ? saved.surface : 'none';
+    st.liqColor = /^#[0-9a-f]{6}$/i.test(saved.liqColor || '') ? saved.liqColor.toLowerCase() : '';
     st.layers = { ...DEFAULT_STYLE.layers, ...(saved.layers || {}) };
     st.layers.colors = [...st.layers.colors];
     if (opts.flavor) st.flavor = opts.flavor;
@@ -827,6 +828,15 @@ export class App {
     if (id !== 'off') this.sb.impulse(0, 0.6, 0, 0, -1, 0, 3, 0.8); // a jiggle to show it off
   }
 
+  // Its liquid's colour (full of liquid): '#rrggbb', or '' - its jelly's own, each drop the colour it was poured
+  // from. Filled afresh with it, as for its glitter or bubbles (see applyStyle: its liquid's look)
+  setLiquidColor(c) {
+    const v = typeof c === 'string' && /^#[0-9a-f]{6}$/i.test(c) ? c.toLowerCase() : '';
+    if ((this.style.liqColor || '') === v) return;
+    this.style.liqColor = v;
+    this.applyStyle();
+  }
+
   // Its own glitter's makings (the studio: see ui.js), as it's made: live, the flakes where they are - final, a
   // jiggle to show it off.
   setGlitterMix(mix, final = false) {
@@ -1085,7 +1095,7 @@ export class App {
   // (what a cube full of liquid's liquid looks like - its colours, glitter, bubbles: see Spill)
   liquidLook(cb) {
     const st = cb.style, cs = resolveSettings(cb.tune, TEXTURES[st.texture]);
-    return JSON.stringify([st.flavor, st.flavor === 'layers' || st.flavor === 'rainbow' ? st.layers : 0, st.rubik, st.glitter, cs.bubbles, cs.bubbleSize]);
+    return JSON.stringify([st.flavor, st.flavor === 'layers' || st.flavor === 'rainbow' ? st.layers : 0, st.rubik, st.glitter, cs.bubbles, cs.bubbleSize, st.liqColor || '']);
   }
 
   flavorColorAtTet(t) {
@@ -2546,6 +2556,7 @@ export class App {
     // (its googly eyes come with it - or none)
     s.eyes = copyEyes(c.eyes);
     s.surface = SURFACE[c.surface] ? c.surface : 'none';
+    s.liqColor = /^#[0-9a-f]{6}$/i.test(c.liqColor || '') ? c.liqColor.toLowerCase() : '';
     const tune = { ...c.tune };
     for (const k of ['volume', 'impacts', 'wobble', 'notes']) if (this.tune[k] !== undefined) tune[k] = this.tune[k];
     if (c.tear === false) tune.tear = false;
