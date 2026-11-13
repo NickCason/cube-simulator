@@ -658,10 +658,14 @@ export class Bubbles {
             c[2] = FR[f + 5] + FR[f + 8] * ex + FR[f + 11] * ey + FR[f + 14] * ez;
             b.cOK = true;
           }
-          const dx = x[o] - FR[f], dy = x[o + 1] - FR[f + 1], dz = x[o + 2] - FR[f + 2], kc = Math.min(1, dt * 1.5);
-          c[0] += (FR[f + 3] + FR[f + 6] * dx + FR[f + 9] * dy + FR[f + 12] * dz + b.u[0] * 0.4 * D - c[0]) * kc;
-          c[1] += (FR[f + 4] + FR[f + 7] * dx + FR[f + 10] * dy + FR[f + 13] * dz + b.u[1] * 0.4 * D - c[1]) * kc;
-          c[2] += (FR[f + 5] + FR[f + 8] * dx + FR[f + 11] * dy + FR[f + 14] * dz + b.u[2] * 0.4 * D - c[2]) * kc;
+          // (slowly while it's near - but the further its drop's gone, the faster after it: sloshed, it was left
+          // behind out of its liquid, 12 cm)
+          const dx = x[o] - FR[f], dy = x[o + 1] - FR[f + 1], dz = x[o + 2] - FR[f + 2];
+          const tx = FR[f + 3] + FR[f + 6] * dx + FR[f + 9] * dy + FR[f + 12] * dz + b.u[0] * 0.4 * D - c[0];
+          const ty = FR[f + 4] + FR[f + 7] * dx + FR[f + 10] * dy + FR[f + 13] * dz + b.u[1] * 0.4 * D - c[1];
+          const tz = FR[f + 5] + FR[f + 8] * dx + FR[f + 11] * dy + FR[f + 14] * dz + b.u[2] * 0.4 * D - c[2];
+          const lag2 = (tx * tx + ty * ty + tz * tz) / (0.03 * 0.03), kc = Math.min(1, dt * 1.5 * (1 + lag2));
+          c[0] += tx * kc; c[1] += ty * kc; c[2] += tz * kc;
           const rx = c[0] - FR[f + 3], ry = c[1] - FR[f + 4], rz = c[2] - FR[f + 5];
           w[0] = FR[f] + FR[f + 6] * rx + FR[f + 7] * ry + FR[f + 8] * rz;
           w[1] = FR[f + 1] + FR[f + 9] * rx + FR[f + 10] * ry + FR[f + 11] * rz;
@@ -712,18 +716,20 @@ export class Bubbles {
     if (any) this._poolV++;
   }
 
-  // A bubble in its cube full of liquid (see poolTick): its middle - c, in the cube's rest shape - kept in from its
-  // hollow's walls as far as its wall is thick, its own size and a centimetre more. (A drop's width off its drop,
-  // it rode into the wall about as often as not near it - an ultrathin one's, 5 cm, right through - drifting in
-  // the skin.) Moved: true.
+  // A bubble in its cube full of liquid (see poolTick): its middle - c, in the cube's rest shape - kept in its
+  // liquid as drawn: in from its hollow's walls by its wall's thickness, its own size, a cell of the liquid's
+  // surface and a centimetre - that surface's edges and corners a cell rounder than the hollow's, so it's
+  // kept in from those too. (A drop's width off its drop, it rode into the wall about as often as not near it -
+  // an ultrathin one's, 5 cm, right through - drifting in the skin; kept a centimetre in from the hollow, it
+  // still stood out of the liquid where that rounds off short of it.) Moved: true.
   _inset(b, k, c) {
-    const sb = this.app.sb, half = sb.cSize[k] / 2, bev = sb.hollowBevel(k), x = c[0] - k * REST_STEP, y = c[1], z = c[2];
+    const sb = this.app.sb, cell = this.app.fluid?.cell || 0.035, half = sb.cSize[k] / 2, bev = sb.hollowBevel(k) + cell, x = c[0] - k * REST_STEP, y = c[1], z = c[2];
     let sh = null;
     if (sb.cBow[k] || sb.cLobeA[k] > 0) {
       if (this._insetAt[k] !== this._insetF) (this._insetSh[k] = sb.shapeOf(k)), (this._insetAt[k] = this._insetF);
       sh = this._insetSh[k];
     }
-    const need = Math.min(sb.wallTh(k) + b.R + 0.01, 0.8 * half);
+    const need = Math.min(sb.wallTh(k) + b.R + cell + 0.01, 0.8 * half);
     const sd = sh ? shapeSDF(x, y, z, half, bev, sh) : roundBoxSDF(x, y, z, half, bev);
     if (!(sd > -need)) return false;
     const n = this._insetN;
