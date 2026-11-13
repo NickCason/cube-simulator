@@ -48,7 +48,7 @@ export async function run(k, p, ctx) {
           else if (fl._inTet(fl.x[o], fl.x[o + 1], fl.x[o + 2]) >= 0) inJ++;
         }
       }
-      Object.assign(r, { own, inH, inJ, vol: +Math.abs(vol).toFixed(4), put: fl._contained, ts: +a.timeScale.toFixed(2), hs: +(a._hitStop || 0).toFixed(3), reb: +(pc.rebT || 0).toFixed(2), imp: +(pc.impY || 0).toFixed(2), asleep: fl.asleep ? 1 : 0, sealed: c?.sealed ? 1 : 0, ab: pc.asleep ? 1 : 0, heal: a.healer?.active ? 1 : 0, sw: a.swapper?.active ? 1 : 0 });
+      Object.assign(r, { own, inH, inJ, vol: +Math.abs(vol).toFixed(4), put: fl._contained, ts: +a.timeScale.toFixed(2), hs: +(a._hitStop || 0).toFixed(3), reb: +(pc.rebT || 0).toFixed(2), imp: +(pc.impY || 0).toFixed(2), ut: +(pc.untangle || 0).toFixed(2), tt: pc.tangleTries || 0, fold: pc.foldUntil > sb.time ? 1 : 0, asleep: fl.asleep ? 1 : 0, sealed: c?.sealed ? 1 : 0, ab: pc.asleep ? 1 : 0, heal: a.healer?.active ? 1 : 0, sw: a.swapper?.active ? 1 : 0 });
     }
     return r;
   }, p.trace);
@@ -108,6 +108,11 @@ export async function run(k, p, ctx) {
     if (hit >= 0) {
       const aft = series.slice(hit);
       R.reboundAlt = Math.max(...aft.map((q) => q.alt));
+      // (sprung back to its shape as made - see SoftBody._untangle - while falling: frames, and the tries)
+      const fl2 = series.filter((q) => q.phase === 'fall' && q.alt > 0.05);
+      R.untangleFall = fl2.filter((q) => q.ut > 0).length;
+      R.foldFall = fl2.filter((q) => q.fold).length;
+      R.tangleTries = Math.max(0, ...series.map((q) => q.tt || 0));
       R.reboundVy = Math.max(...aft.map((q) => q.vy));
     }
     const fall = series.filter((q) => q.phase === 'fall');

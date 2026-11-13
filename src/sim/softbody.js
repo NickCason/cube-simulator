@@ -56,6 +56,10 @@ const SPLAT_E = 0.3, SPLAT_D = 30, SPLAT_T = 0.7;
 // two-thirds of that, pulled up by its top: stretched to 1.7 times its height and peeling from its edges in, it
 // pops free. At a third of it, it came up as soon as a cube that didn't stick did)
 const STICK_A = 4000, PEEL_RATE = 1.6;
+// Squashed by a landing out of the air, or by the air falling: not a tangle for LAND_CALM s after, nor while it's
+// windy (see _tangleCheck) - sprung back to its shape as made, a splatted pudding popped back up a cube a moment
+// after landing, and a falling one reset in mid-air and spread again: the twerk, again
+const LAND_CALM = 2;
 
 // How soft, at the least, the tets' shape and volume terms stay - as a share
 // of hard (a full correction in one substep): see _solveTets. A tet of the
@@ -130,9 +134,9 @@ export function polarRot(q, A, R, iters) {
   }
 }
 
-const PIECE_FLOATS = ['air', 'lastVy', 'splatT', 'splatK', 'splatV', 'sleepT', 'rebT', 'impY', 'rebR', 'impR', 'impUx', 'impUz', 'impT', 'impDv', 'foldUntil', 'buzzT', 'buzzA', 'buzzB', 'untangle', 'tangleTouch', 'touchT', 'vib', 'nwT', 'nwV', 'nwU', 'nwN'];
+const PIECE_FLOATS = ['air', 'landAt', 'lastVy', 'splatT', 'splatK', 'splatV', 'sleepT', 'rebT', 'impY', 'rebR', 'impR', 'impUx', 'impUz', 'impT', 'impDv', 'foldUntil', 'buzzT', 'buzzA', 'buzzB', 'untangle', 'tangleTouch', 'touchT', 'vib', 'nwT', 'nwV', 'nwU', 'nwN'];
 // (piece state a rebuild carries over to an untouched piece: see _buildPieces)
-const CARRY = ['air', 'lastVy', 'splatT', 'splatK', 'splatV', 'sleepT', 'asleep', 'rebT', 'impY', 'boosted', 'rebR', 'impR', 'impUx', 'impUz', 'boostedR', 'impPend', 'impT', 'impDv', 'sleepLogMu', 'foldUntil', 'foldAsk', 'buzzT', 'buzzA', 'buzzB', 'tangleN', 'untangle', 'tangleTries', 'tangleTouch', 'touchT', 'hinge', 'gap', 'foldN', 'foldTouch', 'foldGiveUp', 'nwT', 'nwV', 'nwU', 'nwN', 'nwS'];
+const CARRY = ['air', 'landAt', 'lastVy', 'splatT', 'splatK', 'splatV', 'sleepT', 'asleep', 'rebT', 'impY', 'boosted', 'rebR', 'impR', 'impUx', 'impUz', 'boostedR', 'impPend', 'impT', 'impDv', 'sleepLogMu', 'foldUntil', 'foldAsk', 'buzzT', 'buzzA', 'buzzB', 'tangleN', 'untangle', 'tangleTries', 'tangleTouch', 'touchT', 'hinge', 'gap', 'foldN', 'foldTouch', 'foldGiveUp', 'nwT', 'nwV', 'nwU', 'nwN', 'nwS'];
 
 // (the parts of a step ?stats times: SoftBody.profT, in this order - the
 // last, how many substeps)
@@ -1634,6 +1638,7 @@ export class SoftBody {
         // (all fields up front - see the constructor)
         air: 0, // (s) left of its having been up off the floor just now - what makes a landing one (see _dampPieces)
         lastVy: 0, // (m/s) its middle's speed up, the step before
+        landAt: -1e9, // (sim time) it last came down out of the air, hard - see _tangleCheck
         splatT: 0, // (s) left of its splat's hold - how hard (0..1), and how fast it came down (m/s)
         splatK: 0,
         splatV: 0,
@@ -2989,7 +2994,7 @@ export class SoftBody {
           // (how fast it came down: the step before it touched too - from 25 m/s, squashed flat and sprung back up
           // within the step it landed in, its middle read 7 coming down)
           const vd = Math.min(vy, pc.lastVy);
-          if (y0 < 0.02 && vd < -1.2 && (pc.air > 0 || pc.impY < 0)) pc.impY = Math.min(pc.impY, vd);
+          if (y0 < 0.02 && vd < -1.2 && (pc.air > 0 || pc.impY < 0)) (pc.impY = Math.min(pc.impY, vd)), (pc.landAt = this.time);
           if (pc.impY < 0 && vy > -0.25) {
             pc.splatT = SPLAT_T;
             pc.splatK = (1 - e / SPLAT_E) * Math.min(1, -pc.impY / 4);
@@ -3004,7 +3009,10 @@ export class SoftBody {
             vy = cap;
           }
         } else {
-          if (y0 < 0.02 && vy < -1.2 && !pc.rebT) pc.impY = Math.min(pc.impY || 0, vy);
+          if (y0 < 0.02 && vy < -1.2 && !pc.rebT) {
+            pc.impY = Math.min(pc.impY || 0, vy);
+            if (pc.air > 0) pc.landAt = this.time;
+          }
           if (pc.impY && !pc.rebT && vy > -0.25) pc.rebT = 0.22;
           if (pc.rebT) {
             const want = -pc.impY * e;
@@ -3633,7 +3641,9 @@ export class SoftBody {
       // two faces lie against each other and read as passing through, and its
       // rest shape is the whole cube - springing back closed the cut, the
       // halves fell open again, and round it went: the "twerk")
+      // (nor one squashed by a landing, or by the air as it falls - see LAND_CALM)
       if (pc.asleep || pc.hinge || (GP && GP[k]) || pc.untangle > 0 || pc.verts.length < 30 || this.time - pc.touchT > 4) continue;
+      if (this.cWind[pc.cube] > 0 || this.time - pc.landAt < LAND_CALM) continue;
       // (a tangle three springings back haven't undone - a fold stuck fast -
       // is left be till the piece is next touched: trying for ever kept it
       // awake, pulled about, for ever)
