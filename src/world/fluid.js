@@ -192,6 +192,7 @@ export class Fluid {
     // and whether that's there: for its liquid's surface against its wall and what's carried in it, see _frames)
     this.frames = new Float64Array(MAX_CUBES * 15);
     this.frameOK = new Uint8Array(MAX_CUBES);
+    this._bigN = this._totN = null; // (each cube's pieces of size, and its points: see _frames)
     // (the cups - pieces of a hollow cube cut open - holding air under the liquid this frame, and each piece's own
     // turn, hollow and air, kept from frame to frame: see _cups, _air)
     this.cups = [];
@@ -2178,9 +2179,17 @@ export class Fluid {
   // pool - and the bubbles carried by it stepped along a moving cube.)
   _frames() {
     const sb = this.app.sb, x = sb.x, X = sb.X, vc = sb.vCube, A = this._wA, R = this._wR, q = this._wqk, FR = this.frames;
+    // (cut in two - or more, each of size - it has no one frame: fitted to all its points, its hollow stood
+    // between its halves, the liquid in one snapped up onto its walls there and mirrored in them, a box of it
+    // hanging in the air between a half lifted off and the other)
+    const big = this._bigN || (this._bigN = new Int32Array(MAX_CUBES)), tot = this._totN || (this._totN = new Int32Array(MAX_CUBES));
+    big.fill(0);
+    tot.fill(0);
+    for (const pc of sb.pieces) if (pc) tot[pc.cube] += pc.verts.length;
+    for (const pc of sb.pieces) if (pc && pc.verts.length > 0.15 * tot[pc.cube]) big[pc.cube]++;
     for (let k = 0; k < MAX_CUBES; k++) {
       this.frameOK[k] = 0;
-      if (!sb.cHollow[k] || !sb.cLiq[k] || !(sb.cSize[k] > 0)) continue;
+      if (!sb.cHollow[k] || !sb.cLiq[k] || !(sb.cSize[k] > 0) || big[k] > 1) continue;
       let n = 0, xm0 = 0, xm1 = 0, xm2 = 0, Xm0 = 0, Xm1 = 0, Xm2 = 0;
       for (let i = 0; i < sb.nV; i++) {
         if (vc[i] !== k || !sb.alive[i]) continue;
