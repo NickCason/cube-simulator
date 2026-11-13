@@ -178,7 +178,7 @@ function trimTile(id) {
 }
 
 // (a cube full of liquid's own colours for it: '' its jelly's; white, clear water)
-const LIQ_COLOURS = [['', 'Jelly'], ['#ffffff', 'Clear'], ['#e8132b', 'Red'], ['#ff7a12', 'Orange'], ['#ffd012', 'Yellow'], ['#22c55a', 'Green'], ['#1488ff', 'Blue'], ['#8a2be2', 'Purple'], ['#ff4fa3', 'Pink'], ['#1b1b26', 'Ink']];
+const LIQ_COLOURS = [['', 'Jelly'], ['rainbow', 'Rainbow'], ['#ffffff', 'Clear'], ['#e8132b', 'Red'], ['#ff7a12', 'Orange'], ['#ffd012', 'Yellow'], ['#22c55a', 'Green'], ['#1488ff', 'Blue'], ['#8a2be2', 'Purple'], ['#ff4fa3', 'Pink'], ['#1b1b26', 'Ink']];
 
 export class UI {
   constructor(app, root) {
@@ -442,7 +442,7 @@ export class UI {
       const b = document.createElement('button');
       b.className = 'opt';
       b.dataset.liqcol = hex;
-      b.innerHTML = `<i class="gdot"${hex ? ` style="background:${hex}"` : ''}></i>${name}`;
+      b.innerHTML = `<i class="gdot"${hex ? ` style="background:${hex === 'rainbow' ? 'linear-gradient(0deg, #ff2a2a, #ffd012, #22c55a, #1488ff, #8a2be2)' : hex}"` : ''}></i>${name}`;
       b.setAttribute('aria-label', hex ? `${name} liquid` : 'Liquid the colour of the jelly');
       b.addEventListener('click', () => {
         app.audio.ui();

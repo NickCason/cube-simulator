@@ -43,7 +43,10 @@ export class Injector {
         n++;
       }
     if (n) col.setRGB(r / n, gg / n, b / n);
-    else col.set(app.cubes?.find((c) => c.slot === slot)?.style?.liqColor || app.flavorColorAtRest(slot * REST_STEP, 0, 0, slot));
+    else {
+      const lc = app.cubes?.find((c) => c.slot === slot)?.style?.liqColor || '';
+      col.set(lc.startsWith('#') ? lc : app.flavorColorAtRest(slot * REST_STEP, 0, 0, slot));
+    }
     fm.material = new THREE.MeshStandardMaterial({ color: col, roughness: 0.12, transparent: true, opacity: 0.8, envMap: fm.material.envMap });
     const stream = new THREE.Mesh(new THREE.CylinderGeometry(1, 1, 1, 12, 1, true).translate(0, -0.5, 0), new THREE.MeshStandardMaterial({ color: col, roughness: 0.08, transparent: true, opacity: 0.92, envMap: fm.material.envMap, depthWrite: false }));
     stream.visible = false;

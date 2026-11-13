@@ -134,7 +134,7 @@ export function captureCube(app, name = '') {
     theme: app.theme,
     eyes: copyEyes(s.eyes),
     surface: SURFACE[s.surface] ? s.surface : 'none',
-    ...(/^#[0-9a-f]{6}$/i.test(s.liqColor || '') ? { liqColor: s.liqColor.toLowerCase() } : {}),
+    ...(/^#[0-9a-f]{6}$/i.test(s.liqColor || '') ? { liqColor: s.liqColor.toLowerCase() } : s.liqColor === 'rainbow' ? { liqColor: 'rainbow' } : {}),
   };
 }
 
@@ -170,6 +170,7 @@ export function encodeCube(c) {
   if (c.trim && c.trim !== 'none' && TRIM[c.trim]) f.push('x' + c.trim);
   // (full of liquid: its liquid's own colour - none, its jelly's)
   if (c.liqColor && /^#[0-9a-f]{6}$/i.test(c.liqColor)) f.push('a' + hex6(c.liqColor));
+  else if (c.liqColor === 'rainbow') f.push('arainbow');
   const t = Object.keys(c.tune || {})
     .filter((k) => TUNE_CODES[k] && Number.isFinite(c.tune[k]))
     .map((k) => TUNE_CODES[k] + num(c.tune[k]));
@@ -246,6 +247,7 @@ export function decodeCube(text) {
     else if (k === 's') c.surface = SURFACE[v] ? v : 'none';
     else if (k === 'x') c.trim = TRIM[v] ? v : 'none';
     else if (k === 'a' && /^[0-9a-f]{6}$/i.test(v)) c.liqColor = '#' + v.toLowerCase();
+    else if (k === 'a' && v === 'rainbow') c.liqColor = 'rainbow';
     else if (k === 't') {
       for (const pair of v.split(',')) {
         const m = pair.match(/^([a-z]{2})(-?(?:\d+\.?\d*|\.\d+)(?:e-?\d+)?)$/);

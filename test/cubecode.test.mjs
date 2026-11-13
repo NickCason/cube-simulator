@@ -138,4 +138,6 @@ test("a cube full of liquid's own colour survives the round trip; none, its jell
   assert.equal(decodeCube(encodeCube(full)).liqColor, undefined);
   // (a broken one's skipped)
   assert.equal(decodeCube(encodeCube(full) + '~azz12').liqColor, undefined);
+  // (a rainbow)
+  assert.equal(decodeCube(encodeCube({ ...full, liqColor: 'rainbow' })).liqColor, 'rainbow');
 });

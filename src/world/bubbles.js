@@ -867,12 +867,21 @@ export class Bubbles {
       } else {
         lo[c * 3] = hi[c * 3] = px; lo[c * 3 + 1] = hi[c * 3 + 1] = py; lo[c * 3 + 2] = hi[c * 3 + 2] = pz;
       }
-      const fade = vis * Math.exp(-D[row + 3] * L * 0.8) * b.life;
-      tint.setRGB(
-        (0.25 + 0.75 * D[row + 4]) * Math.exp(-D[row] * L) * fade,
-        (0.25 + 0.75 * D[row + 5]) * Math.exp(-D[row + 1] * L) * fade,
-        (0.25 + 0.75 * D[row + 6]) * Math.exp(-D[row + 2] * L) * fade,
-      );
+      // (in its liquid: the colour of the drop it rides, seen through its cube's wall - only that much of the jelly;
+      // out in a pool, its liquid's alone. Tinted as if the jelly ran all the way to it, a blue liquid's bubbles in a
+      // red cube were red)
+      const fl = app.fluid, p = b.pool ? b.p : -1;
+      if (p >= 0 && p < fl.n) {
+        const Lw = b.held && b.hk >= 0 ? 1.3 * sb.wallTh(b.hk) : 0, fade = vis * Math.exp(-D[row + 3] * Lw * 0.8) * b.life, C = fl.col, q = p * 3;
+        tint.setRGB((0.25 + 0.75 * C[q]) * Math.exp(-D[row] * Lw) * fade, (0.25 + 0.75 * C[q + 1]) * Math.exp(-D[row + 1] * Lw) * fade, (0.25 + 0.75 * C[q + 2]) * Math.exp(-D[row + 2] * Lw) * fade);
+      } else {
+        const fade = vis * Math.exp(-D[row + 3] * L * 0.8) * b.life;
+        tint.setRGB(
+          (0.25 + 0.75 * D[row + 4]) * Math.exp(-D[row] * L) * fade,
+          (0.25 + 0.75 * D[row + 5]) * Math.exp(-D[row + 1] * L) * fade,
+          (0.25 + 0.75 * D[row + 6]) * Math.exp(-D[row + 2] * L) * fade,
+        );
+      }
       this.mesh.setColorAt(c, tint);
       this._p.set(px, py, pz);
       this._s.setScalar(b.R * (1 + 0.35 * (1 - b.life)));
