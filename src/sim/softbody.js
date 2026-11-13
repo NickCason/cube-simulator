@@ -306,6 +306,7 @@ export class SoftBody {
     this.sTet = null;
     this.sTag = null;
     this.sRestN = null;
+    this.sHollow = null; // (each face: on a rounded hollow's skin (2) or not - see _buildRenderClusters)
     this.tetBoundary = null;
     this.nextBoundary = null;
     this.vfStart = null;
@@ -486,6 +487,18 @@ export class SoftBody {
   // points, not its shape: null, the plain rounded box, or { bow })
   formOf(k) {
     return this.cBow[k] ? { bow: this.cBow[k] } : null;
+  }
+
+  // A cube full of liquid's wall: how thick (see Spill._hollow) - and its hollow's rounding, its edges' radius
+  // (the cube's less the wall): none - a sharp box - when it's no more than a third of a tet's cell, which can't
+  // round it.
+  wallTh(k) {
+    const sk = Math.min(1, Math.max(0, this.cSkin[k]));
+    return this.cSize[k] * (sk <= 0.5 ? 0.05 + 0.08 * sk : 0.09 + 0.18 * (sk - 0.5));
+  }
+  hollowRound(k) {
+    const r = this.cBevel[k] - this.wallTh(k);
+    return r > 0.3 * this.cH[k] ? r : 0;
   }
 
   loadCube(ox = 0, oy = 0, oz = 0, yaw = 0) {
@@ -1851,6 +1864,39 @@ export class SoftBody {
     const inc = new Int32Array(nF * 3); // encoded face*3+corner
     for (let f = 0; f < nF; f++) for (let c = 0; c < 3; c++) inc[fill[sTri[f * 3 + c]]++] = f * 3 + c;
 
+    // (a hollow's skin - a cube full of liquid's, carved to its rounded box's inside, where that's rounded (see
+    // hollowRound): its faces with all three corners as deep as its wall or deeper, facing in - smoothed all over
+    // (2): its edges' and corners' rounding one or two faces across, they met at 65-90 degrees and were drawn as cut
+    // faces are, creased - and drawn round, not smoothed as a cut's are (see JellyView._buildSmooth, snapToHollow).
+    // A sharp box's, its wall as thick as its rounding or near, is a cut's still. A cut into it is let be: at its
+    // rim a corner of each of its faces is out in the wall.)
+    const hollowF = this.sHollow && this.sHollow.length >= nF ? this.sHollow : (this.sHollow = new Uint8Array(Math.max(64, nF * 2)));
+    hollowF.fill(0, 0, nF);
+    {
+      const X = this.X, nrm = [0, 0, 0];
+      let k = -1, half = 0, bevel = 0, lim = 0, lb = null, round = false;
+      const sd = (x, y, z) => (lb ? shapeSDF(x, y, z, half, bevel, lb) : roundBoxSDF(x, y, z, half, bevel));
+      const deep = (i) => sd(X[i * 3] - k * REST_STEP, X[i * 3 + 1], X[i * 3 + 2]) <= lim;
+      for (let f = 0; f < nF; f++) {
+        if (sTag[f] !== TAG_FRESH) continue;
+        const a = sTri[f * 3], b = sTri[f * 3 + 1], c = sTri[f * 3 + 2];
+        if (!this.cHollow[this.vCube[a]] || (this.vCube[a] === k && !round)) continue;
+        if (this.vCube[a] !== k) {
+          k = this.vCube[a];
+          half = this.cSize[k] / 2;
+          bevel = this.cBevel[k];
+          lb = this.shapeOf(k);
+          lim = -0.95 * this.wallTh(k) + 0.01;
+          round = this.hollowRound(k) > 0;
+          if (!round) continue;
+        }
+        if (!deep(a) || !deep(b) || !deep(c)) continue;
+        const cx = (X[a * 3] + X[b * 3] + X[c * 3]) / 3 - k * REST_STEP, cy = (X[a * 3 + 1] + X[b * 3 + 1] + X[c * 3 + 1]) / 3, cz = (X[a * 3 + 2] + X[b * 3 + 2] + X[c * 3 + 2]) / 3;
+        if (lb) shapeNormal(cx, cy, cz, half, bevel, lb, nrm);
+        else roundBoxNormal(cx, cy, cz, half, bevel, nrm);
+        if (-(N[f * 3] * nrm[0] + N[f * 3 + 1] * nrm[1] + N[f * 3 + 2] * nrm[2]) > 0.3) hollowF[f] = 2;
+      }
+    }
     const cornerR = new Int32Array(nF * 3);
     const rSim = [];
     const rTag = [];
@@ -1894,7 +1940,7 @@ export class SoftBody {
           const b1 = sTri[fb * 3 + ((cb + 1) % 3)], b2 = sTri[fb * 3 + ((cb + 2) % 3)];
           if (!(a1 === b1 || a1 === b2 || a2 === b1 || a2 === b2)) continue;
           const d = N[fa * 3] * N[fb * 3] + N[fa * 3 + 1] * N[fb * 3 + 1] + N[fa * 3 + 2] * N[fb * 3 + 2];
-          const thr = sTag[fa] === TAG_EXTERIOR ? thrX : sTag[fa] === TAG_MELT ? 0.15 : 0.82;
+          const thr = sTag[fa] === TAG_EXTERIOR ? thrX : sTag[fa] === TAG_MELT ? 0.15 : hollowF[fa] && hollowF[fb] ? -0.25 : 0.82;
           if (d < thr) continue;
           const ra = find(a), rb = find(b);
           if (ra !== rb) par[rb] = ra;

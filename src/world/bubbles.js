@@ -4,7 +4,7 @@ import { CUBE_TEX_W } from '../render/jellyView.js';
 import { TAG_FRESH } from '../sim/softbody.js';
 import { MAX_CAVITIES } from '../render/jellyMaterials.js';
 import { closestOnTriangle } from '../sim/geom.js';
-import { roundBoxSDF, roundBoxNormal } from '../sim/mesh.js';
+import { roundBoxSDF, roundBoxNormal, shapeSDF, shapeNormal } from '../sim/mesh.js';
 import { SWIRL } from './glitter.js';
 
 const MAX = 240;
@@ -18,6 +18,10 @@ const BUOY = 0.16, DRAG_T = 0.12, MERGE = 0.6, BIG = 0.1, CHURN = 0.6, SPLIT = 1
 export class Bubbles {
   constructor(app) {
     this.app = app;
+    this._insetN = [0, 0, 0]; // (see _inset)
+    this._insetSh = new Array(MAX_CUBES).fill(null); // (each shaped cube's shape, as of poolTick _insetF)
+    this._insetAt = new Int32Array(MAX_CUBES).fill(-1);
+    this._insetF = 0;
     const geo = new THREE.SphereGeometry(1, 14, 10);
     // Air bubbles in the jelly. An air bubble is a lens the other way round
     // from the jelly about it: what's behind, seen through one, is shrunk
@@ -619,6 +623,7 @@ export class Bubbles {
   // in its cube full of liquid, it stays where it is in it, carried along: not borne up, nor burst, nor foam -
   // they rose to a layer at the top of it, and came out of it there.
   poolTick(dt) {
+    this._insetF++;
     const fl = this.app.fluid, x = fl.x, NS = fl.nbStart, NB = fl.nb, D = fl.D, DI = fl.dIn, own = fl.own, FR = fl.frames, FO = fl.frameOK;
     let any = false;
     for (const b of this.items) {
@@ -668,6 +673,13 @@ export class Bubbles {
             c[1] = FR[f + 4] + FR[f + 7] * ex + FR[f + 10] * ey + FR[f + 13] * ez;
             c[2] = FR[f + 5] + FR[f + 8] * ex + FR[f + 11] * ey + FR[f + 14] * ez;
           }
+          // (and in its liquid, clear of its walls)
+          if (this._inset(b, hk, c)) {
+            const qx = c[0] - FR[f + 3], qy = c[1] - FR[f + 4], qz = c[2] - FR[f + 5];
+            w[0] = FR[f] + FR[f + 6] * qx + FR[f + 7] * qy + FR[f + 8] * qz;
+            w[1] = FR[f + 1] + FR[f + 9] * qx + FR[f + 10] * qy + FR[f + 11] * qz;
+            w[2] = FR[f + 2] + FR[f + 12] * qx + FR[f + 13] * qy + FR[f + 14] * qz;
+          }
           continue;
         }
         w[0] += (x[p * 3] + b.u[0] * 0.4 * D - w[0]) * k;
@@ -698,6 +710,28 @@ export class Bubbles {
       }
     }
     if (any) this._poolV++;
+  }
+
+  // A bubble in its cube full of liquid (see poolTick): its middle - c, in the cube's rest shape - kept in from its
+  // hollow's walls as far as its wall is thick, its own size and a centimetre more. (A drop's width off its drop,
+  // it rode into the wall about as often as not near it - an ultrathin one's, 5 cm, right through - drifting in
+  // the skin.) Moved: true.
+  _inset(b, k, c) {
+    const sb = this.app.sb, half = sb.cSize[k] / 2, bev = sb.cBevel[k], x = c[0] - k * REST_STEP, y = c[1], z = c[2];
+    let sh = null;
+    if (sb.cBow[k] || sb.cLobeA[k] > 0) {
+      if (this._insetAt[k] !== this._insetF) (this._insetSh[k] = sb.shapeOf(k)), (this._insetAt[k] = this._insetF);
+      sh = this._insetSh[k];
+    }
+    const need = Math.min(sb.wallTh(k) + b.R + 0.01, 0.8 * half);
+    const sd = sh ? shapeSDF(x, y, z, half, bev, sh) : roundBoxSDF(x, y, z, half, bev);
+    if (!(sd > -need)) return false;
+    const n = this._insetN;
+    if (sh) shapeNormal(x, y, z, half, bev, sh, n);
+    else roundBoxNormal(x, y, z, half, bev, n);
+    const mv = sd + need;
+    c[0] -= n[0] * mv; c[1] -= n[1] * mv; c[2] -= n[2] * mv;
+    return true;
   }
 
   // A bubble at the top of its liquid - the drawn surface over its drop and those round it (sy) - held there by the

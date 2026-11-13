@@ -273,6 +273,33 @@ function shapeAt(px, py, pz, s) {
   _cp[0] = px - _n3[0] * d; _cp[1] = py - _n3[1] * d; _cp[2] = pz - _n3[2] * d;
   return d;
 }
+// (a rounded hollow's skin's, the same - a cube full of liquid's (see SoftBody._buildRenderClusters): onto the
+// rounded box its wall's thickness in. Its own points are on that already, its faces chords across the rounding,
+// one way at half its corners and the other at the rest. Its normal's into the hollow, the box's out of it.
+// hollows: each cube's { a, r } or null.)
+function snapToHollow(pos, nrm, mids, first, disp, hollows, cube) {
+  const on = new Int8Array(first);
+  const onShape = (v) => {
+    const s = hollows[cube[v]];
+    if (!on[v]) on[v] = !s || Math.abs(roundedBox(pos[v * 3], pos[v * 3 + 1], pos[v * 3 + 2], s.a, s.r)) > 4e-3 ? -1 : 1;
+    return on[v] > 0;
+  };
+  for (let m = 0, k = first, j = 0; m < mids.length; m += 3, k++, j++) {
+    if (mids[m + 2]) continue;
+    if (!onShape(mids[m]) || !onShape(mids[m + 1])) continue;
+    const S = hollows[cube[mids[m]]];
+    const ia = mids[m] * 3, ib = mids[m + 1] * 3, o = k * 3;
+    const ex = pos[ia] - pos[ib], ey = pos[ia + 1] - pos[ib + 1], ez = pos[ia + 2] - pos[ib + 2];
+    const len = Math.sqrt(ex * ex + ey * ey + ez * ez);
+    const sd = roundedBox(pos[o], pos[o + 1], pos[o + 2], S.a, S.r);
+    const nx = nrm[o], ny = nrm[o + 1], nz = nrm[o + 2];
+    if (Math.abs(sd) > 0.35 * len || -(nx * _cp[3] + ny * _cp[4] + nz * _cp[5]) < 0.9) continue;
+    const d = (_cp[0] - pos[o]) * nx + (_cp[1] - pos[o + 1]) * ny + (_cp[2] - pos[o + 2]) * nz;
+    if (Math.abs(d) > 0.25 * len) continue;
+    disp[j] = d;
+    pos[o] += nx * d; pos[o + 1] += ny * d; pos[o + 2] += nz * d;
+  }
+}
 // A shaped cube's new points exactly onto its skin (at rest): each one's
 // way there kept as so much of its edge, of its normal and of across - so
 // it lands on them however the jelly bends (see tessellate). Only on its
@@ -1171,6 +1198,8 @@ export class JellyView {
     // (each cube its own rounding; each render vertex knows its cube - the
     // new points their edge's)
     const shapes = Array.from(sb.cBevel, (b, k) => ({ a: sb.cSize[k] / 2 - b, r: b, form: sb.formOf(k) }));
+    const hollows = Array.from(sb.cBevel, (b, k) => (sb.cHollow[k] && sb.cLiq[k] && !sb.shapeOf(k) && sb.hollowRound(k) > 0 ? { a: sb.cSize[k] / 2 - b, r: sb.hollowRound(k) } : null));
+    const hollowed = hollows.some(Boolean);
     const cube = new Float32Array(maxN);
     for (let r = 0; r < nB; r++) cube[r] = sb.vCube[rSim[r]];
     for (let m = 0, k = nB; m < L1.mids.length; m += 3, k++) cube[k] = cube[L1.mids[m]];
@@ -1183,6 +1212,7 @@ export class JellyView {
     const onForm = formed ? new Uint8Array(maxN) : null;
     if (formed) snapToForm(rest, restN, L1.mids, nB, this.disp31, shapes, cube, onForm);
     snapToShape(rest, restN, L1.mids, nB, this.disp1, shapes.map((S) => (S.form ? { a: 0, r: 0 } : S)), cube);
+    if (hollowed) snapToHollow(rest, restN, L1.mids, nB, this.disp1, hollows, cube);
     // the second level only where the surface curves (bevels, corners): flat
     // faces - and the cut faces a burst leaves - gain nothing from it
     const t1 = L1.index.length / 3;
@@ -1215,6 +1245,7 @@ export class JellyView {
     tessellate(rest, restN, null, L2.mids, nL1, this.disp2);
     if (formed) snapToForm(rest, restN, L2.mids, nL1, this.disp32, shapes, cube, onForm);
     snapToShape(rest, restN, L2.mids, nL1, this.disp2, shapes.map((S) => (S.form ? { a: 0, r: 0 } : S)), cube);
+    if (hollowed) snapToHollow(rest, restN, L2.mids, nL1, this.disp2, hollows, cube);
     const index = L2.index;
     // (a shaped cube's light off its own fine surface, not its coarse
     // mesh's: the render vertices of such cubes, and the triangles at them -
@@ -1380,14 +1411,20 @@ export class JellyView {
     this.smN = 0;
     const nV = sb.nV, nF = sb.nF, S = sb.sTri, tag = sb.sTag, X = sb.X, ST = sb.sTet, T = sb.T, rSim = sb.rSim, rI = sb.rIndex;
     if (!nF || !rSim) return;
-    // (each vertex: on a cut's face, the outside's, any other's - a melt's: left be)
+    // (each vertex: on a cut's face, the outside's, any other's - a melt's: left be. And on a rounded hollow's
+    // skin alone - a cube full of liquid's, its points already on the shape it was carved to: left be too, drawn
+    // round by its smoothing group and snapToHollow. Smoothed, its corners were drawn pulled in - one diagonal set
+    // of them 6 cm, the other 10, 3 cm short of it: pinched.)
     const fr = new Uint8Array(nV), ex = new Uint8Array(nV), ot = new Uint8Array(nV), face = new Int32Array(nV).fill(-1);
+    const HF = sb.sHollow, hw = new Uint8Array(nV), cf = new Uint8Array(nV);
     for (let f = 0; f < nF; f++) {
       const g = tag[f];
       for (let c = 0; c < 3; c++) {
         const v = S[f * 3 + c];
         if (g === TAG_FRESH) {
           if (!fr[v]) (fr[v] = 1), (face[v] = f);
+          if (HF && HF[f] === 2) hw[v] = 1;
+          else cf[v] = 1;
         } else if (g === TAG_EXTERIOR) ex[v] = 1;
         else ot[v] = 1;
       }
@@ -1400,7 +1437,7 @@ export class JellyView {
     // on the edge of a flat one (2); in one, all round: left be
     const idx = new Int32Array(nV).fill(-1), list = [], rim = [];
     for (let v = 0; v < nV; v++) {
-      if (!fr[v] || ot[v]) continue;
+      if (!fr[v] || ot[v] || (hw[v] && !cf[v])) continue;
       const kind = ex[v] ? 1 : pl.edge[v] ? 2 : pl.in[v] ? -1 : 0;
       if (kind < 0) continue;
       idx[v] = list.length;
