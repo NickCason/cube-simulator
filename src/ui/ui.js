@@ -199,7 +199,7 @@ export class UI {
         <div class="tools"></div>
         <div class="sep"></div>
         <div class="colors">
-          <button class="swatch-btn" aria-label="Jelly style" title="Flavor, material & edges"><span class="swatch"></span></button>
+          <button class="swatch-btn" aria-label="The Cubimizer" title="The Cubimizer: flavor, material &amp; edges"><span class="cube-ico"><span class="swatch"></span><svg class="cube-shade" viewBox="0 0 24 26" aria-hidden="true"><path class="top" d="M12 0 24 6.5 12 13 0 6.5Z"/><path class="left" d="M0 6.5 12 13 12 26 0 19.5Z"/><path class="right" d="M12 13 24 6.5 24 19.5 12 26Z"/><path class="edge" d="M0 6.5 12 13 24 6.5M12 13V26"/><path class="rim" d="M12 .7 23.3 6.9V19.1L12 25.3.7 19.1V6.9Z"/></svg></span></button>
 
         </div>
         <button class="tune-btn" aria-label="Settings" title="Settings">${ICONS.tune}</button>
@@ -208,6 +208,7 @@ export class UI {
         <button class="mute" title="Sound (M)" aria-label="Toggle sound">${ICONS.sound}</button>
       </nav>
       <div class="palette style-panel" hidden>
+        <div class="pal-title">The Cubimizer</div>
         <div class="sec"><span class="lbl">Flavor</span><div class="chips"></div></div>
         <div class="sec layers-sec" hidden>
           <div class="lbl-row">

@@ -33,7 +33,10 @@ export class AudioEngine {
 
   init() {
     if (this.ctx) {
-      if (this.ctx.state === 'suspended') this.ctx.resume();
+      // (not running: suspended - or, on an iPhone, 'interrupted' since the app was last away, where it stayed
+      // for good, the sound dead till a reload - a touch asks it back)
+      const st = this.ctx.state;
+      if (st !== 'running' && st !== 'closed') this.ctx.resume()?.catch?.(() => {});
       return;
     }
     const AC = window.AudioContext || window.webkitAudioContext;

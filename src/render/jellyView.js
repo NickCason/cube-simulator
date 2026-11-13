@@ -7,6 +7,7 @@ const GLOW_BIT = 32; // (JELLY_GLOW: see jellyMaterials.js JELLY_FEATURES)
 import {
   createBackMaterial,
   createCoverMaterial,
+  createFrontDepthMaterial,
   createJellyMaterial,
   createCausticMaterial,
   createLightViewMaterial,
@@ -468,6 +469,9 @@ export class JellyView {
     this.coverMat = createCoverMaterial();
     this.coverMat.uniforms.uCubeTex.value = this.cubeTex;
     this.coverU = { tCover: { value: null }, uCoverOn: { value: 0 }, uCoverInv: { value: new THREE.Vector2(1, 1) } };
+    // (the jelly's nearest surface, how far: see renderFrontDepth - made when it's first wanted)
+    this.fdMat = createFrontDepthMaterial();
+    this.rtFD = null;
     this.prepass = true;
     this.causticMat = createCausticMaterial();
     // the caustics' view from the key light (entry, normal, exit) and their
@@ -1790,6 +1794,26 @@ export class JellyView {
   // The skin's coat, where it's nearest the eye (see createCoverMaterial):
   // the glitter and bubbles inside fade under flour, sugar, frost. Only
   // drawn while there's a coat anywhere.
+  // How far the jelly's nearest surface is, at half the screen's size (see createFrontDepthMaterial): for the
+  // liquid in front of it to be drawn after it and the rest before (App.render)
+  renderFrontDepth(camera) {
+    const r = this.renderer, w = Math.max(1, this.rtBack.width >> 1), h = Math.max(1, this.rtBack.height >> 1);
+    if (!this.rtFD || this.rtFD.width !== w || this.rtFD.height !== h) {
+      this.rtFD?.dispose();
+      this.rtFD = new THREE.WebGLRenderTarget(w, h, { type: THREE.HalfFloatType, minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter, generateMipmaps: false, depthBuffer: true });
+    }
+    const prev = r.getRenderTarget(), pc = r.getClearColor(this._v2c || (this._v2c = new THREE.Color())), pa = r.getClearAlpha();
+    r.setRenderTarget(this.rtFD);
+    r.setClearColor(0x000000, 0);
+    r.clear(true, true, false);
+    this.scene.overrideMaterial = this.fdMat;
+    r.render(this.scene, camera);
+    this.scene.overrideMaterial = null;
+    r.setRenderTarget(prev);
+    r.setClearColor(pc, pa);
+    return this.rtFD.texture;
+  }
+
   renderCover(camera) {
     const on = !!(this.coverWanted && this.allMesh && this.rtCover);
     this.coverU.uCoverOn.value = on ? 1 : 0;

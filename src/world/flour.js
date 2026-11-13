@@ -25,6 +25,10 @@ const PRINT = 0.05; // (m) a vertex's footprint, its share of what it's on (as f
 const ON_FLOOR = 0.006; // (m) a vertex this low is on the floor
 const rnd = (a, b) => a + Math.random() * (b - a);
 const FLOUR = [...POWDERS[0].lin, POWDERS[0].sparkle, POWDERS[0].multi];
+// (1/s) liquid on it washes powder away - off the floor under it, off the jelly it runs over - and more, the faster
+// it moves (per m/s): see _wash
+const WASH = 0.35, WASH_V = 6;
+const WASH_HASH = 4096;
 
 export class Flour {
   constructor(app) {
@@ -53,6 +57,9 @@ export class Flour {
     this._dirty = null; // (texels changed since they went up: i0, j0, i1, j1)
     this._upT = 0;
     this._lookT = 0;
+    this._washT = 0;
+    this._wHead = new Int32Array(WASH_HASH); // (the liquid out of the cubes, in cells: see _wash)
+    this._wNext = null;
     this.sweeping = 0;
     // (re-cubed, all of them: swept away - the floor too)
     app.onHealEnd.push(() => {
@@ -234,6 +241,7 @@ export class Flour {
       this._dirty = [0, 0, N - 1, N - 1];
     }
     if (dt > 0 && (this.any || this.dusty)) this._exchange(dt, sb);
+    if (dt > 0 && (this.any || this.dusty)) this._wash(dt);
     if (this.any && dt > 0) this._puffs(sb);
     // (up to the GPU: 20 times a second at most, while it's changing - just
     // the rows and columns that did)
@@ -376,6 +384,68 @@ export class Flour {
       this.touch[i] = 1;
     }
     this.dusty = dusty;
+  }
+
+  // Liquid washes powder away: the floor under a pool comes clean, a run of it down a powdered cube takes the
+  // powder with it - each by how long it's had liquid on it, more the faster it moves. Only liquid out of the
+  // cubes: what's in one is behind its wall. (A tick a tenth of a second.)
+  _wash(dt) {
+    const fl = this.app.fluid;
+    if (!fl || !(fl.n > 0)) return;
+    this._washT += dt;
+    if (this._washT < 0.1) return;
+    const t = Math.min(this._washT, 0.25), n = fl.n, x = fl.x, v = fl.v, DI = fl.dIn, own = fl.own, D = fl.D;
+    this._washT = 0;
+    const loose = (p) => (DI[p] === 255 ? own[p] === 0 : DI[p] === 0);
+    // the floor: under each drop on it (as low as one lying there), some of what's there
+    if (this.any) {
+      const M = this.map, low = 0.9 * D, r = 0.6 * D;
+      for (let p = 0; p < n; p++) {
+        const o = p * 3;
+        if (x[o + 1] > low || !loose(p)) continue;
+        const c = this._cell(x[o], x[o + 2]);
+        if (c < 0 || !(M[c] > 1e-3)) continue;
+        this._splat(x[o], x[o + 2], -(WASH + WASH_V * Math.hypot(v[o], v[o + 2])) * t, r);
+      }
+    }
+    // the jelly: each powdered vertex with a drop on it - the drops in cells a drop wide, a vertex looks in its own
+    // and those round it
+    if (!this.dusty) return;
+    const sb = this.app.sb, Dst = sb.dust, C = sb.coat, X = sb.x, V = sb.v, alive = sb.alive, H = this._wHead, iD = 1 / D, HM = WASH_HASH - 1;
+    if (!this._wNext || this._wNext.length < n) this._wNext = new Int32Array(fl.max);
+    const nx = this._wNext, hash = (i, j, k) => (Math.imul(i, 92837111) ^ Math.imul(j, 689287499) ^ Math.imul(k, 283923481)) & HM;
+    H.fill(-1);
+    let any = false;
+    for (let p = 0; p < n; p++) {
+      if (!loose(p)) continue;
+      const o = p * 3, c = hash(Math.floor(x[o] * iD), Math.floor(x[o + 1] * iD), Math.floor(x[o + 2] * iD));
+      nx[p] = H[c];
+      H[c] = p;
+      any = true;
+    }
+    if (!any) return;
+    const reach2 = 0.81 * D * D;
+    for (let i = 0; i < sb.nV; i++) {
+      const d = Dst[i];
+      if (!(d > 0.002) || !alive[i]) continue;
+      const o = i * 3, px = X[o], py = X[o + 1], pz = X[o + 2], ci = Math.floor(px * iD), cj = Math.floor(py * iD), ck = Math.floor(pz * iD);
+      let hit = -1;
+      for (let a = -1; a <= 1 && hit < 0; a++)
+        for (let b = -1; b <= 1 && hit < 0; b++)
+          for (let e = -1; e <= 1 && hit < 0; e++)
+            for (let p = H[hash(ci + a, cj + b, ck + e)]; p >= 0; p = nx[p]) {
+              const q = p * 3, dx = x[q] - px, dy = x[q + 1] - py, dz = x[q + 2] - pz;
+              if (dx * dx + dy * dy + dz * dz < reach2) {
+                hit = p;
+                break;
+              }
+            }
+      if (hit < 0) continue;
+      const q = hit * 3, s = Math.hypot(v[q] - V[o], v[q + 1] - V[o + 1], v[q + 2] - V[o + 2]);
+      const left = Math.max(0, d - (WASH + WASH_V * s) * t), f = left / d;
+      for (let k = 0; k < 5; k++) C[i * 5 + k] *= f;
+      Dst[i] = left;
+    }
   }
 
   // (the record a look goes down as: the powder it's nearest)

@@ -389,49 +389,58 @@ export function attachStats(app) {
   };
   el.querySelector('.bench').addEventListener('click', (e) => runBench(e.currentTarget));
 
-  // ---- rec test: a clip recorded each way there is (see Clips.mode) - the copied picture, the screen's own,
-  // the copied one with no sound - each 22 s of a wobbling jelly, and each looked at after (Clips._check:
-  // second by second, did the picture move?). Which way's clip freezes on this phone. Hands off (~90 s).
+  // ---- rec test: a clip recorded each way there is (see Clips.mode) - the screen's own picture and the copied
+  // one, each with its sound and without - each 26 s of a wobbling jelly, and each looked at after (Clips._check:
+  // second by second, did the picture move?). Which way's clip freezes on this phone, and whether the sound's
+  // to blame. Each way's line goes in the report as it's done. Hands off (~2 min).
   let recLines = [], recTesting = false;
   const runRecTest = async (btn) => {
     const C = app.ui?.clips;
     if (!C?.able || C.recording || recTesting || benching) return;
     recTesting = true;
     app.audio?.init?.();
-    const was = { mode: C.mode, sound: C.sound }, ways = [['copy', true], ['gl', true], ['copy', false]], out = [];
-    recLines = ['rec test (each 22 s of a wobbling jelly; the clip looked at after - did its picture move, second by second):'];
+    const was = { mode: C.mode, sound: C.sound }, ways = [['gl', true], ['copy', true], ['gl', false], ['copy', false]], out = [];
+    recLines = ['rec test (each 26 s of a wobbling jelly; the clip looked at after - did its picture move, second by second):'];
+    // (the app sent away mid-clip - an iPhone stops its sound then - is said on that clip's line)
+    let away = false;
+    const gone = () => document.hidden && (away = true);
+    document.addEventListener('visibilitychange', gone);
     try {
       for (let i = 0; i < ways.length; i++) {
         const [mode, sound] = ways[i];
         btn.textContent = `Rec test ${i + 1}/${ways.length}…`;
         C.mode = mode;
         C.sound = sound;
+        const way = `${mode}${sound ? '' : ', no sound'}`, line = (l) => (out.push(l), recLines.push(`  ${l}`));
+        app.audio?.init?.();
         C.start();
         if (!C.recording) {
-          out.push(`${mode}${sound ? '' : ', no sound'}: didn't start`);
+          line(`${way}: didn't start`);
           continue;
         }
+        away = false;
         const t0 = performance.now();
-        for (let k = 0; performance.now() - t0 < 22000; k++) {
+        for (let k = 0; performance.now() - t0 < 26000; k++) {
           await new Promise((res) => requestAnimationFrame(res));
           wobble(k);
         }
         C.stop();
+        // (till it's looked at - or nothing came out)
         const t1 = performance.now();
-        while (!C.diag?.moved && performance.now() - t1 < 75000) await new Promise((res) => setTimeout(res, 250));
+        while (!(C.diag?.moved || (C.diag?.over && !C.diag.file)) && performance.now() - t1 < 75000) await new Promise((res) => setTimeout(res, 250));
         const D = C.diag;
-        out.push(`${mode}${sound ? '' : ', no sound'}: ${D?.copies || 0} frames in, ${D?.file || 'nothing made'}; moved ${D?.moved || '(not looked at)'}`);
+        line(`${way}: sound ${D?.sound || '?'}${away ? ', the app went away mid-clip' : ''}; ${D?.copies || 0} frames in, ${D?.file || 'nothing made'}; moved ${D?.moved || '(not looked at)'}`);
         C._close?.();
         await new Promise((res) => setTimeout(res, 600));
       }
     } finally {
+      document.removeEventListener('visibilitychange', gone);
       C.mode = was.mode;
       C.sound = was.sound;
       recTesting = false;
       btn.textContent = 'Rec test ✓';
       setTimeout(() => (btn.textContent = 'Rec test'), 2500);
     }
-    recLines.push(...out.map((l) => `  ${l}`));
     say(`RECTEST ${out.join(' | ')}`);
   };
   el.querySelector('.rectest')?.addEventListener('click', (e) => runRecTest(e.currentTarget));

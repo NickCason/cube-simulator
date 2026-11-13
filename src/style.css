@@ -265,12 +265,69 @@ body {
   background: rgba(0, 0, 0, 0.055);
 }
 
+/* The Cubimizer's button: a little cube in the jelly's own colours (a hexagon of its swatch - a gradient too -
+   with its three faces lit, half lit and shaded over it) */
+.cube-ico {
+  position: relative;
+  width: 24px;
+  height: 26px;
+  filter: drop-shadow(0 2px 3px rgba(0, 0, 0, 0.22));
+}
+
 .swatch {
-  width: 22px;
-  height: 22px;
-  border-radius: 50%;
+  position: absolute;
+  inset: 0;
   background: var(--jelly);
-  box-shadow: inset -2px -3px 5px rgba(0, 0, 0, 0.28), inset 2px 2px 3px rgba(255, 255, 255, 0.55), 0 0 0 1.5px rgba(255, 255, 255, 0.9), 0 2px 6px rgba(0, 0, 0, 0.18);
+  clip-path: polygon(50% 0, 100% 25%, 100% 75%, 50% 100%, 0 75%, 0 25%);
+}
+
+.cube-shade {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+
+.cube-shade .top {
+  fill: #fff;
+  opacity: 0.32;
+}
+
+.cube-shade .left {
+  fill: #000;
+  opacity: 0.08;
+}
+
+.cube-shade .right {
+  fill: #000;
+  opacity: 0.3;
+}
+
+.cube-shade .edge {
+  fill: none;
+  stroke: #fff;
+  stroke-opacity: 0.55;
+  stroke-width: 1;
+  stroke-linejoin: round;
+}
+
+.cube-shade .rim {
+  fill: none;
+  stroke: #fff;
+  stroke-opacity: 0.9;
+  stroke-width: 1.4;
+  stroke-linejoin: round;
+}
+
+/* its panel's name */
+.pal-title {
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  color: rgba(28, 28, 31, 0.78);
+  padding-left: 2px;
+  margin-bottom: -4px;
 }
 
 .palette {
@@ -1552,8 +1609,16 @@ html.dark .sep {
   background: rgba(255, 255, 255, 0.11);
 }
 
-html.dark .swatch {
-  box-shadow: inset -2px -3px 5px rgba(0, 0, 0, 0.3), inset 2px 2px 3px rgba(255, 255, 255, 0.5), 0 0 0 1.5px rgba(255, 255, 255, 0.2), 0 0 12px color-mix(in srgb, var(--jelly) 75%, transparent);
+html.dark .cube-ico {
+  filter: drop-shadow(0 0 6px color-mix(in srgb, var(--jelly) 75%, transparent));
+}
+
+html.dark .cube-shade .rim {
+  stroke-opacity: 0.25;
+}
+
+html.dark .pal-title {
+  color: rgba(255, 255, 255, 0.82);
 }
 
 html.dark .heal {

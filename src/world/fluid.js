@@ -164,6 +164,10 @@ export class Fluid {
     this._wA = new Float64Array(9);
     this._wR = new Float64Array(9);
     this._wF = new Float64Array(6); // (its middle as it stands, and at rest: see _snapBox)
+    // (each cube full of liquid as it stands this frame - its middle now, at rest, and the turn from rest to now -
+    // and whether that's there: for its liquid's surface against its wall and what's carried in it, see _frames)
+    this.frames = new Float64Array(MAX_CUBES * 15);
+    this.frameOK = new Uint8Array(MAX_CUBES);
     this.asleep = false;
     this.stillT = 0;
     // the jelly's tets near the liquid (hashed by cells of 0.1 m)
@@ -214,7 +218,7 @@ export class Fluid {
     this.mat = new THREE.ShaderMaterial({
       vertexColors: true,
       side: THREE.DoubleSide,
-      uniforms: { tBg: { value: null }, uRes: { value: new THREE.Vector2(1, 1) }, envMap: { value: app.env.texture }, uLight: { value: app.lightDir }, uLightColor: F.uLightColor, uEmit: { value: 0 } },
+      uniforms: { tBg: { value: null }, uRes: { value: new THREE.Vector2(1, 1) }, envMap: { value: app.env.texture }, uLight: { value: app.lightDir }, uLightColor: F.uLightColor, uEmit: { value: 0 }, tFD: { value: null }, uFD: { value: 0 } },
       vertexShader: /* glsl */ `
         varying vec3 vW;
         varying vec3 vN;
@@ -233,10 +237,21 @@ export class Fluid {
         uniform vec3 uLight;
         uniform vec3 uLightColor;
         uniform float uEmit;
+        uniform sampler2D tFD;
+        uniform float uFD;
         varying vec3 vW;
         varying vec3 vN;
         varying vec3 vCol;
         void main() {
+          // (drawn in two, about the jelly - uFD 1: all but what's in front of it, before it; 2: only that, after
+          // it - tFD, how far the jelly's nearest surface is: see App.render. Where it meets the jelly, it's as far
+          // as it is: in front, it goes after, where the depth test tells the one from the other - drawn before,
+          // what of it the jelly didn't cover showed the room through it, a pale fringe)
+          if (uFD > 0.5) {
+            float jd = texture2D(tFD, gl_FragCoord.xy / uRes).r;
+            bool front = jd > 0.0 && length(vW - cameraPosition) < jd + 0.012;
+            if (front != (uFD > 1.5)) discard;
+          }
           vec3 N = normalize(vN), V = normalize(cameraPosition - vW);
           if (dot(N, V) < 0.0) N = -N;
           float ndv = clamp(dot(N, V), 0.0, 1.0);
@@ -394,6 +409,26 @@ export class Fluid {
     }
     if (this.n >= this.max) this.bank = 0;
     this.mesh.visible = this.n > 0;
+  }
+
+  // (the box round what's out of the cubes - a pool, a run down one - its surface too; null, none)
+  looseBox(out) {
+    const x = this.x, DI = this.dIn, own = this.own, pad = 1.6 * this.D;
+    let x0 = Infinity, y0 = Infinity, z0 = Infinity, x1 = -Infinity, y1 = -Infinity, z1 = -Infinity;
+    for (let p = 0; p < this.n; p++) {
+      const din = DI[p];
+      if (din === 255 ? own[p] !== 0 : din !== 0) continue;
+      const o = p * 3, px = x[o], py = x[o + 1], pz = x[o + 2];
+      if (px < x0) x0 = px;
+      if (px > x1) x1 = px;
+      if (py < y0) y0 = py;
+      if (py > y1) y1 = py;
+      if (pz < z0) z0 = pz;
+      if (pz > z1) z1 = pz;
+    }
+    if (!(x1 >= x0)) return null;
+    out[0] = x0 - pad; out[1] = y0 - pad; out[2] = z0 - pad; out[3] = x1 + pad; out[4] = y1 + pad; out[5] = z1 + pad;
+    return out;
   }
 
   // Where a ray first meets the liquid (each particle a ball of 0.06 m),
@@ -630,6 +665,7 @@ export class Fluid {
 
   clear() {
     if (this.n) this._mapDone(null, this.n); // (all gone)
+    this.frameOK.fill(0);
     if (this.pressOn) (this.pressOn = 0), this.press.fill(0), this.app.sb?.cPress?.fill(0);
     this.n = 0;
     this.bank = 0;
@@ -656,6 +692,8 @@ export class Fluid {
       return;
     }
     if (!(dt > 0)) return;
+    // (all of it still - liquid and jelly: as they were)
+    if (!(this.asleep && !this.app.sb.anyAwake)) this._frames();
     // (a pool that's come to rest sleeps till jelly moves near it - or
     // while acid in it is still eating)
     if (this.asleep && (this.keepAwake || this._stirred())) this.wake();
@@ -1769,12 +1807,34 @@ export class Fluid {
   // every edge, across every face once the cube turned, seen through the wall, worse the more it moved. The
   // centimetre: a wall bulging out a little, it follows.)
   _snapWalls(nv) {
-    const sb = this.app.sb, inn = this.inn, x = sb.x, X = sb.X, vc = sb.vCube, A = this._wA, R = this._wR, q = this._wqk;
+    const sb = this.app.sb, inn = this.inn, FR = this.frames, F = this._wF, R = this._wR;
     let mask = 0;
     for (let v = 0; v < nv; v++) if (inn[v] > 0) mask |= 1 << (inn[v] - 1);
     for (let k = 0; k < MAX_CUBES; k++) {
-      if (!(mask & (1 << k)) || !sb.cHollow[k] || !(sb.cSize[k] > 0)) continue;
-      // (the cube as it stands: its middle now and at rest, and the turn from the one to the other)
+      if (!(mask & (1 << k)) || !sb.cHollow[k] || !(sb.cSize[k] > 0) || !this.frameOK[k]) continue;
+      // (the cube as it stands this frame: see _frames)
+      const fo = k * 15;
+      F[0] = FR[fo]; F[1] = FR[fo + 1]; F[2] = FR[fo + 2]; F[3] = FR[fo + 3] - k * REST_STEP; F[4] = FR[fo + 4]; F[5] = FR[fo + 5];
+      for (let c = 0; c < 9; c++) R[c] = FR[fo + 6 + c];
+      const size = sb.cSize[k], bev = sb.cBevel[k], shape = sb.shapeOf(k), sk = Math.min(1, Math.max(0, sb.cSkin[k]));
+      const th = size * (sk <= 0.5 ? 0.05 + 0.08 * sk : 0.09 + 0.18 * (sk - 0.5)), tol = Math.min(0.01, 0.2 * th);
+      // (a rounded box worked out here - most of the liquid's surface nowhere near the wall, and the rest
+      // simply - else any shape: a call a point, and its slope from six more. In a function each, small: as
+      // one, Safari's engine took a millisecond and a half over it half the time)
+      if (!(shape && shape.bow)) this._snapBox(nv, k + 1, size / 2, bev, th, tol);
+      else this._snapShape(nv, k + 1, size / 2, bev, shape, th, tol);
+    }
+  }
+
+  // Each cube full of liquid as it stands, a frame: its middle now and at rest, and the turn from the one to the
+  // other (fitted to all its points: Müller's polar fit, warm from last time) - for its liquid's surface against
+  // its wall (_snapWalls) and what's carried in it (Bubbles.poolTick). (Once a surface - every other frame, a big
+  // pool - and the bubbles carried by it stepped along a moving cube.)
+  _frames() {
+    const sb = this.app.sb, x = sb.x, X = sb.X, vc = sb.vCube, A = this._wA, R = this._wR, q = this._wqk, FR = this.frames;
+    for (let k = 0; k < MAX_CUBES; k++) {
+      this.frameOK[k] = 0;
+      if (!sb.cHollow[k] || !sb.cLiq[k] || !(sb.cSize[k] > 0)) continue;
       let n = 0, xm0 = 0, xm1 = 0, xm2 = 0, Xm0 = 0, Xm1 = 0, Xm2 = 0;
       for (let i = 0; i < sb.nV; i++) {
         if (vc[i] !== k || !sb.alive[i]) continue;
@@ -1796,15 +1856,10 @@ export class Fluid {
       for (let c = 0; c < 4; c++) q[c] = this._wq[k * 4 + c];
       polarRot(q, A, R, 8);
       for (let c = 0; c < 4; c++) this._wq[k * 4 + c] = q[c];
-      const size = sb.cSize[k], bev = sb.cBevel[k], shape = sb.shapeOf(k), sk = Math.min(1, Math.max(0, sb.cSkin[k]));
-      const th = size * (sk <= 0.5 ? 0.05 + 0.08 * sk : 0.09 + 0.18 * (sk - 0.5)), tol = Math.min(0.01, 0.2 * th), F = this._wF;
-      // (where it is, from the cube's middle as it stands back to its rest shape's, centred: see _snapBox)
-      F[0] = xm0; F[1] = xm1; F[2] = xm2; F[3] = Xm0 - k * REST_STEP; F[4] = Xm1; F[5] = Xm2;
-      // (a rounded box worked out here - most of the liquid's surface nowhere near the wall, and the rest
-      // simply - else any shape: a call a point, and its slope from six more. In a function each, small: as
-      // one, Safari's engine took a millisecond and a half over it half the time)
-      if (!(shape && shape.bow)) this._snapBox(nv, k + 1, size / 2, bev, th, tol);
-      else this._snapShape(nv, k + 1, size / 2, bev, shape, th, tol);
+      const fo = k * 15;
+      FR[fo] = xm0; FR[fo + 1] = xm1; FR[fo + 2] = xm2; FR[fo + 3] = Xm0; FR[fo + 4] = Xm1; FR[fo + 5] = Xm2;
+      for (let c = 0; c < 9; c++) FR[fo + 6 + c] = R[c];
+      this.frameOK[k] = 1;
     }
   }
 

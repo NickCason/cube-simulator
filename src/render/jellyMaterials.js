@@ -387,6 +387,21 @@ export function createCoverMaterial() {
   });
 }
 
+// The jelly's nearest surface: how far from the eye (m; 0, none there) - for the liquid, to tell what of it is in
+// front of the jelly, drawn after it with the jelly seen through it, from what's behind, drawn before it for the
+// jelly to see through itself (see JellyView.renderFrontDepth, App.render)
+export function createFrontDepthMaterial() {
+  return new THREE.ShaderMaterial({
+    side: THREE.FrontSide,
+    vertexShader: VERT,
+    fragmentShader: /* glsl */ `
+      varying vec3 vViewPos;
+      void main() {
+        gl_FragColor = vec4(length(vViewPos), 0.0, 0.0, 1.0);
+      }`,
+  });
+}
+
 // Back faces: linear view depth, packed view-space exit normal, and what
 // the line of sight leaves through - the coat on the outside there (sugar
 // crystals, a dusting, flour it's picked up) or frost: 0 for bare jelly. (A

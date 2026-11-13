@@ -30,6 +30,7 @@ export class Clips {
     this.file = null;
     this._tick = 0;
     this._wait = 0;
+    this._n = 0; // (which recording this is: one that finishes late can't land in the next)
     this._mt = null;
     // (?stats: the last recording's own account - how many frames went in, the picture's size, the tracks'
     // say, what came out, and whether its picture keeps moving to the end: see _say, _check, diagLine)
@@ -195,9 +196,17 @@ export class Clips {
       };
       // (each second's middle, sought out: one that won't come is a '?', not a '0' - played through
       // instead, headless Chrome showed too few of a video's frames to tell a held picture from a skipped one)
-      for (let i = 0; i < Math.min(120, Math.ceil(dur)); i++) {
+      // (four in a row that won't come: the rest won't either - '?'s, not 3 s more each)
+      const n = Math.min(120, Math.ceil(dur));
+      for (let i = 0, miss = 0; i < n; i++) {
+        if (miss >= 4) {
+          marks += '?';
+          continue;
+        }
         v.currentTime = Math.min(dur - 0.05, i + 0.5);
-        marks += (await once('seeked', 3000)) ? look() : '?';
+        const ok = await once('seeked', 3000);
+        miss = ok ? 0 : miss + 1;
+        marks += ok ? look() : '?';
       }
       // (every picture black: its frames couldn't be read here, not a clip of black)
       const note = lit < 4 ? ', but every picture read black - not a fair look' : '';
@@ -237,9 +246,11 @@ export class Clips {
         manual = S.manual;
         this.vtrack = S.track;
       }
-      const tracks = [this.vtrack], A = app.audio;
-      // (its sounds as you hear them - none, muted)
-      if (this.sound && A?.ctx && A.out) {
+      const tracks = [this.vtrack], A = app.audio, sst = A?.ctx?.state;
+      // (its sounds as you hear them - none, muted; none while the phone has them stopped: an iPhone's
+      // 'interrupted', after the app's been away - a clip with a sound track that never sent anything never
+      // came out at all)
+      if (this.sound && A?.ctx && A.out && (sst === 'running' || sst === 'suspended')) {
         try {
           this.dest ||= A.ctx.createMediaStreamDestination();
           A.out.connect(this.dest);
@@ -259,16 +270,16 @@ export class Clips {
       }
       // (each recording its own pieces: one that's still finishing can't
       // spill into the next)
-      const chunks = [];
+      const chunks = [], n = ++this._n;
       rec.ondataavailable = (e) => e.data && e.data.size && chunks.push(e.data);
-      rec.onstop = () => this._done(chunks, type);
+      rec.onstop = () => this._done(chunks, type, n);
       rec.onerror = (e) => {
         this._event(`recorder error ${e?.error?.name || ''}`);
         this.stop();
       };
       rec.start();
       this.rec = rec;
-      this.diag = { mode: this.mode, t0: performance.now(), end: 0, copies: 0, copies0: 0, at: 0, gw: gl.width, gh: gl.height, from: `${gl.width}x${gl.height}`, size: `${w}x${h}`, type, manual, sound: tracks.length > 1 ? A.ctx.state : 'none', events: [], file: '', moved: '' };
+      this.diag = { mode: this.mode, t0: performance.now(), end: 0, copies: 0, copies0: 0, at: 0, gw: gl.width, gh: gl.height, from: `${gl.width}x${gl.height}`, size: `${w}x${h}`, type, manual, sound: tracks.length > 1 ? sst : this.sound && sst ? `${sst}, left out` : 'none', events: [], file: '', moved: '', over: false };
       const watch = (tr, name) => {
         tr.onmute = () => this._event(`${name} muted`);
         tr.onunmute = () => this._event(`${name} unmuted`);
@@ -311,12 +322,13 @@ export class Clips {
     this.ringEl.style.strokeDashoffset = '';
     // (it says it's done - or, if it never does, it didn't come out)
     clearTimeout(this._wait);
-    this._wait = setTimeout(() => this._done([], ''), 6000);
+    const n = this._n;
+    this._wait = setTimeout(() => this._done([], '', n), 6000);
     try {
       if (rec.state !== 'inactive') rec.stop();
-      else this._done([], '');
+      else this._done([], '', n);
     } catch (e) {
-      this._done([], '');
+      this._done([], '', n);
     }
   }
 
@@ -348,11 +360,13 @@ export class Clips {
     this._sound = false;
   }
 
-  _done(chunks, type) {
+  _done(chunks, type, n) {
+    // (an earlier recording's, finishing after the next one started: let go)
+    if (n !== this._n) return;
     clearTimeout(this._wait);
     this._unhook();
+    if (this.diag) this.diag.over = true;
     if (!chunks.length) {
-      // (a recording's finishing - the one that never said - or one's going)
       if (!this.rec && this.modal.hidden) this.ui.hint?.("That clip didn't come out - try again");
       this._say('made nothing');
       return;

@@ -308,7 +308,7 @@ export class Bubbles {
         // (and, loose: how it's moving, whether it's up against the top, how much of it's left - a burst's
         // shrinking - gone: run into another, or burst)
         // (and run out with a spill, into its pool - see poolFrom: its drop, where it is, foam or not, its time)
-        this.items.push({ slot, u: P.u, r: P.r, scale: w.scale, R, c: [x, y, z], a: r ? { tet: r.tet, b: r.bary, lost: false } : { tet: -1, b: [0, 0, 0, 0], lost: false }, open: false, v: [0, 0, 0], top: false, life: 1, gone: false, pool: false, p: -1, w: [0, 0, 0], lp: [0, 0, 0], lpOK: false, foam: false, popT: 0, held: false, hk: -1 });
+        this.items.push({ slot, u: P.u, r: P.r, scale: w.scale, R, c: [x, y, z], a: r ? { tet: r.tet, b: r.bary, lost: false } : { tet: -1, b: [0, 0, 0, 0], lost: false }, open: false, v: [0, 0, 0], top: false, life: 1, gone: false, pool: false, p: -1, w: [0, 0, 0], lp: [0, 0, 0], lpOK: false, foam: false, popT: 0, held: false, hk: -1, cOK: false });
       }
     }
     for (const slot of wet) this.intoLiquid(slot);
@@ -369,6 +369,7 @@ export class Bubbles {
       b.popT = Infinity;
       b.held = true;
       b.hk = slot;
+      b.cOK = false;
       made++;
     }
     return made;
@@ -554,7 +555,7 @@ export class Bubbles {
   _spare() {
     for (const b of this.items) if (b.gone && !b.open && !b.pool) return b;
     if (this.items.length >= MAX) return null;
-    const b = { slot: 0, u: [0, 0, 0], r: 0, scale: 1, R: 0, c: [0, 0, 0], a: { tet: -1, b: [0, 0, 0, 0], lost: false }, open: false, v: [0, 0, 0], top: false, life: 1, gone: true, pool: false, p: -1, w: [0, 0, 0], lp: [0, 0, 0], lpOK: false, foam: false, popT: 0, held: false, hk: -1 };
+    const b = { slot: 0, u: [0, 0, 0], r: 0, scale: 1, R: 0, c: [0, 0, 0], a: { tet: -1, b: [0, 0, 0, 0], lost: false }, open: false, v: [0, 0, 0], top: false, life: 1, gone: true, pool: false, p: -1, w: [0, 0, 0], lp: [0, 0, 0], lpOK: false, foam: false, popT: 0, held: false, hk: -1, cOK: false };
     this.items.push(b);
     return b;
   }
@@ -618,7 +619,7 @@ export class Bubbles {
   // in its cube full of liquid, it stays where it is in it, carried along: not borne up, nor burst, nor foam -
   // they rose to a layer at the top of it, and came out of it there.
   poolTick(dt) {
-    const fl = this.app.fluid, x = fl.x, NS = fl.nbStart, NB = fl.nb, D = fl.D, DI = fl.dIn, own = fl.own;
+    const fl = this.app.fluid, x = fl.x, NS = fl.nbStart, NB = fl.nb, D = fl.D, DI = fl.dIn, own = fl.own, FR = fl.frames, FO = fl.frameOK;
     let any = false;
     for (const b of this.items) {
       if (!b.pool || b.gone) continue;
@@ -639,6 +640,29 @@ export class Bubbles {
       if (inCube) {
         b.held = true;
         if (din !== 255) b.hk = din - 1;
+        const hk = b.hk;
+        if (hk >= 0 && FO[hk]) {
+          // In its cube's own frame - as the cube stands, from its liquid's surface - it drifts after its drop,
+          // slowly, and is carried with the cube exactly: carried by its drop, every jostle of a drop's was its
+          // own, and the bubbles in a cube at rest shivered.
+          const f = hk * 15, c = b.c, o = p * 3;
+          if (!b.cOK) {
+            const ex = w[0] - FR[f], ey = w[1] - FR[f + 1], ez = w[2] - FR[f + 2];
+            c[0] = FR[f + 3] + FR[f + 6] * ex + FR[f + 9] * ey + FR[f + 12] * ez;
+            c[1] = FR[f + 4] + FR[f + 7] * ex + FR[f + 10] * ey + FR[f + 13] * ez;
+            c[2] = FR[f + 5] + FR[f + 8] * ex + FR[f + 11] * ey + FR[f + 14] * ez;
+            b.cOK = true;
+          }
+          const dx = x[o] - FR[f], dy = x[o + 1] - FR[f + 1], dz = x[o + 2] - FR[f + 2], kc = Math.min(1, dt * 1.5);
+          c[0] += (FR[f + 3] + FR[f + 6] * dx + FR[f + 9] * dy + FR[f + 12] * dz + b.u[0] * 0.4 * D - c[0]) * kc;
+          c[1] += (FR[f + 4] + FR[f + 7] * dx + FR[f + 10] * dy + FR[f + 13] * dz + b.u[1] * 0.4 * D - c[1]) * kc;
+          c[2] += (FR[f + 5] + FR[f + 8] * dx + FR[f + 11] * dy + FR[f + 14] * dz + b.u[2] * 0.4 * D - c[2]) * kc;
+          const rx = c[0] - FR[f + 3], ry = c[1] - FR[f + 4], rz = c[2] - FR[f + 5];
+          w[0] = FR[f] + FR[f + 6] * rx + FR[f + 7] * ry + FR[f + 8] * rz;
+          w[1] = FR[f + 1] + FR[f + 9] * rx + FR[f + 10] * ry + FR[f + 11] * rz;
+          w[2] = FR[f + 2] + FR[f + 12] * rx + FR[f + 13] * ry + FR[f + 14] * rz;
+          continue;
+        }
         w[0] += (x[p * 3] + b.u[0] * 0.4 * D - w[0]) * k;
         w[1] += (x[p * 3 + 1] + b.u[1] * 0.4 * D - w[1]) * k;
         w[2] += (x[p * 3 + 2] + b.u[2] * 0.4 * D - w[2]) * k;
@@ -648,6 +672,7 @@ export class Bubbles {
         // (out now: as a spill's are - kept in its cube for good, foam a while or a moment)
         b.held = false;
         b.hk = -1;
+        b.cOK = false;
         if (b.popT === Infinity) (b.foam = Math.random() < 0.35), (b.popT = b.foam ? 20 + Math.random() * 40 : 0.3 + Math.random() * 2.2);
       }
       let top = x[p * 3 + 1];

@@ -268,6 +268,7 @@ export class App {
     this.substepRate = 720; // physics substeps per second
     this.isTouch = false;
     this._panV = new THREE.Vector3();
+    this._lbox = this._lrect = this._prect = null; // (the liquid out of the cubes and the jelly, on screen: see _liqSplit)
     this._hitStop = 0;
     this._resizePending = false;
     this.splash = null; // the opening splash (see main.js, ui/splash.js)
@@ -2919,11 +2920,18 @@ export class App {
     // (a cube full of liquid's far walls, across its hollow: into the room's picture, for its liquid and its near
     // walls to see - see JellyView.renderFar)
     if (!this.opts.nojelly && !skip.jelly && this.jelly.renderFar(this.camera, this.sb, this.rtScene, this.rtTrans)) copy();
-    // the liquid: the room's picture seen through it - and then that, with it, for the jelly to see through
-    if (FL.mesh.visible && !skip.room) {
+    // the liquid: the room's picture seen through it - and then that, with it, for the jelly to see through.
+    // (Some of it out of the cubes and in front of one - a run of it down a cube, a pool before one - is drawn
+    // after the jelly instead, and its eyes, with them seen through it: drawn before, it hid the jelly - the
+    // room seen through it, milky - and an eye under it was cut off where it met it. See _liqSplit)
+    const FU = FL.mat.uniforms, liq = FL.mesh.visible && !skip.room;
+    const split = liq && !this.opts.nojelly && !skip.jelly && this._liqSplit();
+    if (liq) {
       const auto = r.autoClear;
-      FL.mat.uniforms.tBg.value = this.rtTrans.texture;
-      FL.mat.uniforms.uRes.value.set(this.rtScene.width, this.rtScene.height);
+      FU.tBg.value = this.rtTrans.texture;
+      FU.uRes.value.set(this.rtScene.width, this.rtScene.height);
+      FU.uFD.value = split ? 1 : 0;
+      if (split) FU.tFD.value = this.jelly.renderFrontDepth(this.camera);
       r.autoClear = false;
       r.setRenderTarget(this.rtScene);
       r.render(FL.scene, this.camera);
@@ -2944,7 +2952,8 @@ export class App {
       BU.uRes.value.set(this.rtScene.width, this.rtScene.height);
     }
 
-    // (the scene before its glitter, kept: see _keepBase)
+    // (the scene before its glitter, kept: see _keepBase - not with liquid to draw in front, after it)
+    if (split) keepBase = false;
     if (keepBase) {
       const { pw, ph } = this.size;
       if (this._base && (this._base.width !== pw || this._base.height !== ph)) {
@@ -2973,8 +2982,51 @@ export class App {
       this.camera.layers.mask = L;
       r.autoClear = auto;
     }
+    // (the liquid in front of the jelly: all that's there now seen through it)
+    if (split) {
+      const auto = r.autoClear;
+      copy();
+      FU.tBg.value = this.rtTrans.texture;
+      FU.uFD.value = 2;
+      r.autoClear = false;
+      r.setRenderTarget(this.rtScene);
+      r.render(FL.scene, this.camera);
+      r.autoClear = auto;
+    }
+    FU.uFD.value = 0;
 
     this._post();
+  }
+
+  // Any liquid out of the cubes (Fluid.looseBox) over a piece of jelly on the screen - some of it may be in front
+  // of it: drawn in two (see render). (Box against box, both as seen: a pool well away, a cube full of liquid
+  // and nothing spilt, it's drawn whole, as ever - one pass, no look at the jelly's depth.)
+  _liqSplit() {
+    const B = this.fluid.looseBox(this._lbox || (this._lbox = new Float64Array(6)));
+    if (!B) return false;
+    const v = this._panV, cam = this.camera, box = this._lrect || (this._lrect = new Float64Array(4));
+    // (its box on the screen - none, all of it: a corner behind the eye)
+    const rect = (b, out) => {
+      out[0] = out[1] = Infinity;
+      out[2] = out[3] = -Infinity;
+      for (let c = 0; c < 8; c++) {
+        v.set(c & 1 ? b[3] : b[0], c & 2 ? b[4] : b[1], c & 4 ? b[5] : b[2]).project(cam);
+        if (!(v.z < 1)) return false;
+        if (v.x < out[0]) out[0] = v.x;
+        if (v.y < out[1]) out[1] = v.y;
+        if (v.x > out[2]) out[2] = v.x;
+        if (v.y > out[3]) out[3] = v.y;
+      }
+      return true;
+    };
+    if (!rect(B, box)) return true;
+    const pr = this._prect || (this._prect = new Float64Array(4));
+    for (const pc of this.sb.pieces) {
+      if (!pc?.bbox) continue;
+      if (!rect(pc.bbox, pr)) return true;
+      if (pr[0] < box[2] && box[0] < pr[2] && pr[1] < box[3] && box[1] < pr[3]) return true;
+    }
+    return false;
   }
 
   // bloom, edges, the picture to the screen
