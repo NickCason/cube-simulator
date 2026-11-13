@@ -220,6 +220,9 @@ export class Fluid {
     this._poSt = new Uint8Array(1024);
     this._poG = 0;
     this._poTh = new Float64Array(MAX_CUBES); // (each cube's wall's thickness - see _pushOut)
+    this._po3 = new Float64Array(3); // (and where a point taken out went: see _tryRest)
+    this._poNet = new Uint8Array(MAX_CUBES); // (whole cubes whose own liquid's looked at too - see _pushOut)
+    this._poForm = { bow: 0 }; // (a bowed cube's shape, for its distance: see shapeSDF)
     this._cupSeq = 0;
     this._cupOf = new WeakMap();
     // (each drop by a cut piece: which (its id), which side of its walls - 1 out past a wall, 2 in its hollow, 3 out
@@ -2498,11 +2501,15 @@ export class Fluid {
       this._poSt = new Uint8Array(cap);
     }
     const gen = ++this._poG, KEY = this._poKey, GEN = this._poGen, RES = this._poRes, ST = this._poSt, PB = this._posBits, msk = cap - 1;
-    const WK = this._wallK, FOK = this.frameOK;
+    const WK = this._wallK, FOK = this.frameOK, NET = this._poNet;
+    // (a whole cube's own liquid's kept to its walls already - see _snapWalls - by its fit, a centimetre in: still,
+    // and its faces flat, to that and a centimetre or two. Moving - lifted by its top and let fall, 5 cm into its lid
+    // - or its faces bowed, 8: looked at here too, and let a centimetre in, no more)
+    NET.fill(0);
+    for (const pc of PC) if (pc && FOK[pc.cube] && (!pc.asleep || sb.cBow[pc.cube])) NET[pc.cube] = 1;
     for (let v = 0; v < nv; v++) {
-      // (a whole cube's own liquid: kept to its walls already - see _snapWalls. Most of the time, all of it)
       const l = inn[v];
-      if (l > 0 && FOK[l - 1]) continue;
+      if (l > 0 && FOK[l - 1] && !NET[l - 1]) continue;
       const o = v * 3, ox = pos[o], oy = pos[o + 1], oz = pos[o + 2];
       // (seen already: as that one went)
       const kx = PB[o], ky = PB[o + 1], kz = PB[o + 2];
@@ -2527,59 +2534,92 @@ export class Fluid {
       // (in the jelly? - nowhere near any, at once)
       const t = this._inTet(ox, oy, oz);
       if (t < 0) continue;
-      let px = ox, py = oy, pz = oz, ok = false, wx = 0, wy = 0, wz = 0;
-      const k = TC[t], S = this._cupOf.get(PC[TP[t]]), cup = S && WK.get(S.id) === S;
-      if (!(sb.cBow[k] || sb.cLobeA[k] > 0)) {
+      let px = ox, py = oy, pz = oz, ok = false;
+      const k = TC[t], S = this._cupOf.get(PC[TP[t]]), cup = S && WK.get(S.id) === S, P3 = this._po3;
+      {
         // (where it is in the jelly as made)
         this._grads(T, X, t, px, py, pz);
         const t4 = t * 4, a3 = T[t4] * 3, b3 = T[t4 + 1] * 3, c3 = T[t4 + 2] * 3, d3 = T[t4 + 3] * 3;
         const r0 = bs[0] * XR[a3] + bs[1] * XR[b3] + bs[2] * XR[c3] + bs[3] * XR[d3], r1 = bs[0] * XR[a3 + 1] + bs[1] * XR[b3 + 1] + bs[2] * XR[c3 + 1] + bs[3] * XR[d3 + 1], r2 = bs[0] * XR[a3 + 2] + bs[1] * XR[b3 + 2] + bs[2] * XR[c3 + 2] + bs[3] * XR[d3 + 2];
-        // (the rounded box it's of: how far out of it, and which way)
-        const half = 0.5 * sb.cSize[k], bev = sb.cBevel[k], hb = half - bev, th = TH[k], cx = r0 - k * REST_STEP;
-        const qx = Math.abs(cx) - hb, qy = Math.abs(r1) - hb, qz = Math.abs(r2) - hb, ux = qx > 0 ? qx : 0, uy = qy > 0 ? qy : 0, uz = qz > 0 ? qz : 0;
-        const pl = Math.sqrt(ux * ux + uy * uy + uz * uz), mq = qx > qy ? (qx > qz ? qx : qz) : qy > qz ? qy : qz, sd = pl + (mq < 0 ? mq : 0) - bev;
-        let gx = 0, gy = 0, gz = 0;
-        if (pl > 1e-9) (gx = ux / pl), (gy = uy / pl), (gz = uz / pl);
-        else if (mq === qx) gx = 1;
-        else if (mq === qy) gy = 1;
-        else gz = 1;
-        if (cx < 0) gx = -gx;
-        if (r1 < 0) gy = -gy;
-        if (r2 < 0) gz = -gz;
-        // (the ways out: its own side's the nearer by 3 cm. Into the hollow: straight in from the rounded box - its
-        // hollow's edges rounded as much less as the wall's thick - or, a wall thicker than they're rounded, its
-        // hollow a box: onto it)
-        const own = inn[v] === k + 1, dOut = -sd;
-        let dIn = sd + th, mx = -gx * (dIn + mg), my = -gy * (dIn + mg), mz = -gz * (dIn + mg);
-        if (bev < th) {
-          const h = half - th - mg, tx = Math.min(h, Math.max(-h, cx)), ty = Math.min(h, Math.max(-h, r1)), tz = Math.min(h, Math.max(-h, r2));
-          (mx = tx - cx), (my = ty - r1), (mz = tz - r2);
-          dIn = Math.sqrt(mx * mx + my * my + mz * mz);
+        // (the shape it's of - a rounded box, or its faces bowed (Faces): how far out of it, and which way - the
+        // bowed one's by its own distance, its way by a step either side)
+        const half = 0.5 * sb.cSize[k], bev = sb.cBevel[k], hb = half - bev, th = TH[k], cx = r0 - k * REST_STEP, bow = sb.cBow[k];
+        let sd, gx = 0, gy = 0, gz = 0;
+        if (!bow) {
+          const qx = Math.abs(cx) - hb, qy = Math.abs(r1) - hb, qz = Math.abs(r2) - hb, ux = qx > 0 ? qx : 0, uy = qy > 0 ? qy : 0, uz = qz > 0 ? qz : 0;
+          const pl = Math.sqrt(ux * ux + uy * uy + uz * uz), mq = qx > qy ? (qx > qz ? qx : qz) : qy > qz ? qy : qz;
+          sd = pl + (mq < 0 ? mq : 0) - bev;
+          if (pl > 1e-9) (gx = ux / pl), (gy = uy / pl), (gz = uz / pl);
+          else if (mq === qx) gx = 1;
+          else if (mq === qy) gy = 1;
+          else gz = 1;
+          if (cx < 0) gx = -gx;
+          if (r1 < 0) gy = -gy;
+          if (r2 < 0) gz = -gz;
+        } else {
+          const F = this._poForm, e = 0.002 * sb.cSize[k];
+          F.bow = bow;
+          sd = shapeSDF(cx, r1, r2, half, bev, F);
+          gx = shapeSDF(cx + e, r1, r2, half, bev, F) - shapeSDF(cx - e, r1, r2, half, bev, F);
+          gy = shapeSDF(cx, r1 + e, r2, half, bev, F) - shapeSDF(cx, r1 - e, r2, half, bev, F);
+          gz = shapeSDF(cx, r1, r2 + e, half, bev, F) - shapeSDF(cx, r1, r2 - e, half, bev, F);
+          const gl = Math.sqrt(gx * gx + gy * gy + gz * gz) || 1;
+          (gx /= gl), (gy /= gl), (gz /= gl);
         }
-        let best = dIn + (own ? 0 : 0.03);
-        if (dOut + (own ? 0.03 : 0) < best) (best = dOut + (own ? 0.03 : 0)), (mx = gx * (dOut + mg)), (my = gy * (dOut + mg)), (mz = gz * (dOut + mg));
+        // (a whole cube's own: a centimetre into its wall, as _snapWalls has it - deeper, back to that)
+        if (FOK[k] && inn[v] === k + 1) {
+          const tol = Math.min(0.01, 0.2 * th), dIn = sd + th;
+          if (!(dIn > tol + 0.005)) continue;
+          let mx, my, mz;
+          if (bev < th && !bow) {
+            const h = half - th + tol, tx = Math.min(h, Math.max(-h, cx)), ty = Math.min(h, Math.max(-h, r1)), tz = Math.min(h, Math.max(-h, r2));
+            (mx = tx - cx), (my = ty - r1), (mz = tz - r2);
+          } else (mx = -gx * (dIn - tol)), (my = -gy * (dIn - tol)), (mz = -gz * (dIn - tol));
+          const bo = t * 9, l1 = BI[bo] * mx + BI[bo + 1] * my + BI[bo + 2] * mz, l2 = BI[bo + 3] * mx + BI[bo + 4] * my + BI[bo + 5] * mz, l3 = BI[bo + 6] * mx + BI[bo + 7] * my + BI[bo + 8] * mz;
+          px = ox + (X[b3] - X[a3]) * l1 + (X[c3] - X[a3]) * l2 + (X[d3] - X[a3]) * l3;
+          py = oy + (X[b3 + 1] - X[a3 + 1]) * l1 + (X[c3 + 1] - X[a3 + 1]) * l2 + (X[d3 + 1] - X[a3 + 1]) * l3;
+          pz = oz + (X[b3 + 2] - X[a3 + 2]) * l1 + (X[c3 + 2] - X[a3 + 2]) * l2 + (X[d3 + 2] - X[a3 + 2]) * l3;
+          pos[o] = px; pos[o + 1] = py; pos[o + 2] = pz;
+          moved++;
+          ST[h] = 1;
+          RES[h * 3] = px; RES[h * 3 + 1] = py; RES[h * 3 + 2] = pz;
+          continue;
+        }
+        // the ways out: into the hollow (straight in - a wall thicker than a plain box's edges are rounded, its
+        // hollow a box: onto it), out of its outside, up out of its piece's cut
+        const dOut = -sd;
+        let dIn = sd + th, ix = -gx * (dIn + mg), iy = -gy * (dIn + mg), iz = -gz * (dIn + mg);
+        if (bev < th && !bow) {
+          const h = half - th - mg, tx = Math.min(h, Math.max(-h, cx)), ty = Math.min(h, Math.max(-h, r1)), tz = Math.min(h, Math.max(-h, r2));
+          (ix = tx - cx), (iy = ty - r1), (iz = tz - r2);
+          dIn = Math.sqrt(ix * ix + iy * iy + iz * iz);
+        }
+        const ox2 = gx * (dOut + mg), oy2 = gy * (dOut + mg), oz2 = gz * (dOut + mg);
+        // (which: a cut piece holding liquid, its own side's - the nearer by 3 cm - or its cut, the nearest; a
+        // whole cube, the room's liquid out of its outside; a piece of a cut one that holds none of its own - its
+        // liquid not marked out as its own - back the way its liquid lies: the surface faces away from it)
+        let inFirst;
+        if (cup || FOK[k]) inFirst = dIn + (inn[v] === k + 1 ? 0 : 0.03) <= dOut + (inn[v] === k + 1 ? 0.03 : 0);
+        else {
+          const bo = t * 9, n0 = nrm[o], n1 = nrm[o + 1], n2 = nrm[o + 2];
+          const l1 = BI[bo] * gx + BI[bo + 1] * gy + BI[bo + 2] * gz, l2 = BI[bo + 3] * gx + BI[bo + 4] * gy + BI[bo + 5] * gz, l3 = BI[bo + 6] * gx + BI[bo + 7] * gy + BI[bo + 8] * gz;
+          const out = ((X[b3] - X[a3]) * l1 + (X[c3] - X[a3]) * l2 + (X[d3] - X[a3]) * l3) * n0 + ((X[b3 + 1] - X[a3 + 1]) * l1 + (X[c3 + 1] - X[a3 + 1]) * l2 + (X[d3 + 1] - X[a3 + 1]) * l3) * n1 + ((X[b3 + 2] - X[a3 + 2]) * l1 + (X[c3 + 2] - X[a3 + 2]) * l2 + (X[d3 + 2] - X[a3 + 2]) * l3) * n2;
+          // (facing out of the cube - its liquid inside, behind it: into the hollow; facing in, out; edge on, nearer)
+          inFirst = out > 0.2 ? true : out < -0.2 ? false : dIn <= dOut;
+        }
+        let cutBest = Infinity, cx2 = 0, cy2 = 0, cz2 = 0;
         if (cup && S.cutOK && S.rbTopo === sb.topoVersion)
           for (let side = 0; side < 6; side++) {
             if (!(S.cutOK & (1 << side))) continue;
             const so = side * 3, cN = S.cutN, cP = S.cutP, dc = (cP[so] - r0) * cN[so] + (cP[so + 1] - r1) * cN[so + 1] + (cP[so + 2] - r2) * cN[so + 2];
-            if (dc > 0 && dc < best) (best = dc), (mx = cN[so] * (dc + mg)), (my = cN[so + 1] * (dc + mg)), (mz = cN[so + 2] * (dc + mg));
+            if (dc > 0 && dc < cutBest) (cutBest = dc), (cx2 = cN[so] * (dc + mg)), (cy2 = cN[so + 1] * (dc + mg)), (cz2 = cN[so + 2] * (dc + mg));
           }
-        // (back in the room by its tet's stretch and turn)
-        const bo = t * 9, l1 = BI[bo] * mx + BI[bo + 1] * my + BI[bo + 2] * mz, l2 = BI[bo + 3] * mx + BI[bo + 4] * my + BI[bo + 5] * mz, l3 = BI[bo + 6] * mx + BI[bo + 7] * my + BI[bo + 8] * mz;
-        wx = (X[b3] - X[a3]) * l1 + (X[c3] - X[a3]) * l2 + (X[d3] - X[a3]) * l3;
-        wy = (X[b3 + 1] - X[a3 + 1]) * l1 + (X[c3 + 1] - X[a3 + 1]) * l2 + (X[d3 + 1] - X[a3 + 1]) * l3;
-        wz = (X[b3 + 2] - X[a3 + 2]) * l1 + (X[c3 + 2] - X[a3 + 2]) * l2 + (X[d3 + 2] - X[a3 + 2]) * l3;
-        px += wx; py += wy; pz += wz;
-        if (this._inTet(px, py, pz) < 0) ok = true;
-        else {
-          // (a facet standing proud: on that way)
-          const wl = Math.sqrt(wx * wx + wy * wy + wz * wz);
-          if (wl > 1e-9)
-            for (let s = 1; s <= 6 && !ok; s++) {
-              const e = (0.005 * s) / wl;
-              if (this._inTet(px + wx * e, py + wy * e, pz + wz * e) < 0) (px += wx * e), (py += wy * e), (pz += wz * e), (ok = true);
-            }
-        }
+        // (the cut, where it's nearer than the way chosen; then that way; then the other)
+        const first = inFirst ? dIn + (cup && inn[v] !== k + 1 ? 0.03 : 0) : dOut + (cup && inn[v] === k + 1 ? 0.03 : 0);
+        if (cutBest < first) ok = this._tryRest(t, ox, oy, oz, cx2, cy2, cz2);
+        if (!ok) ok = inFirst ? this._tryRest(t, ox, oy, oz, ix, iy, iz) : this._tryRest(t, ox, oy, oz, ox2, oy2, oz2);
+        if (!ok) ok = inFirst ? this._tryRest(t, ox, oy, oz, ox2, oy2, oz2) : this._tryRest(t, ox, oy, oz, ix, iy, iz);
+        if (ok) (px = P3[0]), (py = P3[1]), (pz = P3[2]);
       }
       if (!ok) {
         // (along its facing, back toward its own liquid first, else on)
@@ -2627,6 +2667,31 @@ export class Fluid {
     }
     this._pushedN = moved;
     this._droppedN = nb;
+  }
+
+  // (from (ox, oy, oz), in tet t, moved by m as the jelly was made - in the room by that tet's stretch and turn:
+  // out of the jelly there? - or, a flat facet across a rounded edge standing proud of it, a little further on that
+  // way, half a centimetre at a time. Where it ends up, in _po3)
+  _tryRest(t, ox, oy, oz, mx, my, mz) {
+    const sb = this.app.sb, T = sb.T, X = sb.x, BI = sb.B, P3 = this._po3, t4 = t * 4, bo = t * 9;
+    const a3 = T[t4] * 3, b3 = T[t4 + 1] * 3, c3 = T[t4 + 2] * 3, d3 = T[t4 + 3] * 3;
+    const l1 = BI[bo] * mx + BI[bo + 1] * my + BI[bo + 2] * mz, l2 = BI[bo + 3] * mx + BI[bo + 4] * my + BI[bo + 5] * mz, l3 = BI[bo + 6] * mx + BI[bo + 7] * my + BI[bo + 8] * mz;
+    const wx = (X[b3] - X[a3]) * l1 + (X[c3] - X[a3]) * l2 + (X[d3] - X[a3]) * l3;
+    const wy = (X[b3 + 1] - X[a3 + 1]) * l1 + (X[c3 + 1] - X[a3 + 1]) * l2 + (X[d3 + 1] - X[a3 + 1]) * l3;
+    const wz = (X[b3 + 2] - X[a3 + 2]) * l1 + (X[c3 + 2] - X[a3 + 2]) * l2 + (X[d3 + 2] - X[a3 + 2]) * l3;
+    let px = ox + wx, py = oy + wy, pz = oz + wz;
+    if (this._inTet(px, py, pz) >= 0) {
+      const wl = Math.sqrt(wx * wx + wy * wy + wz * wz);
+      let ok = false;
+      if (wl > 1e-9)
+        for (let s = 1; s <= 6 && !ok; s++) {
+          const e = (0.005 * s) / wl;
+          if (this._inTet(px + wx * e, py + wy * e, pz + wz * e) < 0) (px += wx * e), (py += wy * e), (pz += wz * e), (ok = true);
+        }
+      if (!ok) return false;
+    }
+    P3[0] = px; P3[1] = py; P3[2] = pz;
+    return true;
   }
 
   // (cube k's bend from its best fit at r - where in it as made, its middle at 0 - into _bd: its points' round there,
