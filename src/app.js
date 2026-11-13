@@ -45,7 +45,7 @@ import { captureCube } from './cubecode.js';
 import { bevelPoint, unbevelPoint, CRIMP_AMP, CRIMP_DEEPEST } from './sim/mesh.js';
 import { RUBIK_COLORS, rubikCellAt, TRIM } from './styles.js';
 import { DEFAULT_STYLE, TEXTURES, EDGES, LAYER_PRESETS, MIN_LAYERS, MAX_LAYERS, MAX_REPEAT, resolveFlavor, flavorMainHex, nextLayerColor } from './styles.js';
-import { GRAD_SHAPE_INDEX, gradStops, gradT, gradColorAt, copyLayers, tileLocal, MAX_TILES } from './styles.js';
+import { GRAD_SHAPE_INDEX, gradStops, gradT, gradColorAt, copyLayers, tileLocal, MAX_TILES, copyGlitterMix, glitterPart } from './styles.js';
 import { freeNodes, freeNodesDefault, freeColorAt, FREE_K_MIN, FREE_K_MAX } from './freeform.js';
 import { randomGradient } from './genetics.js';
 import { SETTINGS, resolveSettings } from './settings.js';
@@ -452,6 +452,7 @@ export class App {
     if (!Array.isArray(st.layers.colors) || st.layers.colors.length < MIN_LAYERS) st.layers.colors = [...DEFAULT_STYLE.layers.colors];
     st.layers.colors = st.layers.colors.slice(0, MAX_LAYERS);
     st.layers = copyLayers(st.layers);
+    st.glitterMix = st.glitterMix || st.glitter === 'custom' ? copyGlitterMix(st.glitterMix) : null;
     if (!TEXTURES[st.texture]) st.texture = DEFAULT_STYLE.texture;
     if (!EDGES[st.edges]) st.edges = DEFAULT_STYLE.edges;
     return st;
@@ -811,6 +812,11 @@ export class App {
 
   setGlitter(id) {
     if (!(id in GLITTER_MODES)) return;
+    // (its own, the first time: what it had, and holo stars - something to start from, made in the studio)
+    if (id === 'custom' && !this.style.glitterMix) {
+      const was = this.style.glitter, star = glitterPart('holo', { shape: 'star', size: 1.8, share: 0.35 });
+      this.style.glitterMix = copyGlitterMix(was !== 'off' && was !== 'custom' ? [glitterPart(was, { share: 0.65 }), star] : [glitterPart('gold', { share: 0.65 }), star]);
+    }
     // (snow: a snow globe - full of liquid, the snow riding it; made solid, it's silver - see setSetting)
     if (id === 'snow' && this.style.glitter !== 'snow' && !(this.settings.liquid > 0.5)) {
       this.tune.liquid = 1;
@@ -819,6 +825,15 @@ export class App {
     this.style.glitter = id;
     this.applyStyle();
     if (id !== 'off') this.sb.impulse(0, 0.6, 0, 0, -1, 0, 3, 0.8); // a jiggle to show it off
+  }
+
+  // Its own glitter's makings (the studio: see ui.js), as it's made: live, the flakes where they are - final, a
+  // jiggle to show it off.
+  setGlitterMix(mix, final = false) {
+    this.style.glitterMix = copyGlitterMix(mix);
+    this.style.glitter = 'custom';
+    this.applyStyle();
+    if (final) this.sb.impulse(0, 0.6, 0, 0, -1, 0, 3, 0.5);
   }
 
   setTexture(id) {
@@ -847,8 +862,11 @@ export class App {
   // One fine-tuning slider changed (value in physical units).
   setSetting(key, value, final = true) {
     this.tune[key] = value;
-    // (a snow globe made solid: snow in jelly - silver, till there's a glitter studio)
-    if (key === 'liquid' && !(value > 0.5) && this.style.glitter === 'snow') this.style.glitter = 'silver';
+    // (a snow globe made solid: snow in jelly - its own glitter, snowflakes, held still)
+    if (key === 'liquid' && !(value > 0.5) && this.style.glitter === 'snow') {
+      this.style.glitter = 'custom';
+      this.style.glitterMix = copyGlitterMix([glitterPart('snow')]);
+    }
     if (!PER_CUBE(key)) for (const cb of this.cubes) cb.tune[key] = value; // (the same in every cube)
     if (key === 'size') {
       if (final) this.setCubeSize(value);
@@ -2209,7 +2227,7 @@ export class App {
     while (used.has(slot)) slot++;
     const flavors = ['cherry', 'lime', 'blue', 'grape', 'orange', 'lemon', 'watermelon', 'cola'];
     const style = c
-      ? { flavor: c.flavor, layers: copyLayers(c.layers), texture: c.texture, edges: EDGES[c.edges] ? c.edges : DEFAULT_STYLE.edges, glitter: c.glitter, rubik: Number.isFinite(c.rubik) ? c.rubik : 1, ...(c.rubikState ? { rubikState: c.rubikState } : {}), trim: TRIM[c.trim] ? c.trim : 'none', eyes: copyEyes(c.eyes), surface: SURFACE[c.surface] ? c.surface : 'none' }
+      ? { flavor: c.flavor, layers: copyLayers(c.layers), texture: c.texture, edges: EDGES[c.edges] ? c.edges : DEFAULT_STYLE.edges, glitter: c.glitter, glitterMix: c.glitter === 'custom' ? copyGlitterMix(c.glitterMix) : null, rubik: Number.isFinite(c.rubik) ? c.rubik : 1, ...(c.rubikState ? { rubikState: c.rubikState } : {}), trim: TRIM[c.trim] ? c.trim : 'none', eyes: copyEyes(c.eyes), surface: SURFACE[c.surface] ? c.surface : 'none' }
       : { flavor: flavors[Math.floor(Math.random() * flavors.length)], layers: copyLayers(DEFAULT_STYLE.layers), texture: 'jello', edges: DEFAULT_STYLE.edges, glitter: 'off', eyes: Math.random() < 0.12 ? copyEyes(EYE_FACES.pair) : [], surface: Math.random() < 0.2 ? SURFACES[1 + Math.floor(Math.random() * (SURFACES.length - 1))].id : 'none' };
     // (its own material sliders; the world's as everyone's)
     const tune = {};
@@ -2483,6 +2501,7 @@ export class App {
     for (const [j, c] of sc.cubes.entries()) {
       if (j === keepSel || 1 + more.length >= MAX_CUBES || !c || !c.style || !TEXTURES[c.style.texture]) continue;
       const style = { ...DEFAULT_STYLE, ...c.style, layers: copyLayers({ ...DEFAULT_STYLE.layers, ...(c.style.layers || {}) }), eyes: copyEyes(c.style.eyes), surface: SURFACE[c.style.surface] ? c.style.surface : 'none' };
+      style.glitterMix = style.glitterMix || style.glitter === 'custom' ? copyGlitterMix(style.glitterMix) : null;
       if (!EDGES[style.edges]) style.edges = DEFAULT_STYLE.edges;
       const tune = {};
       for (const k of Object.keys(this.tune)) if (!PER_CUBE(k)) tune[k] = this.tune[k];
@@ -2515,6 +2534,7 @@ export class App {
     s.layers = copyLayers(c.layers);
     s.texture = c.texture;
     s.glitter = c.glitter;
+    if (c.glitter === 'custom') s.glitterMix = copyGlitterMix(c.glitterMix);
     if (Number.isFinite(c.rubik)) s.rubik = c.rubik;
     // (a Rubik's as it's been turned - or as its scramble left it)
     if (c.rubikState) s.rubikState = c.rubikState;

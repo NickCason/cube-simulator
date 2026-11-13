@@ -1,5 +1,6 @@
 import { FLAVORS, TEXTURES, EDGES, TRIMS, GLITTERS, LAYER_PRESETS, MIN_LAYERS, MAX_LAYERS, MAX_REPEAT, MAX_TILES, flavorSwatchCSS, flavorMainHex, materialSwatchCSS } from '../styles.js';
 import { SETTINGS, settingWord, settingNum } from '../settings.js';
+import { GlitterStudio } from './glitterstudio.js';
 import { Cubby } from './cubby.js';
 import { Clips } from './clips.js';
 import { StackPanel, STACK_ICON } from './stackpanel.js';
@@ -451,10 +452,14 @@ export class UI {
       b.innerHTML = gl.id === 'off' ? gl.name : `<i class="gdot" style="background:${gl.dot}"></i>${gl.name}`;
       b.addEventListener('click', () => {
         app.audio.ui();
+        const was = app.style.glitter;
         app.setGlitter(gl.id);
+        if (gl.id === 'custom' && was !== 'custom') this.hint('Your own glitter · what it’s made of, just below', 2600);
       });
       glitSeg.appendChild(b);
     }
+    // (its own: made just under the row)
+    this.glitterStudio = new GlitterStudio(app, glitSeg.closest('.sec'), readout);
     const edgeSeg = this.paletteEl.querySelector('.seg.edges');
     for (const [id, e] of Object.entries(EDGES)) {
       const b = document.createElement('button');
@@ -864,6 +869,7 @@ export class UI {
       input.style.setProperty('--p', `${t * 100}%`);
       readout(word, settingWord(def, v), settingNum(def, v));
     }
+    this.glitterStudio?.setSettings(st);
     const reset = this.tuneEl.querySelector('.reset');
     reset.textContent = 'Back to square one';
     reset.title = `Every slider back to ${tex.name}'s own`;
@@ -1008,6 +1014,7 @@ export class UI {
     this._surfHex = hex;
     if (this._surfsPainted) this._tintSurfaces();
     for (const b of this.paletteEl.querySelectorAll('.opt[data-glit]')) b.classList.toggle('active', b.dataset.glit === style.glitter);
+    this.glitterStudio?.render(style);
     const liquid = this.app.settings.liquid > 0.5;
     for (const b of this.paletteEl.querySelectorAll('.opt[data-fill]')) b.classList.toggle('active', (b.dataset.fill === 'liquid') === liquid);
     this._showLiquid?.();

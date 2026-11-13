@@ -11,7 +11,7 @@
 // arrival is - see Cubiplication._split and ui/cubiplied.js).
 
 import { SETTINGS, resolveSettings, settingWord } from './settings.js';
-import { TEXTURES, EDGES, GLITTERS, MIN_LAYERS, MAX_LAYERS, MAX_REPEAT, resolveFlavor, flavorMainHex, gradStops, copyLayers } from './styles.js';
+import { TEXTURES, EDGES, GLITTERS, MIN_LAYERS, MAX_LAYERS, MAX_REPEAT, resolveFlavor, flavorMainHex, gradStops, copyLayers, copyGlitterMix } from './styles.js';
 import { freeNodes } from './freeform.js';
 import { EYE_STYLES, EYE_SIZES, EYE_R_MIN, EYE_R_MAX, MAX_EYES, copyEyes, onSurface, eyeFrame, mirrorEye } from './eyes.js';
 import { SURFACES, SURFACE } from './surfaces.js';
@@ -185,7 +185,8 @@ export function mutate(style, tune, { rnd = Math.random, gen = 0, boost = 1 } = 
   }
   if (chance(0.1)) {
     const now = style.glitter || 'off';
-    const to = now === 'off' ? pick(rnd, GLITTERS.filter((g) => g.id !== 'off')).id : rnd() < 0.3 ? 'off' : pick(rnd, GLITTERS.filter((g) => g.id !== now && g.id !== 'off')).id;
+    // (one of the six: its own - made in the studio - isn't come by by chance)
+    const to = now === 'off' ? pick(rnd, GLITTERS.filter((g) => g.id !== 'off' && g.id !== 'custom')).id : rnd() < 0.3 ? 'off' : pick(rnd, GLITTERS.filter((g) => g.id !== now && g.id !== 'off' && g.id !== 'custom')).id;
     style.glitter = to;
     add(to === 'off' ? { tier: 1, label: 'Lost its glitter', kind: 'glitter' } : { tier: now === 'off' ? 2 : 1, label: `${GLITTERS.find((g) => g.id === to).name} glitter`, kind: 'glitter' });
   }
@@ -230,6 +231,7 @@ export function mutate(style, tune, { rnd = Math.random, gen = 0, boost = 1 } = 
   const nudges = 1 + (rnd() < 0.45 ? 1 : 0);
   for (let k = 0; k < nudges; k++) add(moveSlider(style, tune, pick(rnd, DRIFT_KEYS), (rnd() - 0.5) * 0.3, 0));
   if (style.layers) style.layers = copyLayers(style.layers);
+  if (style.glitterMix) style.glitterMix = copyGlitterMix(style.glitterMix);
   mutateEyes(style, rnd, chance, add);
   mutateSurface(style, rnd, chance, add);
   return changes;

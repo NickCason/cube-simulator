@@ -3,7 +3,7 @@ import { SoftBody } from './sim/softbody.js';
 import { createStudioEnvironment } from './render/env.js';
 import { CUBE_TEX_W } from './render/jellyView.js';
 import { GRAD_N } from './render/jellyMaterials.js';
-import { DEFAULT_STYLE, TEXTURES, EDGES, resolveFlavor, copyLayers } from './styles.js';
+import { DEFAULT_STYLE, TEXTURES, EDGES, resolveFlavor, copyLayers, copyGlitterMix } from './styles.js';
 import { resolveSettings } from './settings.js';
 import { copyEyes } from './eyes.js';
 import { SURFACE } from './surfaces.js';
@@ -147,6 +147,7 @@ export class Portraits {
       texture: TEXTURES[c.texture] ? c.texture : DEFAULT_STYLE.texture,
       edges: EDGES[c.edges] ? c.edges : DEFAULT_STYLE.edges,
       glitter: c.glitter || 'off',
+      glitterMix: c.glitter === 'custom' ? copyGlitterMix(c.glitterMix) : null,
       rubik: Number.isFinite(c.rubik) ? c.rubik : 1,
       ...(c.rubikState ? { rubikState: c.rubikState } : {}),
       trim: c.trim || 'none',

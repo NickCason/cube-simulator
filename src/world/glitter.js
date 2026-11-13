@@ -3,13 +3,34 @@ import { CUBE_GLSL } from '../render/jellyMaterials.js';
 import { roundBoxSDF } from '../sim/mesh.js';
 import { REST_STEP } from '../sim/softbody.js';
 import { frameOf } from '../tools/cubey.js';
+import { GLITTER_SHAPES, copyGlitterMix } from '../styles.js';
 
 // (a grid cell's key: i, j, k each within ±500)
 const cellKey = (i, j, k) => ((i + 512) * 1024 + (j + 512)) * 1024 + (k + 512);
 
 const MAX = 9000;
-export const GLITTER_MODES = { off: -1, silver: 0, gold: 1, holo: 2, rose: 3, cubic: 4, snow: 5 };
-const SNOW = 5;
+export const GLITTER_MODES = { off: -1, silver: 0, gold: 1, holo: 2, rose: 3, cubic: 4, snow: 5, custom: 8 };
+const SNOW = 5, CUBE = 1;
+// A cube's glitter as what it's made of, for the flakes: each ingredient's finish (the six as GLITTER_MODES -
+// the cubic's its white with fire - then 6 a colour of its own, metallic, 7 iridescent), shape (GLITTER_SHAPES'
+// place: 1 the cube), colour (linear), size (times the flake's own; a snowflake bigger, a cube a little) and share
+// of the flakes, summed to 1 by the last. Its own (custom) - or one of the six, all of it.
+export function glitterMix(style) {
+  const one = (kind, g) => {
+    const f = kind === 'color' ? (g.iri ? 7 : 6) : GLITTER_MODES[kind] ?? 0, sh = Math.max(0, GLITTER_SHAPES.findIndex((q) => q.id === g.shape));
+    const h = parseInt((g.color || '#ffffff').slice(1), 16), lin = (c) => Math.pow(c / 255, 2.2);
+    return { f, sh, col: [lin((h >> 16) & 255), lin((h >> 8) & 255), lin(h & 255)], z: (g.size || 1) * (f === SNOW ? 1.6 : 1) * (sh === CUBE ? 1.3 : 1), w: g.share ?? 1 };
+  };
+  const id = style?.glitter;
+  if (!id || id === 'off' || !(id in GLITTER_MODES)) return [];
+  const parts = id === 'custom' ? copyGlitterMix(style.glitterMix).map((g) => one(g.kind, g)) : [one(id, { shape: id === 'cubic' ? 'cube' : 'hex' })];
+  let sum = 0;
+  for (const q of parts) sum += q.w;
+  let acc = 0;
+  for (const q of parts) q.w = (acc += q.w / (sum || 1));
+  parts[parts.length - 1].w = 1;
+  return parts;
+}
 // A snow globe's flakes: loose in it (see Glitter._loose). How much of the
 // pull they feel (gravity less the cube's own acceleration: they're barely
 // heavier than the water they're in), how quickly the water drags them its
@@ -82,6 +103,11 @@ export class Glitter {
     this._bbSig = NaN;
     this.looseMoved = false;
     this.seed = new Float32Array(MAX * 3);
+    // (each flake's own way along it, as made - its shape turns with the jelly by it, a heart not flipped
+    // round as the jelly turns it past a pole - and which of its cube's ingredients it is: see _anchor, _paint)
+    this.t0 = new Float32Array(MAX * 3);
+    this.ltn = new Float32Array(MAX * 3); // (and a loose one's, tumbling: see _loose)
+    this.mixR = new Float32Array(MAX);
     for (let i = 0; i < MAX; i++) {
       this.u[i * 3] = rnd() * 2 - 1;
       this.u[i * 3 + 1] = rnd() * 2 - 1;
@@ -98,6 +124,13 @@ export class Glitter {
       this.lw[i * 3] = wr * Math.cos(wa);
       this.lw[i * 3 + 1] = wz;
       this.lw[i * 3 + 2] = wr * Math.sin(wa);
+      // (square to its facing: its spin axis less its facing - no more of the sequence drawn, its flakes where
+      // they were)
+      const nx = this.n0[i * 3], ny = this.n0[i * 3 + 1], nz = this.n0[i * 3 + 2], d = this.lw[i * 3] * nx + wz * ny + this.lw[i * 3 + 2] * nz;
+      let tx = this.lw[i * 3] - d * nx, ty = wz - d * ny, tz = this.lw[i * 3 + 2] - d * nz, tl = Math.hypot(tx, ty, tz);
+      if (tl < 1e-3) (tx = -nz), (ty = 0), (tz = nx), (tl = Math.hypot(tx, tz) || 1);
+      this.t0[i * 3] = tx / tl; this.t0[i * 3 + 1] = ty / tl; this.t0[i * 3 + 2] = tz / tl;
+      this.mixR[i] = (i * 0.6180339887) % 1;
     }
 
     const g = new THREE.InstancedBufferGeometry();
@@ -109,7 +142,10 @@ export class Glitter {
     this.aM = ia(3);
     this.aSeed = ia(3);
     this.aInfo = ia(2);
-    this.aMode = ia(1); // (each flake its cube's glitter)
+    this.aMode = ia(1); // (each flake's finish: see glitterMix)
+    this.aShape = ia(1); // (its shape)
+    this.aCol = ia(3); // (its colour, a colour of its own)
+    this.aTan = ia(3); // (its way along it, in its tet: see t0)
     this.aRestK = ia(4); // (where it sits in its cube at rest, and which cube: its tint by that cube's colours)
     g.setAttribute('aTet', this.aTet);
     g.setAttribute('aBary', this.aBary);
@@ -117,6 +153,9 @@ export class Glitter {
     g.setAttribute('aSeed', this.aSeed);
     g.setAttribute('aInfo', this.aInfo);
     g.setAttribute('aMode', this.aMode);
+    g.setAttribute('aShape', this.aShape);
+    g.setAttribute('aCol', this.aCol);
+    g.setAttribute('aTan', this.aTan);
     g.setAttribute('aRestK', this.aRestK);
     g.instanceCount = 0;
     this.geo = g;
@@ -125,7 +164,7 @@ export class Glitter {
     const gc = new THREE.InstancedBufferGeometry();
     for (const k of ['position', 'normal', 'uv']) gc.setAttribute(k, box.getAttribute(k));
     gc.setIndex(box.getIndex());
-    for (const k of ['aTet', 'aBary', 'aM', 'aSeed', 'aInfo', 'aMode', 'aRestK']) gc.setAttribute(k, g.getAttribute(k));
+    for (const k of ['aTet', 'aBary', 'aM', 'aSeed', 'aInfo', 'aMode', 'aShape', 'aCol', 'aTan', 'aRestK']) gc.setAttribute(k, g.getAttribute(k));
     gc.instanceCount = 0;
     this.geoCube = gc;
 
@@ -170,7 +209,9 @@ export class Glitter {
         #ifdef POOL
         attribute vec3 aPosW; // (run out into a spill's pool: where it is, which way it faces - see Glitter.poolTick)
         attribute vec3 aNrmW;
+        attribute vec3 aTanW;
         #else
+        attribute vec3 aTan;
         attribute vec4 aTet;
         attribute vec4 aBary;
         attribute vec3 aM;
@@ -178,8 +219,12 @@ export class Glitter {
         #endif
         attribute vec3 aSeed;
         attribute float aMode;
+        attribute float aShape;
+        attribute vec3 aCol;
         attribute vec4 aRestK;
         varying float vMode;
+        varying float vShape;
+        varying vec3 vCol;
         varying vec3 vN;
         varying vec3 vV;
         varying vec2 vUv;
@@ -191,17 +236,20 @@ export class Glitter {
           return texelFetch(uPos, ivec2(i - (i / uPosW) * uPosW, i / uPosW), 0).xyz;
         }
         void main() {
-          // (cubic flakes in the cube mesh, the rest in the flat one)
+          // (cubes in the cube mesh, the rest - flat - in the flat one)
           #ifdef CUBE
-          bool other = abs(aMode - 4.0) > 0.5;
+          bool other = abs(aShape - 1.0) > 0.5;
           #else
-          bool other = abs(aMode - 4.0) < 0.5;
+          bool other = abs(aShape - 1.0) < 0.5;
           #endif
           if (aSeed.x <= 0.0 || other) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); return; }
           vMode = aMode;
+          vShape = aShape;
+          vCol = aCol;
           #ifdef POOL
           vec3 c = aPosW;
           vec3 n = normalize(aNrmW + 1e-9);
+          vec3 tw = aTanW;
           #else
           vec3 x0 = P(aTet.x), x1 = P(aTet.y), x2 = P(aTet.z), x3 = P(aTet.w);
           vec3 c = x0 * aBary.x + x1 * aBary.y + x2 * aBary.z + x3 * aBary.w;
@@ -209,11 +257,15 @@ export class Glitter {
           // flake normal follows the deformation: cofactor(Ds) * (Dm^T n0)
           vec3 n = cross(e2, e3) * aM.x + cross(e3, e1) * aM.y + cross(e1, e2) * aM.z;
           n = normalize(n + 1e-9);
+          // (and its way along it, as the jelly stretches and turns it: a heart turned with it, never flipped)
+          vec3 tw = e1 * aTan.x + e2 * aTan.y + e3 * aTan.z;
           #endif
           // a whisper of shimmer so resting glitter still twinkles
           float ph = aSeed.z * 6.2831 + uTime * (0.5 + aSeed.z * 0.8);
           n = normalize(n + 0.03 * vec3(sin(ph), cos(ph * 1.3), sin(ph * 0.7 + 1.0)));
-          vec3 t = normalize(abs(n.y) < 0.9 ? cross(n, vec3(0.0, 1.0, 0.0)) : cross(n, vec3(1.0, 0.0, 0.0)));
+          tw -= n * dot(tw, n);
+          float twl = length(tw);
+          vec3 t = twl > 1e-7 ? tw / twl : normalize(abs(n.y) < 0.9 ? cross(n, vec3(0.0, 1.0, 0.0)) : cross(n, vec3(1.0, 0.0, 0.0)));
           vec3 b = cross(n, t);
           float r = uSize * aSeed.x;
           vec4 mvc = viewMatrix * vec4(c, 1.0);
@@ -273,6 +325,8 @@ export class Glitter {
         uniform float uCoverOn;
         uniform vec2 uCoverInv;
         varying float vMode;
+        varying float vShape;
+        varying vec3 vCol;
         uniform float uShine;
         varying vec3 vN;
         varying vec3 vV;
@@ -289,7 +343,21 @@ export class Glitter {
           // cut-glass: each face's rim catches the light
           float rim = 1.0 + 1.6 * smoothstep(0.5, 1.0, max(q.x, q.y));
           #else
-          if (max(q.x * 0.8660254 + q.y * 0.5, q.y) > 1.0) discard; // hexagonal flake
+          // (its shape: a hexagonal flake, a star, a heart, a sequin, a square, a sliver - see GLITTER_SHAPES)
+          int sh = int(vShape + 0.5);
+          if (sh == 0) { if (max(q.x * 0.8660254 + q.y * 0.5, q.y) > 1.0) discard; }
+          else if (sh == 2) {
+            // (five points: inside the line from a point's tip to the dip beside it)
+            float a = atan(vUv.x, vUv.y), seg = 1.2566371, an = mod(a + 0.6283185, seg) - 0.6283185;
+            vec2 pp = length(vUv) * vec2(sin(abs(an)), cos(an)), e = vec2(0.2468691, -0.6602348), w = pp - vec2(0.0, 1.0);
+            if (e.x * w.y - e.y * w.x > 0.0) discard;
+          } else if (sh == 3) {
+            vec2 h = vec2(vUv.x * 1.2, vUv.y * 1.25 + 0.2);
+            float r2 = dot(h, h) - 1.0;
+            if (r2 * r2 * r2 - h.x * h.x * h.y * h.y * h.y > 0.0) discard;
+          } else if (sh == 4) { float l = length(vUv); if (l > 1.0 || l < 0.26) discard; }
+          else if (sh == 5) { if (max(q.x, q.y) > 0.84) discard; }
+          else if (sh == 6) { if (q.x > 1.0 || q.y > 0.2) discard; }
           float rim = 1.0;
           #endif
           if (dot(vN, vN) < 1e-20) discard; // (a flattened flake has no normal)
@@ -307,6 +375,8 @@ export class Glitter {
           else if (uMode == 2) col = mix(vec3(1.0), hue(fract(vHue + ndv * 1.8)), 0.85);
           else if (uMode == 3) col = vec3(1.0, 0.6, 0.56);
           else if (uMode == 4) col = mix(vec3(1.0), hue(fract(vHue + ndv * 2.6 + dot(n, L) * 0.7)), 0.55); // white, with fire
+          else if (uMode == 6) col = vCol; // (a colour of its own: metallic)
+          else if (uMode == 7) col = mix(vCol, hue(fract(vHue + ndv * 1.8)), 0.45); // (iridescent: its colour, shifting)
           else col = vec3(0.92, 0.95, 1.0);
           // (snow: white flakes, seen whichever way they face - a soft body of
           // their own - and a glint now and then as they tumble)
@@ -337,14 +407,18 @@ export class Glitter {
     // (dynamic: moving, they're seen as moving - see App._stillSig)
     this.pPos = pa(3).setUsage(THREE.DynamicDrawUsage);
     this.pNrm = pa(3).setUsage(THREE.DynamicDrawUsage);
+    this.pTan = pa(3).setUsage(THREE.DynamicDrawUsage);
     this.pSeed = pa(3);
     this.pMode = pa(1);
+    this.pShape = pa(1);
+    this.pCol = pa(3);
     this.pRestK = pa(4);
+    this.poolT = new Float32Array(MAX * 3); // (each pool flake's way along it, tumbling with its facing)
     const pool = (base, keys) => {
       const q = new THREE.InstancedBufferGeometry();
       for (const k of keys) q.setAttribute(k, base.getAttribute(k));
       q.setIndex(base.getIndex());
-      for (const [k, at] of [['aPosW', this.pPos], ['aNrmW', this.pNrm], ['aSeed', this.pSeed], ['aMode', this.pMode], ['aRestK', this.pRestK]]) q.setAttribute(k, at);
+      for (const [k, at] of [['aPosW', this.pPos], ['aNrmW', this.pNrm], ['aTanW', this.pTan], ['aSeed', this.pSeed], ['aMode', this.pMode], ['aShape', this.pShape], ['aCol', this.pCol], ['aRestK', this.pRestK]]) q.setAttribute(k, at);
       q.instanceCount = 0;
       return q;
     };
@@ -398,24 +472,69 @@ export class Glitter {
     this.uniforms.uSparkle.value = this.sparkle;
     // each cube's own glitter (several cubes: those with any share the flakes)
     const cubes = this.app.cubes || [{ slot: 0, style: { glitter: this.mode } }];
-    this.groups = cubes.filter((c) => c.style.glitter && c.style.glitter !== 'off').map((c) => ({ slot: c.slot, mode: GLITTER_MODES[c.style.glitter] ?? 0, loose: false }));
+    this.groups = cubes.filter((c) => c.style.glitter && c.style.glitter !== 'off').map((c) => ({ slot: c.slot, mix: glitterMix(c.style), loose: false })).filter((g) => g.mix.length);
     // the cubes with water in them - a snow globe's, or any cube full of liquid (how thick: 0 water .. 1 near
     // solid; a snow globe's water) - and so every flake in them loose, whatever its kind
     // (a cube full of liquid isn't one: its liquid's real - the Fluid's, its flakes riding it: see Spill)
     this.waters = cubes.filter((c) => c.style.glitter === 'snow' && !(c.tune?.liquid > 0.5)).map((c) => ({ slot: c.slot, visc: 0, skin: -1 }));
     for (const g of this.groups) g.loose = this.waters.some((w) => w.slot === g.slot);
-    this.anyCubic = this.groups.some((g) => g.mode === 4);
+    this.anyCubic = this.groups.some((g) => g.mix.some((q) => q.sh === CUBE));
     this.anySnow = this.groups.some((g) => g.loose);
-    this.anyFlat = this.groups.some((g) => g.mode !== 4);
+    this.anyFlat = this.groups.some((g) => g.mix.some((q) => q.sh !== CUBE));
     this.mesh.geometry = this.anyFlat ? this.geo : this.geoCube;
     this.mesh.material = this.anyFlat ? this.mat : this.matCube;
     this.meshCube.visible = false;
+    this.mixKey = this._mixKey();
   }
 
   _key() {
     const sb = this.app.sb, B = this.app.bubbles;
     // (and where the bubbles are: the flakes keep out of them)
-    return `${this.count}|${this.size.toFixed(3)}|${this.groups.map((g) => g.slot + ':' + g.mode + ':' + (g.loose ? 'l' : '') + sb.cSize[g.slot].toFixed(4)).join(',')}|${B ? B.version : ''}`;
+    return `${this.count}|${this.size.toFixed(3)}|${this.groups.map((g) => g.slot + ':' + (g.loose ? 'l' : '') + sb.cSize[g.slot].toFixed(4)).join(',')}|${B ? B.version : ''}`;
+  }
+
+  // (what the flakes are made of: changed, they're made of that where they are - see _paint)
+  _mixKey() {
+    return this.groups.map((g) => g.slot + ':' + g.mix.map((q) => `${q.f},${q.sh},${q.col.map((c) => c.toFixed(4))},${q.z.toFixed(3)},${q.w.toFixed(4)}`).join(';')).join('|');
+  }
+
+  // (flake k's ingredient, of its group's: by its own share of them - see mixR)
+  _pick(grp, k) {
+    const r = this.mixR[k], M = grp.mix;
+    for (let i = 0; i < M.length; i++) if (r < M[i].w) return M[i];
+    return M[M.length - 1];
+  }
+
+  // Each flake in its cube made of its ingredient - its finish, shape, colour, size - where it is: a change of
+  // what the glitter's made of, as the studio's sliders are dragged, without placing them all again.
+  _paint() {
+    const n = this.count, G = this.groups.length ? this.groups : null, S = this.aSeed.array, MD = this.aMode.array, SH = this.aShape.array, C = this.aCol.array;
+    if (!G) return;
+    for (let k = 0; k < n; k++) {
+      if (this.pooled[k] || !(S[k * 3] > 0)) continue;
+      const q = this._pick(G[k % G.length], k);
+      MD[k] = q.f; SH[k] = q.sh;
+      C[k * 3] = q.col[0]; C[k * 3 + 1] = q.col[1]; C[k * 3 + 2] = q.col[2];
+      S[k * 3] = this.seed[k * 3] * q.z;
+    }
+    for (const at of [this.aSeed, this.aMode, this.aShape, this.aCol]) at.needsUpdate = true;
+    this._paintPool();
+    this.paintedFor = this.mixKey;
+  }
+
+  // (the flakes out in a pool - a cube full of liquid's, all of them, riding it - made of their own cube's
+  // glitter as it is now)
+  _paintPool() {
+    const G = this.groups, PM = this.pMode.array, PH = this.pShape.array, PC = this.pCol.array, PS = this.pSeed.array, PR = this.pRestK.array;
+    for (let i = 0; i < this.poolN; i++) {
+      const k = this.poolK[i], slot = PR[i * 4 + 3], grp = G.find((g) => g.slot === slot);
+      if (!grp) continue;
+      const q = this._pick(grp, k);
+      PM[i] = q.f; PH[i] = q.sh;
+      PC[i * 3] = q.col[0]; PC[i * 3 + 1] = q.col[1]; PC[i * 3 + 2] = q.col[2];
+      PS[i * 3] = this.seed[k * 3] * q.z;
+    }
+    if (this.poolN) this._poolDirty = true;
   }
 
   // How far in a full cube's skin reaches (m): what's in the liquid stops there - ultrathin, half a percent of
@@ -447,8 +566,8 @@ export class Glitter {
     const X = sb.X, T = sb.T;
     const grid = this._bubbleGrid();
     const out = { tet: -1, b0: 0, b1: 0, b2: 0, b3: 0 };
-    const n = this.count, G = this.groups.length ? this.groups : [{ slot: 0, mode: 0 }];
-    const RK0 = this.aRestK.array, MD0 = this.aMode.array, OK = this.lpOK;
+    const n = this.count, G = this.groups.length ? this.groups : [{ slot: 0, mix: [{ f: 0, sh: 0, col: [1, 1, 1], z: 1, w: 1 }] }];
+    const RK0 = this.aRestK.array, OK = this.lpOK, BI = sb.B, T0 = this.t0, LT = this.ltn;
     // (a new cube - a re-cube - has all its flakes back: the pool's are gone with it)
     if (sb.cubeVersion !== this._poolCV) {
       this._poolCV = sb.cubeVersion;
@@ -467,7 +586,8 @@ export class Glitter {
       // Loose, and placed in this same cube, as this kind, at this size: where it is now - a cut, a re-cube, a
       // change in how many there are left it where it was (a cut put a snow globe's flakes back where they
       // started, its bubbles staying put); else where its own sequence puts it
-      const kept = grp.loose && OK[k] && RK0[k * 4 + 3] === grp.slot && MD0[k] === grp.mode && this._anSize[grp.slot] === sb.cSize[grp.slot];
+      const kept = grp.loose && OK[k] && RK0[k * 4 + 3] === grp.slot && this._anSize[grp.slot] === sb.cSize[grp.slot];
+      const ing = this._pick(grp, k);
       let px = kept ? this.lp[k * 3] : this.u[k * 3] * (half - m), py = kept ? this.lp[k * 3 + 1] : this.u[k * 3 + 1] * (half - m), pz = kept ? this.lp[k * 3 + 2] : this.u[k * 3 + 2] * (half - m);
       OK[k] = 0;
       // (not in a bubble, nor touching one: a flake that would be is moved -
@@ -475,7 +595,7 @@ export class Glitter {
       // them all - or, none clear, it's left out)
       const bg = kept ? null : grid[grp.slot];
       if (bg) {
-        const fr = 0.0072 * this.size * sb.cSize[grp.slot] * this.seed[k * 3] * 1.4 + 0.004;
+        const fr = 0.0072 * this.size * sb.cSize[grp.slot] * this.seed[k * 3] * ing.z * 1.4 + 0.004;
         const clear = (x, y, z) => {
           const ci = Math.floor(x / bg.cell), cj = Math.floor(y / bg.cell), ck = Math.floor(z / bg.cell);
           for (let di = -2; di <= 2; di++)
@@ -503,7 +623,9 @@ export class Glitter {
           }
         }
       }
-      this.aMode.array[k] = grp.mode;
+      this.aMode.array[k] = ing.f;
+      this.aShape.array[k] = ing.sh;
+      this.aCol.array[k * 3] = ing.col[0]; this.aCol.array[k * 3 + 1] = ing.col[1]; this.aCol.array[k * 3 + 2] = ing.col[2];
       let r = null;
       if (roundBoxSDF(px, py, pz, half, sb.cBevel[grp.slot]) < -m * 0.5) r = sb.locateRestFast(px + grp.slot * REST_STEP, py, pz, out);
       if (!r) {
@@ -520,7 +642,13 @@ export class Glitter {
       this.aM.array[k * 3] = dot(b);
       this.aM.array[k * 3 + 1] = dot(c);
       this.aM.array[k * 3 + 2] = dot(d);
-      this.aSeed.array[k * 3] = this.seed[k * 3] * (grp.mode === SNOW ? 1.6 : 1);
+      // (its way along it, by the tet's inverse as made: a loose one's own, tumbled so far, or set afresh)
+      if (!grp.loose || !kept) (LT[k * 3] = T0[k * 3]), (LT[k * 3 + 1] = T0[k * 3 + 1]), (LT[k * 3 + 2] = T0[k * 3 + 2]);
+      const bo = t * 9, tx = LT[k * 3], ty = LT[k * 3 + 1], tz = LT[k * 3 + 2];
+      this.aTan.array[k * 3] = BI[bo] * tx + BI[bo + 1] * ty + BI[bo + 2] * tz;
+      this.aTan.array[k * 3 + 1] = BI[bo + 3] * tx + BI[bo + 4] * ty + BI[bo + 5] * tz;
+      this.aTan.array[k * 3 + 2] = BI[bo + 6] * tx + BI[bo + 7] * ty + BI[bo + 8] * tz;
+      this.aSeed.array[k * 3] = this.seed[k * 3] * ing.z;
       this.aSeed.array[k * 3 + 1] = this.seed[k * 3 + 1];
       this.aSeed.array[k * 3 + 2] = this.seed[k * 3 + 2];
       this.aInfo.array[k * 2] = py;
@@ -539,11 +667,13 @@ export class Glitter {
     for (const g of G) this._anSize[g.slot] = sb.cSize[g.slot];
     this.globes.clear();
     this.lt.fill(-1); // (the mesh is new: each loose flake found in it afresh)
-    for (const at of [this.aTet, this.aBary, this.aM, this.aSeed, this.aInfo, this.aMode, this.aRestK]) at.needsUpdate = true;
+    for (const at of [this.aTet, this.aBary, this.aM, this.aSeed, this.aInfo, this.aMode, this.aShape, this.aCol, this.aTan, this.aRestK]) at.needsUpdate = true;
     this.geo.instanceCount = n;
     this.geoCube.instanceCount = n;
     this.topo = sb.topoVersion;
     this.anchoredFor = this._key();
+    this._paintPool();
+    this.paintedFor = this.mixKey;
   }
 
   // A snow globe: its flakes loose in the water it's full of. Each one's
@@ -623,7 +753,7 @@ export class Glitter {
     // (no flakes - a cube full of liquid with no glitter: only its water, for its bubbles)
     if (!any || !on) return;
     let moved = false, tetMoved = false, pieceMoved = false;
-    const n = this.count, GS = this._gs, busyN = this._gBusy, LP = this.lp, LV = this.lv, LN = this.ln, LW = this.lw, SD = this.seed, LZ = this.lz, LT = this.lt, PH = this.lph, nT = sb.nT, tPiece = sb.tPiece;
+    const n = this.count, GS = this._gs, busyN = this._gBusy, LP = this.lp, LV = this.lv, LN = this.ln, LW = this.lw, SD = this.seed, LZ = this.lz, LT = this.lt, PH = this.lph, nT = sb.nT, tPiece = sb.tPiece, LTN = this.ltn, TN = this.aTan.array;
     GS.length = 0;
     for (const grp of this.groups) if (grp.loose && this.globes.has(grp.slot)) GS[grp.slot] = this.globes.get(grp.slot);
     busyN.fill(0);
@@ -697,14 +827,20 @@ export class Glitter {
       LV[k3] = ux; LV[k3 + 1] = uy; LV[k3 + 2] = uz;
       LP[k3] = x; LP[k3 + 1] = y; LP[k3 + 2] = z;
       // (tumbling as it goes)
-      let nx = LN[k3], ny = LN[k3 + 1], nz = LN[k3 + 2];
+      let nx = LN[k3], ny = LN[k3 + 1], nz = LN[k3 + 2], tx = LTN[k3], ty = LTN[k3 + 1], tz = LTN[k3 + 2];
       const ang = Math.sqrt(sp2) * dt * (14 / st.size);
       if (ang > 1e-5) {
-        const wx = LW[k3], wy = LW[k3 + 1], wz = LW[k3 + 2], ox = nx, oy = ny;
+        const wx = LW[k3], wy = LW[k3 + 1], wz = LW[k3 + 2], ox = nx, oy = ny, px = tx, py = ty;
         nx += (wy * nz - wz * ny) * ang; ny += (wz * ox - wx * nz) * ang; nz += (wx * oy - wy * ox) * ang;
         const nl = Math.sqrt(nx * nx + ny * ny + nz * nz) || 1;
         nx /= nl; ny /= nl; nz /= nl;
         LN[k3] = nx; LN[k3 + 1] = ny; LN[k3 + 2] = nz;
+        // (its way along it, turned the same - and kept square to its facing)
+        tx += (wy * tz - wz * ty) * ang; ty += (wz * px - wx * tz) * ang; tz += (wx * py - wy * px) * ang;
+        const d = tx * nx + ty * ny + tz * nz;
+        (tx -= d * nx), (ty -= d * ny), (tz -= d * nz);
+        const tl = Math.sqrt(tx * tx + ty * ty + tz * tz) || 1;
+        LTN[k3] = tx /= tl; LTN[k3 + 1] = ty /= tl; LTN[k3 + 2] = tz /= tl;
       }
       // found in the mesh: still in its tet (most frames), else looked up
       const RX = x + slot * REST_STEP;
@@ -736,6 +872,10 @@ export class Glitter {
         M[k3] = (X[b3x] - xa) * nx + (X[b3x + 1] - ya) * ny + (X[b3x + 2] - za) * nz;
         M[k3 + 1] = (X[c3x] - xa) * nx + (X[c3x + 1] - ya) * ny + (X[c3x + 2] - za) * nz;
         M[k3 + 2] = (X[e3x] - xa) * nx + (X[e3x + 1] - ya) * ny + (X[e3x + 2] - za) * nz;
+        const bo = t * 9;
+        TN[k3] = B[bo] * tx + B[bo + 1] * ty + B[bo + 2] * tz;
+        TN[k3 + 1] = B[bo + 3] * tx + B[bo + 4] * ty + B[bo + 5] * tz;
+        TN[k3 + 2] = B[bo + 6] * tx + B[bo + 7] * ty + B[bo + 8] * tz;
         RK[k4] = x; RK[k4 + 1] = y; RK[k4 + 2] = z;
         moved = true;
       }
@@ -754,6 +894,7 @@ export class Glitter {
       };
       up(this.aBary, n * 4);
       up(this.aM, n * 3);
+      up(this.aTan, n * 3);
       up(this.aRestK, n * 4);
       if (tetMoved) up(this.aTet, n * 4);
       if (pieceMoved) up(this.aInfo, n * 2);
@@ -772,6 +913,7 @@ export class Glitter {
     if (!this.waters.length || !(dt > 0) || app.paused) return;
     const sb = app.sb;
     if (on && (sb.topoVersion !== this.topo || this.anchoredFor !== this._key())) this._anchor();
+    else if (on && this.paintedFor !== this.mixKey) this._paint();
     this._loose(dt * (app.timeScale ?? 1), time, on && this.anySnow);
   }
 
@@ -782,6 +924,7 @@ export class Glitter {
     if (!fl.n || !this.count || !this.groups.length) return 0;
     // (in the cube as it is: just made, or its glitter just put on, they're not in it yet)
     if (this.app.sb.topoVersion !== this.topo || this.anchoredFor !== this._key()) this._anchor();
+    else if (this.paintedFor !== this.mixKey) this._paint();
     if (p1 <= p0) (p0 = 0), (p1 = fl.n);
     const sb = this.app.sb, T = sb.T, key = (a, b, c, d) => {
       const q = [a, b, c, d].sort((x, y) => x - y);
@@ -823,7 +966,7 @@ export class Glitter {
         }
       });
     }
-    const i = this.poolN++;
+    const i = this.poolN++, sz = this.aSeed.array[k * 3];
     this.pooled[k] = 1;
     this.aSeed.array[k * 3] = 0;
     this.poolK[i] = k;
@@ -836,12 +979,15 @@ export class Glitter {
     for (let c = 0; c < 3; c++) {
       this.poolNr[i * 3 + c] = this.n0[k * 3 + c];
       this.poolW[i * 3 + c] = this.lw[k * 3 + c] * (0.5 + this.seed[k * 3 + 2]);
+      this.poolT[i * 3 + c] = this.t0[k * 3 + c];
+      this.pCol.array[i * 3 + c] = this.aCol.array[k * 3 + c];
     }
-    const md = this.aMode.array[k];
-    this.pSeed.array[i * 3] = this.seed[k * 3] * (md === SNOW ? 1.6 : 1);
+    // (as it was in its cube: what it's made of, its size)
+    this.pSeed.array[i * 3] = sz > 0 ? sz : this.seed[k * 3];
     this.pSeed.array[i * 3 + 1] = this.seed[k * 3 + 1];
     this.pSeed.array[i * 3 + 2] = this.seed[k * 3 + 2];
-    this.pMode.array[i] = md;
+    this.pMode.array[i] = this.aMode.array[k];
+    this.pShape.array[i] = this.aShape.array[k];
     for (let c = 0; c < 4; c++) this.pRestK.array[i * 4 + c] = this.aRestK.array[k * 4 + c];
     this._poolDirty = true;
   }
@@ -856,7 +1002,7 @@ export class Glitter {
       return;
     }
     const x = fl.x, v = fl.v, P = this.poolP, K = this.poolK, O = this.poolO, NR = this.poolNr, W = this.poolW;
-    const PS = this.pSeed.array, PM = this.pMode.array, PR = this.pRestK.array, PP = this.pPos.array, PN = this.pNrm.array;
+    const PS = this.pSeed.array, PM = this.pMode.array, PR = this.pRestK.array, PP = this.pPos.array, PN = this.pNrm.array, PH = this.pShape.array, PC = this.pCol.array, TT = this.poolT, PT = this.pTan.array;
     const still = fl.asleep, low = -0.018 * this.app.sb.p.size, RY = fl.revealY, sb = this.app.sb, own = fl.own;
     let w = 0, anyFlat = false, anyCube = false;
     for (let i = 0; i < N; i++) {
@@ -869,9 +1015,10 @@ export class Glitter {
         P[w] = p; K[w] = K[i];
         for (let c = 0; c < 3; c++) {
           O[w * 3 + c] = O[i * 3 + c]; NR[w * 3 + c] = NR[i * 3 + c]; W[w * 3 + c] = W[i * 3 + c];
-          PS[w * 3 + c] = PS[i * 3 + c];
+          PS[w * 3 + c] = PS[i * 3 + c]; TT[w * 3 + c] = TT[i * 3 + c]; PC[w * 3 + c] = PC[i * 3 + c];
         }
         PM[w] = PM[i];
+        PH[w] = PH[i];
         for (let c = 0; c < 4; c++) PR[w * 4 + c] = PR[i * 4 + c];
       }
       const o = w * 3, q = p * 3;
@@ -885,6 +1032,11 @@ export class Glitter {
         let rx = nx * cs + (ky * nz - kz * ny) * sn + kx * kd * (1 - cs);
         let ry = ny * cs + (kz * nx - kx * nz) * sn + ky * kd * (1 - cs);
         let rz = nz * cs + (kx * ny - ky * nx) * sn + kz * kd * (1 - cs);
+        // (its way along it, turned the same)
+        const tx = TT[o], ty = TT[o + 1], tz = TT[o + 2], td = kx * tx + ky * ty + kz * tz;
+        TT[o] = tx * cs + (ky * tz - kz * ty) * sn + kx * td * (1 - cs);
+        TT[o + 1] = ty * cs + (kz * tx - kx * tz) * sn + ky * td * (1 - cs);
+        TT[o + 2] = tz * cs + (kx * ty - ky * tx) * sn + kz * td * (1 - cs);
         // (slow, it lies down: flat, facing up or down, and sinks a little)
         if (sp < 0.08) {
           const e = Math.min(1, dt * 1.5 * (1 - sp / 0.08));
@@ -903,7 +1055,10 @@ export class Glitter {
             break;
           }
       PN[o] = NR[o]; PN[o + 1] = NR[o + 1]; PN[o + 2] = NR[o + 2];
-      if (Math.abs(PM[w] - 4) < 0.5) anyCube = true;
+      // (square to its facing, as it lies down)
+      const nd = TT[o] * NR[o] + TT[o + 1] * NR[o + 1] + TT[o + 2] * NR[o + 2];
+      PT[o] = TT[o] - nd * NR[o]; PT[o + 1] = TT[o + 1] - nd * NR[o + 1]; PT[o + 2] = TT[o + 2] - nd * NR[o + 2];
+      if (PH[w] === CUBE) anyCube = true;
       else anyFlat = true;
       w++;
     }
@@ -922,10 +1077,13 @@ export class Glitter {
       this._revealed = fl.revealOn > 0;
       up(this.pPos, w * 3);
       up(this.pNrm, w * 3);
+      up(this.pTan, w * 3);
     }
     if (this._poolDirty) {
       up(this.pSeed, w * 3);
       up(this.pMode, w);
+      up(this.pShape, w);
+      up(this.pCol, w * 3);
       up(this.pRestK, w * 4);
       this._poolDirty = false;
     }
@@ -939,6 +1097,7 @@ export class Glitter {
     const app = this.app;
     const sb = app.sb;
     if (sb.topoVersion !== this.topo || this.anchoredFor !== this._key()) this._anchor();
+    else if (this.paintedFor !== this.mixKey) this._paint();
     // simulated vertex positions -> texture: when they've moved (the jelly's own count of that), not every
     // frame - a still cube's every vertex copied and sent up again, sixty times a second
     const H0 = this.posTex?.image.height;
@@ -978,6 +1137,6 @@ export class Glitter {
     const cam = app.camera;
     U.uPxScale.value = app.size.ph / (2 * Math.tan((cam.fov * Math.PI) / 360));
     U.uMinPx.value = 1.5 * Math.max(1, app.pixelRatio * 0.9);
-    U.uSize.value = 0.0072 * this.size * sb.p.size * (this.mode === 'cubic' ? 1.3 : 1);
+    U.uSize.value = 0.0072 * this.size * sb.p.size; // (a cube's a third bigger, its own: see glitterMix)
   }
 }

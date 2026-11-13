@@ -354,7 +354,63 @@ export const GLITTERS = [
   { id: 'cubic', name: 'Cubic', dot: 'conic-gradient(from 45deg, #ffffff, #cfe8ff, #ffd9f2, #fff3c4, #d6ffe9, #ffffff)' },
   // (loose in it: a snow globe - shake it - see Glitter._loose)
   { id: 'snow', name: 'Snow', dot: 'radial-gradient(circle at 35% 32%, #ffffff, #e6eef7 55%, #b4c2d4)' },
+  // (its own, made in the studio under the row: see glitterMix, ui.js)
+  { id: 'custom', name: 'Custom', dot: 'conic-gradient(#ffd166, #ff7ab8, #9b8cff, #6fd6ff, #c8f7a6, #ffd166)' },
 ];
+
+// The glitter studio's makings: a cube's own glitter (glitter 'custom') is up to MAX_GLITTER_MIX of these - what
+// it's made of (one of the six, or a colour of its own: metallic, or iridescent), the shape of its flakes, their
+// size (times the Size setting) and its share of them. See Glitter.configure.
+export const GLITTER_KINDS = ['silver', 'gold', 'holo', 'rose', 'cubic', 'snow', 'color'];
+export const GLITTER_SHAPES = [
+  { id: 'hex', name: 'Flake' },
+  { id: 'cube', name: 'Cube' },
+  { id: 'star', name: 'Star' },
+  { id: 'heart', name: 'Heart' },
+  { id: 'sequin', name: 'Sequin' },
+  { id: 'square', name: 'Square' },
+  { id: 'sliver', name: 'Sliver' },
+];
+export const MAX_GLITTER_MIX = 4;
+export const GLITTER_SIZE = [0.4, 2.8]; // (an ingredient's size, times the Size setting: dust .. sequins)
+// (one of the six, as an ingredient: its own shape - the cubic's cubes - at its own size)
+export const glitterPart = (kind, over = {}) => ({ kind, color: '#ff4fa3', iri: false, shape: kind === 'cubic' ? 'cube' : 'hex', size: 1, share: 1, ...over });
+// (a mix, checked and copied - always a new array: unknown makings, shapes, colours or numbers put right)
+export function copyGlitterMix(m) {
+  const out = [];
+  for (const g of Array.isArray(m) ? m : []) {
+    if (!g || out.length >= MAX_GLITTER_MIX) continue;
+    const kind = GLITTER_KINDS.includes(g.kind) ? g.kind : 'silver';
+    out.push({
+      kind,
+      color: /^#[0-9a-f]{6}$/i.test(g.color) ? g.color.toLowerCase() : '#ff4fa3',
+      iri: !!g.iri,
+      shape: GLITTER_SHAPES.some((q) => q.id === g.shape) ? g.shape : kind === 'cubic' ? 'cube' : 'hex',
+      size: Number.isFinite(g.size) ? Math.min(GLITTER_SIZE[1], Math.max(GLITTER_SIZE[0], g.size)) : 1,
+      share: Number.isFinite(g.share) ? Math.min(1, Math.max(0.02, g.share)) : 1,
+    });
+  }
+  return out.length ? out : [glitterPart('silver')];
+}
+// (the most of a mix - its biggest share's kind, a colour of its own as the nearest of the six: what an older app,
+// not knowing a mix, shows; and what it's called by: see cubecode, namegen)
+export function glitterMain(mix) {
+  const m = copyGlitterMix(mix);
+  let best = m[0];
+  for (const g of m) if (g.share > best.share) best = g;
+  if (best.kind !== 'color') return best.kind;
+  const h = parseInt(best.color.slice(1), 16), r = (h >> 16) & 255, g = (h >> 8) & 255, b = h & 255;
+  return best.iri ? 'holo' : r > 200 && g > 160 && b < 140 ? 'gold' : r > 190 && g < 170 ? 'rose' : 'silver';
+}
+// "Gold flakes, holo stars" - what a mix is, in a few words (two, then "and more")
+export function glitterMixWords(mix) {
+  const m = copyGlitterMix(mix), KIND = { silver: 'Silver', gold: 'Gold', holo: 'Holo', rose: 'Rose', cubic: 'Cubic', snow: 'Snow' };
+  const shape = (g) => ({ hex: g.kind === 'snow' ? 'flakes' : 'flakes', cube: 'cubes', star: 'stars', heart: 'hearts', sequin: 'sequins', square: 'squares', sliver: 'slivers' })[g.shape] || 'flakes';
+  const one = (g) => `${g.kind === 'color' ? (g.iri ? 'Iridescent' : 'Metallic') : KIND[g.kind]} ${shape(g)}`;
+  const parts = [...m].sort((a, b) => b.share - a.share).map(one);
+  const words = parts.slice(0, 2).join(', ') + (parts.length > 2 ? ' and more' : '');
+  return words.charAt(0) + words.slice(1).toLowerCase();
+}
 
 // Its edges' trim, with any rounding: a pattern along every edge (baked into
 // its surface map - see surfaces.js sfTrim; the ones that cut the edge, cut
@@ -379,6 +435,7 @@ export const DEFAULT_STYLE = {
   edges: 'round',
   trim: 'none',
   glitter: 'off',
+  glitterMix: null, // (its own glitter's makings, once it has any: see copyGlitterMix)
   layers: { colors: [...LAYER_PRESETS[0].colors], blur: 0, repeat: 1, bias: 0, stops: null, shape: 'up' },
   rubik: 0, // (0: solved - picking Rubik scrambles it)
   eyes: [], // (googly eyes: see eyes.js - always a new array, never this one)

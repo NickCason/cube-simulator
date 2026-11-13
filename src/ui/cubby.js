@@ -11,7 +11,7 @@ import { cubeOfTheDay, dayKey } from '../cotd.js';
 import { cubePicture } from './sharecard.js';
 import { qrEncode, qrSVG } from './qr.js';
 import { FighterCard } from './fighter.js';
-import { resolveFlavor, layerBands, TEXTURES, RUBIK_COLORS, rubikStateOf } from '../styles.js';
+import { resolveFlavor, layerBands, TEXTURES, RUBIK_COLORS, rubikStateOf, copyGlitterMix } from '../styles.js';
 
 const KEY = 'cube-sim-cubby';
 const ON_KEY = 'cube-sim-cubby-on'; // which saved cube is on show, and the record of one that isn't saved
@@ -40,7 +40,17 @@ const ICON = {
   qr: svg('<rect x="4" y="4" width="6" height="6" rx="1"/><rect x="14" y="4" width="6" height="6" rx="1"/><rect x="4" y="14" width="6" height="6" rx="1"/><path d="M14 14h2v2h-2zM18 14h2M14 18v2M18 18h2v2"/>'),
 };
 
-const GLINT = { silver: ['#ffffff', '#dfe6ee'], gold: ['#fff1b8', '#ffd25f'], holo: ['#ff8fc0', '#7fe3ff', '#c2ff8f', '#d6a8ff'], rose: ['#ffe0dc', '#ffb3a8'] };
+const GLINT = { silver: ['#ffffff', '#dfe6ee'], gold: ['#fff1b8', '#ffd25f'], holo: ['#ff8fc0', '#7fe3ff', '#c2ff8f', '#d6a8ff'], rose: ['#ffe0dc', '#ffb3a8'], cubic: ['#ffffff', '#cfe8ff'], snow: ['#ffffff', '#e6eef7'] };
+// (its own glitter's glints: each of its makings', a colour of its own as itself - by how much of it there is)
+function glintsOf(c) {
+  if (c.glitter !== 'custom') return GLINT[c.glitter];
+  const out = [];
+  for (const g of copyGlitterMix(c.glitterMix)) {
+    const cols = g.kind === 'color' ? (g.iri ? [g.color, '#ff8fc0', '#7fe3ff'] : [g.color]) : GLINT[g.kind] || GLINT.silver;
+    for (let i = 0, n = Math.max(1, Math.round(g.share * 6)); i < n; i++) out.push(cols[i % cols.length]);
+  }
+  return out;
+}
 
 // A little cube in the cube's colours (layers as bands, glitter as glints):
 // for shelf cards with no picture yet, and for codes that arrive.
@@ -89,8 +99,8 @@ export function cubeArt(c) {
   }
   const top = bands[bands.length - 1].color;
   let glints = '';
-  const g = GLINT[c.glitter];
-  if (g) {
+  const g = glintsOf(c);
+  if (g && g.length) {
     const spots = [[14, 30], [22, 41], [12, 44], [27, 50], [38, 36], [46, 29], [42, 47], [51, 40], [30, 17], [40, 15], [24, 14]];
     spots.forEach(([x, y], i) => (glints += `<circle cx="${x}" cy="${y}" r="${i % 3 ? 0.9 : 1.3}" fill="${g[i % g.length]}"/>`));
   }

@@ -26,7 +26,7 @@
 
 import { cubeStats } from './cubecode.js';
 import { punsFor } from './puns.js';
-import { TEXTURES, LAYER_PRESETS } from './styles.js';
+import { TEXTURES, LAYER_PRESETS, copyGlitterMix, glitterMain } from './styles.js';
 import { THEMES } from './themes.js';
 import { EYE_STYLES, copyEyes } from './eyes.js';
 import { SURFACE } from './surfaces.js';
@@ -525,6 +525,8 @@ const GLITTER_WORDS = {
   rose: ['Rosé', 'Blushing', 'Rose-Gold'],
   cubic: ['Zirconia', 'Bejewelled', 'Diamond-Studded', 'Bedazzled'],
 };
+// (its own glitter's shapes - see the glitter studio)
+const SHAPE_WORDS = { star: ['Starry', 'Star-Spangled', 'Starlit'], heart: ['Lovestruck', 'Sweetheart', 'Heart-Strewn'], sequin: ['Sequined', 'Paillette', 'Spangled'], square: ['Pixelated', 'Mosaic'], sliver: ['Tinselled', 'Streamered'], cube: ['Bejewelled', 'Zirconia'] };
 
 // names to call it (first names, cube-ified) and surnames
 const FIRST = [
@@ -810,10 +812,12 @@ export function cubeTraits(c, rec = null, ctx = {}) {
   const bub = val('bubbles', 0), bubSize = val('bubbleSize', 1);
   if (bub > 0.35) finish.push([bubSize > 1.4 ? ['Frothy', 'Foaming', 'Sudsy'] : ['Fizzy', 'Bubbly', 'Sparkling', 'Effervescent'], ['Soda', 'Fizz', 'Champagne', 'Seltzer', 'Cream Soda'], 0.45 + Math.min(0.3, bub * 0.3)]);
   // glitter: its kind, and how much, how big, how sparkly
-  const glitterKey = c.glitter && c.glitter !== 'off' ? c.glitter : null;
+  // (its own: called by the most of it - and by its shapes)
+  const glitterKey = c.glitter === 'custom' ? glitterMain(c.glitterMix) : c.glitter && c.glitter !== 'off' ? c.glitter : null;
   if (glitterKey) {
     const ga = val('glitterAmount', 1), gs = val('glitterSize', 1), gk = val('glitterSparkle', 1);
     const adj = [...(GLITTER_WORDS[glitterKey] || [])];
+    if (c.glitter === 'custom') for (const g of copyGlitterMix(c.glitterMix)) adj.push(...(SHAPE_WORDS[g.shape] || []));
     if (ga > 1.5) adj.push('Bedazzled', 'Glitter-Bombed', 'Encrusted');
     if (gs > 1.5) adj.push('Sequined', 'Confetti', 'Paillette');
     if (gk > 1.5) adj.push('Twinkling', 'Starry', 'Scintillating');

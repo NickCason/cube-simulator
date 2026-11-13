@@ -4778,3 +4778,201 @@ html.dark .rec-btn:not(.on) {
     opacity: 1;
   }
 }
+
+/* the glitter studio (see glitterstudio.js): under the Glitter row, its own - what it's made of, a chip each, and
+   the picked one's makings; then how much of it and how sparkly */
+.gstudio {
+  display: grid;
+  gap: 7px;
+  padding: 10px 10px 8px;
+  border-radius: 12px;
+  background: rgba(0, 0, 0, 0.035);
+}
+
+.gstudio[hidden] {
+  display: none;
+}
+
+.gs-parts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.palette .gs-part {
+  position: relative;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  color: #fff;
+  transition: transform 0.25s cubic-bezier(0.3, 1.8, 0.45, 1);
+}
+
+.palette .gs-part i {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.14), 0 1px 4px rgba(0, 0, 0, 0.18);
+}
+
+.palette .gs-part svg {
+  position: relative;
+  width: 18px;
+  height: 18px;
+  filter: drop-shadow(0 1px 1.5px rgba(0, 0, 0, 0.45));
+}
+
+.palette .gs-part em {
+  position: absolute;
+  bottom: -5px;
+  right: -6px;
+  padding: 1px 4px;
+  border-radius: 6px;
+  background: #fff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+  font-style: normal;
+  font-size: 9.5px;
+  font-weight: 680;
+  font-variant-numeric: tabular-nums;
+  color: rgba(28, 28, 31, 0.8);
+}
+
+.palette .gs-part.active {
+  transform: scale(1.08);
+}
+
+.palette .gs-part.active i {
+  box-shadow: 0 0 0 2.5px #fff, 0 0 0 4.5px var(--jelly), 0 2px 6px rgba(0, 0, 0, 0.22);
+}
+
+.palette .gs-add {
+  border: 1.5px dashed rgba(0, 0, 0, 0.25);
+  color: rgba(28, 28, 31, 0.55);
+}
+
+.palette .gs-add svg {
+  width: 16px;
+  height: 16px;
+  filter: none;
+}
+
+/* (what it's made of: more than fit - each its own width, the row scrolling sideways, as the Glitter row) */
+.palette .gs-kind {
+  grid-auto-columns: auto;
+  width: 0;
+  min-width: 100%;
+  box-sizing: border-box;
+  overflow-x: auto;
+  scrollbar-width: none;
+  overscroll-behavior-x: contain;
+}
+
+.palette .gs-kind::-webkit-scrollbar {
+  display: none;
+}
+
+.palette .gs-kind .opt {
+  min-width: max-content;
+  padding: 0 10px;
+}
+
+.gs-colour {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.gs-colour[hidden] {
+  display: none;
+}
+
+.gs-colour .gs-finish {
+  flex: 1;
+}
+
+.palette .gs-shape .opt {
+  flex-direction: column;
+  height: 42px;
+  gap: 2px;
+  padding: 0 2px;
+  font-size: 10px;
+}
+
+.palette .gs-shape .opt svg {
+  width: 16px;
+  height: 16px;
+}
+
+.gs-foot {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 28px;
+}
+
+.gs-what {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  font-weight: 560;
+  color: rgba(28, 28, 31, 0.6);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.palette .gs-del {
+  height: 28px;
+  padding: 0 11px;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.06);
+  font-size: 12px;
+  font-weight: 620;
+}
+
+.palette .gs-del:hover {
+  background: rgba(0, 0, 0, 0.1);
+}
+
+.palette .gs-del[hidden] {
+  display: none;
+}
+
+.gs-all {
+  display: grid;
+  gap: 7px;
+  padding-top: 6px;
+  border-top: 1px solid rgba(0, 0, 0, 0.06);
+}
+
+html.dark .gstudio {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+html.dark .palette .gs-part em {
+  background: #2a2830;
+  color: rgba(241, 239, 244, 0.85);
+}
+
+html.dark .palette .gs-part.active i {
+  box-shadow: 0 0 0 2.5px #1d1b22, 0 0 0 4.5px var(--jelly), 0 2px 6px rgba(0, 0, 0, 0.4);
+}
+
+html.dark .palette .gs-add {
+  border-color: rgba(255, 255, 255, 0.25);
+  color: rgba(241, 239, 244, 0.6);
+}
+
+html.dark .gs-what {
+  color: rgba(241, 239, 244, 0.6);
+}
+
+html.dark .palette .gs-del {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+html.dark .gs-all {
+  border-top-color: rgba(255, 255, 255, 0.08);
+}

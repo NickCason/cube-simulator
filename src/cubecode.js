@@ -20,6 +20,10 @@
 //   k  Rubik's (with f rubik): its scramble 0 solved, 1..65535 - or, turned,
 //      its 54 stickers face by face, a digit (0..5) each
 //   x  its edges' trim: scalloped, sawtooth, stitched, piped, beaded, crimped (missing: none)
+//   j  its own glitter (g then the most of it, for a reader that doesn't know j): up to 4 ingredients joined
+//      by '.', each its kind - s silver, g gold, h holo, r rose, c cubic, w snow, k a colour (then 6 hex
+//      digits and i iridescent or m metallic) - its shape's place in GLITTER_SHAPES (a digit), its size
+//      (2 hex digits, 0..255 along GLITTER_SIZE on a log scale) and its share (2 hex digits, 0..255 of 1)
 //   t  tuned sliders, <code><value> joined by commas: the codes are in
 //      TUNE_CODES, the values in each slider's own units
 // A reader skips letters and slider codes it doesn't know, so a code made by a
@@ -29,13 +33,33 @@
 import { copyEyes, encodeEyes, decodeEyes, eyesWord } from './eyes.js';
 import { SURFACE, surfaceWord } from './surfaces.js';
 import { SETTINGS, resolveSettings } from './settings.js';
-import { FLAVORS, TEXTURES, EDGES, TRIM, GLITTERS, MIN_LAYERS, MAX_LAYERS, MAX_REPEAT, DEFAULT_STYLE, GRAD_SHAPE_INDEX, copyLayers } from './styles.js';
+import { FLAVORS, TEXTURES, EDGES, TRIM, GLITTERS, MIN_LAYERS, MAX_LAYERS, MAX_REPEAT, DEFAULT_STYLE, GRAD_SHAPE_INDEX, copyLayers, GLITTER_SHAPES, GLITTER_SIZE, copyGlitterMix, glitterMain, glitterMixWords } from './styles.js';
 import { FREE_K_MIN, FREE_K_MAX } from './freeform.js';
 
 // (a freeform point's strength, 1/4..4, as 0..255 on a log scale)
 const kToByte = (k) => Math.round((Math.log(Math.min(FREE_K_MAX, Math.max(FREE_K_MIN, k)) / FREE_K_MIN) / Math.log(FREE_K_MAX / FREE_K_MIN)) * 255);
 const byteToK = (b) => FREE_K_MIN * Math.pow(FREE_K_MAX / FREE_K_MIN, b / 255);
 const hex2 = (v) => Math.round(Math.min(255, Math.max(0, v))).toString(16).padStart(2, '0');
+
+// (a glitter mix, as the j field: see the list above)
+const MIX_KIND = { silver: 's', gold: 'g', holo: 'h', rose: 'r', cubic: 'c', snow: 'w', color: 'k' };
+const KIND_OF = Object.fromEntries(Object.entries(MIX_KIND).map(([k, l]) => [l, k]));
+const sizeToByte = (z) => (Math.log(Math.min(GLITTER_SIZE[1], Math.max(GLITTER_SIZE[0], z)) / GLITTER_SIZE[0]) / Math.log(GLITTER_SIZE[1] / GLITTER_SIZE[0])) * 255;
+const byteToSize = (b) => GLITTER_SIZE[0] * Math.pow(GLITTER_SIZE[1] / GLITTER_SIZE[0], b / 255);
+export function encodeGlitterMix(mix) {
+  return copyGlitterMix(mix)
+    .map((g) => MIX_KIND[g.kind] + Math.max(0, GLITTER_SHAPES.findIndex((q) => q.id === g.shape)) + (g.kind === 'color' ? g.color.slice(1) + (g.iri ? 'i' : 'm') : '') + hex2(sizeToByte(g.size)) + hex2(g.share * 255))
+    .join('.');
+}
+export function decodeGlitterMix(v) {
+  const out = [];
+  for (const p of String(v).split('.')) {
+    const m = /^([sghrcwk])([0-9])(?:([0-9a-f]{6})([im]))?([0-9a-f]{2})([0-9a-f]{2})$/i.exec(p);
+    if (!m || (m[1].toLowerCase() === 'k') !== !!m[3]) continue;
+    out.push({ kind: KIND_OF[m[1].toLowerCase()], shape: GLITTER_SHAPES[+m[2]]?.id, color: m[3] ? '#' + m[3] : undefined, iri: m[4] === 'i', size: byteToSize(parseInt(m[5], 16)), share: parseInt(m[6], 16) / 255 });
+  }
+  return out.length ? copyGlitterMix(out) : null;
+}
 
 export const CODE_VERSION = 1;
 export const SITE_URL = 'https://nickcason.github.io/cube-simulator/';
@@ -101,6 +125,7 @@ export function captureCube(app, name = '') {
     texture: s.texture,
     edges: s.edges,
     glitter: s.glitter || 'off',
+    ...(s.glitter === 'custom' ? { glitterMix: copyGlitterMix(s.glitterMix) } : {}),
     rubik: Number.isFinite(s.rubik) ? s.rubik : 1,
     ...(typeof s.rubikState === 'string' && /^[0-5]{54}$/.test(s.rubikState) ? { rubikState: s.rubikState } : {}),
     trim: TRIM[s.trim] ? s.trim : 'none',
@@ -132,7 +157,8 @@ export function encodeCube(c) {
   // (a Rubik's: as it's been turned - its 54 stickers - else its scramble)
   if (c.flavor === 'rubik') f.push('k' + (typeof c.rubikState === 'string' && /^[0-5]{54}$/.test(c.rubikState) ? c.rubikState : Math.max(0, Math.min(65535, Math.round(c.rubik ?? 1)))));
   f.push('m' + c.texture, 'e' + c.edges);
-  if (c.glitter && c.glitter !== 'off') f.push('g' + c.glitter);
+  if (c.glitter === 'custom') f.push('g' + glitterMain(c.glitterMix), 'j' + encodeGlitterMix(c.glitterMix));
+  else if (c.glitter && c.glitter !== 'off') f.push('g' + c.glitter);
   if (c.theme) f.push('d' + c.theme);
   if (c.tear === false) f.push('w0');
   // (its googly eyes: see eyes.js)
@@ -188,7 +214,7 @@ export function decodeCube(text) {
     surface: 'none',
     trim: 'none',
   };
-  let flavor = null, custom = null, stops = null, nodes = null;
+  let flavor = null, custom = null, stops = null, nodes = null, mix = null;
   for (const p of parts.slice(1)) {
     const k = p[0], v = p.slice(1);
     if (!k) continue;
@@ -208,6 +234,7 @@ export function decodeCube(text) {
     else if (k === 'm') c.texture = TEXTURES[v] ? v : c.texture;
     else if (k === 'e') c.edges = EDGES[v] ? v : c.edges;
     else if (k === 'g') c.glitter = GLITTERS.some((g) => g.id === v) ? v : 'off';
+    else if (k === 'j') mix = decodeGlitterMix(v);
     else if (k === 'd') c.theme = THEMES.includes(v) ? v : null;
     else if (k === 'w') c.tear = v !== '0';
     else if (k === 'k' && /^[0-5]{54}$/.test(v)) c.rubikState = v;
@@ -233,6 +260,9 @@ export function decodeCube(text) {
   }
   if (custom) c.flavor = '#' + custom;
   else if (flavor && FLAVORS.some((f) => f.id === flavor)) c.flavor = flavor;
+  // (its own glitter: whatever g said, for an older reader)
+  if (mix) (c.glitter = 'custom'), (c.glitterMix = mix);
+  else if (c.glitter === 'custom') c.glitter = 'off';
   // (stops: one a colour, in order - else evenly spaced)
   if (stops && stops.length === c.layers.colors.length && stops.every((v, i) => !i || v >= stops[i - 1])) c.layers.stops = stops;
   // (freeform points: one a colour)
@@ -248,7 +278,8 @@ function clamp(x, a, b, fallback) {
 export function cubeSummary(c, withLook = false) {
   const bits = [TEXTURES[c.texture]?.name || c.texture, EDGES[c.edges]?.name || c.edges];
   if (surfaceWord(c.surface)) bits.push(surfaceWord(c.surface));
-  if (c.glitter && c.glitter !== 'off') bits.push(`${GLITTERS.find((g) => g.id === c.glitter)?.name || c.glitter} glitter`);
+  if (c.glitter === 'custom') bits.push(`${glitterMixWords(c.glitterMix)} glitter`);
+  else if (c.glitter && c.glitter !== 'off') bits.push(`${GLITTERS.find((g) => g.id === c.glitter)?.name || c.glitter} glitter`);
   if (c.eyes && c.eyes.length) bits.push(eyesWord(c.eyes));
   if (withLook && c.theme === 'dark') bits.push('Glow mode');
   return bits.join(' · ');
