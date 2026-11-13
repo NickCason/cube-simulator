@@ -7,7 +7,8 @@ import { shapeSDF } from '../sim/mesh.js';
 // Molten jelly. The torch turns the hottest jelly to liquid (see
 // TorchTool): its tets go, and particles carry their volume on - position-
 // based fluids (Macklin & Mueller 2013: a density constraint per particle,
-// pushing only - no pull, so no clumping to fix), thick with viscosity, running down the jelly that's
+// pushing apart - pulling together only as its surface tension's above
+// water's), thick with viscosity, running down the jelly that's
 // left (pushed out of its tets along its escape field), pooling on the
 // floor. It cools; the cryo spray cools it fast, and a clump of it cold
 // enough sets: meshed back into jelly - a new piece in whatever shape the
@@ -44,7 +45,7 @@ const GAIN = 0.8; // (m/s) the most the solver speeds a particle up a substep
 // (how much of the way off a cube full of liquid's shell a drop's pushed each substep, to its own width - see
 // _radius: all of it at once, every drop against a wall chattered on it, and a cube's liquid never came to rest)
 const RADIUS_K = 0.35;
-const COH = 0.3; // cohesion: how hard thin parts pull together (vs packed parts pushing apart)
+const COH = 0.3; // cohesion: how hard thin parts pull together (vs packed parts pushing apart) - at the highest surface tension
 const EPS = +(globalThis.__fluidEps ?? 1); // constraint relaxation, x a full neighbourhood's gradient sum
 const VISC = 0.25; // XSPH: how much each takes on its neighbours' velocity
 // (thicker than this - slime, putty - it moves with what's round it, not through it, unless it's pushed hard: how
@@ -1633,7 +1634,7 @@ export class Fluid {
     const lam = this.lam, dp = this.dp, NB = this.nb, NS = this.nbStart, eps = this.eps, lim = 0.25 * D;
     const iDq = 1 / this.wDq, kC = this.kCorr, age = this.age, PW = this.pw, PC = this.pc, MS = this.mass;
     // (a lot of it: two rounds - it settles a little lower, but at a third less)
-    const rounds = n > 900 ? 2 : ITER;
+    const rounds = n > 900 ? 2 : ITER, TN = this.tens;
     for (let it = 0; it < rounds; it++) {
       for (let i = 0; i < n; i++) {
         const o = i * 3, px = q[o], py = q[o + 1], pz = q[o + 2];
@@ -1656,11 +1657,14 @@ export class Fluid {
           gx += dx * w; gy += dy * w; gz += dz * w;
           s2 += w * w * d2;
         }
-        // (packed: push apart; thin - the surface - pull together, gently)
+        // (packed: push apart; thin - the surface - pull together, gently, as much as its surface tension says:
+        // water's, at a drop this size, nothing - pulled together as before, a cut cube's liquid stood a drop and
+        // a half over the lowest of its rim, held there, and a hole shot in one hardly let it out; very high, as
+        // before)
         // (one carrying more sits at a lower density - its target 1/mass of the rest's: scaling C by its mass
         // instead, not its gradient, over-corrected twice over, and flung drops about at metres a second)
         const C = r * irho - 1 / MS[i];
-        lam[i] = -(C > 0 ? C : COH * Math.max(C, -0.35)) / (s2 + gx * gx + gy * gy + gz * gz + eps);
+        lam[i] = -(C > 0 ? C : COH * Math.max(0, 2 * TN[i] - 1) * Math.max(C, -0.35)) / (s2 + gx * gx + gy * gy + gz * gz + eps);
       }
       for (let i = 0; i < n; i++) {
         const o = i * 3, px = q[o], py = q[o + 1], pz = q[o + 2], li = lam[i];
@@ -1706,7 +1710,9 @@ export class Fluid {
       // (pushed out of the jelly this substep: no faster out of it than 0.3 m/s - pressed into a cut cube's wall
       // by the liquid behind, drops were shoved out through it at metres a second - and none into it - against a
       // wall, at rest, it stays at rest: else each substep it sank back into the wall and was pushed out again,
-      // and a pool in a cut cube churned for ever - a little friction along it. All as against the jelly there,
+      // and a pool in a cut cube churned for ever - a little friction along it (a little: 0.92 a substep, all but
+      // all of it gone in a second, held a cut cube's liquid up on its rim and choked a hole shot through a wall
+      // to a seep, then asleep, full). All as against the jelly there,
       // moving as it is: held to a standstill, a falling cube's liquid fell at a third of its speed - its top
       // swept down through it - and a cube swung about left its liquid behind, out through its walls.)
       const cpx = this.cpush[o], cpy = this.cpush[o + 1], cpz = this.cpush[o + 2], cpl = Math.sqrt(cpx * cpx + cpy * cpy + cpz * cpz);
@@ -1716,7 +1722,7 @@ export class Fluid {
         const nx = cpx / cpl, ny = cpy / cpl, nz = cpz / cpl, vn = rx * nx + ry * ny + rz * nz;
         const k = vn > 0.3 ? vn - 0.3 : vn < 0 ? vn : 0;
         rx -= nx * k; ry -= ny * k; rz -= nz * k;
-        const vn2 = vn - k, fr2 = 0.92;
+        const vn2 = vn - k, fr2 = 0.99;
         vx = jx + nx * vn2 + (rx - nx * vn2) * fr2; vy = jy + ny * vn2 + (ry - ny * vn2) * fr2; vz = jz + nz * vn2 + (rz - nz * vn2) * fr2;
         // (no faster than ever, though: carried off a cube's top springing back from a landing at 12 m/s, drops
         // went clean through it)
@@ -2933,6 +2939,9 @@ export class Fluid {
     const pad = R * Math.cbrt(mMax) + 2 * c;
     x0 -= pad; z0 -= pad; x1 += pad; z1 += pad; y1 += pad;
     y0 = Math.max(y0 - pad, 0);
+    // (the grid's corner on whole cells of the room: where its edge drops lay, a hair's move of the outermost moved
+    // the grid under all of it - every facet and its way facing anew each frame, still or not, its glints winking)
+    x0 = Math.floor(x0 / c) * c; z0 = Math.floor(z0 / c) * c; y0 = Math.max(0, Math.floor(y0 / c) * c);
     if (y1 <= y0 + c) {
       this.geo.setDrawRange(0, 0);
       this.inN = 0;
