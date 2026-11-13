@@ -1,0 +1,316 @@
+// In the page (injected by kit.mjs before the app loads): window.__kit - helpers and measurements, each
+// called as k.probe(name, arg). Measurements return plain numbers; lengths in m unless named ...Cm.
+window.__kit = (() => {
+  const A = () => window.__app;
+  const K = {};
+
+  // ---- driving
+  K.frames = (n = 1, dt = 1 / 30) => {
+    const a = A();
+    for (let i = 0; i < n; i++) a.frame(dt);
+    a.render();
+    return n;
+  };
+  K.load = async (code) => {
+    const m = await import('/src/cubecode.js');
+    A().loadCube(m.decodeCube(code));
+    return true;
+  };
+  K.set = (s) => {
+    const a = A();
+    for (const [k, v] of Object.entries(s || {})) a.setSetting(k, v, true);
+    return true;
+  };
+  K.style = (s) => {
+    const a = A();
+    if (s.texture) a.setTexture(s.texture);
+    if (s.color) a.setColor(s.color);
+    if (s.edges) a.setEdges(s.edges);
+    if (s.trim) a.setTrim(s.trim);
+    if (s.place) a.setPlace(s.place, false);
+    return true;
+  };
+  K.skip = (s) => {
+    const a = A();
+    a.skip.liquid = !!s.liquid;
+    a.skip.jelly = !!s.jelly;
+    a.render();
+    return true;
+  };
+  K.pointer = (type, id, x, y) => {
+    A().canvas.dispatchEvent(new PointerEvent(type, { pointerId: id, clientX: x, clientY: y, button: 0, buttons: type === 'pointerup' ? 0 : 1, pointerType: 'touch', isPrimary: id === 1, bubbles: true }));
+    return true;
+  };
+
+  // ---- where things are on the screen (CSS px)
+  K.screenOf = (p) => {
+    const a = A(), V3 = a.camera.position.constructor, r = a.canvas.getBoundingClientRect(), v = new V3(p[0], p[1], p[2]).project(a.camera);
+    return [r.left + (v.x * 0.5 + 0.5) * r.width, r.top + (-v.y * 0.5 + 0.5) * r.height];
+  };
+  K.screenBox = () => {
+    const a = A(), sb = a.sb, V3 = a.camera.position.constructor, r = a.canvas.getBoundingClientRect(), v = new V3();
+    let x0 = 1e9, x1 = -1e9, y0 = 1e9, y1 = -1e9;
+    for (let i = 0; i < sb.nV; i++) {
+      if (!sb.alive[i]) continue;
+      v.set(sb.x[i * 3], sb.x[i * 3 + 1], sb.x[i * 3 + 2]).project(a.camera);
+      const px = r.left + (v.x * 0.5 + 0.5) * r.width, py = r.top + (-v.y * 0.5 + 0.5) * r.height;
+      x0 = Math.min(x0, px); x1 = Math.max(x1, px); y0 = Math.min(y0, py); y1 = Math.max(y1, py);
+    }
+    return { x0, x1, y0, y1 };
+  };
+  const pieceOf = (which) => {
+    const ps = A().sb.pieces.filter(Boolean).sort((p, q) => p.verts.length - q.verts.length);
+    if (which === 'top' || which === 'bottom') return ps.reduce((m, p) => (!m || (which === 'top' ? p.com[1] > m.com[1] : p.com[1] < m.com[1]) ? p : m), null);
+    return which === 'small' ? ps[0] : which === 'big' ? ps[ps.length - 1] : A().sb.pieces[which];
+  };
+  K.pieceScreen = (which = 'small') => K.screenOf(pieceOf(which).com);
+  K.pieces = () => {
+    const sb = A().sb, ps = sb.pieces.filter(Boolean);
+    return { n: ps.length, verts: ps.map((p) => p.verts.length).sort((p, q) => q - p), awake: ps.filter((p) => !p.asleep).length, tets: sb.nT };
+  };
+
+  // ---- the cube as it stands: its points' best rigid fit (cube k's, or its biggest piece's) - middle now (xm),
+  // at rest (Xm), and the turn R (row-major, rest -> world)
+  K.fit = async (k = 0) => {
+    const { polarRot } = await import('/src/sim/softbody.js');
+    const sb = A().sb, big = pieceOf('big'), vs = big ? big.verts : [];
+    const xm = [0, 0, 0], Xm = [0, 0, 0];
+    let n = 0;
+    for (const i of vs) {
+      if (!sb.alive[i] || sb.vCube[i] !== k) continue;
+      for (let c = 0; c < 3; c++) (xm[c] += sb.x[i * 3 + c]), (Xm[c] += sb.X[i * 3 + c]);
+      n++;
+    }
+    for (let c = 0; c < 3; c++) (xm[c] /= n), (Xm[c] /= n);
+    const M = new Float64Array(9), R = new Float64Array(9);
+    for (const i of vs) {
+      if (!sb.alive[i] || sb.vCube[i] !== k) continue;
+      for (let r = 0; r < 3; r++) for (let c = 0; c < 3; c++) M[r * 3 + c] += (sb.x[i * 3 + r] - xm[r]) * (sb.X[i * 3 + c] - Xm[c]);
+    }
+    polarRot(new Float64Array([0, 0, 0, 1]), M, R, 30);
+    return { xm, Xm, R: Array.from(R) };
+  };
+  // the camera: { theta, phi, radius, target } or { face: '+z' | '-x' ..., phi, radius } - square on to that face
+  K.camera = async (c) => {
+    const a = A(), o = { theta: c.theta, phi: c.phi, radius: c.radius };
+    let target = c.target;
+    if (c.face) {
+      const f = await K.fit(c.cube ?? 0), ax = 'xyz'.indexOf(c.face[1]), s = c.face[0] === '-' ? -1 : 1, R = f.R;
+      const n = [R[ax] * s, R[3 + ax] * s, R[6 + ax] * s];
+      o.theta = Math.atan2(n[0], n[2]);
+      o.phi = c.phi ?? 0.05;
+      o.radius = c.radius ?? 4;
+      target = target || f.xm;
+    }
+    if (target) a.orbit.target.set(target[0], target[1], target[2]);
+    for (const q of [a.orbit, a.orbitGoal]) for (const key of ['theta', 'phi', 'radius']) if (o[key] !== undefined) q[key] = o[key];
+    K.frames(3);
+    return true;
+  };
+
+  // ---- measurements
+  // The liquid's drawn surface in the jelly as it's drawn (Fluid._jellyAt, else its tets), over n frames: points
+  // 1 cm and 3 cm deep or more (the nearest way out of 26, to half a centimetre and two halvings, 8 cm at most) -
+  // mean and worst a frame - and the deepest.
+  K.depth = (o = {}) => {
+    const a = A(), fl = a.fluid, NF = o.frames ?? 30, dt = o.dt ?? 1 / 30;
+    const JA = fl._jellyAt ? (x, y, z) => fl._jellyAt(x, y, z) : (x, y, z) => fl._inTet(x, y, z);
+    const DIRS = [];
+    for (let p = -1; p <= 1; p++) for (let q = -1; q <= 1; q++) for (let r = -1; r <= 1; r++) if (p || q || r) { const l = Math.hypot(p, q, r); DIRS.push([p / l, q / l, r / l]); }
+    const depth = (px, py, pz) => {
+      let best = 0.08;
+      for (const [dx, dy, dz] of DIRS) {
+        let lo = 0, hi = -1;
+        for (let s = 1; s <= 16 && s * 0.005 < best; s++) { const d = s * 0.005; if (JA(px + dx * d, py + dy * d, pz + dz * d) < 0) { hi = d; break; } lo = d; }
+        if (hi < 0) continue;
+        for (let b = 0; b < 2; b++) { const m = 0.5 * (lo + hi); if (JA(px + dx * m, py + dy * m, pz + dz * m) < 0) hi = m; else lo = m; }
+        if (hi < best) best = hi;
+      }
+      return best;
+    };
+    let D1 = 0, D3 = 0, W1 = 0, W3 = 0, dmax = 0, at = null, pts = 0;
+    for (let f = 0; f < NF; f++) {
+      a.frame(dt);
+      if (!fl.asleep) fl._remesh();
+      fl._jellyCells();
+      const pos = fl.geo.attributes.position.array, cnt = fl.geo.drawRange.count;
+      let d1 = 0, d3 = 0;
+      pts = cnt;
+      for (let v = 0; v < cnt; v++) {
+        const o3 = v * 3, px = pos[o3], py = pos[o3 + 1], pz = pos[o3 + 2], t = ((v / 3) | 0) * 9;
+        if (pos[t] === pos[t + 3] && pos[t] === pos[t + 6] && pos[t + 1] === pos[t + 4] && pos[t + 1] === pos[t + 7] && pos[t + 2] === pos[t + 5] && pos[t + 2] === pos[t + 8]) continue;
+        if (JA(px, py, pz) < 0) continue;
+        const dd = depth(px, py, pz);
+        if (dd >= 0.01) {
+          d1++;
+          if (dd >= 0.03) d3++;
+          if (dd > dmax) (dmax = dd), (at = [px, py, pz].map((q) => +q.toFixed(2)));
+        }
+      }
+      D1 += d1; D3 += d3; W1 = Math.max(W1, d1); W3 = Math.max(W3, d3);
+    }
+    return { frames: NF, surface: pts, d1mean: +(D1 / NF).toFixed(1), d1worst: W1, d3mean: +(D3 / NF).toFixed(1), d3worst: W3, deepestCm: +(100 * dmax).toFixed(1), at };
+  };
+
+  // The bubbles riding cube k's liquid: against the liquid's drawn surface (its own points - a middle out of it, or
+  // its sphere reaching past it; those riding its top, as meant, aside) and against the hollow's walls (its shape
+  // as drawn: sphere into the wall)
+  K.bubbles = async (o = {}) => {
+    const mesh = await import('/src/sim/mesh.js');
+    const a = A(), sb = a.sb, fl = a.fluid, bu = a.bubbles, k = o.cube ?? 0, cnt = fl.geo.drawRange.count, P = fl.pos, N = fl.nrm;
+    const h = 0.05, grid = new Map(), key = (x, y, z) => `${Math.floor(x / h)},${Math.floor(y / h)},${Math.floor(z / h)}`;
+    let lvl = -Infinity;
+    for (let v = 0; v < cnt; v++) {
+      if (fl.inn[v] !== k + 1) continue;
+      const kk = key(P[v * 3], P[v * 3 + 1], P[v * 3 + 2]);
+      (grid.get(kk) || grid.set(kk, []).get(kk)).push(v);
+      lvl = Math.max(lvl, P[v * 3 + 1]);
+    }
+    const near = (x, y, z) => {
+      let best = -1, bd = Infinity;
+      const i0 = Math.floor(x / h), j0 = Math.floor(y / h), k0 = Math.floor(z / h);
+      for (let r = 1; r <= 3 && best < 0; r++)
+        for (let i = i0 - r; i <= i0 + r; i++)
+          for (let j = j0 - r; j <= j0 + r; j++)
+            for (let q = k0 - r; q <= k0 + r; q++) {
+              const l = grid.get(`${i},${j},${q}`);
+              if (l) for (const v of l) { const d = (P[v * 3] - x) ** 2 + (P[v * 3 + 1] - y) ** 2 + (P[v * 3 + 2] - z) ** 2; if (d < bd) (bd = d), (best = v); }
+            }
+      return [best, Math.sqrt(bd)];
+    };
+    const half = sb.cSize[k] / 2, bh = sb.hollowBevel ? sb.hollowBevel(k) : sb.cBevel[k], th = sb.wallTh ? sb.wallTh(k) : 0.05, sh = sb.shapeOf(k);
+    let n = 0, top = 0, poke = 0, out = 0, worst = 0, wall = 0, wallWorst = 0;
+    for (const b of bu.items) {
+      if (!b.pool || b.gone || !b.held || b.hk !== k) continue;
+      n++;
+      const into = mesh.shapeSDF(b.c[0] - k * 10, b.c[1], b.c[2], half, bh, sh) + th + b.R;
+      if (into > 0.002) (wall++, (wallWorst = Math.max(wallWorst, into)));
+      const [v, d] = near(b.w[0], b.w[1], b.w[2]);
+      if (v < 0) continue; // (deep in it)
+      if (N[v * 3 + 1] > 0.7 && b.w[1] > lvl - 2 * b.R) { top++; continue; }
+      const side = (b.w[0] - P[v * 3]) * N[v * 3] + (b.w[1] - P[v * 3 + 1]) * N[v * 3 + 1] + (b.w[2] - P[v * 3 + 2]) * N[v * 3 + 2];
+      const past = side > 0 ? d + b.R : b.R - d;
+      if (side > 0) out++;
+      if (past > 0.002) poke++;
+      worst = Math.max(worst, past);
+    }
+    return { n, top, pokeOut: poke, middleOut: out, worstOutCm: +(100 * worst).toFixed(1), inWall: wall, wallWorstCm: +(100 * wallWorst).toFixed(1) };
+  };
+
+  // The liquid's drawn surface out past the jelly's box (its biggest piece's points' bounds, +1 cm): how many
+  // points and how far - liquid through its walls, or poured out
+  K.outside = () => {
+    const a = A(), sb = a.sb, fl = a.fluid, P = fl.pos, cnt = fl.geo.drawRange.count, big = pieceOf('big');
+    const lo = [1e9, 1e9, 1e9], hi = [-1e9, -1e9, -1e9];
+    for (const i of big.verts) for (let c = 0; c < 3; c++) (lo[c] = Math.min(lo[c], sb.x[i * 3 + c])), (hi[c] = Math.max(hi[c], sb.x[i * 3 + c]));
+    let past = 0, worst = 0;
+    for (let v = 0; v < cnt; v++) {
+      const d = Math.max(lo[0] - P[v * 3], P[v * 3] - hi[0], lo[1] - P[v * 3 + 1], P[v * 3 + 1] - hi[1], lo[2] - P[v * 3 + 2], P[v * 3 + 2] - hi[2]);
+      if (d > 0.01) (past++, (worst = Math.max(worst, d)));
+    }
+    return { surface: cnt, past, worstCm: +(100 * worst).toFixed(1) };
+  };
+
+  // A cube full of liquid cut: its frame, its pieces' fits (walls: box, hollow box, open sides, cut plane), the
+  // liquid's surface labels (0 the room's, k+1 its own) and drops by their side of their piece's walls
+  K.cutDiag = () => {
+    const a = A(), sb = a.sb, fl = a.fluid, cnt = fl.geo.drawRange.count, lab = {};
+    for (let v = 0; v < cnt; v++) lab[fl.inn[v]] = (lab[fl.inn[v]] || 0) + 1;
+    const tot = sb.pieces.filter(Boolean).reduce((t, p) => t + p.verts.length, 0);
+    const walls = fl.walls.map((S) => {
+      const sides = {};
+      for (let p = 0; p < fl.n; p++) if (fl.wId[p] === S.id) sides[fl.wSide[p]] = (sides[fl.wSide[p]] || 0) + 1;
+      return { id: S.id, open: S.open, cutOK: S.cutOK, errCm: +(100 * S.err).toFixed(1), rb: Array.from(S.rb).map((v) => +v.toFixed(2)), drops: sides };
+    });
+    return { bigN: fl._bigN ? fl._bigN[0] : null, frameOK: fl.frameOK[0], pieces: sb.pieces.filter(Boolean).map((p) => `${p.verts.length}${p.verts.length > 0.15 * tot ? '*' : ''}`), walls, labels: lab, surface: cnt, asleep: fl.asleep };
+  };
+
+  // The hollow as drawn against its shape as drawn (SoftBody.hollowRound/hollowBevel): its points' rest places as
+  // JellyView draws them - worst off, how many past 5 mm, and the worst at each diagonal set of its corners
+  K.hollowFit = async (o = {}) => {
+    const mesh = await import('/src/sim/mesh.js');
+    const a = A(), sb = a.sb, jv = a.jelly, k = o.cube ?? 0, P = jv.smRestP, K3 = jv.smK3;
+    if (!P || !K3 || !sb.hollowBevel) return { none: true };
+    const half = sb.cSize[k] / 2, th = sb.wallTh(k), bh = sb.hollowBevel(k), sh = sb.shapeOf(k), hb = half - th - sb.hollowRound(k) - 0.005;
+    let n = 0, worst = 0, far = 0;
+    const set = { even: 0, odd: 0 };
+    for (let v = 0; v < sb.nV; v++) {
+      if (!K3[v]) continue;
+      n++;
+      const x = P[v * 3] - k * 10, y = P[v * 3 + 1], z = P[v * 3 + 2], d = Math.abs(mesh.shapeSDF(x, y, z, half, bh, sh) + th);
+      worst = Math.max(worst, d);
+      if (d > 0.005) far++;
+      if (Math.abs(x) > hb && Math.abs(y) > hb && Math.abs(z) > hb) { const s = ((x < 0) + (y < 0) + (z < 0)) % 2 ? 'odd' : 'even'; set[s] = Math.max(set[s], d); }
+    }
+    return { points: n, worstCm: +(100 * worst).toFixed(1), past5mm: far, evenCm: +(100 * set.even).toFixed(1), oddCm: +(100 * set.odd).toFixed(1), roundingCm: +(100 * sb.hollowRound(k)).toFixed(1) };
+  };
+
+  // The cut faces' points as JellyView draws them: kept flat (in a plane), a plane's edge, on the outside too (rim;
+  // on a plane), or smoothed - and the planes found
+  K.cutKinds = () => {
+    const a = A(), sb = a.sb, pl = a.jelly._cutPlanes(sb), nV = sb.nV, fr = new Uint8Array(nV), ex = new Uint8Array(nV);
+    for (let f = 0; f < sb.nF; f++) for (let c = 0; c < 3; c++) { const v = sb.sTri[f * 3 + c]; if (sb.sTag[f] === 0) fr[v] = 1; else if (sb.sTag[f] === 1) ex[v] = 1; }
+    let flat = 0, edge = 0, rim = 0, rimFlat = 0, smooth = 0, n = 0;
+    for (let i = 0; i < nV; i++) {
+      if (!fr[i]) continue;
+      n++;
+      if (ex[i]) (rim++, pl.plane[i] >= 0 && rimFlat++);
+      else if (pl.edge[i]) edge++;
+      else if (pl.in[i]) flat++;
+      else smooth++;
+    }
+    return { planes: pl.P.length / 4, points: n, flat, edge, rim, rimFlat, smooth };
+  };
+
+  // ---- time: each frame's, and its parts' (the sim's step, the liquid, glitter, bubbles, spill, particles, the
+  // render and the jelly's drawing) - start, drive it, stop: per part mean/p50/p90/p99/max (ms) and the worst frames
+  K.perfStart = () => {
+    const a = A(), P = (K._perf = { recs: [], acc: {}, wrapped: [] });
+    const wrap = (obj, m, label) => {
+      if (!obj || typeof obj[m] !== 'function') return;
+      const f = obj[m];
+      P.wrapped.push([obj, m, f]);
+      obj[m] = function (...args) {
+        const t = performance.now(), r = f.apply(this, args);
+        P.acc[label] = (P.acc[label] || 0) + performance.now() - t;
+        return r;
+      };
+    };
+    wrap(a.sb, 'step', 'sim');
+    wrap(a.fluid, 'update', 'liquid');
+    wrap(a.glitter, 'poolTick', 'glitterPool');
+    wrap(a.glitter, 'tick', 'glitter');
+    wrap(a.bubbles, 'poolTick', 'bubblesPool');
+    wrap(a.bubbles, 'update', 'bubbles');
+    wrap(a.spill, 'update', 'spill');
+    wrap(a.particles, 'update', 'particles');
+    wrap(a.jelly, 'update', 'jellyView');
+    wrap(a, 'render', 'render');
+    const frame = a.frame;
+    P.wrapped.push([a, 'frame', frame]);
+    a.frame = function (dt) {
+      P.acc = {};
+      const t = performance.now(), r = frame.call(this, dt);
+      P.recs.push({ total: performance.now() - t, ...P.acc, pieces: a.sb.pieces.length, drops: a.fluid.n });
+      return r;
+    };
+    return true;
+  };
+  K.perfStop = () => {
+    const P = K._perf;
+    if (!P) return null;
+    for (const [obj, m, f] of P.wrapped.reverse()) obj[m] = f;
+    K._perf = null;
+    const R = P.recs, keys = new Set();
+    for (const r of R) for (const q of Object.keys(r)) if (q !== 'pieces' && q !== 'drops') keys.add(q);
+    const pc = (s, p) => s[Math.min(s.length - 1, Math.floor(p * (s.length - 1)))];
+    const parts = {};
+    for (const q of keys) {
+      const s = R.map((r) => r[q] || 0).sort((x, y) => x - y), mean = s.reduce((t, v) => t + v, 0) / Math.max(1, s.length);
+      parts[q] = { mean: +mean.toFixed(2), p50: +pc(s, 0.5).toFixed(2), p90: +pc(s, 0.9).toFixed(2), p99: +pc(s, 0.99).toFixed(2), max: +pc(s, 1).toFixed(2) };
+    }
+    const worst = [...R].sort((x, y) => y.total - x.total).slice(0, 5).map((r) => Object.fromEntries(Object.entries(r).map(([q, v]) => [q, +(+v).toFixed(1)])));
+    return { frames: R.length, parts, worst };
+  };
+  return K;
+})();
