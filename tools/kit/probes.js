@@ -322,19 +322,30 @@ window.__kit = (() => {
 
   // The cut faces' points as JellyView draws them: kept flat (in a plane), a plane's edge, on the outside too (rim;
   // on a plane), or smoothed - and the planes found
+  // (the cut faces' groups not taken for planes - as wide/long, flat, big as they are - the biggest first)
+  K.cutRejects = (n = 12) => {
+    const why = [];
+    A().jelly._cutPlanes(A().sb, why);
+    return why.sort((p, q) => q.areaCm2 - p.areaCm2).slice(0, n);
+  };
   K.cutKinds = () => {
-    const a = A(), sb = a.sb, pl = a.jelly._cutPlanes(sb), nV = sb.nV, fr = new Uint8Array(nV), ex = new Uint8Array(nV);
-    for (let f = 0; f < sb.nF; f++) for (let c = 0; c < 3; c++) { const v = sb.sTri[f * 3 + c]; if (sb.sTag[f] === 0) fr[v] = 1; else if (sb.sTag[f] === 1) ex[v] = 1; }
-    let flat = 0, edge = 0, rim = 0, rimFlat = 0, smooth = 0, n = 0;
+    // (a hollow's own skin - a cube full of liquid's inside, see SoftBody.sHollow - counted apart: drawn on its shape)
+    const a = A(), sb = a.sb, pl = a.jelly._cutPlanes(sb), nV = sb.nV, fr = new Uint8Array(nV), ex = new Uint8Array(nV), HF = sb.sHollow, cf = new Uint8Array(nV), hw = new Uint8Array(nV);
+    for (let f = 0; f < sb.nF; f++) for (let c = 0; c < 3; c++) { const v = sb.sTri[f * 3 + c]; if (sb.sTag[f] === 0) { fr[v] = 1; if (HF && HF[f] === 2) hw[v] = 1; else cf[v] = 1; } else if (sb.sTag[f] === 1) ex[v] = 1; }
+    let flat = 0, edge = 0, rim = 0, rimFlat = 0, smooth = 0, n = 0, hollow = 0;
     for (let i = 0; i < nV; i++) {
       if (!fr[i]) continue;
+      if (hw[i] && !cf[i]) {
+        hollow++;
+        continue;
+      }
       n++;
       if (ex[i]) (rim++, pl.plane[i] >= 0 && rimFlat++);
       else if (pl.edge[i]) edge++;
       else if (pl.in[i]) flat++;
       else smooth++;
     }
-    return { planes: pl.P.length / 4, points: n, flat, edge, rim, rimFlat, smooth };
+    return { planes: pl.P.length / 4, points: n, flat, edge, rim, rimFlat, smooth, hollow };
   };
 
   // ---- time: each frame's, and its parts' (the sim's step, the liquid, glitter, bubbles, spill, particles, the

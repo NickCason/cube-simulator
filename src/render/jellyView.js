@@ -1605,7 +1605,7 @@ export class JellyView {
   // dicer's smallest dice, 5 a side - 2.2 cells, their faces' middles spread over 1.9 - were all smoothed into
   // pebbles). For each vertex: in one (in), on one's
   // edge against the rest of the cut (edge), its plane (plane); those edges (edgeE); the planes (P: n, d).
-  _cutPlanes(sb) {
+  _cutPlanes(sb, why = null) {
     const nV = sb.nV, nF = sb.nF, S = sb.sTri, tag = sb.sTag, X = sb.X, N = sb.sRestN;
     const par = new Int32Array(nF);
     const find = (a) => {
@@ -1662,7 +1662,7 @@ export class JellyView {
     const big = new Map(), P = [];
     for (const [r, A] of acc) {
       if (!(A.a > 0)) continue;
-      const cell = sb.cH[sb.vCube[S[r * 3]]] || 0.1;
+      const k = sb.vCube[S[r * 3]], cell = sb.cH[k] || 0.1;
       const mx = A.sx / A.a, my = A.sy / A.a, mz = A.sz / A.a;
       const C = [A.xx / A.a - mx * mx, A.xy / A.a - mx * my, A.xz / A.a - mx * mz, A.yy / A.a - my * my, A.yz / A.a - my * mz, A.zz / A.a - mz * mz];
       // (two axes across its plane; the spread along each and their cross term; the smaller principal one, its
@@ -1676,8 +1676,17 @@ export class JellyView {
       const vx = ny * uz - nz * uy, vy = nz * ux - nx * uz, vz = nx * uy - ny * ux;
       const q = (ax, ay, az, bx, by, bz) => ax * (C[0] * bx + C[1] * by + C[2] * bz) + ay * (C[1] * bx + C[3] * by + C[4] * bz) + az * (C[2] * bx + C[4] * by + C[5] * bz);
       const suu = q(ux, uy, uz, ux, uy, uz), svv = q(vx, vy, vz, vx, vy, vz), suv = q(ux, uy, uz, vx, vy, vz);
-      const lo = (suu + svv) / 2 - Math.sqrt(Math.max(0, ((suu - svv) * (suu - svv)) / 4 + suv * suv));
-      if (Math.sqrt(12 * Math.max(0, lo)) < 1.5 * cell) continue;
+      const rt = Math.sqrt(Math.max(0, ((suu - svv) * (suu - svv)) / 4 + suv * suv)), lo = (suu + svv) / 2 - rt, hi = (suu + svv) / 2 + rt;
+      const wide = Math.sqrt(12 * Math.max(0, lo)), long = Math.sqrt(12 * Math.max(0, hi));
+      // (or a strip across a thin wall - a cube full of liquid's skin cut through: as wide as it's thick, and longer
+      // than a cell. Held to a cell and a half wide, an ultrathin cube's dice were drawn as rounded shells - its
+      // dice's strips 11 x 13 cm, 6.5 x 11 by its edges. A tunnel shot through such a wall: no flat run of its faces
+      // longer than a cell - 7 x 9.4 cm at most, 9 cm cells)
+      if (wide < 1.5 * cell && !(sb.cHollow[k] && wide >= 0.6 * sb.wallTh(k) && long >= 1.15 * cell)) {
+        // (why not, for the kit: see probes.js cutKinds)
+        if (why) why.push({ wideCm: +(100 * wide).toFixed(1), longCm: +(100 * long).toFixed(1), flatMm: +(1000 * Math.sqrt(Math.max(0, q(nx, ny, nz, nx, ny, nz)))).toFixed(1), areaCm2: +(1e4 * A.a).toFixed(0), thCm: +(100 * sb.wallTh(k)).toFixed(1), cellCm: +(100 * cell).toFixed(1) });
+        continue;
+      }
       // (and flat, all of it: no thicker than 6 mm across its plane - faces chained a few degrees at a time round
       // a tunnel or along a torn face's waves are none)
       if (q(nx, ny, nz, nx, ny, nz) > 0.006 * 0.006) continue;
