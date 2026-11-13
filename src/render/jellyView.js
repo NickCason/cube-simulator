@@ -1212,9 +1212,9 @@ export class JellyView {
     // new points their edge's)
     const shapes = Array.from(sb.cBevel, (b, k) => ({ a: sb.cSize[k] / 2 - b, r: b, form: sb.formOf(k) }));
     const hollows = Array.from(sb.cBevel, (b, k) => {
-      if (!sb.cHollow[k] || !sb.cLiq[k] || !(sb.hollowRound(k) > 0)) return null;
-      const form = sb.shapeOf(k);
-      return form ? { form, half: sb.cSize[k] / 2, bev: b, th: sb.wallTh(k) } : { a: sb.cSize[k] / 2 - b, r: sb.hollowRound(k) };
+      if (!sb.cHollow[k] || !sb.cLiq[k]) return null;
+      const form = sb.shapeOf(k), bh = sb.hollowBevel(k);
+      return form ? { form, half: sb.cSize[k] / 2, bev: bh, th: sb.wallTh(k) } : { a: sb.cSize[k] / 2 - bh, r: sb.hollowRound(k) };
     });
     const hollowed = hollows.some(Boolean);
     const cube = new Float32Array(maxN);
@@ -1430,9 +1430,9 @@ export class JellyView {
     const nV = sb.nV, nF = sb.nF, S = sb.sTri, tag = sb.sTag, X = sb.X, ST = sb.sTet, T = sb.T, rSim = sb.rSim, rI = sb.rIndex;
     if (!nF || !rSim) return;
     // (each vertex: on a cut's face, the outside's, any other's - a melt's: left be. And on a rounded hollow's
-    // skin alone - a cube full of liquid's - not smoothed (3): its points are on the shape it was carved to, or,
-    // carved short, put out onto it - as far as HOLLOW_SHORT (its liquid let fill that: see Fluid._jellyAt) - and
-    // drawn round by its smoothing group and snapToHollow. Smoothed, its corners were drawn pulled in - one
+    // skin alone - a cube full of liquid's - not smoothed (3): its points put onto its shape as it's drawn (see
+    // SoftBody.hollowRound), as far as HOLLOW_SHORT - out where its carving fell short (its liquid let fill that:
+    // see Fluid._jellyAt), in off a sharp corner - and drawn round by its smoothing group and snapToHollow. Smoothed, its corners were drawn pulled in - one
     // diagonal set of them 6 cm, the other 10, 3 cm short of it: pinched; left as carved, a thin wall's soft-edged
     // one's one set 2 cm short, its liquid in that: crimped.)
     const fr = new Uint8Array(nV), ex = new Uint8Array(nV), ot = new Uint8Array(nV), face = new Int32Array(nV).fill(-1);
@@ -1499,12 +1499,18 @@ export class JellyView {
     const VS = sb.vShort, K3 = new Uint8Array(nV), g3 = [0, 0, 0];
     for (let j = 0; j < n; j++) {
       if (rim[j] !== 3) continue;
-      const v = list[j], s = VS && v < VS.length ? Math.min(VS[v], HOLLOW_SHORT) : 0;
+      const v = list[j], s = VS && v < VS.length ? Math.max(-HOLLOW_SHORT, Math.min(VS[v], HOLLOW_SHORT)) : 0;
       K3[v] = 1;
-      if (!(s > 1e-4)) continue;
-      const k = sb.vCube[v], o = v * 3;
-      shapeNormal(P[o] - k * REST_STEP, P[o + 1], P[o + 2], sb.cSize[k] / 2, sb.cBevel[k], sb.shapeOf(k), g3);
-      P[o] += g3[0] * s; P[o + 1] += g3[1] * s; P[o + 2] += g3[2] * s;
+      if (!(Math.abs(s) > 1e-4)) continue;
+      // (along its shape's slope, twice - round a corner the slope turns on the way)
+      const k = sb.vCube[v], o = v * 3, half = sb.cSize[k] / 2, bh = sb.hollowBevel(k), th = sb.wallTh(k), fm = sb.shapeOf(k);
+      let left = HOLLOW_SHORT;
+      for (let it = 0; it < 2 && left > 1e-4; it++) {
+        const lx = P[o] - k * REST_STEP, d = it ? -(shapeSDF(lx, P[o + 1], P[o + 2], half, bh, fm) + th) : s, m = Math.max(-left, Math.min(left, d));
+        shapeNormal(lx, P[o + 1], P[o + 2], half, bh, fm, g3);
+        P[o] += g3[0] * m; P[o + 1] += g3[1] * m; P[o + 2] += g3[2] * m;
+        left -= Math.abs(m);
+      }
     }
     const taubin = (which) => {
       for (let it = 0; it < 2 * SMOOTH_IT; it++) {

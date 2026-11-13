@@ -2394,8 +2394,8 @@ export class Fluid {
       const fo = k * 15;
       F[0] = FR[fo]; F[1] = FR[fo + 1]; F[2] = FR[fo + 2]; F[3] = FR[fo + 3] - k * REST_STEP; F[4] = FR[fo + 4]; F[5] = FR[fo + 5];
       for (let c = 0; c < 9; c++) R[c] = FR[fo + 6 + c];
-      const size = sb.cSize[k], bev = sb.cBevel[k], shape = sb.shapeOf(k), sk = Math.min(1, Math.max(0, sb.cSkin[k]));
-      const th = size * (sk <= 0.5 ? 0.05 + 0.08 * sk : 0.09 + 0.18 * (sk - 0.5)), tol = Math.min(0.01, 0.2 * th);
+      // (its hollow's shape as it's drawn - its edges no sharper than its tets can make them: see SoftBody.hollowRound)
+      const size = sb.cSize[k], bev = sb.hollowBevel(k), shape = sb.shapeOf(k), th = sb.wallTh(k), tol = Math.min(0.01, 0.2 * th);
       // (and what's just short of the wall, as its liquid clings - drawn with its image past the wall, its surface
       // there lies about the wall: snapped only where it was past it, its sides were a patchwork of flat bits and
       // dints. Surface tension none: it's let be - beaded off the wall, as it is)
@@ -2895,7 +2895,7 @@ export class Fluid {
     const w3 = ((e1y * e2z - e1z * e2y) * rx + (e1z * e2x - e1x * e2z) * ry + (e1x * e2y - e1y * e2x) * rz) / det, w0 = 1 - w1 - w2 - w3;
     const r0 = w0 * XR[a3] + w1 * XR[b3] + w2 * XR[c3] + w3 * XR[d3], r1 = w0 * XR[a3 + 1] + w1 * XR[b3 + 1] + w2 * XR[c3 + 1] + w3 * XR[d3 + 1], r2 = w0 * XR[a3 + 2] + w1 * XR[b3 + 2] + w2 * XR[c3 + 2] + w3 * XR[d3 + 2];
     const k = sb.tCube[t];
-    return -this._shapeDist(k, r0, r1, r2) > this._wallTh(k) + Math.max(0, s - HOLLOW_SHORT) ? -1 : t;
+    return -this._shapeDist(k, r0, r1, r2, sb.hollowBevel(k)) > this._wallTh(k) + Math.max(0, s - HOLLOW_SHORT) ? -1 : t;
   }
 
   _inTet(px, py, pz) {
@@ -3735,9 +3735,9 @@ export class Fluid {
   }
 
   // (how far out of cube k's shape - its rounded box, or its faces bowed - a point is, where it is as made: r its
-  // rest place, its cube's offset in it)
-  _shapeDist(k, r0, r1, r2) {
-    const sb = this.app.sb, half = 0.5 * sb.cSize[k], bev = sb.cBevel[k], bow = sb.cBow[k], cx = r0 - k * REST_STEP;
+  // rest place, its cube's offset in it; bev, another rounding than its own)
+  _shapeDist(k, r0, r1, r2, bev = this.app.sb.cBevel[k]) {
+    const sb = this.app.sb, half = 0.5 * sb.cSize[k], bow = sb.cBow[k], cx = r0 - k * REST_STEP;
     if (bow) {
       const F = this._poForm;
       F.bow = bow;

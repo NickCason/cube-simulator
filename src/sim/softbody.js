@@ -42,10 +42,10 @@ export const MAX_CUBES = 8;
 export const REST_STEP = 10;
 // (a thin firm shell's spring to its shape, ultrathin rubber's: how quick, alone - see SoftBody._shellSpring)
 const SHELL_HZ = 5.5;
-// (a rounded hollow's skin left short of its shape by its carving - a thin wall's corners, one diagonal set of
-// them 2 cm: their tets would have been squashed flat - is drawn out to it, as far as this, and its liquid let
-// fill it: see vShort, JellyView._buildSmooth, Fluid._jellyAt)
-export const HOLLOW_SHORT = 0.03;
+// (a hollow's skin left short of its shape by its carving - a thin wall's corners, one diagonal set of them 2-4
+// cm; a medium wall's edges, 4: their tets would have been squashed flat - is drawn out to it, as far as this,
+// and its liquid let fill it: see vShort, JellyView._buildSmooth, Fluid._jellyAt. A dished face's 8 moves 5.)
+export const HOLLOW_SHORT = 0.05;
 
 // How soft, at the least, the tets' shape and volume terms stay - as a share
 // of hard (a full correction in one substep): see _solveTets. A tet of the
@@ -311,7 +311,7 @@ export class SoftBody {
     this.sTag = null;
     this.sRestN = null;
     this.sHollow = null; // (each face: on a rounded hollow's skin (2) or not - see _buildRenderClusters)
-    this.vShort = null; // (each vertex on one: how far short of its shape it was carved, m)
+    this.vShort = null; // (each vertex on one: how far short of its shape as drawn it was carved, m; past it, -)
     this.tetBoundary = null;
     this.nextBoundary = null;
     this.vfStart = null;
@@ -494,16 +494,20 @@ export class SoftBody {
     return this.cBow[k] ? { bow: this.cBow[k] } : null;
   }
 
-  // A cube full of liquid's wall: how thick (see Spill._hollow) - and its hollow's rounding, its edges' radius
-  // (the cube's less the wall): none - a sharp box - when it's no more than a third of a tet's cell, which can't
-  // round it.
+  // A cube full of liquid's wall: how thick (see Spill._hollow) - and its hollow's rounding as it's drawn, its
+  // edges' radius: the cube's less the wall, or a third of a tet's cell if that's less - its tets can't make it
+  // any sharper. (A sharp box - a thin wall's sharp-edged cube's, a thick one's - came out of them crimped, one
+  // diagonal set of its corners one way and the other the other.) Its shape: the cube's own with its edges that
+  // much rounder (hollowBevel), its wall's thickness in.
   wallTh(k) {
     const sk = Math.min(1, Math.max(0, this.cSkin[k]));
     return this.cSize[k] * (sk <= 0.5 ? 0.05 + 0.08 * sk : 0.09 + 0.18 * (sk - 0.5));
   }
   hollowRound(k) {
-    const r = this.cBevel[k] - this.wallTh(k);
-    return r > 0.3 * this.cH[k] ? r : 0;
+    return Math.max(this.cBevel[k] - this.wallTh(k), 0.3 * this.cH[k]);
+  }
+  hollowBevel(k) {
+    return this.wallTh(k) + this.hollowRound(k);
   }
 
   loadCube(ox = 0, oy = 0, oz = 0, yaw = 0) {
@@ -1869,44 +1873,41 @@ export class SoftBody {
     const inc = new Int32Array(nF * 3); // encoded face*3+corner
     for (let f = 0; f < nF; f++) for (let c = 0; c < 3; c++) inc[fill[sTri[f * 3 + c]]++] = f * 3 + c;
 
-    // (a hollow's skin - a cube full of liquid's, carved to its rounded box's inside, where that's rounded (see
-    // hollowRound): its faces with all three corners as deep as its wall or deeper, facing in - smoothed all over
-    // (2): its edges' and corners' rounding one or two faces across, they met at 65-90 degrees and were drawn as cut
-    // faces are, creased - and drawn round, not smoothed as a cut's are (see JellyView._buildSmooth, snapToHollow).
-    // A sharp box's, its wall as thick as its rounding or near, is a cut's still. A cut into it is let be: at its
-    // rim a corner of each of its faces is out in the wall.)
+    // (a hollow's skin - a cube full of liquid's, carved to its shape's inside: its faces with all three corners as
+    // deep as its wall or deeper, facing in - smoothed all over (2): its edges' and corners' rounding one or two
+    // faces across, they met at 65-90 degrees and were drawn as cut faces are, creased - and drawn round, on its
+    // shape as it's drawn (see hollowRound), not smoothed as a cut's are (see JellyView._buildSmooth,
+    // snapToHollow). A cut into it is let be: at its rim a corner of each of its faces is out in the wall.)
     const hollowF = this.sHollow && this.sHollow.length >= nF ? this.sHollow : (this.sHollow = new Uint8Array(Math.max(64, nF * 2)));
     hollowF.fill(0, 0, nF);
     const VS = this.vShort && this.vShort.length >= nV ? this.vShort : (this.vShort = new Float32Array(Math.max(64, nV * 2)));
     VS.fill(0, 0, nV);
     {
       const X = this.X, nrm = [0, 0, 0];
-      let k = -1, half = 0, bevel = 0, th = 0, lim = 0, lb = null, round = false;
-      const sd = (i) => (lb ? shapeSDF(X[i * 3] - k * REST_STEP, X[i * 3 + 1], X[i * 3 + 2], half, bevel, lb) : roundBoxSDF(X[i * 3] - k * REST_STEP, X[i * 3 + 1], X[i * 3 + 2], half, bevel));
+      let k = -1, half = 0, bevel = 0, bevH = 0, th = 0, lim = 0, lb = null;
+      const sd = (i, bv) => (lb ? shapeSDF(X[i * 3] - k * REST_STEP, X[i * 3 + 1], X[i * 3 + 2], half, bv, lb) : roundBoxSDF(X[i * 3] - k * REST_STEP, X[i * 3 + 1], X[i * 3 + 2], half, bv));
       for (let f = 0; f < nF; f++) {
         if (sTag[f] !== TAG_FRESH) continue;
         const a = sTri[f * 3], b = sTri[f * 3 + 1], c = sTri[f * 3 + 2];
-        if (!this.cHollow[this.vCube[a]] || (this.vCube[a] === k && !round)) continue;
+        if (!this.cHollow[this.vCube[a]]) continue;
         if (this.vCube[a] !== k) {
           k = this.vCube[a];
           half = this.cSize[k] / 2;
           bevel = this.cBevel[k];
+          bevH = this.hollowBevel(k);
           lb = this.shapeOf(k);
           th = this.wallTh(k);
           lim = -0.95 * th + 0.01;
-          round = this.hollowRound(k) > 0;
-          if (!round) continue;
         }
-        const sa = sd(a), sb2 = sd(b), sc = sd(c);
-        if (sa > lim || sb2 > lim || sc > lim) continue;
+        if (sd(a, bevel) > lim || sd(b, bevel) > lim || sd(c, bevel) > lim) continue;
         const cx = (X[a * 3] + X[b * 3] + X[c * 3]) / 3 - k * REST_STEP, cy = (X[a * 3 + 1] + X[b * 3 + 1] + X[c * 3 + 1]) / 3, cz = (X[a * 3 + 2] + X[b * 3 + 2] + X[c * 3 + 2]) / 3;
         if (lb) shapeNormal(cx, cy, cz, half, bevel, lb, nrm);
         else roundBoxNormal(cx, cy, cz, half, bevel, nrm);
         if (!(-(N[f * 3] * nrm[0] + N[f * 3 + 1] * nrm[1] + N[f * 3 + 2] * nrm[2]) > 0.3)) continue;
         hollowF[f] = 2;
-        VS[a] = Math.max(VS[a], -(sa + th));
-        VS[b] = Math.max(VS[b], -(sb2 + th));
-        VS[c] = Math.max(VS[c], -(sc + th));
+        VS[a] = -(sd(a, bevH) + th);
+        VS[b] = -(sd(b, bevH) + th);
+        VS[c] = -(sd(c, bevH) + th);
       }
     }
     const cornerR = new Int32Array(nF * 3);

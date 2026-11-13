@@ -717,7 +717,7 @@ export class Bubbles {
   // it rode into the wall about as often as not near it - an ultrathin one's, 5 cm, right through - drifting in
   // the skin.) Moved: true.
   _inset(b, k, c) {
-    const sb = this.app.sb, half = sb.cSize[k] / 2, bev = sb.cBevel[k], x = c[0] - k * REST_STEP, y = c[1], z = c[2];
+    const sb = this.app.sb, half = sb.cSize[k] / 2, bev = sb.hollowBevel(k), x = c[0] - k * REST_STEP, y = c[1], z = c[2];
     let sh = null;
     if (sb.cBow[k] || sb.cLobeA[k] > 0) {
       if (this._insetAt[k] !== this._insetF) (this._insetSh[k] = sb.shapeOf(k)), (this._insetAt[k] = this._insetF);
