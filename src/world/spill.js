@@ -17,8 +17,10 @@ import { liquidVisc } from './fluid.js';
 
 const OVER = 1.2; // (how much closer drops stand settled in a hollow than laid out D apart: see _hollow)
 // (how many drops a full cube's liquid is, at most - each as big as that takes: a full one's every drop lives
-// as long as the cube does, and is worked out every frame it's moving - 900 took the liquid 20 ms a frame)
-const FILL_N = +(globalThis.__fillN ?? 520);
+// as long as the cube does, and is worked out every frame it's moving - 900 took the liquid 20 ms a frame; 520,
+// 37 ms of a phone's 80: 360, a fifth off the whole frame, each drop an eighth wider - its walls, its leaks, its
+// bubbles as they were)
+const FILL_N = +(globalThis.__fillN ?? 360);
 
 export class Spill {
   constructor(app) {
