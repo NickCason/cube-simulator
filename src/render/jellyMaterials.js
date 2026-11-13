@@ -476,8 +476,7 @@ export function createJellyMaterial(env, layerUniforms) {
       uHazeMin: { value: 0 },
       tScene: { value: null },
       tBack: { value: null },
-      tPeel: { value: null }, // (a cube full of liquid's far walls: only what's behind this - see JellyView.renderFar)
-      uPeel: { value: 0 },
+      uPeel: { value: 0 }, // (a cube full of liquid's far walls: only what's behind the first way out - see JellyView.renderFar)
       tBackRest: { value: null }, // (where the line of sight leaves: its rest point - see createBackMaterial)
       uBackRest: { value: 0 }, // (whether that's there: else only its height is)
       uGradTex: { value: null },
@@ -531,7 +530,6 @@ export function createJellyMaterial(env, layerUniforms) {
       uniform mat4 projectionMatrix;
       uniform sampler2D tScene;
       uniform sampler2D tBack;
-      uniform sampler2D tPeel;
       uniform float uPeel;
       uniform sampler2D tBackRest;
       uniform float uBackRest;
@@ -888,9 +886,11 @@ export function createJellyMaterial(env, layerUniforms) {
         // (this cube's look)
         gK = int(vCube + 0.5);
         // (a cube full of liquid's far walls - its inside faces seen through its hollow, and on out through it: only
-        // what's behind the nearest way out of the jelly here - see JellyView.renderFar)
+        // what's behind the nearest way out of the jelly here - see JellyView.renderFar. Read through tBackRest,
+        // free in that pass: a sampler of its own made the shader with everything 17, over an iPhone's 16 - it
+        // wouldn't link, and a cube whose look stood in with it wasn't drawn at all)
         if (uPeel > 0.5) {
-          float pz = texture(tPeel, gl_FragCoord.xy / resolution).r;
+          float pz = texture(tBackRest, gl_FragCoord.xy / resolution).r;
           if (!(pz > 0.0) || -vViewPos.z <= pz + 0.003 || cubeT(35).x < 0.5) discard;
         }
         vec4 cq0 = cubeT(0), cq1 = cubeT(1), cq2 = cubeT(2), cq3 = cubeT(3), cq4 = cubeT(4), cq5 = cubeT(5), cq6 = cubeT(6);

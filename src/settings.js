@@ -27,7 +27,10 @@ export const SETTINGS = [
   // Full of liquid (the switch at the head of the group: see Ui), how thick that is, how thick its skin - its shell's
   // wall - and how full it is (see Spill): each cube its own, kept through a change of material
   { id: 'liquid', group: 'Liquid', label: 'Filled', key: 'liquid', def: 0, ...linMap(0, 1), hidden: true, words: ['Off', 'On'] },
-  { id: 'liqVisc', group: 'Liquid', label: 'Viscosity', key: 'liqVisc', def: 0.15, ...linMap(0, 1), words: ['Water', 'Syrup', 'Glue', 'Gel', 'Near solid'] },
+  { id: 'liqVisc', group: 'Liquid', label: 'Viscosity', key: 'liqVisc', def: 0.15, ...linMap(0, 1), words: ['Water', 'Syrup', 'Honey', 'Slime', 'Putty'] },
+  // (how it clings: to its walls and the floor - it lies flat in a part-full cube, its edges up them, not heaped
+  // like beads - and to the bubbles at its top, risen as high as it lets them: see Fluid._wallFill, Bubbles.poolTick)
+  { id: 'liqTension', group: 'Liquid', label: 'Surface tension', key: 'liqTension', def: 0.5, ...linMap(0, 1), words: ['None', 'Low', 'Water', 'High', 'Very high'] },
   { id: 'liqSkin', group: 'Liquid', label: 'Skin', key: 'liqSkin', def: 0.5, ...linMap(0, 1), release: true, words: ['Ultrathin', 'Thin', 'Medium', 'Thick'] },
   { id: 'liqFill', group: 'Liquid', label: 'Fill', key: 'liqFill', def: 1, ...linMap(0, 1), release: true, words: ['Empty', 'A quarter', 'Half', 'Three quarters', 'Full'] },
   { id: 'opacity', group: 'Look', label: 'Opacity', key: 'opacity', mat: true, ...linMap(0, 1), words: ['Clear', 'Hazy', 'Cloudy', 'Milky', 'Solid'] },

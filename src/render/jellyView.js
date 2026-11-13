@@ -1734,10 +1734,11 @@ export class JellyView {
     this.scene.overrideMaterial = this.backPeelMat;
     r.render(this.scene, camera);
     const F = this.frontMat.uniforms, was = [F.tBack.value, F.tBackRest.value, F.uBackRest.value, F.tScene.value];
-    F.tBack.value = F.tBackRest.value = this.rtPeel2.texture;
+    F.tBack.value = this.rtPeel2.texture;
+    // (the first way out, to peel behind: in tBackRest - no rest point read in this pass, uBackRest 0)
+    F.tBackRest.value = this.rtPeel.texture;
     F.uBackRest.value = 0;
     F.tScene.value = rtTrans.texture;
-    F.tPeel.value = this.rtPeel.texture;
     F.uPeel.value = 1;
     r.setClearColor(pc, pa);
     r.setRenderTarget(rtScene);
@@ -1957,7 +1958,14 @@ export class JellyView {
   _featReady(key) {
     if (this._featUsed.has(key)) return true;
     const v = this._variants.get(key);
-    return !!v && v.prog.isReady();
+    if (!v || !v.prog.isReady()) return false;
+    // (compiled, but wouldn't link - too many textures for this GPU, say: never stood in with, the jelly not drawn)
+    if (v.ok === undefined) {
+      const gl = this.renderer.getContext();
+      v.ok = !!gl.getProgramParameter(v.prog.program, gl.LINK_STATUS);
+      if (!v.ok) console.warn('jelly: a look set would not link here', key);
+    }
+    return v.ok;
   }
 
   // (one still compiling)
@@ -1987,7 +1995,7 @@ export class JellyView {
     r.setRenderTarget(this.rtBack);
     r.compile(scene, camera);
     r.setRenderTarget(prev);
-    this._variants.set(key, { m, prog: r.properties.get(m).currentProgram });
+    this._variants.set(key, { m, prog: r.properties.get(m).currentProgram, ok: undefined });
     if (this._serialCompile) this._finishWarms();
   }
 

@@ -54,7 +54,7 @@ const SETTING_BY_KEY = Object.fromEntries(SETTINGS.map((s) => [s.key, s]));
 // each cube's own settings: its material's, and its size (the rest - gravity,
 // the sound, the tools - are the room's, the same in every cube)
 // (its own: its material's sliders, its size, its bubbles)
-const PER_CUBE = (k) => !!SETTING_BY_KEY[k]?.mat || k === 'size' || k === 'bubbles' || k === 'bubbleSize' || k === 'surfDepth' || k === 'surfScale' || k === 'trimSize' || k === 'trimDepth' || k === 'faces' || k === 'liquid' || k === 'liqVisc' || k === 'liqSkin' || k === 'liqFill';
+const PER_CUBE = (k) => !!SETTING_BY_KEY[k]?.mat || k === 'size' || k === 'bubbles' || k === 'bubbleSize' || k === 'surfDepth' || k === 'surfScale' || k === 'trimSize' || k === 'trimDepth' || k === 'faces' || k === 'liquid' || k === 'liqVisc' || k === 'liqTension' || k === 'liqSkin' || k === 'liqFill';
 import { DiceWatch } from './dice.js';
 import { Alive } from './alive.js';
 import { Tilt } from './tilt.js';
@@ -502,13 +502,16 @@ export class App {
       const ct = TEXTURES[cb.style.texture], cs = resolveSettings(cb.tune, ct);
       fizz.push({ slot: cb.slot, count: cs.bubbles, scale: cs.bubbleSize });
       // (its surface map holds on better, or slides: see surfaces.js grip)
-      const wasLiq = sb.cLiq[cb.slot], wasFill = sb.cFill[cb.slot], wasSkin = sb.cSkin[cb.slot];
+      const wasLiq = sb.cLiq[cb.slot], wasFill = sb.cFill[cb.slot], wasSkin = sb.cSkin[cb.slot], wasVisc = sb.cVisc[cb.slot], wasTens = sb.cTens[cb.slot];
       sb.setCube(cb.slot, {
         mu: App.safeMu(cs.mu, cs.weight, sb.cSize[cb.slot], cs.lambda, cs.gravity),
         damping: cs.damping, lambdaRatio: cs.lambda, bounce: cs.bounce, friction: cs.grip * (SURFACE[cb.style.surface]?.grip ?? 1),
         rigidity: cs.rigidity, density: cs.weight, airDrag: cs.airDrag,
-        liquid: cs.liquid > 0.5, liqVisc: cs.liqVisc, liqSkin: cs.liqSkin, liqFill: cs.liqFill,
+        liquid: cs.liquid > 0.5, liqVisc: cs.liqVisc, liqTension: cs.liqTension, liqSkin: cs.liqSkin, liqFill: cs.liqFill,
       });
+      // (its liquid as thick, as clinging, as it's set now - the liquid already in it too)
+      if (sb.cHollow[cb.slot] && Math.abs(sb.cVisc[cb.slot] - wasVisc) > 1e-6) this.fluid?.setVisc(cb.slot, sb.cVisc[cb.slot]);
+      if (sb.cHollow[cb.slot] && Math.abs(sb.cTens[cb.slot] - wasTens) > 1e-6) this.fluid?.setTension(cb.slot, sb.cTens[cb.slot]);
       this.jelly.setCubeLook(cb.slot, resolveFlavor(cb.style), { ...ct, ...cs, surface: cb.style.surface, trim: cb.style.trim, bevelRatio: (EDGES[cb.style.edges] || EDGES[DEFAULT_STYLE.edges]).bevel }, sb.cSize[cb.slot]);
       // (its own shape - faces dished or bulged, scalloped edges: built
       // again in place if that's changed and it's whole; else at its next

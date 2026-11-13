@@ -245,6 +245,7 @@ export class SoftBody {
     // thick): see _liquidTets
     this.cLiq = new Uint8Array(MAX_CUBES);
     this.cVisc = new Float64Array(MAX_CUBES).fill(0.15);
+    this.cTens = new Float64Array(MAX_CUBES).fill(0.5); // (its liquid's surface tension: see Fluid._wallFill)
     this.cSkin = new Float64Array(MAX_CUBES).fill(0.5);
     // (and a cube full of liquid is a shell, once its inside's been let out to be real liquid - the Fluid's: see
     // Spill: how full it was filled, whether it's hollow yet, and its hollow while it's sealed - see
@@ -942,7 +943,7 @@ export class SoftBody {
       this.vCube[i] = j;
       this.X[i * 3] += d;
     }
-    for (const a of [this.cMu, this.cLam, this.cDens, this.cDamp, this.cFric, this.cBounce, this.cRigid, this.cAir, this.cBevel, this.cN, this.cGrav, this.cBoost, this.cSize, this.cRes, this.cH, this.cBow, this.cLobeA, this.cLobeP, this.cTrimK, this.cLiq, this.cVisc, this.cSkin, this.cFill, this.cHollow, this.cav, this.cHid, this.cPress]) a[j] = a[k];
+    for (const a of [this.cMu, this.cLam, this.cDens, this.cDamp, this.cFric, this.cBounce, this.cRigid, this.cAir, this.cBevel, this.cN, this.cGrav, this.cBoost, this.cSize, this.cRes, this.cH, this.cBow, this.cLobeA, this.cLobeP, this.cTrimK, this.cLiq, this.cVisc, this.cTens, this.cSkin, this.cFill, this.cHollow, this.cav, this.cHid, this.cPress]) a[j] = a[k];
     this.cHollow[k] = 0;
     this.cav[k] = null;
     this.cHid[k] = 0;
@@ -969,6 +970,7 @@ export class SoftBody {
     // (full of liquid: its tets' shares of its firmness made again before the next step - see _liquidTets)
     if (q.liquid !== undefined && (q.liquid ? 1 : 0) !== this.cLiq[k]) (this.cLiq[k] = q.liquid ? 1 : 0), (this._liqDirty = true);
     if (q.liqVisc !== undefined && q.liqVisc !== this.cVisc[k]) (this.cVisc[k] = q.liqVisc), (this._liqDirty = true);
+    if (q.liqTension !== undefined) this.cTens[k] = q.liqTension;
     if (q.liqSkin !== undefined && q.liqSkin !== this.cSkin[k]) (this.cSkin[k] = q.liqSkin), (this._liqDirty = true);
     if (q.liqFill !== undefined) this.cFill[k] = q.liqFill;
     if (q.density !== undefined && q.density !== this.cDens[k]) {

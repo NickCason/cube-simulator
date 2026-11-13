@@ -308,7 +308,7 @@ export class Bubbles {
         // (and, loose: how it's moving, whether it's up against the top, how much of it's left - a burst's
         // shrinking - gone: run into another, or burst)
         // (and run out with a spill, into its pool - see poolFrom: its drop, where it is, foam or not, its time)
-        this.items.push({ slot, u: P.u, r: P.r, scale: w.scale, R, c: [x, y, z], a: r ? { tet: r.tet, b: r.bary, lost: false } : { tet: -1, b: [0, 0, 0, 0], lost: false }, open: false, v: [0, 0, 0], top: false, life: 1, gone: false, pool: false, p: -1, w: [0, 0, 0], lp: [0, 0, 0], lpOK: false, foam: false, popT: 0, held: false, hk: -1, cOK: false });
+        this.items.push({ slot, u: P.u, r: P.r, scale: w.scale, R, c: [x, y, z], a: r ? { tet: r.tet, b: r.bary, lost: false } : { tet: -1, b: [0, 0, 0, 0], lost: false }, open: false, v: [0, 0, 0], top: false, life: 1, gone: false, pool: false, p: -1, w: [0, 0, 0], lp: [0, 0, 0], lpOK: false, foam: false, popT: 0, held: false, hk: -1, cOK: false, sy: -Infinity });
       }
     }
     for (const slot of wet) this.intoLiquid(slot);
@@ -555,7 +555,7 @@ export class Bubbles {
   _spare() {
     for (const b of this.items) if (b.gone && !b.open && !b.pool) return b;
     if (this.items.length >= MAX) return null;
-    const b = { slot: 0, u: [0, 0, 0], r: 0, scale: 1, R: 0, c: [0, 0, 0], a: { tet: -1, b: [0, 0, 0, 0], lost: false }, open: false, v: [0, 0, 0], top: false, life: 1, gone: true, pool: false, p: -1, w: [0, 0, 0], lp: [0, 0, 0], lpOK: false, foam: false, popT: 0, held: false, hk: -1, cOK: false };
+    const b = { slot: 0, u: [0, 0, 0], r: 0, scale: 1, R: 0, c: [0, 0, 0], a: { tet: -1, b: [0, 0, 0, 0], lost: false }, open: false, v: [0, 0, 0], top: false, life: 1, gone: true, pool: false, p: -1, w: [0, 0, 0], lp: [0, 0, 0], lpOK: false, foam: false, popT: 0, held: false, hk: -1, cOK: false, sy: -Infinity };
     this.items.push(b);
     return b;
   }
@@ -661,11 +661,19 @@ export class Bubbles {
           w[0] = FR[f] + FR[f + 6] * rx + FR[f + 7] * ry + FR[f + 8] * rz;
           w[1] = FR[f + 1] + FR[f + 9] * rx + FR[f + 10] * ry + FR[f + 11] * rz;
           w[2] = FR[f + 2] + FR[f + 12] * rx + FR[f + 13] * ry + FR[f + 14] * rz;
+          // (at the top of its liquid, no further out of it than its Surface tension lets it - see _surface)
+          if (this._surface(b, x, NS, NB, D, fl.tens[p])) {
+            const ex = w[0] - FR[f], ey = w[1] - FR[f + 1], ez = w[2] - FR[f + 2];
+            c[0] = FR[f + 3] + FR[f + 6] * ex + FR[f + 9] * ey + FR[f + 12] * ez;
+            c[1] = FR[f + 4] + FR[f + 7] * ex + FR[f + 10] * ey + FR[f + 13] * ez;
+            c[2] = FR[f + 5] + FR[f + 8] * ex + FR[f + 11] * ey + FR[f + 14] * ez;
+          }
           continue;
         }
         w[0] += (x[p * 3] + b.u[0] * 0.4 * D - w[0]) * k;
         w[1] += (x[p * 3 + 1] + b.u[1] * 0.4 * D - w[1]) * k;
         w[2] += (x[p * 3 + 2] + b.u[2] * 0.4 * D - w[2]) * k;
+        this._surface(b, x, NS, NB, D, fl.tens[p]);
         continue;
       }
       if (b.held) {
@@ -677,8 +685,10 @@ export class Bubbles {
       }
       let top = x[p * 3 + 1];
       for (let e = NS[p], e1 = NS[p + 1]; e < e1; e++) top = Math.max(top, x[NB[e] * 3 + 1]);
-      // (its surface, as drawn, is 1.1 spacings over its drops' middles - the splats are wide: see Fluid._remesh)
-      const tx = x[p * 3] + b.u[0] * 0.4 * D, tz = x[p * 3 + 2] + b.u[2] * 0.4 * D, ty = top + 1.1 * D - 0.2 * b.R;
+      // (its surface, as drawn, is 1.1 spacings over its drops' middles - the splats are wide: see Fluid._remesh -
+      // and it rides as high in it as its Surface tension holds it: see _surface)
+      b.sy = top + 1.1 * D;
+      const tx = x[p * 3] + b.u[0] * 0.4 * D, tz = x[p * 3 + 2] + b.u[2] * 0.4 * D, ty = b.sy - (0.75 - 1.1 * fl.tens[p]) * b.R;
       w[0] += (tx - w[0]) * k;
       w[2] += (tz - w[2]) * k;
       w[1] += Math.max(-0.5 * dt, Math.min(0.6 * dt, (ty - w[1]) * k));
@@ -688,6 +698,20 @@ export class Bubbles {
       }
     }
     if (any) this._poolV++;
+  }
+
+  // A bubble at the top of its liquid - the drawn surface over its drop and those round it (sy) - held there by the
+  // liquid's Surface tension t: its middle as far out of it as that lets it, no further - none, three quarters of it
+  // under; water's, a fifth; very high, a third of it out, riding up on it. Pushed back down: true.
+  _surface(b, x, NS, NB, D, t) {
+    const p = b.p;
+    let top = x[p * 3 + 1];
+    for (let e = NS[p], e1 = NS[p + 1]; e < e1; e++) top = Math.max(top, x[NB[e] * 3 + 1]);
+    b.sy = top + 1.1 * D;
+    const cap = b.sy - (0.75 - 1.1 * t) * b.R;
+    if (!(b.w[1] > cap)) return false;
+    b.w[1] = cap;
+    return true;
   }
 
   // a pool bubble bursting: a pinch of spray and a tiny 'plip', where it is

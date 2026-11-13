@@ -13,6 +13,7 @@ import * as THREE from 'three';
 import { removeTets } from '../sim/cutting.js';
 import { TAG_EXTERIOR, REST_STEP, polarRot } from '../sim/softbody.js';
 import { shapeSDF } from '../sim/mesh.js';
+import { liquidVisc } from './fluid.js';
 
 const OVER = 1.2; // (how much closer drops stand settled in a hollow than laid out D apart: see _hollow)
 // (how many drops a full cube's liquid is, at most - each as big as that takes: a full one's every drop lives
@@ -130,7 +131,7 @@ export class Spill {
     // - as many as there's room for
     P.sort((p, q) => p[1] - q[1]);
     const n = Math.min(room, P.length, Math.round(fill * ((OVER * V) / D ** 3)));
-    const visc = sb.cVisc[k], fv = 0.12 + 0.83 * Math.pow(visc, 1.2), ft = 30 * visc * visc, p0 = fl.n;
+    const [fv, ft] = liquidVisc(sb.cVisc[k]), p0 = fl.n;
     for (let i = 0; i < n; i++) {
       const [px, py, pz, rx, ry, rz] = P[i];
       col.set(app.flavorColorAtRest(rx, ry, rz, k));
@@ -139,7 +140,7 @@ export class Spill {
     // (settled liquid, not just made: the solver holds it up at full strength from the first - see Fluid's
     // GAIN - else the column fell in on itself before it could; and marked as this cube's)
     sb.cHid[k] = ++this.hid;
-    for (let i = p0; i < fl.n; i++) (fl.age[i] = 1), (fl.own[i] = this.hid);
+    for (let i = p0; i < fl.n; i++) (fl.age[i] = 1), (fl.own[i] = this.hid), (fl.tens[i] = sb.cTens[k]);
     this.drained += (fl.n - p0) * fl.vol;
     // (what's in it - the glitter on the nearest of them; its bubbles all through it, none left in its wall or
     // hollow: see Bubbles.intoLiquid)
