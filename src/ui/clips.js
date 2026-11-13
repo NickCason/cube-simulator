@@ -43,7 +43,11 @@ export class Clips {
     const q = new URLSearchParams(location.search), ua = navigator.userAgent;
     const webkit = (/AppleWebKit/.test(ua) && !/Chrome\/|Chromium|Edg\//.test(ua)) || /CriOS|FxiOS|EdgiOS/.test(ua);
     this.mode = q.get('rec') === 'copy' || q.get('rec') === 'gl' ? q.get('rec') : webkit ? 'gl' : 'copy';
-    this.sound = q.get('recsound') !== '0';
+    // (its sounds - not on an iPhone: there a clip with a sound track stopped taking pictures 12-14 s in, either
+    // way of taking them, its sound running or not, every frame still sent - his Rec test, 2026-11-13: with sound
+    // 204 of 403 frames and 191 of 339 in the file, frozen from 12 s; without, 446 of 446, 441 of 442.
+    // ?recsound=1 to try it there; ?recsound=0, none anywhere)
+    this.sound = q.get('recsound') === '1' || (q.get('recsound') !== '0' && !webkit);
     this.srcGL = null; // (the screen's own picture's stream: see _glSource)
     this.vtrack = null; // (the picture's track this recording)
     // (can't record here: no button)
