@@ -5,8 +5,21 @@ import { Splash } from './ui/splash.js';
 const params = new URLSearchParams(location.search);
 const canvas = document.getElementById('stage');
 
+// A GPU context the browser takes back (iOS does, for a tab left in the background - or as a page loads with
+// another's still held) can't be pieced together again here: stop drawing, and start afresh once it's back or the
+// page is looked at again (the style and the settings are remembered). Listened for before the app's made: lost
+// while it was being made, nobody heard, and the splash stood dark till a reload.
+let app = null;
+const restart = () => location.reload();
+canvas.addEventListener('webglcontextlost', (e) => {
+  e.preventDefault();
+  if (app) app.lost = true;
+  if (document.visibilityState === 'visible') setTimeout(restart, 1500);
+  else document.addEventListener('visibilitychange', () => document.visibilityState === 'visible' && setTimeout(restart, 300));
+});
+canvas.addEventListener('webglcontextrestored', restart);
+
 function boot() {
-  let app;
   try {
     app = new App(canvas, {
       preserve: params.has('shot'),
@@ -49,18 +62,7 @@ function boot() {
     app.jelly.debugShader = true;
   }
   window.__app = app;
-  // A GPU context the browser takes back (iOS does, for a tab left in the
-  // background) can't be pieced together again here: stop drawing, and start
-  // afresh once it's back or the page is looked at again (the style and the
-  // settings are remembered).
-  const restart = () => location.reload();
-  canvas.addEventListener('webglcontextlost', (e) => {
-    e.preventDefault();
-    app.lost = true;
-    if (document.visibilityState === 'visible') setTimeout(restart, 1500);
-    else document.addEventListener('visibilitychange', () => document.visibilityState === 'visible' && setTimeout(restart, 300));
-  });
-  canvas.addEventListener('webglcontextrestored', restart);
+  if (app.renderer.getContext().isContextLost()) app.lost = true;
   app.splash = new Splash(app);
   if (params.has('stats')) import('./ui/stats.js').then((m) => m.attachStats(app));
   app.start();

@@ -1598,8 +1598,11 @@ export class App {
       this._selRing(dt);
       this.room.update(dt);
       this.cubiplication.update(dt);
-      // (a cube full of liquid cut open: its liquid out of it before the step - not stepped as jelly once more)
-      if (this.intro.done) this.spill.update(sdt);
+      // (a cube full of liquid cut open: its liquid out of it before the step - not stepped as jelly once more.
+      // And made hollow and filled behind the splash, once its show's begun, not as it's let go: the cube was
+      // drawn solid the moment before it dropped, and hollowed, filled and its liquid first drawn in the drop's
+      // first frames - 0.8 s and 0.4 s at a phone's speed)
+      if (this.intro.done || !this.splash?.active || this.splash.goAt) this.spill.update(sdt);
       const nS = Math.max(4, Math.min(36, Math.round(this.substepRate * sdt)));
       this.sb.p.substeps = nS;
       const p0 = performance.now();

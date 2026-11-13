@@ -6,14 +6,15 @@
 // what's over that hole goes out of it as the floor's yanked up past it: a few a frame, not a sheet)
 import { join } from 'node:path';
 import { table } from './_common.mjs';
-export const meta = { name: 'yank', params: { cube: 'blueGold', gun: 'holegun', wait: 60, gu: 0.5, gv: 0.2, rise: 320, over: 4, hold: 30, pics: 0 } };
+// (shake=N: instead, shaken side to side N times, rise px each way, `over` frames a stroke - out through its sides too)
+export const meta = { name: 'yank', params: { cube: 'blueGold', gun: 'holegun', wait: 60, gu: 0.5, gv: 0.2, rise: 320, over: 4, hold: 30, pics: 0, shake: 0 } };
 export async function run(k, p, ctx) {
   await k.load(p.cube, {}, { settle: 120 });
   await k.shoot(p.gun, [0.5, 0.55]);
   await k.frames(p.wait);
   await k.app((a) => {
     // (each frame: the jelly's box - its biggest piece - and each drop: in its footprint, over its bottom then, under it now)
-    const W = (window.__yk = { prevIn: new Uint8Array(a.fluid.max || 8192), crossed: 0, worst: 0, frames: 0, under: 0 });
+    const W = (window.__yk = { prevIn: new Uint8Array(a.fluid.max || 8192), crossed: 0, sides: 0, worst: 0, frames: 0, under: 0 });
     W.look = () => {
       const sb = a.sb, fl = a.fluid, big = sb.pieces.filter(Boolean).reduce((m, q) => (!m || q.verts.length > m.verts.length ? q : m), null);
       const lo = [1e9, 1e9, 1e9], hi = [-1e9, -1e9, -1e9];
@@ -23,6 +24,8 @@ export async function run(k, p, ctx) {
         const x = fl.x[i * 3], y = fl.x[i * 3 + 1], z = fl.x[i * 3 + 2], foot = x > lo[0] + 0.03 && x < hi[0] - 0.03 && z > lo[2] + 0.03 && z < hi[2] - 0.03;
         const inside = foot && y > lo[1] && y < hi[1];
         if (W.prevIn[i] && foot && y < lo[1] - 0.02) (W.crossed++, now++);
+        // (out through a side: off its box across by 2 cm, between its bottom and top)
+        else if (W.prevIn[i] && y > lo[1] + 0.03 && y < hi[1] && (x < lo[0] - 0.02 || x > hi[0] + 0.02 || z < lo[2] - 0.02 || z > hi[2] + 0.02)) W.sides++;
         W.prevIn[i] = inside ? 1 : 0;
       }
       // (the drawn surface under its bottom, inside its footprint)
@@ -47,18 +50,26 @@ export async function run(k, p, ctx) {
     if (!at.includes(f)) return;
     for (const s of ['all', 'jelly']) shots.push(await k.shot(join(ctx.out, `yank-${ctx.build}-s${ctx.seed}-f${f}-${s}.png`), { skip: s === 'jelly' ? { jelly: true } : {} }));
   };
-  for (let i = 1; i <= p.over; i++) {
-    await k.page.mouse.move(x, y - (p.rise * i) / p.over);
-    await step(1);
-    await snap(i);
-  }
+  if (p.shake)
+    for (let c = 0; c < p.shake * 2; c++)
+      for (let i = 1; i <= p.over; i++) {
+        const to = c % 2 ? -1 : 1, from = c === 0 ? 0 : -to;
+        await k.page.mouse.move(x + p.rise * 0.5 * (from + ((to - from) * i) / p.over), y);
+        await step(1);
+      }
+  else
+    for (let i = 1; i <= p.over; i++) {
+      await k.page.mouse.move(x, y - (p.rise * i) / p.over);
+      await step(1);
+      await snap(i);
+    }
   for (let i = 1; i <= p.hold; i++) {
     await step(1);
     await snap(p.over + i);
   }
   await k.page.mouse.up();
-  const r = await k.app(() => ({ crossed: window.__yk.crossed, worstFrame: window.__yk.worst, underMax: window.__yk.under, frames: window.__yk.frames }));
+  const r = await k.app(() => ({ crossed: window.__yk.crossed, sides: window.__yk.sides, worstFrame: window.__yk.worst, underMax: window.__yk.under, frames: window.__yk.frames }));
   return { ...r, ...(await k.probe('pieces')), ...(shots.length ? { shots: shots.join(' ') } : {}) };
 }
-export const row = (r) => `drops through its bottom face ${r.crossed} (worst frame ${r.worstFrame}) | drawn surface under it ${r.underMax} points | pieces ${r.n}`;
-export const summary = (all) => table(all, ['crossed', 'worstFrame', 'underMax']);
+export const row = (r) => `drops through its bottom face ${r.crossed} (worst frame ${r.worstFrame}), its sides ${r.sides} | drawn surface under it ${r.underMax} points | pieces ${r.n}`;
+export const summary = (all) => table(all, ['crossed', 'sides', 'worstFrame', 'underMax']);

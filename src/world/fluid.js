@@ -55,6 +55,12 @@ const VISC = 0.25; // XSPH: how much each takes on its neighbours' velocity
 // (thicker than this - slime, putty - it moves with what's round it, not through it, unless it's pushed hard: how
 // hard, YIELD_K m/s for each unit of XSPH past it - see _step)
 const YIELD_V = 0.6, YIELD_K = 4.0;
+// (1/s: how fast a whole cube's own liquid stills while the cube's still - gently at first, a slosh dying away,
+// then hard, over STILL_RAMP s: see _stillMark)
+const STILL_K0 = 3, STILL_K1 = 30, STILL_RAMP = 1.2;
+// (s: all of it a whole cube's own, each cube still this long - it sleeps: see _stillMark. Behind the splash,
+// once its code's warm: sooner - till it slept, the splash's own warm-up went slower, and it stayed up longer)
+const STILL_SLEEP = 1.5, STILL_SLEEP_HELD = 0.6;
 
 // A cube full of liquid's Viscosity (0..1, water to putty) as its drops have it: how much each takes on its
 // neighbours' velocity (XSPH), and a drag on it (1/s). (It was set as a cube was filled, and kept: the slider did
@@ -114,6 +120,13 @@ export class Fluid {
     this._sw = new Float32Array(N); // (each drop's neighbours' weight, summed - their velocity's mean: see _step)
     // (thick stuff - slime, putty - at rest on what's under it: no gravity for it the next substep - see _step)
     this._rested = new Uint8Array(N);
+    // (each a whole cube's own while that cube's still: stilled so much a substep - see _stillMark - and how
+    // long each cube's been still)
+    this._still = new Float32Array(N).fill(1);
+    this._stillIds = new Int32Array(MAX_CUBES);
+    this._stillFs = new Float32Array(MAX_CUBES);
+    this._stillT = new Float64Array(MAX_CUBES);
+    this._stillAll = 0;
     this._gw = new Float64Array(3);
     this._colTop = new Float32Array(COL_HASH);
     // (and how much of it each carries, in particles' worth - more than one, a spill bigger than the pool has
@@ -827,6 +840,7 @@ export class Fluid {
     if (!this.asleep) {
       this._jellyCells();
       this._pressures();
+      this._stillMark(phys);
       this._advance(phys);
       this._contain();
       const v = this.v;
@@ -864,6 +878,7 @@ export class Fluid {
       // (liquid seeping out through a slit - drops in its crack moving on, lately: awake, however slow the seep
       // - asleep, it'd have stopped dead, the level left above the slit)
       if (this._flowT < 1) this.stillT = 0;
+      if (this._stillAll >= STILL_SLEEP) this.stillT = 1;
       if (this.stillT > 0.6) {
         this.asleep = true;
         v.fill(0, 0, this.n * 3);
@@ -1188,6 +1203,7 @@ export class Fluid {
   stepPart(dt) {
     if (!this.n || (this.rc && !this.rc.partial) || this.drainT > 0 || this.asleep || !(dt > 0)) return;
     this._jellyCells();
+    this._stillMark(dt);
     this._advance(dt);
   }
 
@@ -1703,7 +1719,45 @@ export class Fluid {
   }
 
   // Jelly awake within reach of the (sleeping) pool?
+  // (each drop of a whole cube's own liquid while that cube's still - all of it asleep, or held up behind the
+  // splash - is stilled, as water in a jar set down comes to rest: thin as water, the solver's own jostling, a
+  // metre a second, never died away there, and it never slept - every still frame of his cube of water worked
+  // all of it out, 16 ms here, 45-68 on his phone. Moving, cut open, spilled: left be)
+  _stillMark(dt) {
+    const sb = this.app.sb, S = this._still, own = this.own, n = this.n, ids = this._stillIds, fs = this._stillFs, T = this._stillT, held = !this.app.intro?.done;
+    let m = 0;
+    for (let k = 0; k < MAX_CUBES; k++) {
+      const c = sb.cav[k], id = sb.cHid[k];
+      let still = !!(c && c.sealed && id);
+      if (still && !held) for (const pc of sb.pieces) if (pc && pc.cube === k && !pc.asleep) (still = false);
+      T[k] = still ? T[k] + dt : 0;
+      if (!still) continue;
+      ids[m] = id;
+      fs[m++] = Math.exp(-(STILL_K0 + (STILL_K1 - STILL_K0) * Math.min(1, T[k] / STILL_RAMP)) * STEP);
+    }
+    S.fill(1, 0, n);
+    this._stillAll = 0;
+    if (!m) return;
+    // (and all of it so, the least time any of those cubes has been still - stilled hard, it still jostles a
+    // metre a second, the solver's own, but it's going nowhere: it sleeps. At a phone's speed it never passed
+    // update's own looks for that)
+    let all = n > 0, least = Infinity;
+    for (let i = 0; i < n; i++) {
+      const o = own[i];
+      let hit = -1;
+      if (o) for (let j = 0; j < m; j++) if (ids[j] === o) hit = j;
+      if (hit < 0) all = false;
+      else S[i] = fs[hit];
+    }
+    if (all) for (let k = 0; k < MAX_CUBES; k++) if (T[k] > 0) least = Math.min(least, T[k]);
+    this._stillAll = all && least < Infinity ? least * (held ? STILL_SLEEP / STILL_SLEEP_HELD : 1) : 0;
+  }
+
   _stirred() {
+    // (held up behind the splash the jelly isn't moving, but nor does it ever go to sleep: its liquid, poured
+    // in there, was woken every frame and worked out for nothing - at a phone's speed the splash's own warm-up
+    // went at half the pace, and it stayed up till its 9 s were out)
+    if (!this.app.intro?.done) return false;
     const x = this.x, m = 0.1;
     let x0 = Infinity, y0 = Infinity, z0 = Infinity, x1 = -Infinity, y1 = -Infinity, z1 = -Infinity;
     for (let o = 0; o < this.n * 3; o += 3) {
@@ -1960,14 +2014,14 @@ export class Fluid {
       dv[o] = ax; dv[o + 1] = ay; dv[o + 2] = az;
       SW[i] = sw;
     }
-    const damp = Math.exp(-1.2 * h), fr = 1 - Math.min(1, 6 * h), slush = Math.exp(-14 * h), settle = Math.exp(-5 * h), temp = this.temp, VI = this.visc, TK = this.thick;
+    const damp = Math.exp(-1.2 * h), fr = 1 - Math.min(1, 6 * h), slush = Math.exp(-14 * h), settle = Math.exp(-5 * h), ST = this._still, temp = this.temp, VI = this.visc, TK = this.thick;
     for (let o = 0; o < n * 3; o += 3) {
       // (cold enough to set: slush - it hardly flows; thick stuff - glue - drags too)
       const i = o / 3, vi = VI[i], tk = TK[i] > 0 ? Math.exp(-TK[i] * h) : 1;
       // (slow, it settles: a pool barely moving had a slow churn - drops sinking into the walls and floor and
       // pushed back - that never died away, and never slept; flowing, it's left be)
       const sp2 = v[o] * v[o] + v[o + 1] * v[o + 1] + v[o + 2] * v[o + 2];
-      const dm = (temp[i] < SET_T ? slush : damp) * tk * (sp2 < 0.0625 ? settle : 1);
+      const dm = (temp[i] < SET_T ? slush : damp) * tk * (sp2 < 0.0625 ? settle : 1) * ST[i];
       // (slime, putty: moving against what's round it slower than it yields, it moves with it - its neighbours'
       // velocity, all of it: a lump falls as a lump, a heap holds, till it's pushed hard)
       let rx = vi * dv[o], ry = vi * dv[o + 1], rz = vi * dv[o + 2], rest = 0;

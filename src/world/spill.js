@@ -43,7 +43,9 @@ export class Spill {
       for (let i = 0; i < fl.n && !gone; i++) gone = own[i] !== 0 && !live.has(own[i]);
       if (gone) fl.removeWhere((i) => own[i] !== 0 && !live.has(own[i]));
     }
-    if (app.healer?.active || app.swapper?.active || app.cubiplication?.active || fl.rc || !sb.nT) return;
+    // (swapped: only while the old one's on its way out - the new one, dropping in, is made hollow at once: left
+    // till it had landed and settled, a cube full of liquid came down solid and turned to liquid after)
+    if (app.healer?.active || (app.swapper?.active && app.swapper.phase === 'exit') || app.cubiplication?.active || fl.rc || !sb.nT) return;
     for (const cb of app.cubes) if (sb.cLiq[cb.slot] && !sb.cHollow[cb.slot]) this._hollow(sb, cb.slot);
     if (sb.topoVersion !== this.ver || sb.cubeVersion !== this.cv) this._seal(sb);
   }

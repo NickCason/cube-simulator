@@ -31,6 +31,24 @@
         } catch (e) {}
         if (/[?&](shot|nosplash)\b/.test(q) || (navigator.webdriver && !/[?&]splash\b/.test(q))) return;
         d.classList.add('splashing');
+        // (the app not drawing 12 s on - its script never came, a new build's page ahead of its bundle; or it
+        // fell over, or its GPU context went, before it drew - the splash stood dark for good, till a reload:
+        // once a minute, loaded again; past that, the splash let go)
+        setTimeout(function () {
+          var a = window.__app;
+          if (a && a.stats && a.stats.frames > 1 && !a.lost) return;
+          try {
+            var t = +sessionStorage.getItem('cube-sim-reboot') || 0;
+            if (Date.now() - t > 60000) {
+              sessionStorage.setItem('cube-sim-reboot', String(Date.now()));
+              location.reload();
+              return;
+            }
+          } catch (e) {}
+          d.classList.remove('splashing');
+          var el = document.getElementById('splash');
+          if (el) el.remove();
+        }, 12000);
         try {
           var st = JSON.parse(localStorage.getItem('cube-sim-style') || '{}') || {};
           var F = { cherry: '#d4102a', lime: '#5fce1e', blue: '#0f8cff', grape: '#7a24d4', orange: '#ff7414', lemon: '#ffcc12', watermelon: '#ff3f7f', cola: '#7a2e0e' };
