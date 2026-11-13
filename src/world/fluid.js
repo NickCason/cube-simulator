@@ -237,6 +237,7 @@ export class Fluid {
     this._lvK = new Uint8Array(4096);
     this._lvE = new Uint8Array(4096);
     this._lvG = null;
+    this._lvM = null;
     this._bigN = this._totN = null; // (each cube's pieces of size, and its points: see _frames)
     // (the cups - pieces of a hollow cube cut open - holding air under the liquid this frame, and each piece's own
     // turn, hollow and air, kept from frame to frame: see _cups, _air)
@@ -1039,59 +1040,76 @@ export class Fluid {
     }
   }
 
-  // A whole cube's own liquid's top drawn as water's - flat, meeting its walls square - not as its drops make it:
-  // a lump a drop wide over each (13 cm, a full cube's) and rounded down a splat's width at its walls, like slime.
-  // Its top - where it faces up - as a height over the floor, smoothed over a drop's width (its waves, a slosh's
-  // tilt, kept; its drops' lumps gone) and carried on out to its walls; each point of its top within a drop of
-  // that put on it (a tenth of its lump left), and the band rounding down to its walls - only there, where its top
-  // ends: not a wave's steep face - lifted to it; each facing as that height slopes. Drawn only: the liquid's as it
-  // was. (Not one drawn full - its top's its hollow's - nor out of a cube, nor a cube in pieces.)
+  // Its liquid's top drawn as water's - flat - not as its drops make it: a lump a drop wide over each (13 cm, a
+  // full cube's). A whole cube's own liquid's top meeting its walls square too - not rounded down a splat's width
+  // at them, like slime; a puddle's edge left round, as a puddle's is. Its top - where it faces up, its lowest layer
+  // of that in each spot: a stream falling into a puddle, a splash over a cube's liquid, not its top - as a height
+  // over the floor, smoothed over a drop and a half (its waves, a slosh's tilt kept; its drops' lumps gone) and
+  // carried on out past where it ends; each point of its top within a drop of that put on it (a tenth of its lump
+  // left), and in a cube the band rounding down to its walls - only there, where its top ends, not a wave's steep
+  // face - lifted to it; each facing as that height slopes. Drawn only: the liquid's as it was. (Not a cube's drawn
+  // full - its top's its hollow's - nor one in pieces.)
   _flatTop(nv) {
-    const sb = this.app.sb, P = this.pos, N = this.nrm, inn = this.inn, FU = this._full, RY = this.revealY, d0 = this.D;
+    const sb = this.app.sb, FU = this._full, RY = this.revealY;
+    for (let k = 0; k < MAX_CUBES; k++) if (sb.cHollow[k] && this.frameOK[k] && !(FU && FU[k]) && !(RY[k] < Infinity)) this._flatOne(nv, k + 1, true);
+    // (and what's out on the floor - and in a cut piece of one, its own walls' liquid as it's labelled: see _walls)
+    this._flatOne(nv, 0, false);
+  }
+
+  // (one label's points of the surface - a cube's own liquid's, k + 1, or the room's, 0: see _flatTop)
+  _flatOne(nv, lab, edges) {
+    const P = this.pos, N = this.nrm, inn = this.inn, d0 = this.D;
     // (smoothed over a drop and a half: six or so of them across a cube, its waves any shorter than that were its
     // drops' lumps)
     const hc = 0.5 * d0, sig = 1.5 / 0.5, rad = Math.ceil(1.5 * sig), band = d0, keep = 0.1, re = 2;
-    // (its blur's weights, cell by cell out from the middle)
     if (!this._lvG || this._lvG.length !== rad + 1) {
       this._lvG = new Float32Array(rad + 1);
       for (let r = 0; r <= rad; r++) this._lvG[r] = Math.exp(-(r * r) / (2 * sig * sig));
     }
     const GW = this._lvG;
-    for (let k = 0; k < MAX_CUBES; k++) {
-      if (!sb.cHollow[k] || !this.frameOK[k] || (FU && FU[k]) || RY[k] < Infinity) continue;
-      const lab = k + 1;
-      let x0 = Infinity, z0 = Infinity, x1 = -Infinity, z1 = -Infinity;
-      for (let v = 0; v < nv; v++) {
-        if (inn[v] !== lab) continue;
-        const o = v * 3;
-        if (P[o] < x0) x0 = P[o];
-        if (P[o] > x1) x1 = P[o];
-        if (P[o + 2] < z0) z0 = P[o + 2];
-        if (P[o + 2] > z1) z1 = P[o + 2];
-      }
-      if (!(x1 >= x0)) continue;
-      x0 -= 2 * hc; z0 -= 2 * hc;
-      const gx = Math.floor((x1 + 2 * hc - x0) / hc) + 1, gz = Math.floor((z1 + 2 * hc - z0) / hc) + 1, G = gx * gz;
-      if (G > 40000) continue;
-      if (this._lvH.length < G) (this._lvH = new Float32Array(G * 2)), (this._lvW = new Float32Array(G * 2)), (this._lvT = new Float32Array(G * 2)), (this._lvU = new Float32Array(G * 2)), (this._lvK = new Uint8Array(G * 2)), (this._lvE = new Uint8Array(G * 2));
-      const H = this._lvH, W = this._lvW, T = this._lvT, U = this._lvU, K = this._lvK, E = this._lvE;
-      H.fill(0, 0, G);
-      W.fill(0, 0, G);
-      // (its top's heights, binned: a cell each)
-      let tops = 0;
-      for (let v = 0; v < nv; v++) {
-        if (inn[v] !== lab) continue;
-        const o = v * 3;
-        if (N[o + 1] < 0.75) continue;
-        const g = Math.min(gz - 1, Math.round((P[o + 2] - z0) / hc)) * gx + Math.min(gx - 1, Math.round((P[o] - x0) / hc));
-        H[g] += P[o + 1];
-        W[g] += 1;
-        tops++;
-      }
-      if (!tops) continue;
-      // (where its top is - a point of it in a cell or the next - and by its end, within re cells of none: E 1 its
-      // top, 2 by its end, 3 both. Past its end its heights only carry on)
-      for (let g = 0; g < G; g++) K[g] = W[g] > 0 ? 1 : 0;
+    let x0 = Infinity, z0 = Infinity, x1 = -Infinity, z1 = -Infinity;
+    for (let v = 0; v < nv; v++) {
+      if (inn[v] !== lab || N[v * 3 + 1] < 0.1) continue;
+      const o = v * 3;
+      if (P[o] < x0) x0 = P[o];
+      if (P[o] > x1) x1 = P[o];
+      if (P[o + 2] < z0) z0 = P[o + 2];
+      if (P[o + 2] > z1) z1 = P[o + 2];
+    }
+    if (!(x1 >= x0)) return;
+    x0 -= 2 * hc; z0 -= 2 * hc;
+    const gx = Math.floor((x1 + 2 * hc - x0) / hc) + 1, gz = Math.floor((z1 + 2 * hc - z0) / hc) + 1, G = gx * gz;
+    if (G > 40000) return;
+    if (this._lvH.length < G) (this._lvH = new Float32Array(G * 2)), (this._lvW = new Float32Array(G * 2)), (this._lvT = new Float32Array(G * 2)), (this._lvU = new Float32Array(G * 2)), (this._lvK = new Uint8Array(G * 2)), (this._lvE = new Uint8Array(G * 2));
+    const H = this._lvH, W = this._lvW, T = this._lvT, U = this._lvU, K = this._lvK, E = this._lvE;
+    const cellOf = (o) => Math.min(gz - 1, Math.round((P[o + 2] - z0) / hc)) * gx + Math.min(gx - 1, Math.round((P[o] - x0) / hc));
+    // (each spot's lowest up-facing point, then its top's heights - those within half a drop of that - binned)
+    T.fill(Infinity, 0, G);
+    for (let v = 0; v < nv; v++) {
+      if (inn[v] !== lab) continue;
+      const o = v * 3;
+      if (N[o + 1] < 0.75) continue;
+      const g = cellOf(o);
+      if (P[o + 1] < T[g]) T[g] = P[o + 1];
+    }
+    H.fill(0, 0, G);
+    W.fill(0, 0, G);
+    let tops = 0;
+    for (let v = 0; v < nv; v++) {
+      if (inn[v] !== lab) continue;
+      const o = v * 3;
+      if (N[o + 1] < 0.75) continue;
+      const g = cellOf(o);
+      if (P[o + 1] > T[g] + 0.5 * band) continue;
+      H[g] += P[o + 1];
+      W[g] += 1;
+      tops++;
+    }
+    if (!tops) return;
+    // (where its top is - a point of it in a cell or the next - and by its end, within re cells of none: E 1 its
+    // top, 2 by its end, 3 both. Past its end its heights only carry on)
+    for (let g = 0; g < G; g++) K[g] = W[g] > 0 ? 1 : 0;
+    if (edges) {
       for (let j = 0; j < gz; j++)
         for (let i = 0; i < gx; i++) {
           let on = 0;
@@ -1101,69 +1119,85 @@ export class Fluid {
       for (let j = 0; j < gz; j++)
         for (let i = 0; i < gx; i++) {
           let end = i < re || j < re || i >= gx - re || j >= gz - re ? 1 : 0;
-          for (let b = j - re; b <= j + re && !end; b++) for (let a = i - re; a <= i + re && !end; a++) end = (E[b * gx + a] & 1) ? 0 : 1;
+          for (let b = j - re; b <= j + re && !end; b++) for (let a = i - re; a <= i + re && !end; a++) end = E[b * gx + a] & 1 ? 0 : 1;
           if (end) E[j * gx + i] |= 2;
         }
-      // (blurred, across then down: heights over a drop and a half)
-      for (const [S, D2] of [[H, T], [W, U]]) {
-        for (let j = 0; j < gz; j++)
-          for (let i = 0; i < gx; i++) {
-            let sum = 0;
-            for (let r = -rad; r <= rad; r++) {
-              const ii = i + r;
-              if (ii >= 0 && ii < gx) sum += S[j * gx + ii] * GW[r < 0 ? -r : r];
-            }
-            D2[j * gx + i] = sum;
-          }
-        for (let j = 0; j < gz; j++)
-          for (let i = 0; i < gx; i++) {
-            let sum = 0;
-            for (let r = -rad; r <= rad; r++) {
-              const jj = j + r;
-              if (jj >= 0 && jj < gz) sum += D2[jj * gx + i] * GW[r < 0 ? -r : r];
-            }
-            S[j * gx + i] = sum;
-          }
+    }
+    // (blurred, across then down: heights over a drop and a half - each spot only with those near its own height
+    // (half a drop's): a cut bowl's liquid and the puddle round it, a third of a metre lower, blurred together, the
+    // one sagged down to the other at its walls. M: each spot's own height, as binned)
+    const M = this._lvM && this._lvM.length >= G ? this._lvM : (this._lvM = new Float32Array(G * 2)), ih = 1 / (2 * (0.5 * band) ** 2);
+    for (let g = 0; g < G; g++) M[g] = W[g] > 0 ? H[g] / W[g] : NaN;
+    for (let j = 0; j < gz; j++)
+      for (let i = 0; i < gx; i++) {
+        const g = j * gx + i, m0 = M[g];
+        let sh = 0, sw = 0;
+        for (let r = -rad; r <= rad; r++) {
+          const ii = i + r;
+          if (ii < 0 || ii >= gx) continue;
+          const q = j * gx + ii;
+          if (!(W[q] > 0)) continue;
+          const dm = m0 === m0 ? M[q] - m0 : 0, w = GW[r < 0 ? -r : r] * Math.exp(-dm * dm * ih);
+          sh += H[q] * w;
+          sw += W[q] * w;
+        }
+        T[g] = sh;
+        U[g] = sw;
       }
-      let left = 0;
-      for (let g = 0; g < G; g++) {
-        if (W[g] > 0.05) (H[g] /= W[g]), (K[g] = 1);
-        else (K[g] = 0), left++;
+    for (let j = 0; j < gz; j++)
+      for (let i = 0; i < gx; i++) {
+        const g = j * gx + i, m0 = M[g];
+        let sh = 0, sw = 0;
+        for (let r = -rad; r <= rad; r++) {
+          const jj = j + r;
+          if (jj < 0 || jj >= gz) continue;
+          const q = jj * gx + i;
+          if (!(U[q] > 0)) continue;
+          const dm = m0 === m0 ? T[q] / U[q] - m0 : 0, w = GW[r < 0 ? -r : r] * Math.exp(-dm * dm * ih);
+          sh += T[q] * w;
+          sw += U[q] * w;
+        }
+        H[g] = sh;
+        W[g] = sw;
       }
-      // (carried on past where its top ends, ring by ring - each from the ring before)
-      while (left) {
-        let filled = 0;
-        for (let j = 0; j < gz; j++)
-          for (let i = 0; i < gx; i++) {
-            const g = j * gx + i;
-            if (K[g]) continue;
-            let sum = 0, m = 0;
-            if (i > 0 && K[g - 1] === 1) (sum += H[g - 1]), m++;
-            if (i < gx - 1 && K[g + 1] === 1) (sum += H[g + 1]), m++;
-            if (j > 0 && K[g - gx] === 1) (sum += H[g - gx]), m++;
-            if (j < gz - 1 && K[g + gx] === 1) (sum += H[g + gx]), m++;
-            if (m) (H[g] = sum / m), (K[g] = 2), filled++;
-          }
-        if (!filled) break;
-        for (let g = 0; g < G; g++) if (K[g] === 2) K[g] = 1;
-        left -= filled;
-      }
-      // (its height at x, z: bilinear)
-      const at = (x, z) => {
-        const u = Math.min(gx - 1.001, Math.max(0, (x - x0) / hc)), w = Math.min(gz - 1.001, Math.max(0, (z - z0) / hc)), i = u | 0, j = w | 0, fu = u - i, fw = w - j, g = j * gx + i;
-        return (H[g] * (1 - fu) + H[g + 1] * fu) * (1 - fw) + (H[g + gx] * (1 - fu) + H[g + gx + 1] * fu) * fw;
-      };
-      for (let v = 0; v < nv; v++) {
-        if (inn[v] !== lab) continue;
-        const o = v * 3, ny = N[o + 1];
-        if (ny < 0.1) continue;
-        const px = P[o], pz = P[o + 2], h = at(px, pz), d = P[o + 1] - h;
-        if (ny >= 0.75 ? !(d > -band && d < 0.5 * band) : !(d < 0 && d > -band && E[Math.min(gz - 1, Math.max(0, Math.round((pz - z0) / hc))) * gx + Math.min(gx - 1, Math.max(0, Math.round((px - x0) / hc)))] & 2)) continue;
-        P[o + 1] = h + d * keep;
-        // (facing as its height slopes there)
-        const sx = (at(px + hc, pz) - at(px - hc, pz)) / (2 * hc), sz = (at(px, pz + hc) - at(px, pz - hc)) / (2 * hc), l = 1 / Math.sqrt(sx * sx + 1 + sz * sz);
-        N[o] = -sx * l; N[o + 1] = l; N[o + 2] = -sz * l;
-      }
+    let left = 0;
+    for (let g = 0; g < G; g++) {
+      if (W[g] > 0.05) (H[g] /= W[g]), (K[g] = 1);
+      else (K[g] = 0), left++;
+    }
+    // (carried on past where its top ends, ring by ring - each from the ring before)
+    while (left) {
+      let filled = 0;
+      for (let j = 0; j < gz; j++)
+        for (let i = 0; i < gx; i++) {
+          const g = j * gx + i;
+          if (K[g]) continue;
+          let sum = 0, m = 0;
+          if (i > 0 && K[g - 1] === 1) (sum += H[g - 1]), m++;
+          if (i < gx - 1 && K[g + 1] === 1) (sum += H[g + 1]), m++;
+          if (j > 0 && K[g - gx] === 1) (sum += H[g - gx]), m++;
+          if (j < gz - 1 && K[g + gx] === 1) (sum += H[g + gx]), m++;
+          if (m) (H[g] = sum / m), (K[g] = 2), filled++;
+        }
+      if (!filled) break;
+      for (let g = 0; g < G; g++) if (K[g] === 2) K[g] = 1;
+      left -= filled;
+    }
+    // (its height at x, z: bilinear)
+    const at = (x, z) => {
+      const u = Math.min(gx - 1.001, Math.max(0, (x - x0) / hc)), w = Math.min(gz - 1.001, Math.max(0, (z - z0) / hc)), i = u | 0, j = w | 0, fu = u - i, fw = w - j, g = j * gx + i;
+      return (H[g] * (1 - fu) + H[g + 1] * fu) * (1 - fw) + (H[g + gx] * (1 - fu) + H[g + gx + 1] * fu) * fw;
+    };
+    for (let v = 0; v < nv; v++) {
+      if (inn[v] !== lab) continue;
+      const o = v * 3, ny = N[o + 1];
+      if (ny < 0.1) continue;
+      const px = P[o], pz = P[o + 2], h = at(px, pz), d = P[o + 1] - h;
+      if (ny >= 0.75 ? !(d > -band && d < 0.5 * band) : !(edges && d < 0 && d > -band && E[cellOf(o)] & 2)) continue;
+      P[o + 1] = h + d * keep;
+      // (facing as its height slopes there)
+      const sx = (at(px + hc, pz) - at(px - hc, pz)) / (2 * hc), sz = (at(px, pz + hc) - at(px, pz - hc)) / (2 * hc), l = 1 / Math.sqrt(sx * sx + 1 + sz * sz);
+      N[o] = -sx * l; N[o + 1] = l; N[o + 2] = -sz * l;
     }
   }
 
