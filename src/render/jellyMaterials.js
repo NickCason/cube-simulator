@@ -387,9 +387,11 @@ export function createCoverMaterial() {
   });
 }
 
-// The jelly's nearest surface: how far from the eye (m; 0, none there) - for the liquid, to tell what of it is in
-// front of the jelly, drawn after it with the jelly seen through it, from what's behind, drawn before it for the
-// jelly to see through itself (see JellyView.renderFrontDepth, App.render)
+// The jelly's nearest surface: how far from the eye (m), and 1 - jelly there (0, 0: none) - for the liquid, to tell
+// what of it is in front of the jelly, drawn after it with the jelly seen through it, from what's behind, drawn
+// before it for the jelly to see through itself (see JellyView.renderFrontDepth, App.render). (Read smoothly between
+// its pixels, the second's how much of there is jelly - its outline smooth at a half - and the first over that how
+// far: the jelly's, not some of the way to none.)
 export function createFrontDepthMaterial() {
   return new THREE.ShaderMaterial({
     side: THREE.FrontSide,
@@ -397,7 +399,7 @@ export function createFrontDepthMaterial() {
     fragmentShader: /* glsl */ `
       varying vec3 vViewPos;
       void main() {
-        gl_FragColor = vec4(length(vViewPos), 0.0, 0.0, 1.0);
+        gl_FragColor = vec4(length(vViewPos), 1.0, 0.0, 1.0);
       }`,
   });
 }

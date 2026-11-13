@@ -284,15 +284,6 @@ export class Fluid {
         varying vec3 vN;
         varying vec3 vCol;
         void main() {
-          // (drawn in two, about the jelly - uFD 1: all but what's in front of it, before it; 2: only that, after
-          // it - tFD, how far the jelly's nearest surface is: see App.render. Where it meets the jelly, it's as far
-          // as it is: in front, it goes after, where the depth test tells the one from the other - drawn before,
-          // what of it the jelly didn't cover showed the room through it, a pale fringe)
-          if (uFD > 0.5) {
-            float jd = texture2D(tFD, gl_FragCoord.xy / uRes).r;
-            bool front = jd > 0.0 && length(vW - cameraPosition) < jd + 0.012;
-            if (front != (uFD > 1.5)) discard;
-          }
           vec3 N = normalize(vN), V = normalize(cameraPosition - vW);
           if (dot(N, V) < 0.0) N = -N;
           float ndv = clamp(dot(N, V), 0.0, 1.0);
@@ -302,8 +293,23 @@ export class Fluid {
           float path = min(thick / max(ndv, 0.25), 0.3);
           // what's behind, bent by its surface - more the deeper
           vec3 Nv = normalize((viewMatrix * vec4(N, 0.0)).xyz);
-          vec2 uv = gl_FragCoord.xy / uRes - Nv.xy * (0.012 + 0.07 * min(path / 0.12, 1.0));
-          vec3 bg = texture2D(tBg, clamp(uv, vec2(0.001), vec2(0.999))).rgb;
+          vec2 uv = clamp(gl_FragCoord.xy / uRes - Nv.xy * (0.012 + 0.07 * min(path / 0.12, 1.0)), vec2(0.001), vec2(0.999));
+          // (drawn in two, about the jelly - uFD 1: all but what's in front of it, before it; 2: only that, after
+          // it, the jelly seen through it - tFD: how far the jelly's nearest surface is, and how much of there's
+          // jelly, see App.render. In front: not behind the jelly here, and the jelly behind it where it bends the
+          // view to (no nearer than it, give or take a hair: where it meets the jelly, it's as far as it is) - as
+          // it sees, not as it lies: by where it lay, the jelly's outline cut straight across it, a box in a pool
+          // round a cube's foot, its edges in steps - a half-size picture's pixels: now its outline's where half of
+          // there is jelly, read smoothly between them)
+          if (uFD > 0.5) {
+            float d = length(vW - cameraPosition);
+            vec2 jo = texture2D(tFD, gl_FragCoord.xy / uRes).rg, jr = texture2D(tFD, uv).rg;
+            bool behind = jo.g > 0.5 && d > jo.r / jo.g + 0.012, front = !behind && jr.g > 0.5 && d < jr.r / jr.g + 0.012;
+            if (front != (uFD > 1.5)) discard;
+          }
+          // (a little blurred, the more the deeper: bent, it magnifies what's behind it - the jelly's edge in the
+          // picture behind, pixel-sharp, in steps half a centimetre a side)
+          vec3 bg = textureLod(tBg, uv, 1.0 + min(path / 0.12, 1.0)).rgb;
           // its colour: what its jelly lets through, the rest taken away along the way
           vec3 tint = max(vCol, vec3(0.015));
           vec3 through = bg * exp(log(tint) * (path * 7.0)) + vCol * 0.03;

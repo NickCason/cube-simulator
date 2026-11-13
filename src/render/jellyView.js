@@ -2100,12 +2100,13 @@ export class JellyView {
   // the glitter and bubbles inside fade under flour, sugar, frost. Only
   // drawn while there's a coat anywhere.
   // How far the jelly's nearest surface is, at half the screen's size (see createFrontDepthMaterial): for the
-  // liquid in front of it to be drawn after it and the rest before (App.render)
+  // liquid in front of it to be drawn after it and the rest before (App.render). (Read smoothly between its pixels:
+  // read as they are, where it's in front of the jelly ran in steps.)
   renderFrontDepth(camera) {
     const r = this.renderer, w = Math.max(1, this.rtBack.width >> 1), h = Math.max(1, this.rtBack.height >> 1);
     if (!this.rtFD || this.rtFD.width !== w || this.rtFD.height !== h) {
       this.rtFD?.dispose();
-      this.rtFD = new THREE.WebGLRenderTarget(w, h, { type: THREE.HalfFloatType, minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter, generateMipmaps: false, depthBuffer: true });
+      this.rtFD = new THREE.WebGLRenderTarget(w, h, { type: THREE.HalfFloatType, minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, generateMipmaps: false, depthBuffer: true });
     }
     const prev = r.getRenderTarget(), pc = r.getClearColor(this._v2c || (this._v2c = new THREE.Color())), pa = r.getClearAlpha();
     r.setRenderTarget(this.rtFD);
