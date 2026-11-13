@@ -431,7 +431,7 @@ export function attachStats(app) {
         const t1 = performance.now();
         while (!(C.diag?.moved || (C.diag?.over && !C.diag.file)) && performance.now() - t1 < 75000) await new Promise((res) => setTimeout(res, 250));
         const D = C.diag;
-        line(`${way}: sound ${D?.sound || '?'}${away ? ', the app went away mid-clip' : ''}; ${D?.copies || 0} frames in, ${D?.file || 'nothing made'}; moved ${D?.moved || '(not looked at)'}`);
+        line(`${way}: sound ${D?.sound || '?'}${away ? ', the app went away mid-clip' : ''}; ${D?.copies || 0} frames in, ${D?.file || 'nothing made'}; in the file: ${D?.tracks || '?'}; moved ${D?.moved || '(not looked at)'}`);
         C._close?.();
         await new Promise((res) => setTimeout(res, 600));
       }

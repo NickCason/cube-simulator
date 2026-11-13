@@ -7,6 +7,7 @@
 // play - so a clip that gets passed on brings people back.
 
 import * as THREE from 'three';
+import { mp4Facts, mp4Line } from './mp4facts.js';
 
 const MAX_S = 120;
 const FPS = 30;
@@ -147,13 +148,26 @@ export class Clips {
     const D = this.diag;
     if (!D) return '';
     const secs = ((D.end || performance.now()) - D.t0) / 1000;
-    return `clip (last): ${D.mode}, ${secs.toFixed(1)} s, ${D.copies} frames in (${(D.copies / Math.max(secs, 0.1)).toFixed(0)}/s), ${D.size} from ${D.from}, ${D.type || '?'}, frames ${D.manual ? 'asked for' : '30/s'}, sound ${D.sound}${D.events.length ? ` | ${D.events.slice(-6).join('; ')}` : ''}${D.file ? ` | made ${D.file}` : ''}${D.moved ? ` | picture moved, second by second: ${D.moved}` : ''}`;
+    return `clip (last): ${D.mode}, ${secs.toFixed(1)} s, ${D.copies} frames in (${(D.copies / Math.max(secs, 0.1)).toFixed(0)}/s), ${D.size} from ${D.from}, ${D.type || '?'}, frames ${D.manual ? 'asked for' : '30/s'}, sound ${D.sound}${D.events.length ? ` | ${D.events.slice(-6).join('; ')}` : ''}${D.file ? ` | made ${D.file}` : ''}${D.tracks ? ` | in the file: ${D.tracks}` : ''}${D.moved ? ` | picture moved, second by second: ${D.moved}` : ''}`;
   }
 
   // What came out, looked at (?stats): every second of it, a little picture - did it change since the one
   // before? (A clip whose frames stopped coming has the same one from there on: '0's.)
   async _check(blob) {
-    const D = this.diag, url = URL.createObjectURL(blob), v = document.createElement('video');
+    const D = this.diag;
+    // (and what's in the file itself, track by track: a picture that stops short of the sound, or has a gap, is
+    // frames that never got into it - see mp4Facts)
+    if (/mp4/.test(blob.type)) {
+      let tracks;
+      try {
+        tracks = mp4Line(mp4Facts(await blob.arrayBuffer()));
+      } catch (e) {
+        tracks = `couldn't read it (${e?.message || e})`;
+      }
+      if (D) D.tracks = tracks;
+      this._say(`in the file: ${tracks}`);
+    }
+    const url = URL.createObjectURL(blob), v = document.createElement('video');
     const once = (ev, ms) => new Promise((res) => {
       const t = setTimeout(() => res(false), ms);
       v.addEventListener(ev, () => (clearTimeout(t), res(true)), { once: true });
@@ -279,7 +293,7 @@ export class Clips {
       };
       rec.start();
       this.rec = rec;
-      this.diag = { mode: this.mode, t0: performance.now(), end: 0, copies: 0, copies0: 0, at: 0, gw: gl.width, gh: gl.height, from: `${gl.width}x${gl.height}`, size: `${w}x${h}`, type, manual, sound: tracks.length > 1 ? sst : this.sound && sst ? `${sst}, left out` : 'none', events: [], file: '', moved: '', over: false };
+      this.diag = { mode: this.mode, t0: performance.now(), end: 0, copies: 0, copies0: 0, at: 0, gw: gl.width, gh: gl.height, from: `${gl.width}x${gl.height}`, size: `${w}x${h}`, type, manual, sound: tracks.length > 1 ? sst : this.sound && sst ? `${sst}, left out` : 'none', events: [], file: '', tracks: '', moved: '', over: false };
       const watch = (tr, name) => {
         tr.onmute = () => this._event(`${name} muted`);
         tr.onunmute = () => this._event(`${name} unmuted`);
