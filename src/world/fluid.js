@@ -25,7 +25,7 @@ const CUT_R = 0.3; // (off a cut's faces, a drop's only this much of its radius 
 const MC_CX = [0, 1, 1, 0, 0, 1, 1, 0], MC_CY = [0, 0, 1, 1, 0, 0, 1, 1], MC_CZ = [0, 0, 0, 0, 1, 1, 1, 1];
 const MC_EA = [0, 1, 2, 3, 4, 5, 6, 7, 0, 1, 2, 3], MC_EB = [1, 2, 3, 0, 5, 6, 7, 4, 4, 5, 6, 7];
 const SET_T = -0.25; // colder than this it sets
-const STEP = 1 / 120; // (s) a substep, always (see _advance)
+const STEP = +(globalThis.__fluidStep ?? 1 / 120); // (s) a substep, always (see _advance)
 // (m) how far out from a drop caught in a cube full of liquid's jelly it looks for free space - see _free
 const FREE_STEPS = [0.012, 0.025, 0.04, 0.06, 0.08, 0.1];
 // (1/s) how hard drops in a narrow slit are held back - see _gaps
@@ -34,7 +34,7 @@ const GAP_DRAG = 18;
 // slits' hold on it gone at this much squeezed (a share of its hollow's volume), and how hard a drop at an opening
 // is pushed out, m/s² a share
 const PRESS_FREE = 0.06, PRESS_ACC = 80;
-const ITER = 3; // solver rounds a substep
+const ITER = +(globalThis.__fluidIter ?? 3); // solver rounds a substep
 const MAXNB = 48; // neighbours kept per particle
 const CELL_HASH = 1 << 14; // buckets for the jelly's tets near the liquid
 const COL_HASH = 1024; // (columns, a splat wide, of the liquid in the cubes: its top in each - see _splatWalls)

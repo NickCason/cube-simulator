@@ -13,6 +13,9 @@ node tools/kit/run.mjs <scenario> [flags]
   --set k=v,k=v                 the scenario's params (see its meta)
   --grid k=a:b,k2=c:d           every combination (':' between alternatives - '|' would be a shell pipe)
   --cpu 4                       Chrome's CPU throttle (4 ~ a phone)     --dpr 2 (pictures)    --theme dark
+  --engine webkit               Safari's engine (JSC) - the app crashes its renderer here, headless: not usable yet
+  --set __fluidIter=2           params named __x are the app's test switches, set as globals before its code
+                                loads: __fluidIter, __fluidStep, __fillN (fluid.js, spill.js), __fluidEps, __splatR
   --out file.jsonl              (default /tmp/kit-runs/<scenario>-<time>.jsonl)   --quiet (no table)
 ```
 
@@ -30,6 +33,8 @@ when done (`> scenario build params seed N: ...`, for Monitor), then a table of 
 | `look` | pictures: views `+z/-x/app` x skips `all/liquid/jelly`, tiled | cube views=+z skips=all cut=none place=diner skin fill radius phi |
 | `perf` | "go wild" on a liquid+glitter cube: each frame and its parts timed | cube=aqua fill=1 glitter=holo fps=60 |
 | `yank` | shot through (the shot exits its bottom), left to dribble, yanked up by its top: drops through its bottom face | cube=blueGold gun=holegun wait=60 gu=0.5 gv=0.2 rise=320 over=4 hold=30 pics=0 |
+| `rectest` | his ?stats Rec test's workload: his cube wobbled as it does it, each frame's parts timed (prof=1: Chrome's profiler, top functions) | cube=blueGold secs=8 fps=30 prof=0 top=25 |
+| `intro` | the first drop as he sees it: page loaded afresh with the splash at a phone's speed, the app's own loop - reveal, splash leaving, when the liquid's in, the drop's frames and their parts | cube=blueGold cpu=4 secs=3 prof=0 |
 | `slit` | slit from the top, kept in one piece: held open (drains) or dragged round (stays in): drops out of its box | cube=plainLiquid skin=0.5 depth=0.5 hold=open\|drag\|none pull=1.5 steps=20 frames=90 r=80 |
 
 Examples:
@@ -81,6 +86,7 @@ The kit (`kit.mjs`) - `k = await open({ build, seed, theme, viewport, dpr, cpu, 
   `k.tap('dicer')`, `k.shoot('holegun', p)`, `k.pull('small'|'big'|'top', [dx, dy])` (a piece taken away by hand)
 - `k.shot(path, { skip: { liquid, jelly }, crop })`
 - `k.app((a, arg) => ..., arg)` - anything on the app (the function's sent as source: no closures)
+- `k.profile(fn, n)` - Chrome's sampling profiler round fn: the top n functions by their own time
 - `k.probe(name, arg)` - `probes.js`, in the page: `pieces`, `fit`, `screenBox`, `depth({ frames })`, `bubbles`,
   `outside`, `cutDiag`, `hollowFit`, `cutKinds`, `perfStart`/`perfStop`
 

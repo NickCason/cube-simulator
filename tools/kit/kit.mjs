@@ -10,7 +10,7 @@
 //   console.log(await k.probe('cutDiag'));
 //   await k.shot('/tmp/gs/x.png', { skip: { jelly: true } });
 //   await k.close();
-import { chromium } from 'playwright';
+import { chromium, webkit } from 'playwright';
 import { readFileSync, mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -21,15 +21,15 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const PROBES = readFileSync(join(HERE, 'probes.js'), 'utf8');
 const ARGS = ['--use-angle=gl-egl', '--ignore-gpu-blocklist', '--enable-gpu'];
 
-// One browser for a whole run (pages are cheap, launches aren't)
-let shared = null;
-async function browserOnce() {
-  if (!shared) shared = await chromium.launch({ args: ARGS, headless: true });
-  return shared;
+// One browser for a whole run (pages are cheap, launches aren't) - an engine each: Chrome's V8, or WebKit's JSC
+// (Safari's, his iPhone's: no CPU throttle there, no profiler - those are Chrome's)
+const shared = {};
+async function browserOnce(engine = 'chromium') {
+  if (!shared[engine]) shared[engine] = engine === 'webkit' ? await webkit.launch({ headless: true }) : await chromium.launch({ args: ARGS, headless: true });
+  return shared[engine];
 }
 export async function closeAll() {
-  if (shared) await shared.close();
-  shared = null;
+  for (const k of Object.keys(shared)) (await shared[k].close(), delete shared[k]);
 }
 
 // open({ build, seed, theme, viewport, dpr, cpu, query, manual })
@@ -37,9 +37,9 @@ export async function closeAll() {
 //  seed: Math.random seeded (null: the real one)      theme: 'light' | 'dark'
 //  cpu: Chrome's CPU throttle (4 = about a phone)       manual: the app's own loop off, stepped by frames()
 export async function open(o = {}) {
-  const { build = 'work', seed = 1, theme = 'light', viewport = [390, 664], dpr = 1, cpu = 1, query = '', manual = true } = o;
+  const { build = 'work', seed = 1, theme = 'light', viewport = [390, 664], dpr = 1, cpu = 1, query = '', manual = true, engine = 'chromium' } = o;
   const b = await serve(build);
-  const browser = await browserOnce();
+  const browser = await browserOnce(engine);
   const ctx = await browser.newContext({ viewport: { width: viewport[0], height: viewport[1] }, deviceScaleFactor: dpr, hasTouch: true });
   const page = await ctx.newPage();
   const errs = [];
@@ -56,15 +56,17 @@ export async function open(o = {}) {
         return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
       };
     }, seed);
+  // (module constants' test switches - globalThis.__fluidIter etc. - set before the app's code loads)
+  if (o.globals) await page.addInitScript((g) => Object.assign(globalThis, g), o.globals);
   await page.addInitScript(PROBES);
   await page.goto(`http://localhost:${b.port}/?nosplash${query ? '&' + query : ''}`, { waitUntil: 'domcontentloaded', timeout: 180000 });
   await page.waitForFunction(() => window.__app && window.__app.intro.done && !window.__app.intro.job, null, { timeout: 180000, polling: 300 });
-  if (cpu > 1) {
+  if (cpu > 1 && engine === 'chromium') {
     const cdp = await ctx.newCDPSession(page);
     await cdp.send('Emulation.setCPUThrottlingRate', { rate: cpu });
   }
   if (manual) await page.evaluate(() => ((__app._loop = () => {}), (__app.opts.noidle = true)));
-  return new Kit(page, ctx, errs, b, { dpr, seed });
+  return new Kit(page, ctx, errs, b, { dpr, seed, engine });
 }
 
 class Kit {
@@ -75,6 +77,7 @@ class Kit {
     this.build = build;
     this.dpr = o.dpr;
     this.seed = o.seed;
+    this.engine = o.engine;
     this.dt = 1 / 30; // (a frame's time, stepped by frames(): 1/60 as a phone runs)
     this._box = null;
   }
@@ -198,6 +201,29 @@ class Kit {
     }
     await this.page.mouse.up();
     this._box = null;
+  }
+
+  // Chrome's sampling profiler round fn(): the functions the time went to, by their own time (not what they
+  // called) - [{ fn, at (file:line), ms, pct }], top n - and the whole run's ms
+  async profile(fn, n = 25) {
+    const cdp = await this.ctx.newCDPSession(this.page);
+    await cdp.send('Profiler.enable');
+    await cdp.send('Profiler.setSamplingInterval', { interval: 200 });
+    await cdp.send('Profiler.start');
+    const t0 = Date.now();
+    await fn();
+    const { profile } = await cdp.send('Profiler.stop');
+    await cdp.detach();
+    const self = new Map(), byId = new Map(profile.nodes.map((nd) => [nd.id, nd]));
+    const dts = profile.timeDeltas, smp = profile.samples;
+    for (let i = 0; i < smp.length; i++) {
+      const nd = byId.get(smp[i]), cf = nd.callFrame, file = (cf.url || '').split('/').slice(-2).join('/').replace(/\?.*$/, '');
+      const key = `${cf.functionName || '(anon)'} ${file}:${cf.lineNumber + 1}`;
+      self.set(key, (self.get(key) || 0) + (dts[i] || 0) / 1000);
+    }
+    const total = [...self.values()].reduce((a, b) => a + b, 0) || 1;
+    const top = [...self.entries()].sort((a, b) => b[1] - a[1]).slice(0, n).map(([k, ms]) => ({ fn: k.split(' ')[0], at: k.split(' ')[1], ms: +ms.toFixed(1), pct: +((100 * ms) / total).toFixed(1) }));
+    return { ms: Date.now() - t0, sampledMs: +total.toFixed(0), top };
   }
 
   // A picture (dpr as opened): skip { liquid, jelly } hides them for it; crop [x0, y0, x1, y1] in its pixels

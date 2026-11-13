@@ -9,6 +9,7 @@
 //   node tools/kit/run.mjs perf --set cube=aqua --cpu 4 --builds head,work
 //   flags: --builds a,b (work | head | any git ref)  --seeds 1-4 | 1,3  --set k=v,..  --grid k=a:b,..
 //          --cpu N (CPU throttle)  --dpr N  --theme light|dark  --out file.jsonl  --quiet (no table)
+//          --engine webkit (Safari's JSC, as on his iPhone; no --cpu, no prof there)
 import { appendFileSync, mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -37,7 +38,7 @@ let combos = [{}];
 for (const [k, v] of Object.entries(kv(flag('grid', '')))) combos = combos.flatMap((c) => String(v).split(':').map((x) => ({ ...c, [k]: num(x) })));
 const out = flag('out', `/tmp/kit-runs/${name}-${new Date().toISOString().replace(/[:.]/g, '-')}.jsonl`);
 mkdirSync(dirname(out), { recursive: true });
-const opt = { cpu: +flag('cpu', 1), dpr: +flag('dpr', sc.meta?.dpr || 1), theme: flag('theme', sc.meta?.theme || 'light') };
+const opt = { cpu: +flag('cpu', 1), dpr: +flag('dpr', sc.meta?.dpr || 1), theme: flag('theme', sc.meta?.theme || 'light'), engine: flag('engine', 'chromium') };
 
 const all = [];
 const short = (p) => Object.entries(p).filter(([k]) => !(k in (sc.meta?.params || {})) || sc.meta.params[k] !== p[k] || combos.some((c) => k in c)).map(([k, v]) => `${k}=${v}`).join(' ');
@@ -47,7 +48,9 @@ for (const build of builds)
       const p = { ...base, ...c }, t0 = Date.now();
       let res, k;
       try {
-        k = await open({ build, seed, ...opt });
+        // (params named __something are the app's test switches - globals set before its code loads)
+        const globals = Object.fromEntries(Object.entries(p).filter(([q]) => q.startsWith('__')));
+        k = await open({ build, seed, ...opt, ...(Object.keys(globals).length ? { globals } : {}) });
         res = await sc.run(k, p, { build, seed, out: dirname(out) });
         if (k.errs.length) res.pageErrors = k.errs.slice(0, 3);
       } catch (e) {
