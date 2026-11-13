@@ -2005,15 +2005,27 @@ export class SoftBody {
     }
     nrm.fill(0, 0, n * 3);
     const nI = this.nF * 3;
+    // (each face's way out, weighted at each of its corners by its angle there - not its area: the skin's squares
+    // are each two triangles split corner to corner, so by area the two corners on the split took two shares of
+    // each square and the others one, and bent - bulging, squeezed - the faces' light and what's seen through them
+    // showed the split's diagonals, the tets' pattern, from the side)
+    const ang = (ux, uy, uz, vx, vy, vz) => {
+      const d = (ux * vx + uy * vy + uz * vz) / Math.sqrt((ux * ux + uy * uy + uz * uz) * (vx * vx + vy * vy + vz * vz) || 1e-30);
+      return Math.acos(d < -1 ? -1 : d > 1 ? 1 : d);
+    };
     for (let k = 0; k < nI; k += 3) {
       const a = rIndex[k], b = rIndex[k + 1], c = rIndex[k + 2];
-      const ax = pos[a * 3], ay = pos[a * 3 + 1], az = pos[a * 3 + 2];
-      const ux = pos[b * 3] - ax, uy = pos[b * 3 + 1] - ay, uz = pos[b * 3 + 2] - az;
-      const vx = pos[c * 3] - ax, vy = pos[c * 3 + 1] - ay, vz = pos[c * 3 + 2] - az;
-      const nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx;
-      nrm[a * 3] += nx; nrm[a * 3 + 1] += ny; nrm[a * 3 + 2] += nz;
-      nrm[b * 3] += nx; nrm[b * 3 + 1] += ny; nrm[b * 3 + 2] += nz;
-      nrm[c * 3] += nx; nrm[c * 3 + 1] += ny; nrm[c * 3 + 2] += nz;
+      const ax = pos[a * 3], ay = pos[a * 3 + 1], az = pos[a * 3 + 2], bx = pos[b * 3], by = pos[b * 3 + 1], bz = pos[b * 3 + 2], cx = pos[c * 3], cy = pos[c * 3 + 1], cz = pos[c * 3 + 2];
+      const ux = bx - ax, uy = by - ay, uz = bz - az;
+      const vx = cx - ax, vy = cy - ay, vz = cz - az;
+      let nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx;
+      const nl = Math.sqrt(nx * nx + ny * ny + nz * nz);
+      if (!(nl > 1e-20)) continue;
+      nx /= nl; ny /= nl; nz /= nl;
+      const wa = ang(ux, uy, uz, vx, vy, vz), wb = ang(cx - bx, cy - by, cz - bz, -ux, -uy, -uz), wc = Math.PI - wa - wb;
+      nrm[a * 3] += nx * wa; nrm[a * 3 + 1] += ny * wa; nrm[a * 3 + 2] += nz * wa;
+      nrm[b * 3] += nx * wb; nrm[b * 3 + 1] += ny * wb; nrm[b * 3 + 2] += nz * wb;
+      nrm[c * 3] += nx * wc; nrm[c * 3 + 1] += ny * wc; nrm[c * 3 + 2] += nz * wc;
     }
     for (let r = 0; r < n; r++) {
       const o = r * 3;

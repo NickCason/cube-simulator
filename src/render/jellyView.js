@@ -78,7 +78,10 @@ function splitEdges(index, geo, first, refine = null) {
   }
   // (the other end of half-edge h)
   const endB = (h) => index[h - (h % 3) + ((h % 3) + 1) % 3];
-  const mids = new Int32Array(nH * 3), midGeo = new Int32Array(nH);
+  // (and each midpoint's edge's far corners - the third corner of the triangle each side of it, -1 none: see
+  // tessellate's normals)
+  const mids = new Int32Array(nH * 3), midGeo = new Int32Array(nH), opp = new Int32Array(nH * 2);
+  const third = (h) => index[h - (h % 3) + (((h % 3) + 2) % 3)];
   let nm = 0;
   const triMid = new Int32Array(nH);
   let g = 0;
@@ -99,6 +102,7 @@ function splitEdges(index, geo, first, refine = null) {
       if (wants(h0) || (n === 2 && wants(h1))) {
         const id = first + nm;
         mids[nm * 3] = index[h0]; mids[nm * 3 + 1] = endB(h0); mids[nm * 3 + 2] = 0;
+        opp[nm * 2] = third(h0); opp[nm * 2 + 1] = n === 2 ? third(h1) : -1;
         midGeo[nm++] = g;
         triMid[h0] = id;
         if (n === 2) triMid[h1] = id;
@@ -107,6 +111,7 @@ function splitEdges(index, geo, first, refine = null) {
       for (let h = h0; h !== -1; h = next[h]) {
         if (!wants(h)) continue;
         mids[nm * 3] = index[h]; mids[nm * 3 + 1] = endB(h); mids[nm * 3 + 2] = 1;
+        opp[nm * 2] = third(h); opp[nm * 2 + 1] = -1;
         triMid[h] = first + nm;
         midGeo[nm++] = g;
       }
@@ -140,7 +145,7 @@ function splitEdges(index, geo, first, refine = null) {
     else (tri(ca, a, ab), tri(c, ca, ab), tri(c, ab, b));
   }
   start[nTri] = o;
-  return { mids: mids.slice(0, nm * 3), midGeo: midGeo.subarray(0, nm), nEdges: g, index: out.slice(0, o), start };
+  return { mids: mids.slice(0, nm * 3), midGeo: midGeo.subarray(0, nm), opp: opp.slice(0, nm * 2), nEdges: g, index: out.slice(0, o), start };
 }
 
 // Area-weighted vertex normals of the first n vertices.
@@ -166,7 +171,7 @@ function vertexNormals(index, pos, nrm, n) {
 // disp (to the true shape - see snapToShape). data (per-vertex extras) may
 // be null.
 const PHONG = 0.75;
-function tessellate(pos, nrm, data, mids, first, disp, coat = null, coatM = null, disp3 = null, twin = null) {
+function tessellate(pos, nrm, data, mids, first, disp, coat = null, coatM = null, disp3 = null, twin = null, opp = null) {
   for (let m = 0, k = first, j = 0; m < mids.length; m += 3, k++, j++) {
     const a = mids[m] * 3, b = mids[m + 1] * 3;
     const ax = pos[a], ay = pos[a + 1], az = pos[a + 2];
@@ -182,6 +187,17 @@ function tessellate(pos, nrm, data, mids, first, disp, coat = null, coatM = null
       qz -= 0.5 * (da * naz + db * nbz) * PHONG;
     }
     let nx = nax + nbx, ny = nay + nby, nz = naz + nbz;
+    // (on a smooth edge between two triangles, its far corners' too - Loop's three eighths each end, an eighth each
+    // far corner: from its ends alone, the way out ran straight across each of the skin's coarse triangles and
+    // turned at their edges - their diagonals most - and a bulging face, seen from the side, its reflections broke
+    // up along them: the tets' pattern)
+    if (opp && !mids[m + 2]) {
+      const c = opp[j * 2], d = opp[j * 2 + 1];
+      if (c >= 0 && d >= 0) {
+        const c3 = c * 3, d3 = d * 3;
+        nx = 3 * nx + nrm[c3] + nrm[d3]; ny = 3 * ny + nrm[c3 + 1] + nrm[d3 + 1]; nz = 3 * nz + nrm[c3 + 2] + nrm[d3 + 2];
+      }
+    }
     let l2 = nx * nx + ny * ny + nz * nz;
     // (ends facing opposite ways - an edge across a thin sliver - sum to
     // nothing: a zero normal turns every shader's normalize() into NaN, and
@@ -469,6 +485,8 @@ export class JellyView {
     this.smN = 0;
     this.smV = this.smT = this.smB = this.smR0 = this.smRN = this.smF = this.smMark = this.smAcc = null;
     this.smK3 = this.smRestP = null; // (a rounded hollow's skin's points, and where they're drawn at rest)
+    this.opp1 = this.opp2 = null; // (each midpoint's edge's far corners: see splitEdges, tessellate)
+    this._snT = null; // (normals summed, for _smoothNormals)
     this.far = true; // (switched off: as before - its near wall a lens straight through to the room)
     this.frontMat = createJellyMaterial(env, this.layerUniforms);
     // (Mesa - Linux's GL - hung the GPU or crashed compiling a shader while
@@ -1224,7 +1242,7 @@ export class JellyView {
     this.disp31 = new Float32Array(L1.mids.length);
     const formed = shapes.some((S) => S.form);
     this.twin1 = formed ? twins(L1.mids, L1.midGeo, nB) : null;
-    tessellate(rest, restN, null, L1.mids, nB, this.disp1);
+    tessellate(rest, restN, null, L1.mids, nB, this.disp1, null, null, null, null, L1.opp);
     // (which render points are on a shaped cube's skin: the new ones put there)
     const onForm = formed ? new Uint8Array(maxN) : null;
     if (formed) snapToForm(rest, restN, L1.mids, nB, this.disp31, shapes, cube, onForm);
@@ -1239,7 +1257,7 @@ export class JellyView {
       const ab = restN[a] * restN[b] + restN[a + 1] * restN[b + 1] + restN[a + 2] * restN[b + 2];
       const bc = restN[b] * restN[c] + restN[b + 1] * restN[c + 1] + restN[b + 2] * restN[c + 2];
       const ca = restN[c] * restN[a] + restN[c + 1] * restN[a + 1] + restN[c + 2] * restN[a + 2];
-      refine[t] = Math.min(ab, bc, ca) < 0.996 ? 1 : 0; // (> ~5 degrees between normals)
+      refine[t] = Math.min(ab, bc, ca) < 0.996 || globalThis.__refineAll ? 1 : 0; // (> ~5 degrees between normals)
       // (a shaped cube's, all: its skin curves however its mesh lies)
       if (formed && (shapes[cube[L1.index[t * 3]]]?.form || shapes[cube[L1.index[t * 3 + 1]]]?.form || shapes[cube[L1.index[t * 3 + 2]]]?.form)) refine[t] = 1;
     }
@@ -1248,6 +1266,8 @@ export class JellyView {
     const n = nL1 + L2.mids.length / 3;
     this.mids1 = L1.mids;
     this.mids2 = L2.mids;
+    this.opp1 = L1.opp;
+    this.opp2 = L2.opp;
     this.nBase = nB;
     this.nL1 = nL1;
     this.nRender = n;
@@ -1259,7 +1279,7 @@ export class JellyView {
     this.disp2 = new Float32Array(L2.mids.length / 3);
     this.disp32 = new Float32Array(L2.mids.length);
     for (let m = 0, k = nL1; m < L2.mids.length; m += 3, k++) cube[k] = cube[L2.mids[m]];
-    tessellate(rest, restN, null, L2.mids, nL1, this.disp2);
+    tessellate(rest, restN, null, L2.mids, nL1, this.disp2, null, null, null, null, L2.opp);
     if (formed) snapToForm(rest, restN, L2.mids, nL1, this.disp32, shapes, cube, onForm);
     snapToShape(rest, restN, L2.mids, nL1, this.disp2, shapes.map((S) => (S.form ? { a: 0, r: 0 } : S)), cube);
     if (hollowed) snapToHollow(rest, restN, L2.mids, nL1, this.disp2, hollows, cube);
@@ -1399,10 +1419,11 @@ export class JellyView {
     this._dataAt = now;
     const pos = this.pos, nrm = this.nrm, data = this.data;
     sb.writeRender(pos, nrm, data, this.coat, this.coatM);
+    if (!globalThis.__noNrmSmooth) this._smoothNormals(sb, nrm);
     if (this.smN) this._smoothCuts(sb);
     if (fill) this._fill(sb, sb.fill);
-    tessellate(pos, nrm, data, this.mids1, this.nBase, this.disp1, this.coat, this.coatM, this._formTri ? this.disp31 : null, this._formTri ? this.twin1 : null);
-    tessellate(pos, nrm, data, this.mids2, this.nL1, this.disp2, this.coat, this.coatM, this._formTri ? this.disp32 : null, this._formTri ? this.twin2 : null);
+    tessellate(pos, nrm, data, this.mids1, this.nBase, this.disp1, this.coat, this.coatM, this._formTri ? this.disp31 : null, this._formTri ? this.twin1 : null, this.opp1);
+    tessellate(pos, nrm, data, this.mids2, this.nL1, this.disp2, this.coat, this.coatM, this._formTri ? this.disp32 : null, this._formTri ? this.twin2 : null, this.opp2);
     if (this._formTri) this._formNormals(pos, nrm);
     if (moved) {
       this.aPos.needsUpdate = true;
@@ -1719,6 +1740,28 @@ export class JellyView {
       }
     }
     return { plane, in: inP, edge, edgeE, P };
+  }
+
+  // (each point's way out averaged with its neighbours' - its triangles' corners', once - drawn only: squeezed or
+  // bulging, a face's points sit a millimetre or two in and out one after the next, its tets' doing, and each
+  // faced a few degrees off the next: seen from the side, its reflections broke up into the tets' zig-zags. Its
+  // render points are split at the skin's creases, so they stay sharp)
+  _smoothNormals(sb, nrm) {
+    const n = sb.rCount, I = sb.rIndex, nI = sb.nF * 3;
+    if (!this._snT || this._snT.length < n * 3) this._snT = new Float32Array(Math.max(n * 3, 64) * 2);
+    const T = this._snT;
+    T.fill(0, 0, n * 3);
+    for (let k = 0; k < nI; k += 3) {
+      const a = I[k] * 3, b = I[k + 1] * 3, c = I[k + 2] * 3;
+      const sx = nrm[a] + nrm[b] + nrm[c], sy = nrm[a + 1] + nrm[b + 1] + nrm[c + 1], sz = nrm[a + 2] + nrm[b + 2] + nrm[c + 2];
+      T[a] += sx; T[a + 1] += sy; T[a + 2] += sz;
+      T[b] += sx; T[b + 1] += sy; T[b + 2] += sz;
+      T[c] += sx; T[c + 1] += sy; T[c + 2] += sz;
+    }
+    for (let o = 0; o < n * 3; o += 3) {
+      const l = Math.sqrt(T[o] * T[o] + T[o + 1] * T[o + 1] + T[o + 2] * T[o + 2]);
+      if (l > 1e-12) (nrm[o] = T[o] / l), (nrm[o + 1] = T[o + 1] / l), (nrm[o + 2] = T[o + 2] / l);
+    }
   }
 
   // (each frame: the smoothed cut's points where their tets have them now, and each one normal over all its
