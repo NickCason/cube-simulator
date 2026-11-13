@@ -11,6 +11,7 @@ import { NailSystem } from './world/nails.js';
 import { Particles } from './world/particles.js';
 import { Healer } from './heal.js';
 import { Swapper } from './swap.js';
+import { DropMode } from './drop.js';
 import { AudioEngine } from './audio.js';
 import { Overlay } from './ui/overlay.js';
 import { UI } from './ui/ui.js';
@@ -198,6 +199,7 @@ export class App {
     this.fxScene = this.particles.scene;
     this.healer = new Healer(this);
     this.swapper = new Swapper(this); // (putting on a saved cube, with ceremony)
+    this.drop = new DropMode(this); // (an exhibition mode: the cube taken up into the sky and let fall)
     this.onHealStart = [];
     this.onHealEnd = [];
     this.onColor = [];
@@ -1304,6 +1306,9 @@ export class App {
       c.position.x += (Math.random() - 0.5) * this._shake;
       c.position.y += (Math.random() - 0.5) * this._shake;
     }
+    // (the sky's dome, 48 m round the middle of the room, up with the eye once that's over 3 m - taken up into the
+    // sky in Drop, the eye went out through its top. Its colours go by the way out from its middle: as they were)
+    if (this.sky) this.sky.position.y = Math.max(0, c.position.y - 3);
   }
 
   _updateCamera(dt) {
@@ -1329,7 +1334,18 @@ export class App {
       fr = Math.max(1, top / 1.7, this.sb.p.arenaRadius / (this._viewArena || this.sb.p.arenaRadius));
     }
     const kf = 1 - Math.exp(-dt * 2.5);
-    this._frameY = (this._frameY ?? 0.44) + (fy - (this._frameY ?? 0.44)) * kf;
+    // (in Drop: on the cube itself, wherever it is - up in the sky, falling - not eased: a cube falling at 20 m/s
+    // was two metres out of the picture)
+    const D = this.drop;
+    D.track();
+    const follow = D.on && D.frameY !== null;
+    if (follow) fy = D.frameY + 0.1;
+    const kx = follow ? 1 - Math.exp(-dt * 6) : kf;
+    this.orbit.target.x += ((follow ? D.frameX : 0) - this.orbit.target.x) * kx;
+    this.orbit.target.z += ((follow ? D.frameZ : 0) - this.orbit.target.z) * kx;
+    if (Math.abs(this.orbit.target.x) < 1e-4 && !follow) this.orbit.target.x = 0;
+    if (Math.abs(this.orbit.target.z) < 1e-4 && !follow) this.orbit.target.z = 0;
+    this._frameY = follow ? fy : (this._frameY ?? 0.44) + (fy - (this._frameY ?? 0.44)) * kf;
     this._frameR = (this._frameR ?? 1) + (fr - (this._frameR ?? 1)) * kf;
     if (Math.abs(fy - this._frameY) < 1e-4) this._frameY = fy;
     if (Math.abs(fr - this._frameR) < 1e-4) this._frameR = fr;
@@ -1492,6 +1508,13 @@ export class App {
         return;
       }
       if (pointers.size > 2) return;
+      // (in Drop: no tools - a drag looks round, a tap lets it go)
+      if (this.drop.on) {
+        mode = 'orbit';
+        last = { x: e.clientX, y: e.clientY };
+        this._dropTap = { x: e.clientX, y: e.clientY, t: performance.now() };
+        return;
+      }
       if (this.healer.active || this.swapper.active) {
         mode = 'orbit';
         last = { x: e.clientX, y: e.clientY };
@@ -1537,6 +1560,9 @@ export class App {
     const end = (e) => {
       pointers.delete(e.pointerId);
       if (mode === 'tool') this.tool?.up?.(e, this.rayFromClient(e.clientX, e.clientY));
+      const T = this._dropTap;
+      if (T && this.drop.on && e.type === 'pointerup' && pointers.size === 0 && Math.hypot(e.clientX - T.x, e.clientY - T.y) < 12 && performance.now() - T.t < 450) this.drop.letGo();
+      if (pointers.size === 0) this._dropTap = null;
       if (pointers.size === 0) {
         mode = null;
         last = null;
@@ -1607,6 +1633,7 @@ export class App {
       this.tool?.update?.(sdt, dt);
       this.healer.update(sdt);
       this.swapper.update(sdt);
+      this.drop.update(sdt);
       this.tilt.update(dt);
       this._edgeMorphTick(dt);
       this._selRing(dt);

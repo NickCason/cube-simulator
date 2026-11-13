@@ -128,6 +128,8 @@ export class Fluid {
     this._stillFs = new Float32Array(MAX_CUBES);
     this._stillT = new Float64Array(MAX_CUBES);
     this._stillAll = 0;
+    // (each a whole cube's own: that cube's speed - its speed limits are against it: see _refMark)
+    this._refV = new Float32Array(N * 3);
     this._gw = new Float64Array(3);
     this._colTop = new Float32Array(COL_HASH);
     // (and how much of it each carries, in particles' worth - more than one, a spill bigger than the pool has
@@ -852,6 +854,7 @@ export class Fluid {
       this._jellyCells();
       this._pressures();
       this._stillMark(phys);
+      this._refMark();
       this._advance(phys);
       this._contain();
       const v = this.v;
@@ -1427,6 +1430,7 @@ export class Fluid {
     if (!this.n || (this.rc && !this.rc.partial) || this.drainT > 0 || this.asleep || !(dt > 0)) return;
     this._jellyCells();
     this._stillMark(dt);
+    this._refMark();
     this._advance(dt);
   }
 
@@ -1976,6 +1980,24 @@ export class Fluid {
     this._stillAll = all && least < Infinity ? least * (held ? STILL_SLEEP / STILL_SLEEP_HELD : 1) : 0;
   }
 
+  // (each drop of a whole cube's own liquid: that cube's speed now - its biggest piece's - against which its
+  // speed limits are taken; the rest's 0. Held to 7 m/s itself, a cube falling at 22 left its liquid behind,
+  // pinned to its ceiling all the way down)
+  _refMark() {
+    const sb = this.app.sb, RV = this._refV, own = this.own, n = this.n;
+    RV.fill(0, 0, n * 3);
+    for (let k = 0; k < MAX_CUBES; k++) {
+      const id = sb.cHid[k];
+      if (!id || !this.frameOK[k]) continue;
+      let best = null;
+      for (const pc of sb.pieces) if (pc && pc.cube === k && (!best || pc.verts.length > best.verts.length)) best = pc;
+      if (!best || !best.vel) continue;
+      const vx = best.vel[0], vy = best.vel[1], vz = best.vel[2];
+      if (vx * vx + vy * vy + vz * vz < 4) continue;
+      for (let i = 0; i < n; i++) if (own[i] === id) (RV[i * 3] = vx), (RV[i * 3 + 1] = vy), (RV[i * 3 + 2] = vz);
+    }
+  }
+
   _stirred() {
     // (held up behind the splash the jelly isn't moving, but nor does it ever go to sleep: its liquid, poured
     // in there, was woken every frame and worked out for nothing - at a phone's speed the splash's own warm-up
@@ -2186,15 +2208,18 @@ export class Fluid {
     // speeds it up only a little a substep - squeezed, it oozes rather than
     // squirts; a particle just made, hardly at all: sorting out where it
     // fits isn't a kick.)
-    const ih = 1 / h;
+    const ih = 1 / h, RV = this._refV;
     for (let o = 0; o < n * 3; o += 3) {
-      let vx = (q[o] - x[o]) * ih, vy = (q[o + 1] - x[o + 1]) * ih, vz = (q[o + 2] - x[o + 2]) * ih;
-      const s2 = vx * vx + vy * vy + vz * vz;
-      const vm = Math.min(VMAX, Math.sqrt(v[o] * v[o] + v[o + 1] * v[o + 1] + v[o + 2] * v[o + 2]) + (age[o / 3] < 0.5 ? 0.15 : GAIN));
+      // (against its cube's own speed, for one's own liquid: see _refMark)
+      const rx0 = RV[o], ry0 = RV[o + 1], rz0 = RV[o + 2];
+      let vx = (q[o] - x[o]) * ih - rx0, vy = (q[o + 1] - x[o + 1]) * ih - ry0, vz = (q[o + 2] - x[o + 2]) * ih - rz0;
+      const s2 = vx * vx + vy * vy + vz * vz, ox = v[o] - rx0, oy = v[o + 1] - ry0, oz = v[o + 2] - rz0;
+      const vm = Math.min(VMAX, Math.sqrt(ox * ox + oy * oy + oz * oz) + (age[o / 3] < 0.5 ? 0.15 : GAIN));
       if (s2 > vm * vm) {
         const k = vm / Math.sqrt(s2);
         vx *= k; vy *= k; vz *= k;
       }
+      vx += rx0; vy += ry0; vz += rz0;
       // (pushed out of the jelly this substep: no faster out of it than 0.3 m/s - pressed into a cut cube's wall
       // by the liquid behind, drops were shoved out through it at metres a second - and none into it - against a
       // wall, at rest, it stays at rest: else each substep it sank back into the wall and was pushed out again,
@@ -2214,10 +2239,10 @@ export class Fluid {
         vx = jx + nx * vn2 + (rx - nx * vn2) * fr2; vy = jy + ny * vn2 + (ry - ny * vn2) * fr2; vz = jz + nz * vn2 + (rz - nz * vn2) * fr2;
         // (no faster than ever, though: carried off a cube's top springing back from a landing at 12 m/s, drops
         // went clean through it)
-        const s3 = vx * vx + vy * vy + vz * vz;
+        const ex = vx - rx0, ey = vy - ry0, ez = vz - rz0, s3 = ex * ex + ey * ey + ez * ez;
         if (s3 > VMAX * VMAX) {
           const k3 = VMAX / Math.sqrt(s3);
-          vx *= k3; vy *= k3; vz *= k3;
+          vx = rx0 + ex * k3; vy = ry0 + ey * k3; vz = rz0 + ez * k3;
         }
       }
       v[o] = vx; v[o + 1] = vy; v[o + 2] = vz;

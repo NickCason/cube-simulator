@@ -12,6 +12,7 @@ import { POWDERS } from '../world/powders.js';
 import { EYE_STYLES } from '../eyes.js';
 import { SURFACES, surfaceSwatch } from '../surfaces.js';
 import { buildLine } from './buildline.js';
+import { Exhibit } from './dropbar.js';
 
 // (the googly eyes' chips: a little eye of each kind, its size, one or two)
 const EYE_PUPIL = { classic: 4, big: 5.6, tiny: 2.3, lashes: 3.8, angry: 3.6, sleepy: 3.4 };
@@ -792,6 +793,8 @@ export class UI {
       else if ((e.key === 'l' || e.key === 'L') && !e.repeat) this.toggleTheme();
     });
     this.cubby = new Cubby(this, app);
+    // the exhibition modes: the cube put to use - Drop (see dropbar.js, drop.js)
+    this.exhibit = new Exhibit(this, app, root);
     // clips: record what's going on, to share (see clips.js)
     this.clips = new Clips(this, app);
     // the stack (several cubes): its button by Re-cube, its panel

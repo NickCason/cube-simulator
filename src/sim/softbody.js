@@ -246,6 +246,10 @@ export class SoftBody {
     // one cube re-cubing on its own (see Healer.start's only): its gravity
     // and damping its own, and it passes through everything meanwhile
     this.cGrav = new Float64Array(MAX_CUBES).fill(1);
+    // (the air on each cube falling fast: how hard it presses on a face for its speed into it - 0, none: see
+    // setWind, _wind)
+    this.cWind = new Float64Array(MAX_CUBES);
+    this._anyWind = false;
     this.cBoost = new Float64Array(MAX_CUBES).fill(1);
     // full of liquid (0/1), how thick that is (0 water .. 1 near solid), how thick its skin (0 ultrathin .. 1
     // thick): see _liquidTets
@@ -517,6 +521,8 @@ export class SoftBody {
     this.cav.fill(null);
     this.cHid.fill(0);
     this.cPress.fill(0);
+    this.cWind.fill(0);
+    this._anyWind = false;
     this.cBevel[0] = this.p.bevel;
     const mesh = buildCubeMesh(this.p.res, this.p.size, this.p.bevel, this.shapeOf(0));
     this.cN[0] = mesh.nV;
@@ -967,7 +973,7 @@ export class SoftBody {
       this.vCube[i] = j;
       this.X[i * 3] += d;
     }
-    for (const a of [this.cMu, this.cLam, this.cDens, this.cDamp, this.cFric, this.cBounce, this.cRigid, this.cAir, this.cBevel, this.cN, this.cGrav, this.cBoost, this.cSize, this.cRes, this.cH, this.cBow, this.cLobeA, this.cLobeP, this.cTrimK, this.cLiq, this.cVisc, this.cTens, this.cSkin, this.cFill, this.cHollow, this.cav, this.cHid, this.cPress]) a[j] = a[k];
+    for (const a of [this.cMu, this.cLam, this.cDens, this.cDamp, this.cFric, this.cBounce, this.cRigid, this.cAir, this.cBevel, this.cN, this.cGrav, this.cBoost, this.cSize, this.cRes, this.cH, this.cBow, this.cLobeA, this.cLobeP, this.cTrimK, this.cLiq, this.cVisc, this.cTens, this.cSkin, this.cFill, this.cHollow, this.cav, this.cHid, this.cPress, this.cWind]) a[j] = a[k];
     this.cHollow[k] = 0;
     this.cav[k] = null;
     this.cHid[k] = 0;
@@ -2160,6 +2166,7 @@ export class SoftBody {
         this._buildCollisionHash();
         if (lap) lap(1);
       }
+      if (this._anyWind) this._wind(h);
       this._integrate(h);
       if (lap) lap(2);
       // (the hand pulls first, then the jelly answers: pulled after its
@@ -2280,6 +2287,52 @@ export class SoftBody {
       if (this.time - (pc.impT ?? -1) < 0.1 && best < (pc.impDv || 0) * 1.6) continue;
       const J = I[o + kind * 4] || 1;
       pc.impPend = { c: kind, dv: best, n: 0, x: I[o + kind * 4 + 1] / J, y: I[o + kind * 4 + 2] / J, z: I[o + kind * 4 + 3] / J };
+    }
+  }
+
+  // Cube k in the air as a falling thing is (see Drop): each face of its skin pressed as hard as it drives into
+  // the air - the square of its speed into it, vt its critical speed: there, the push on the face leading it is
+  // its weight. 0: none.
+  setWind(k, vt) {
+    if (!(vt > 0)) this.cWind[k] = 0;
+    else {
+      let M = 0;
+      for (let i = 0; i < this.nV; i++) if (this.vCube[i] === k && this.alive[i]) M += this.m[i];
+      const A = this.cSize[k] * this.cSize[k], g = Math.abs(this.p.gravity);
+      // (the face leading it pushed, the one behind pulled back 0.8 as hard: see _wind)
+      this.cWind[k] = (M * g) / (1.8 * A * vt * vt);
+    }
+    this._anyWind = this.cWind.some((c) => c > 0);
+  }
+
+  // (a substep of it: each face of a windy cube's skin - not its hollow's, that faces its liquid - pushed back as
+  // hard as it drives into the air, C v_n^2 over its area, and each face behind pulled back a third as hard; a
+  // third to each corner. The face leading is pushed in more than its sides - square on, it meets the air
+  // hardest: falling fast, it's squashed and spread)
+  _wind(h) {
+    const S = this.sTri, nF = this.nF, ST = this.sTet, tc = this.tCube, CW = this.cWind, x = this.x, v = this.v, w = this.w, HF = this.sHollow;
+    const aw = this._awake, vp = this.vPiece;
+    for (let f = 0; f < nF; f++) {
+      const C = CW[tc[ST[f]]];
+      if (!(C > 0) || (HF && HF[f] === 2)) continue;
+      const a = S[f * 3], b = S[f * 3 + 1], c = S[f * 3 + 2];
+      if (!aw[vp[a]]) continue;
+      const a3 = a * 3, b3 = b * 3, c3 = c * 3;
+      const ux = x[b3] - x[a3], uy = x[b3 + 1] - x[a3 + 1], uz = x[b3 + 2] - x[a3 + 2], qx = x[c3] - x[a3], qy = x[c3 + 1] - x[a3 + 1], qz = x[c3 + 2] - x[a3 + 2];
+      let nx = uy * qz - uz * qy, ny = uz * qx - ux * qz, nz = ux * qy - uy * qx;
+      const nl = Math.sqrt(nx * nx + ny * ny + nz * nz);
+      if (!(nl > 1e-12)) continue;
+      nx /= nl; ny /= nl; nz /= nl;
+      const ux3 = (v[a3] + v[b3] + v[c3]) / 3, uy3 = (v[a3 + 1] + v[b3 + 1] + v[c3 + 1]) / 3, uz3 = (v[a3 + 2] + v[b3 + 2] + v[c3 + 2]) / 3;
+      const vn = ux3 * nx + uy3 * ny + uz3 * nz, vt2 = Math.max(0, ux3 * ux3 + uy3 * uy3 + uz3 * uz3 - vn * vn);
+      // (and the air streaming past its sides pulls them out - three times as hard as it pushes square on, more than
+      // a bluff thing's sides are (about as hard): sideways, it doesn't slow the fall, and as hard as that a jelly's
+      // hardly moved - and its wake pulls back on the face behind 0.8 as hard: at its critical speed, distended -
+      // its sides bowed out, its back drawn up after it, puffed out like a pillow)
+      const p = (vn > 0 ? C * vn * vn : -0.8 * C * vn * vn) - 3 * C * vt2, J = (-p * 0.5 * nl * h) / 3;
+      v[a3] += nx * J * w[a]; v[a3 + 1] += ny * J * w[a]; v[a3 + 2] += nz * J * w[a];
+      v[b3] += nx * J * w[b]; v[b3 + 1] += ny * J * w[b]; v[b3 + 2] += nz * J * w[b];
+      v[c3] += nx * J * w[c]; v[c3 + 1] += ny * J * w[c]; v[c3 + 2] += nz * J * w[c];
     }
   }
 
@@ -2540,7 +2593,7 @@ export class SoftBody {
     // (firmer jelly pulls the held patch back harder before the next pull:
     // a longer reach keeps it with the hand)
     const gk = this.p.grabK;
-    const maxStep = 0.012 * gk * this.p.size * ease * (1 + Math.min(2, Math.max(0, (this.p.mu - 100) / 70)));
+    const maxStep = 0.012 * gk * this.p.size * ease * (1 + Math.min(2, Math.max(0, (this.p.mu - 100) / 70))) * (g.boost || 1);
     for (let j = 0; j < g.n; j++) {
       const i = g.idx[j];
       const wi = w[i];
