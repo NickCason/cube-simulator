@@ -42,6 +42,10 @@ export const MAX_CUBES = 8;
 export const REST_STEP = 10;
 // (a thin firm shell's spring to its shape, ultrathin rubber's: how quick, alone - see SoftBody._shellSpring)
 const SHELL_HZ = 5.5;
+// (a rounded hollow's skin left short of its shape by its carving - a thin wall's corners, one diagonal set of
+// them 2 cm: their tets would have been squashed flat - is drawn out to it, as far as this, and its liquid let
+// fill it: see vShort, JellyView._buildSmooth, Fluid._jellyAt)
+export const HOLLOW_SHORT = 0.03;
 
 // How soft, at the least, the tets' shape and volume terms stay - as a share
 // of hard (a full correction in one substep): see _solveTets. A tet of the
@@ -307,6 +311,7 @@ export class SoftBody {
     this.sTag = null;
     this.sRestN = null;
     this.sHollow = null; // (each face: on a rounded hollow's skin (2) or not - see _buildRenderClusters)
+    this.vShort = null; // (each vertex on one: how far short of its shape it was carved, m)
     this.tetBoundary = null;
     this.nextBoundary = null;
     this.vfStart = null;
@@ -1872,11 +1877,12 @@ export class SoftBody {
     // rim a corner of each of its faces is out in the wall.)
     const hollowF = this.sHollow && this.sHollow.length >= nF ? this.sHollow : (this.sHollow = new Uint8Array(Math.max(64, nF * 2)));
     hollowF.fill(0, 0, nF);
+    const VS = this.vShort && this.vShort.length >= nV ? this.vShort : (this.vShort = new Float32Array(Math.max(64, nV * 2)));
+    VS.fill(0, 0, nV);
     {
       const X = this.X, nrm = [0, 0, 0];
-      let k = -1, half = 0, bevel = 0, lim = 0, lb = null, round = false;
-      const sd = (x, y, z) => (lb ? shapeSDF(x, y, z, half, bevel, lb) : roundBoxSDF(x, y, z, half, bevel));
-      const deep = (i) => sd(X[i * 3] - k * REST_STEP, X[i * 3 + 1], X[i * 3 + 2]) <= lim;
+      let k = -1, half = 0, bevel = 0, th = 0, lim = 0, lb = null, round = false;
+      const sd = (i) => (lb ? shapeSDF(X[i * 3] - k * REST_STEP, X[i * 3 + 1], X[i * 3 + 2], half, bevel, lb) : roundBoxSDF(X[i * 3] - k * REST_STEP, X[i * 3 + 1], X[i * 3 + 2], half, bevel));
       for (let f = 0; f < nF; f++) {
         if (sTag[f] !== TAG_FRESH) continue;
         const a = sTri[f * 3], b = sTri[f * 3 + 1], c = sTri[f * 3 + 2];
@@ -1886,15 +1892,21 @@ export class SoftBody {
           half = this.cSize[k] / 2;
           bevel = this.cBevel[k];
           lb = this.shapeOf(k);
-          lim = -0.95 * this.wallTh(k) + 0.01;
+          th = this.wallTh(k);
+          lim = -0.95 * th + 0.01;
           round = this.hollowRound(k) > 0;
           if (!round) continue;
         }
-        if (!deep(a) || !deep(b) || !deep(c)) continue;
+        const sa = sd(a), sb2 = sd(b), sc = sd(c);
+        if (sa > lim || sb2 > lim || sc > lim) continue;
         const cx = (X[a * 3] + X[b * 3] + X[c * 3]) / 3 - k * REST_STEP, cy = (X[a * 3 + 1] + X[b * 3 + 1] + X[c * 3 + 1]) / 3, cz = (X[a * 3 + 2] + X[b * 3 + 2] + X[c * 3 + 2]) / 3;
         if (lb) shapeNormal(cx, cy, cz, half, bevel, lb, nrm);
         else roundBoxNormal(cx, cy, cz, half, bevel, nrm);
-        if (-(N[f * 3] * nrm[0] + N[f * 3 + 1] * nrm[1] + N[f * 3 + 2] * nrm[2]) > 0.3) hollowF[f] = 2;
+        if (!(-(N[f * 3] * nrm[0] + N[f * 3 + 1] * nrm[1] + N[f * 3 + 2] * nrm[2]) > 0.3)) continue;
+        hollowF[f] = 2;
+        VS[a] = Math.max(VS[a], -(sa + th));
+        VS[b] = Math.max(VS[b], -(sb2 + th));
+        VS[c] = Math.max(VS[c], -(sc + th));
       }
     }
     const cornerR = new Int32Array(nF * 3);

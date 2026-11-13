@@ -2,7 +2,7 @@ import { shapeSDF, shapeNormal, shapeRadius, shapeFlat } from '../sim/mesh.js';
 import * as THREE from 'three';
 import { biasExp, RUBIK_COLORS, gradAt, gradSequence, GRAD_SHAPE_INDEX, rubikPack, rubikStateOf, TRIM } from '../styles.js';
 import { FREE_N, bakeFree } from '../freeform.js';
-import { MAX_CUBES, REST_STEP, TAG_FRESH, TAG_EXTERIOR } from '../sim/softbody.js';
+import { MAX_CUBES, REST_STEP, TAG_FRESH, TAG_EXTERIOR, HOLLOW_SHORT } from '../sim/softbody.js';
 
 // (cut surfaces drawn smooth - see JellyView._buildSmooth: Taubin's lambda|mu, rounds of the pair)
 const SMOOTH_L = 0.6307, SMOOTH_M = -0.6732, SMOOTH_IT = 10;
@@ -281,7 +281,7 @@ function snapToHollow(pos, nrm, mids, first, disp, hollows, cube) {
   const on = new Int8Array(first);
   const onShape = (v) => {
     const s = hollows[cube[v]];
-    if (!on[v]) on[v] = !s || Math.abs(roundedBox(pos[v * 3], pos[v * 3 + 1], pos[v * 3 + 2], s.a, s.r)) > 4e-3 ? -1 : 1;
+    if (!on[v]) on[v] = !s || Math.abs(hollowAt(pos[v * 3], pos[v * 3 + 1], pos[v * 3 + 2], s)) > 4e-3 ? -1 : 1;
     return on[v] > 0;
   };
   for (let m = 0, k = first, j = 0; m < mids.length; m += 3, k++, j++) {
@@ -291,7 +291,7 @@ function snapToHollow(pos, nrm, mids, first, disp, hollows, cube) {
     const ia = mids[m] * 3, ib = mids[m + 1] * 3, o = k * 3;
     const ex = pos[ia] - pos[ib], ey = pos[ia + 1] - pos[ib + 1], ez = pos[ia + 2] - pos[ib + 2];
     const len = Math.sqrt(ex * ex + ey * ey + ez * ez);
-    const sd = roundedBox(pos[o], pos[o + 1], pos[o + 2], S.a, S.r);
+    const sd = hollowAt(pos[o], pos[o + 1], pos[o + 2], S);
     const nx = nrm[o], ny = nrm[o + 1], nz = nrm[o + 2];
     if (Math.abs(sd) > 0.35 * len || -(nx * _cp[3] + ny * _cp[4] + nz * _cp[5]) < 0.9) continue;
     const d = (_cp[0] - pos[o]) * nx + (_cp[1] - pos[o + 1]) * ny + (_cp[2] - pos[o + 2]) * nz;
@@ -299,6 +299,16 @@ function snapToHollow(pos, nrm, mids, first, disp, hollows, cube) {
     disp[j] = d;
     pos[o] += nx * d; pos[o + 1] += ny * d; pos[o + 2] += nz * d;
   }
+}
+// (that shape: a plain cube's, the rounded box { a, r }; a shaped one's, its own { form, half, bev, th } that far
+// in - its distance out of it, into the wall, and the nearest point and the way out there in _cp)
+function hollowAt(px, py, pz, s) {
+  if (!s.form) return roundedBox(px, py, pz, s.a, s.r);
+  const d = shapeSDF(px, py, pz, s.half, s.bev, s.form) + s.th;
+  shapeNormal(px, py, pz, s.half, s.bev, s.form, _n3);
+  _cp[3] = _n3[0]; _cp[4] = _n3[1]; _cp[5] = _n3[2];
+  _cp[0] = px - _n3[0] * d; _cp[1] = py - _n3[1] * d; _cp[2] = pz - _n3[2] * d;
+  return d;
 }
 // A shaped cube's new points exactly onto its skin (at rest): each one's
 // way there kept as so much of its edge, of its normal and of across - so
@@ -458,6 +468,7 @@ export class JellyView {
     // (cut surfaces drawn smooth: see _buildSmooth)
     this.smN = 0;
     this.smV = this.smT = this.smB = this.smR0 = this.smRN = this.smF = this.smMark = this.smAcc = null;
+    this.smK3 = this.smRestP = null; // (a rounded hollow's skin's points, and where they're drawn at rest)
     this.far = true; // (switched off: as before - its near wall a lens straight through to the room)
     this.frontMat = createJellyMaterial(env, this.layerUniforms);
     // (Mesa - Linux's GL - hung the GPU or crashed compiling a shader while
@@ -1190,15 +1201,21 @@ export class JellyView {
     const restN = new Float32Array(maxN * 3);
     // (each cube's rest shape in its own frame: the offset that keeps them
     // apart in rest space taken off)
+    // (a rounded hollow's skin's where it's drawn - see _buildSmooth)
+    const K3 = this.smK3, P3 = this.smRestP;
     for (let r = 0; r < nB; r++) {
-      const i = rSim[r] * 3;
-      rest[r * 3] = sb.X[i] - sb.vCube[rSim[r]] * REST_STEP; rest[r * 3 + 1] = sb.X[i + 1]; rest[r * 3 + 2] = sb.X[i + 2];
+      const i = rSim[r] * 3, src = K3 && K3[rSim[r]] ? P3 : sb.X;
+      rest[r * 3] = src[i] - sb.vCube[rSim[r]] * REST_STEP; rest[r * 3 + 1] = src[i + 1]; rest[r * 3 + 2] = src[i + 2];
     }
     vertexNormals(rIndex, rest, restN, nB);
     // (each cube its own rounding; each render vertex knows its cube - the
     // new points their edge's)
     const shapes = Array.from(sb.cBevel, (b, k) => ({ a: sb.cSize[k] / 2 - b, r: b, form: sb.formOf(k) }));
-    const hollows = Array.from(sb.cBevel, (b, k) => (sb.cHollow[k] && sb.cLiq[k] && !sb.shapeOf(k) && sb.hollowRound(k) > 0 ? { a: sb.cSize[k] / 2 - b, r: sb.hollowRound(k) } : null));
+    const hollows = Array.from(sb.cBevel, (b, k) => {
+      if (!sb.cHollow[k] || !sb.cLiq[k] || !(sb.hollowRound(k) > 0)) return null;
+      const form = sb.shapeOf(k);
+      return form ? { form, half: sb.cSize[k] / 2, bev: b, th: sb.wallTh(k) } : { a: sb.cSize[k] / 2 - b, r: sb.hollowRound(k) };
+    });
     const hollowed = hollows.some(Boolean);
     const cube = new Float32Array(maxN);
     for (let r = 0; r < nB; r++) cube[r] = sb.vCube[rSim[r]];
@@ -1409,12 +1426,15 @@ export class JellyView {
   // the jelly itself is as it was. Once a cut (here); each frame, its points and one normal each (_smoothCuts).
   _buildSmooth(sb) {
     this.smN = 0;
+    this.smK3 = this.smRestP = null;
     const nV = sb.nV, nF = sb.nF, S = sb.sTri, tag = sb.sTag, X = sb.X, ST = sb.sTet, T = sb.T, rSim = sb.rSim, rI = sb.rIndex;
     if (!nF || !rSim) return;
     // (each vertex: on a cut's face, the outside's, any other's - a melt's: left be. And on a rounded hollow's
-    // skin alone - a cube full of liquid's, its points already on the shape it was carved to: left be too, drawn
-    // round by its smoothing group and snapToHollow. Smoothed, its corners were drawn pulled in - one diagonal set
-    // of them 6 cm, the other 10, 3 cm short of it: pinched.)
+    // skin alone - a cube full of liquid's - not smoothed (3): its points are on the shape it was carved to, or,
+    // carved short, put out onto it - as far as HOLLOW_SHORT (its liquid let fill that: see Fluid._jellyAt) - and
+    // drawn round by its smoothing group and snapToHollow. Smoothed, its corners were drawn pulled in - one
+    // diagonal set of them 6 cm, the other 10, 3 cm short of it: pinched; left as carved, a thin wall's soft-edged
+    // one's one set 2 cm short, its liquid in that: crimped.)
     const fr = new Uint8Array(nV), ex = new Uint8Array(nV), ot = new Uint8Array(nV), face = new Int32Array(nV).fill(-1);
     const HF = sb.sHollow, hw = new Uint8Array(nV), cf = new Uint8Array(nV);
     for (let f = 0; f < nF; f++) {
@@ -1437,8 +1457,8 @@ export class JellyView {
     // on the edge of a flat one (2); in one, all round: left be
     const idx = new Int32Array(nV).fill(-1), list = [], rim = [];
     for (let v = 0; v < nV; v++) {
-      if (!fr[v] || ot[v] || (hw[v] && !cf[v])) continue;
-      const kind = ex[v] ? 1 : pl.edge[v] ? 2 : pl.in[v] ? -1 : 0;
+      if (!fr[v] || ot[v]) continue;
+      const kind = hw[v] && !cf[v] ? 3 : ex[v] ? 1 : pl.edge[v] ? 2 : pl.in[v] ? -1 : 0;
       if (kind < 0) continue;
       idx[v] = list.length;
       list.push(v);
@@ -1476,6 +1496,16 @@ export class JellyView {
       nbs[j] = u.length === 2 ? u : [];
     }
     const P = Float64Array.from(X.subarray(0, nV * 3)), Q = new Float64Array(n * 3);
+    const VS = sb.vShort, K3 = new Uint8Array(nV), g3 = [0, 0, 0];
+    for (let j = 0; j < n; j++) {
+      if (rim[j] !== 3) continue;
+      const v = list[j], s = VS && v < VS.length ? Math.min(VS[v], HOLLOW_SHORT) : 0;
+      K3[v] = 1;
+      if (!(s > 1e-4)) continue;
+      const k = sb.vCube[v], o = v * 3;
+      shapeNormal(P[o] - k * REST_STEP, P[o + 1], P[o + 2], sb.cSize[k] / 2, sb.cBevel[k], sb.shapeOf(k), g3);
+      P[o] += g3[0] * s; P[o + 1] += g3[1] * s; P[o + 2] += g3[2] * s;
+    }
     const taubin = (which) => {
       for (let it = 0; it < 2 * SMOOTH_IT; it++) {
         const k = it & 1 ? SMOOTH_M : SMOOTH_L;
@@ -1544,11 +1574,13 @@ export class JellyView {
       if (j < 0) continue;
       if (rFirst[j] < 0) rFirst[j] = r;
       rCount[j]++;
-      mark[r] = rim[j] ? 2 : 1;
+      mark[r] = rim[j] === 1 || rim[j] === 2 ? 2 : 1;
     }
     const faces = [];
     for (let k = 0; k < rI.length; k += 3) if (mark[rI[k]] || mark[rI[k + 1]] || mark[rI[k + 2]]) faces.push(k);
     this.smN = n;
+    this.smK3 = K3;
+    this.smRestP = P;
     this.smV = Int32Array.from(list);
     this.smT = smT;
     this.smB = smB;

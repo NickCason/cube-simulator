@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { edgeTable, triTable } from 'three/examples/jsm/objects/MarchingCubes.js';
 import { removeTets } from '../sim/cutting.js';
-import { TAG_FRESH, TAG_EXTERIOR, MAX_CUBES, REST_STEP, polarRot } from '../sim/softbody.js';
+import { TAG_FRESH, TAG_EXTERIOR, MAX_CUBES, REST_STEP, HOLLOW_SHORT, polarRot } from '../sim/softbody.js';
 import { shapeSDF } from '../sim/mesh.js';
 
 // Molten jelly. The torch turns the hottest jelly to liquid (see
@@ -2533,7 +2533,7 @@ export class Fluid {
       KEY[h * 3] = kx; KEY[h * 3 + 1] = ky; KEY[h * 3 + 2] = kz;
       ST[h] = 0;
       // (in the jelly? - nowhere near any, at once)
-      const t = this._inTet(ox, oy, oz);
+      const t = this._jellyAt(ox, oy, oz);
       if (t < 0) {
         // (not: but a cut piece's own liquid out past its wall's middle - across a wall thinner than the surface's
         // cells, its surface closed a cell on, out past its outside. Back to its hollow's face)
@@ -2591,7 +2591,7 @@ export class Fluid {
           }
           let e = din;
           this._restMove(t, ux * (din + 0.01), uy * (din + 0.01), uz * (din + 0.01));
-          if (this._inTet(ox + PW[0], oy + PW[1], oz + PW[2]) >= 0) {
+          if (this._jellyAt(ox + PW[0], oy + PW[1], oz + PW[2]) >= 0) {
             // (the way the hollow was carved: straight in toward its middle, where its face is crossed once - a
             // centimetre at a time, 15 at most, then halved twice)
             const rl = Math.sqrt(cx * cx + r1 * r1 + r2 * r2) || 1;
@@ -2600,14 +2600,14 @@ export class Fluid {
             for (let s2 = 1; s2 <= 15 && hi < 0; s2++) {
               const d = 0.01 * s2;
               this._restMove(t, ux * d, uy * d, uz * d);
-              if (this._inTet(ox + PW[0], oy + PW[1], oz + PW[2]) < 0) hi = d;
+              if (this._jellyAt(ox + PW[0], oy + PW[1], oz + PW[2]) < 0) hi = d;
               else lo = d;
             }
             if (hi < 0) continue;
             for (let b = 0; b < 2; b++) {
               const d = 0.5 * (lo + hi);
               this._restMove(t, ux * d, uy * d, uz * d);
-              if (this._inTet(ox + PW[0], oy + PW[1], oz + PW[2]) < 0) hi = d;
+              if (this._jellyAt(ox + PW[0], oy + PW[1], oz + PW[2]) < 0) hi = d;
               else lo = d;
             }
             e = hi;
@@ -2668,7 +2668,7 @@ export class Fluid {
           let lo = 0, hi = -1;
           for (let s = 1; s <= 6; s++) {
             const d = 0.015 * s * sg;
-            if (this._inTet(ox + nx * d, oy + ny * d, oz + nz * d) < 0) {
+            if (this._jellyAt(ox + nx * d, oy + ny * d, oz + nz * d) < 0) {
               hi = d;
               break;
             }
@@ -2677,7 +2677,7 @@ export class Fluid {
           if (hi === -1) continue;
           for (let b = 0; b < 2; b++) {
             const mm = 0.5 * (lo + hi);
-            if (this._inTet(ox + nx * mm, oy + ny * mm, oz + nz * mm) < 0) hi = mm;
+            if (this._jellyAt(ox + nx * mm, oy + ny * mm, oz + nz * mm) < 0) hi = mm;
             else lo = mm;
           }
           (px = ox + nx * hi), (py = oy + ny * hi), (pz = oz + nz * hi), (ok = true);
@@ -2740,10 +2740,10 @@ export class Fluid {
       let qx = xm[0] + R[0] * m0 + R[1] * m1 + R[2] * m2, qy = xm[1] + R[3] * m0 + R[4] * m1 + R[5] * m2, qz = xm[2] + R[6] * m0 + R[7] * m1 + R[8] * m2;
       // (its fit a centimetre or two off a soft piece: on, half a centimetre at a time, till it's out of the jelly)
       const wx = qx - px, wy = qy - py, wz = qz - pz, wl = Math.sqrt(wx * wx + wy * wy + wz * wz) || 1;
-      let ok = this._inTet(qx, qy, qz) < 0;
+      let ok = this._jellyAt(qx, qy, qz) < 0;
       for (let s = 1; s <= 6 && !ok; s++) {
         const f = (0.005 * s) / wl;
-        if (this._inTet(qx + wx * f, qy + wy * f, qz + wz * f) < 0) (qx += wx * f), (qy += wy * f), (qz += wz * f), (ok = true);
+        if (this._jellyAt(qx + wx * f, qy + wy * f, qz + wz * f) < 0) (qx += wx * f), (qy += wy * f), (qz += wz * f), (ok = true);
       }
       if (!ok) return false;
       const P3 = this._po3;
@@ -2774,13 +2774,13 @@ export class Fluid {
     const wy = (X[b3 + 1] - X[a3 + 1]) * l1 + (X[c3 + 1] - X[a3 + 1]) * l2 + (X[d3 + 1] - X[a3 + 1]) * l3;
     const wz = (X[b3 + 2] - X[a3 + 2]) * l1 + (X[c3 + 2] - X[a3 + 2]) * l2 + (X[d3 + 2] - X[a3 + 2]) * l3;
     let px = ox + wx, py = oy + wy, pz = oz + wz;
-    if (this._inTet(px, py, pz) >= 0) {
+    if (this._jellyAt(px, py, pz) >= 0) {
       const wl = Math.sqrt(wx * wx + wy * wy + wz * wz);
       let ok = false;
       if (wl > 1e-9)
         for (let s = 1; s <= 6 && !ok; s++) {
           const e = (0.005 * s) / wl;
-          if (this._inTet(px + wx * e, py + wy * e, pz + wz * e) < 0) (px += wx * e), (py += wy * e), (pz += wz * e), (ok = true);
+          if (this._jellyAt(px + wx * e, py + wy * e, pz + wz * e) < 0) (px += wx * e), (py += wy * e), (pz += wz * e), (ok = true);
         }
       if (!ok) return false;
     }
@@ -2871,6 +2871,33 @@ export class Fluid {
   // The jelly's tet p is in (of those hashed near the liquid - see _jellyCells), or -1.
   // (each of its tets' boxes looked at first: tested whole, every one in a wall's cell, it took the drops' push off
   // the walls a quarter of the liquid's time)
+  // (in the jelly as it's drawn? - as _inTet, but a rounded hollow's skin carved short of its shape - a thin wall's
+  // corners, one diagonal set of them 2 cm - is drawn out onto it, as far as HOLLOW_SHORT (see
+  // JellyView._buildSmooth): the space that leaves in its tets is the hollow's, its liquid's to fill. Pushed out
+  // to its tets' face, its liquid there was crimped. Its tet, or -1.)
+  _jellyAt(px, py, pz) {
+    const t = this._inTet(px, py, pz), sb = this.app.sb, VS = sb.vShort;
+    if (t < 0 || !VS) return t;
+    const T = sb.T, t4 = t * 4, ia = T[t4], ib = T[t4 + 1], ic = T[t4 + 2], id = T[t4 + 3];
+    const s = Math.max(VS[ia], VS[ib], VS[ic], VS[id]);
+    if (!(s > 1e-4)) return t;
+    // (where it is as made: barycentric in t as it stands)
+    const X = sb.x, XR = sb.X, a3 = ia * 3, b3 = ib * 3, c3 = ic * 3, d3 = id * 3;
+    const e1x = X[b3] - X[a3], e1y = X[b3 + 1] - X[a3 + 1], e1z = X[b3 + 2] - X[a3 + 2];
+    const e2x = X[c3] - X[a3], e2y = X[c3 + 1] - X[a3 + 1], e2z = X[c3 + 2] - X[a3 + 2];
+    const e3x = X[d3] - X[a3], e3y = X[d3 + 1] - X[a3 + 1], e3z = X[d3 + 2] - X[a3 + 2];
+    const g1x = e2y * e3z - e2z * e3y, g1y = e2z * e3x - e2x * e3z, g1z = e2x * e3y - e2y * e3x;
+    const det = e1x * g1x + e1y * g1y + e1z * g1z;
+    if (!(Math.abs(det) > 1e-18)) return t;
+    const rx = px - X[a3], ry = py - X[a3 + 1], rz = pz - X[a3 + 2];
+    const w1 = (g1x * rx + g1y * ry + g1z * rz) / det;
+    const w2 = ((e3y * e1z - e3z * e1y) * rx + (e3z * e1x - e3x * e1z) * ry + (e3x * e1y - e3y * e1x) * rz) / det;
+    const w3 = ((e1y * e2z - e1z * e2y) * rx + (e1z * e2x - e1x * e2z) * ry + (e1x * e2y - e1y * e2x) * rz) / det, w0 = 1 - w1 - w2 - w3;
+    const r0 = w0 * XR[a3] + w1 * XR[b3] + w2 * XR[c3] + w3 * XR[d3], r1 = w0 * XR[a3 + 1] + w1 * XR[b3 + 1] + w2 * XR[c3 + 1] + w3 * XR[d3 + 1], r2 = w0 * XR[a3 + 2] + w1 * XR[b3 + 2] + w2 * XR[c3 + 2] + w3 * XR[d3 + 2];
+    const k = sb.tCube[t];
+    return -this._shapeDist(k, r0, r1, r2) > this._wallTh(k) + Math.max(0, s - HOLLOW_SHORT) ? -1 : t;
+  }
+
   _inTet(px, py, pz) {
     const sb = this.app.sb, cs = this.cStart, ctl = this.cTets, CM = CELL_HASH - 1, TB = this.tBox;
     const hb = (Math.imul(Math.floor(px * 10), 92837111) ^ Math.imul(Math.floor(py * 10), 689287499) ^ Math.imul(Math.floor(pz * 10), 283923481)) & CM;
