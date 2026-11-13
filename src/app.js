@@ -142,6 +142,7 @@ export class App {
     this.env = createStudioEnvironment(renderer, this.lightDir, this.theme);
     this.scene = new THREE.Scene();
     this.camera = new THREE.PerspectiveCamera(30, 1, 0.05, 80);
+    this._fovBase = 30; // (the view's angle as the screen's shape has it - see resize; widened falling in Drop)
     this.orbit = { theta: 0.38, phi: 0.36, radius: 4.1, target: new THREE.Vector3(0, 0.44, 0) };
     this.orbitGoal = { theta: this.orbit.theta, phi: this.orbit.phi, radius: this.orbit.radius };
     this._shake = 0;
@@ -1338,6 +1339,12 @@ export class App {
     // was two metres out of the picture)
     const D = this.drop;
     D.track();
+    // (falling fast in Drop: the view widened - a fifth, at its critical speed - as speed does)
+    const fov = (this._fovBase || this.camera.fov) * (1 + 0.2 * D.fovKick);
+    if (Math.abs(fov - this.camera.fov) > 0.01) {
+      this.camera.fov = fov;
+      this.camera.updateProjectionMatrix();
+    }
     const follow = D.on && D.frameY !== null;
     if (follow) fy = D.frameY + 0.1;
     const kx = follow ? 1 - Math.exp(-dt * 6) : kf;
@@ -1368,7 +1375,7 @@ export class App {
     this.renderer.setSize(w, h, false);
     this.camera.aspect = w / h;
     // keep the cube comfortably framed on portrait screens
-    this.camera.fov = w / h < 0.8 ? 30 / Math.min(1, (w / h) * 1.18) : 30;
+    this.camera.fov = this._fovBase = w / h < 0.8 ? 30 / Math.min(1, (w / h) * 1.18) : 30;
     this.camera.updateProjectionMatrix();
     // keep the arena inside what the default view can see
     const halfV = Math.tan((this.camera.fov * Math.PI) / 360) * this.orbitGoal.radius;

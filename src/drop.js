@@ -3,6 +3,8 @@
 // Gravity on it all the way: hung from the hook it dangles and sways; falling fast the air presses on it - at its
 // critical speed as hard as its weight - squashing and spreading it (SoftBody.setWind).
 
+import { DropFx } from './world/dropfx.js';
+
 const STORE = 'cube-sim-drop-h';
 export const DROP_MIN = 3, DROP_MAX = 45; // (m: the height its bottom is taken up to - the sky dome's 48 m round the eye)
 const LIFT_V = 12; // (m/s: the hook at its fastest)
@@ -34,6 +36,12 @@ export class DropMode {
     this.calmT = 0;
     this.alt = 0; // (its bottom's height, now)
     this.onChange = null; // (the bar: see ui/dropbar.js)
+    // (the fall made plain: its shadow, the air streaking past, the wind, its landing - see world/dropfx.js)
+    this.fx = new DropFx(app);
+    this._goal = null; // (the view as it was before it was let go - put back once it's down)
+    this._slowWas = undefined; // (time slowed just before it lands: what it was)
+    this._slowed = false;
+    this.fovKick = 0; // (0..1: the view widened with its speed - see App._updateCamera)
   }
 
   setHeight(h) {
@@ -55,6 +63,10 @@ export class DropMode {
   exit() {
     if (!this.on) return;
     this._release();
+    this.fx.stop();
+    this._view(false);
+    this._slow(false);
+    this.fovKick = 0;
     this.app.sb.setWind(this.slot, 0);
     this.on = false;
     this.phase = '';
@@ -90,6 +102,7 @@ export class DropMode {
     this.grab.boost = 3;
     this.y0 = top;
     this.yTop = this.height + (top - bot);
+    this.fx.scatter(pc.com[0], pc.com[2], this.yTop);
     this.dur = Math.max(1.2, (1.5 * (this.yTop - this.y0)) / LIFT_V);
     this.phase = 'lift';
     this.t = 0;
@@ -103,6 +116,8 @@ export class DropMode {
   letGo() {
     if (this.phase !== 'lift' && this.phase !== 'hang') return;
     this._release();
+    this._view(true);
+    this.app.audio?.whoosh(0.8);
     this.app.sb.setWind(this.slot, VT);
     this.app.sb.wakeAll();
     this.phase = 'fall';
@@ -139,10 +154,21 @@ export class DropMode {
         this._changed();
       }
     }
+    // (fast: the view widening and buffeted by the wind, more the faster - none once it's down)
+    const kick = this.phase === 'fall' && this.landT < 0 ? Math.min(1, Math.max(0, (this.speed - 6) / 16)) : 0;
+    this.fovKick += (kick - this.fovKick) * (1 - Math.exp(-dt * 4));
+    if (kick > 0) this.app.shake(0.006 * kick);
     if (this.phase === 'fall') {
       this.peak = Math.max(this.peak, this.speed);
+      // (a breath before it hits, fast: time slowed - the landing in slow motion, then back up to speed)
+      if (this.landT < 0 && !this._slowed && this.speed > 12 && this.alt < this.speed * 0.09) this._slow(true);
       // (down: as it first touches - then still a while, or 3 s on)
-      if (this.landT < 0 && pc.bbox[1] < 0.03) (this.landT = this.t), (this.hitV = this.peak);
+      if (this.landT < 0 && pc.bbox[1] < 0.03) {
+        this.landT = this.t;
+        this.hitV = this.peak;
+        this.fx.impact(this, pc, this.hitV);
+      }
+      if (this._slowed && this.landT >= 0 && this.t - this.landT > 0.3) this._slow(false);
       if (this.landT >= 0) {
         const v2 = pc.vel[0] * pc.vel[0] + pc.vel[1] * pc.vel[1] + pc.vel[2] * pc.vel[2];
         this.calmT = v2 < 0.16 ? this.calmT + dt : 0;
@@ -160,15 +186,45 @@ export class DropMode {
   // (the camera on it - where it is now, the frame's step taken: read before it, a cube falling at 16 m/s sat half a
   // metre low in the picture - till a moment after it's down. See App._updateCamera)
   track() {
+    const pc = this.on && this.phase ? this._piece()?.pc : null;
+    this.fx.update(this, pc);
     if (!this.on || !this.phase || (this.phase === 'land' && this.t > 0.8)) {
       this.frameY = null;
+      if (this.phase === 'land') this._view(false);
       return;
     }
-    const pc = this._piece()?.pc;
     if (!pc) return;
     this.frameY = pc.com[1];
     this.frameX = pc.com[0];
     this.frameZ = pc.com[2];
+  }
+
+  // (falling: the view tipped over to look down past it - 66 degrees - at the floor coming up, its shadow on it under
+  // it - and back once it's down)
+  _view(on) {
+    const g = this.app.orbitGoal;
+    if (on && !this._goal) {
+      this._goal = { phi: g.phi, radius: g.radius };
+      g.phi = Math.max(g.phi, 1.15);
+      g.radius = Math.max(g.radius, 5.5);
+    } else if (!on && this._goal) {
+      g.phi = this._goal.phi;
+      g.radius = this._goal.radius;
+      this._goal = null;
+    }
+  }
+
+  // (time slowed - or as it was)
+  _slow(on) {
+    const app = this.app;
+    if (on && !this._slowed) {
+      this._slowWas = app.slowGoal;
+      app.slowGoal = Math.min(app.slowGoal ?? 1, 0.3);
+      this._slowed = true;
+    } else if (!on && this._slowed) {
+      app.slowGoal = this._slowWas ?? 1;
+      this._slowed = false;
+    }
   }
 
   _changed() {

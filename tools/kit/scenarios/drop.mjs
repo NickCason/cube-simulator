@@ -3,10 +3,10 @@
 // spread by the air (its box: wide over tall, most), its liquid out of it falling, the camera on it (its middle on
 // the screen, worst), the time to land; pictures (pics=1) going up, hanging, falling, hitting, after.
 import { join } from 'node:path';
-export const meta = { name: 'drop', dpr: 1, params: { cube: 'plain', height: 15, pics: 0, maxFrames: 900 } };
+export const meta = { name: 'drop', dpr: 1, params: { cube: 'plain', height: 15, place: 'diner', pics: 0, maxFrames: 900 } };
 export async function run(k, p, ctx) {
   k.dt = 1 / 30;
-  await k.load(p.cube, {}, { settle: 60 });
+  await k.load(p.cube, {}, { settle: 60, place: p.place });
   const page = k.page, shots = [];
   const shot = async (tag) => p.pics && shots.push(await k.shot(join(ctx.out, `drop-${ctx.build}-s${ctx.seed}-${p.cube}-${tag}.png`)));
   // (through the UI: the dock's Exhibit, its card's Drop)
