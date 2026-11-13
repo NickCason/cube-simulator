@@ -1,7 +1,8 @@
 import * as THREE from 'three';
 import { edgeTable, triTable } from 'three/examples/jsm/objects/MarchingCubes.js';
 import { removeTets } from '../sim/cutting.js';
-import { TAG_EXTERIOR, MAX_CUBES } from '../sim/softbody.js';
+import { TAG_EXTERIOR, MAX_CUBES, REST_STEP, polarRot } from '../sim/softbody.js';
+import { shapeSDF } from '../sim/mesh.js';
 
 // Molten jelly. The torch turns the hottest jelly to liquid (see
 // TorchTool): its tets go, and particles carry their volume on - position-
@@ -28,6 +29,10 @@ const STEP = 1 / 120; // (s) a substep, always (see _advance)
 const FREE_STEPS = [0.012, 0.025, 0.04, 0.06, 0.08, 0.1];
 // (1/s) how hard drops in a narrow slit are held back - see _gaps
 const GAP_DRAG = 18;
+// A cube full of liquid, cut and squeezed: its liquid pressed out of its cuts (see _pressures, _squeeze) - the
+// slits' hold on it gone at this much squeezed (a share of its hollow's volume), and how hard a drop at an opening
+// is pushed out, m/s² a share
+const PRESS_FREE = 0.06, PRESS_ACC = 80;
 const ITER = 3; // solver rounds a substep
 const MAXNB = 48; // neighbours kept per particle
 const CELL_HASH = 1 << 14; // buckets for the jelly's tets near the liquid
@@ -65,6 +70,12 @@ export class Fluid {
     // (the cube full of liquid it's in, its slot + 1 - 0, none; 255, not looked yet: as of its surface last made,
     // see _splat - for the bubbles in it, see Bubbles.poolTick)
     this.dIn = new Uint8Array(N);
+    // (each by an opening into its cube - a cut's faces near it, or in a slit - this frame: see _squeeze)
+    this.atCut = new Uint8Array(N);
+    // (each cube full of liquid: how hard it's squeezed - see _pressures - its middle; whether any is)
+    this.press = new Float32Array(MAX_CUBES);
+    this.pressC = new Float32Array(MAX_CUBES * 3);
+    this.pressOn = 0;
     // (each cube's liquid drawn only up to this height - being put back into it, re-cubed: see Injector - and how
     // many are; Infinity, all of it)
     this.revealY = new Float32Array(MAX_CUBES).fill(Infinity);
@@ -144,6 +155,15 @@ export class Fluid {
     this._en = new Float32Array(36);
     this._ec = new Float32Array(36);
     this._ei = new Float32Array(12);
+    this._grp = new Int32Array([0, -1, -1]); // (the sides a cell's corners are on: see _march)
+    // (each cube full of liquid as it stands, for its liquid's surface against its wall - see _snapWalls: its turn
+    // from its rest shape, last time - a warm start - and scratch)
+    this._wq = new Float64Array(MAX_CUBES * 4);
+    for (let k = 0; k < MAX_CUBES; k++) this._wq[k * 4 + 3] = 1;
+    this._wqk = new Float64Array(4);
+    this._wA = new Float64Array(9);
+    this._wR = new Float64Array(9);
+    this._wF = new Float64Array(6); // (its middle as it stands, and at rest: see _snapBox)
     this.asleep = false;
     this.stillT = 0;
     // the jelly's tets near the liquid (hashed by cells of 0.1 m)
@@ -610,6 +630,7 @@ export class Fluid {
 
   clear() {
     if (this.n) this._mapDone(null, this.n); // (all gone)
+    if (this.pressOn) (this.pressOn = 0), this.press.fill(0), this.app.sb?.cPress?.fill(0);
     this.n = 0;
     this.bank = 0;
     this.drainT = 0;
@@ -638,8 +659,11 @@ export class Fluid {
     // (a pool that's come to rest sleeps till jelly moves near it - or
     // while acid in it is still eating)
     if (this.asleep && (this.keepAwake || this._stirred())) this.wake();
+    // (asleep, nothing's squeezing it)
+    if (this.asleep && this.pressOn) (this.pressOn = 0), this.press.fill(0), this.app.sb.cPress.fill(0);
     if (!this.asleep) {
       this._jellyCells();
+      this._pressures();
       this._advance(phys);
       this._contain();
       const v = this.v;
@@ -903,8 +927,74 @@ export class Fluid {
     this._carry += F;
     const nS = Math.floor(this._acc / STEP + 1e-6);
     this._acc -= nS * STEP;
+    this.atCut.fill(0, 0, this.n);
     for (let s = 0; s < nS; s++) this._step(STEP);
     this._gaps(F);
+    this._squeeze(F);
+  }
+
+  // How hard each cube full of liquid that's been cut into is squeezed - its hollow's volume short of what it
+  // held as made (only its own faces: not a cut's), past a little give, times how full it is (a part-full
+  // one's air takes it first) - and its middle. (Sealed, its volume's held: see SoftBody._solveCavities.)
+  _pressures() {
+    const sb = this.app.sb, P = this.press, C = this.pressC, x = sb.x, X = sb.X, HB = sb.cHole, DI = this.dIn;
+    let on = 0;
+    for (let k = 0; k < MAX_CUBES; k++) {
+      P[k] = 0;
+      const c = sb.cav[k];
+      if (!c || c.sealed || !sb.cHid[k] || !(c.V0 > 0)) continue;
+      const V = c.v, Fc = c.f, h6 = k * 6, q4 = 0.25 * sb.cH[k];
+      let cx = 0, cy = 0, cz = 0;
+      for (let n = 0; n < V.length; n++) {
+        const o = V[n] * 3;
+        cx += x[o]; cy += x[o + 1]; cz += x[o + 2];
+      }
+      cx /= V.length; cy /= V.length; cz /= V.length;
+      C[k * 3] = cx; C[k * 3 + 1] = cy; C[k * 3 + 2] = cz;
+      let vol = 0;
+      for (let n = 0; n < Fc.length; n += 3) {
+        const a = V[Fc[n]] * 3, b = V[Fc[n + 1]] * 3, d = V[Fc[n + 2]] * 3;
+        // (a cut's face - out past the hollow's box, in its rest shape: not the hollow's)
+        let o2 = 0;
+        for (let ax = 0; ax < 3; ax++) {
+          const r = (X[a + ax] + X[b + ax] + X[d + ax]) / 3, out = Math.max(HB[h6 + ax] - r, 0, r - HB[h6 + 3 + ax]);
+          o2 += out * out;
+        }
+        if (o2 > q4 * q4) continue;
+        const ax_ = x[a] - cx, ay = x[a + 1] - cy, az = x[a + 2] - cz, bx = x[b] - cx, by = x[b + 1] - cy, bz = x[b + 2] - cz, dx = x[d] - cx, dy = x[d + 1] - cy, dz = x[d + 2] - cz;
+        vol -= (ax_ * (by * dz - bz * dy) + ay * (bz * dx - bx * dz) + az * (bx * dy - by * dx)) / 6;
+      }
+      let nIn = 0;
+      for (let i = 0; i < this.n; i++) if (DI[i] === k + 1) nIn++;
+      const full = Math.min(1, (nIn * this.vol) / c.V0);
+      // (a cut one stands a few in a hundred under what it was made, unsqueezed: past that)
+      P[k] = Math.max(0, 1 - vol / c.V0 - 0.035) * full;
+      if (P[k] > 0) on++;
+    }
+    this.pressOn = on;
+    sb.cPress.set(P);
+  }
+
+  // Squeezed (see _pressures), what's at an opening into it - by a cut's faces, in a slit - is pressed out of it:
+  // pushed straight out from its middle, the harder the more it's squeezed. (Only the walls pushed it before:
+  // a cube squeezed a seventh smaller let five drops out of its slit in four seconds.)
+  _squeeze(F) {
+    if (!this.pressOn) return;
+    const sb = this.app.sb, P = this.press, C = this.pressC, v = this.v, x = this.x, AC = this.atCut, own = this.own;
+    for (let i = 0; i < this.n; i++) {
+      if (!AC[i] || !own[i]) continue;
+      let k = -1;
+      for (let q = 0; q < MAX_CUBES; q++)
+        if (sb.cHid[q] === own[i]) {
+          k = q;
+          break;
+        }
+      if (k < 0 || !(P[k] > 0)) continue;
+      const o = i * 3, dx = x[o] - C[k * 3], dy = x[o + 1] - C[k * 3 + 1], dz = x[o + 2] - C[k * 3 + 2], l = Math.sqrt(dx * dx + dy * dy + dz * dz);
+      if (!(l > 1e-6)) continue;
+      const a = (PRESS_ACC * P[k] * F) / l;
+      v[o] += dx * a; v[o + 1] += dy * a; v[o + 2] += dz * a;
+    }
   }
 
   wake() {
@@ -976,9 +1066,13 @@ export class Fluid {
 
   // Each particle's neighbours within H (this substep's: the solver's
   // rounds reuse them), into nb from nbStart[i].
+  // (Not through a cube full of liquid's wall: one in it and one out of it - see dIn - with jelly between them
+  // aren't neighbours. The reach is nearly two drops', more than a wall's thickness: what had run out, lying
+  // against the wall, pulled what was in it out through it. Across an opening they are: the liquid going out of
+  // it is all one - kept apart there, less ran out of a slit pulled open and more fell back in.)
   _neighbours(P) {
     const n = this.n, NB = this.nb, NS = this.nbStart, iH = 1 / H, M = this.hashSize - 1, H2 = H * H;
-    const cs = this.cellStart, order = this.order, seen = this.seen;
+    const cs = this.cellStart, order = this.order, seen = this.seen, DI = this.dIn;
     let w = 0;
     for (let i = 0; i < n; i++) {
       NS[i] = w;
@@ -986,7 +1080,7 @@ export class Fluid {
         this._stamp = 1;
         seen.fill(0);
       }
-      const stamp = this._stamp, lim = w + MAXNB, o = i * 3, px = P[o], py = P[o + 1], pz = P[o + 2];
+      const stamp = this._stamp, lim = w + MAXNB, o = i * 3, px = P[o], py = P[o + 1], pz = P[o + 2], si = DI[i];
       const cx = Math.floor(px * iH), cy = Math.floor(py * iH), cz = Math.floor(pz * iH);
       for (let a = -1; a <= 1; a++) {
         const ha = Math.imul(cx + a, 92837111);
@@ -999,14 +1093,27 @@ export class Fluid {
               // (two of the cells can share a bucket: each particle once)
               if (j === i || seen[j] === stamp) continue;
               seen[j] = stamp;
+              const sj = DI[j];
               const q = j * 3, dx = px - P[q], dy = py - P[q + 1], dz = pz - P[q + 2];
-              if (dx * dx + dy * dy + dz * dz < H2 && w < lim) NB[w++] = j;
+              if (!(dx * dx + dy * dy + dz * dz < H2) || w >= lim) continue;
+              if (si !== sj && si !== 255 && sj !== 255 && this._walled(px, py, pz, dx, dy, dz)) continue;
+              NB[w++] = j;
             }
           }
         }
       }
     }
     NS[n] = w;
+  }
+
+  // (jelly on the way from p back along d: looked at a fifth of the way at a time - closer than the thinnest
+  // wall, 5 cm, for two drops a reach apart)
+  _walled(px, py, pz, dx, dy, dz) {
+    for (let s = 1; s <= 4; s++) {
+      const f = s * 0.2;
+      if (this._inTet(px - dx * f, py - dy * f, pz - dz * f) >= 0) return true;
+    }
+    return false;
   }
 
   // Position based fluids: predict, then a few rounds of pushing apart
@@ -1197,7 +1304,11 @@ export class Fluid {
           const u = T[t * 4 + k];
           slit = !!so[u] && so[u] - 1 !== u;
         }
-        if (slit) continue;
+        // (a slit's: 2 - only while it's squeezed open, see _radius)
+        if (slit) {
+          cm[t] = 2;
+          continue;
+        }
         const h6 = kc * 6, q4 = 0.25 * sb.cH[kc];
         let o2 = 0;
         for (let ax = 0; ax < 3; ax++) {
@@ -1458,8 +1569,9 @@ export class Fluid {
         // they jammed in its mouth, the liquid stood where it was over it; and one by them moving on keeps the
         // liquid awake, as in a slit - see _gaps: it trickles out slowly, and fell asleep part way down)
         let rc = r;
-        if (CM[t]) {
+        if (CM[t] === 1 || (CM[t] === 2 && this.press[sb.tCube[t]] > 0)) {
           this._gapSeen[i] = 1;
+          this.atCut[i] = 1;
           rc = rr = CUT_R * r;
           t = this._inTet(px + ax * rr, py + ay * rr, pz + az * rr);
           if (t < 0 || sb.cLiq[sb.tCube[t]] !== 1) continue;
@@ -1579,10 +1691,175 @@ export class Fluid {
         if (a < 0 || sb.cLiq[sb.tCube[a]] !== 1) continue;
         const b = this._inTet(px - ux, py, pz - uz);
         if (b < 0 || tp[b] !== tp[a] || !(slit(a) || slit(b))) continue;
-        v[o] *= keep; v[o + 1] *= keep; v[o + 2] *= keep;
+        // (squeezed, less: see _pressures)
+        const kp = this.press[sb.tCube[a]], kk = kp > 0 ? Math.exp(-dt * GAP_DRAG * Math.max(0, 1 - kp / PRESS_FREE)) : keep;
+        v[o] *= kk; v[o + 1] *= kk; v[o + 2] *= kk;
         this._gapSeen[i] = 1;
+        this.atCut[i] = 1;
         break;
       }
+    }
+  }
+
+  // One cell marched: its triangles in at nv - all its corners (grp -1), or only those of one side (grp: see
+  // fmask - the rest as nothing); nv after them.
+  _cell(F, FC, touch, cell, grp, nv, iso, x0, y0, z0, c, gx, gxy) {
+    const OFF = this._off, CX = MC_CX, CY = MC_CY, CZ = MC_CZ, EA = MC_EA, EB = MC_EB, M = this.fmask, FO = this.fo;
+    const pos = this.pos, nrm = this.nrm, rgb = this.rgb, vv = this._vv, ex = this._ex, en = this._en, ec = this._ec, ei = this._ei, inn = this.inn;
+    const k = (cell / gxy) | 0, j = ((cell - k * gxy) / gx) | 0, i = cell - k * gxy - j * gx;
+    let ci = 0;
+    for (let m = 0; m < 8; m++) {
+      const q = cell + OFF[m], f = grp < 0 || M[q] === grp ? F[q] : 0;
+      vv[m] = f;
+      // (the tables' winding: bit set where it's outside)
+      if (!(f > iso)) ci |= 1 << m;
+    }
+    const em = edgeTable[ci];
+    if (!em) return nv;
+    for (let e = 0; e < 12; e++) {
+      if (!(em & (1 << e))) continue;
+      const A = EA[e], B = EB[e], qa = cell + OFF[A], qb = cell + OFF[B];
+      const t = (iso - vv[A]) / (vv[B] - vv[A] || 1e-9);
+      const o = e * 3;
+      // (in a cube full of liquid, as its inside corner is: which, + 1)
+      ei[e] = M[vv[A] > iso ? qa : qb] || 0;
+      ex[o] = x0 + (i + CX[A] + (CX[B] - CX[A]) * t) * c;
+      ex[o + 1] = y0 + (j + CY[A] + (CY[B] - CY[A]) * t) * c;
+      ex[o + 2] = z0 + (k + CZ[A] + (CZ[B] - CZ[A]) * t) * c;
+      // normal: down the field's gradient (central differences; one-sided at the floor) - one side's, of a side
+      const ja = j + CY[A], jb = j + CY[B];
+      let ax, ay, az, bx, by, bz;
+      if (grp < 0) {
+        ax = FO[qa - 1] - FO[qa + 1]; ay = FO[ja > 0 ? qa - gx : qa] - FO[qa + gx]; az = FO[qa - gxy] - FO[qa + gxy];
+        bx = FO[qb - 1] - FO[qb + 1]; by = FO[jb > 0 ? qb - gx : qb] - FO[qb + gx]; bz = FO[qb - gxy] - FO[qb + gxy];
+      } else {
+        ax = this._fo(qa - 1, grp) - this._fo(qa + 1, grp); ay = this._fo(ja > 0 ? qa - gx : qa, grp) - this._fo(qa + gx, grp); az = this._fo(qa - gxy, grp) - this._fo(qa + gxy, grp);
+        bx = this._fo(qb - 1, grp) - this._fo(qb + 1, grp); by = this._fo(jb > 0 ? qb - gx : qb, grp) - this._fo(qb + gx, grp); bz = this._fo(qb - gxy, grp) - this._fo(qb + gxy, grp);
+      }
+      const nx = ax + (bx - ax) * t, ny = ay + (by - ay) * t, nz = az + (bz - az) * t;
+      const nl = Math.sqrt(nx * nx + ny * ny + nz * nz) || 1;
+      en[o] = nx / nl; en[o + 1] = ny / nl; en[o + 2] = nz / nl;
+      // (a corner the splat never reached - or the other side's - has no colour: take the other's)
+      const ta = touch[qa] & 1 && Math.abs(vv[A]) > 1e-6, tb = touch[qb] & 1 && Math.abs(vv[B]) > 1e-6, wa = ta ? 1 / F[qa] : 0, wb = tb ? 1 / F[qb] : 0;
+      for (let cc = 0; cc < 3; cc++) {
+        const ca = FC[qa * 3 + cc] * wa, cb = FC[qb * 3 + cc] * wb;
+        ec[o + cc] = !ta ? cb : !tb ? ca : ca + (cb - ca) * t;
+      }
+    }
+    const base = ci * 16;
+    for (let tIdx = 0; triTable[base + tIdx] !== -1; tIdx++) {
+      const e3 = triTable[base + tIdx] * 3, o = nv * 3;
+      pos[o] = ex[e3]; pos[o + 1] = ex[e3 + 1]; pos[o + 2] = ex[e3 + 2];
+      nrm[o] = en[e3]; nrm[o + 1] = en[e3 + 1]; nrm[o + 2] = en[e3 + 2];
+      rgb[o] = ec[e3]; rgb[o + 1] = ec[e3 + 1]; rgb[o + 2] = ec[e3 + 2];
+      inn[nv] = ei[triTable[base + tIdx]];
+      nv++;
+    }
+    return nv;
+  }
+
+  // (the field as splatted at q, of one side only: see _cell)
+  _fo(q, grp) {
+    return this.fmask[q] === grp ? this.fo[q] : 0;
+  }
+
+  // The liquid's surface in a cube full of it, out past its hollow by more than a centimetre - as the cube stands,
+  // turned the way that fits it best (see Spill._hollow) - put back onto its wall there, facing into it. (A wall
+  // thinner than the surface's grid - ultrathin's 5 cm, the grid's ~6.5 cm - left its edges a sawtooth: along
+  // every edge, across every face once the cube turned, seen through the wall, worse the more it moved. The
+  // centimetre: a wall bulging out a little, it follows.)
+  _snapWalls(nv) {
+    const sb = this.app.sb, inn = this.inn, x = sb.x, X = sb.X, vc = sb.vCube, A = this._wA, R = this._wR, q = this._wqk;
+    let mask = 0;
+    for (let v = 0; v < nv; v++) if (inn[v] > 0) mask |= 1 << (inn[v] - 1);
+    for (let k = 0; k < MAX_CUBES; k++) {
+      if (!(mask & (1 << k)) || !sb.cHollow[k] || !(sb.cSize[k] > 0)) continue;
+      // (the cube as it stands: its middle now and at rest, and the turn from the one to the other)
+      let n = 0, xm0 = 0, xm1 = 0, xm2 = 0, Xm0 = 0, Xm1 = 0, Xm2 = 0;
+      for (let i = 0; i < sb.nV; i++) {
+        if (vc[i] !== k || !sb.alive[i]) continue;
+        const o = i * 3;
+        xm0 += x[o]; xm1 += x[o + 1]; xm2 += x[o + 2];
+        Xm0 += X[o]; Xm1 += X[o + 1]; Xm2 += X[o + 2];
+        n++;
+      }
+      if (!n) continue;
+      xm0 /= n; xm1 /= n; xm2 /= n; Xm0 /= n; Xm1 /= n; Xm2 /= n;
+      A.fill(0);
+      for (let i = 0; i < sb.nV; i++) {
+        if (vc[i] !== k || !sb.alive[i]) continue;
+        const o = i * 3, a0 = x[o] - xm0, a1 = x[o + 1] - xm1, a2 = x[o + 2] - xm2, b0 = X[o] - Xm0, b1 = X[o + 1] - Xm1, b2 = X[o + 2] - Xm2;
+        A[0] += a0 * b0; A[1] += a0 * b1; A[2] += a0 * b2;
+        A[3] += a1 * b0; A[4] += a1 * b1; A[5] += a1 * b2;
+        A[6] += a2 * b0; A[7] += a2 * b1; A[8] += a2 * b2;
+      }
+      for (let c = 0; c < 4; c++) q[c] = this._wq[k * 4 + c];
+      polarRot(q, A, R, 8);
+      for (let c = 0; c < 4; c++) this._wq[k * 4 + c] = q[c];
+      const size = sb.cSize[k], bev = sb.cBevel[k], shape = sb.shapeOf(k), sk = Math.min(1, Math.max(0, sb.cSkin[k]));
+      const th = size * (sk <= 0.5 ? 0.05 + 0.08 * sk : 0.09 + 0.18 * (sk - 0.5)), tol = Math.min(0.01, 0.2 * th), F = this._wF;
+      // (where it is, from the cube's middle as it stands back to its rest shape's, centred: see _snapBox)
+      F[0] = xm0; F[1] = xm1; F[2] = xm2; F[3] = Xm0 - k * REST_STEP; F[4] = Xm1; F[5] = Xm2;
+      // (a rounded box worked out here - most of the liquid's surface nowhere near the wall, and the rest
+      // simply - else any shape: a call a point, and its slope from six more. In a function each, small: as
+      // one, Safari's engine took a millisecond and a half over it half the time)
+      if (!(shape && shape.bow)) this._snapBox(nv, k + 1, size / 2, bev, th, tol);
+      else this._snapShape(nv, k + 1, size / 2, bev, shape, th, tol);
+    }
+  }
+
+  // (cube k1 - 1's, a plain rounded box: its rest shape's distance and slope worked out here, those nowhere near
+  // its wall passed over at a glance)
+  _snapBox(nv, k1, half, bev, th, tol) {
+    const inn = this.inn, pos = this.pos, nrm = this.nrm, R = this._wR, F = this._wF, bb = half - bev;
+    const xm0 = F[0], xm1 = F[1], xm2 = F[2], Xm0 = F[3], Xm1 = F[4], Xm2 = F[5], lim = half - Math.max(bev, th - tol);
+    for (let v = 0; v < nv; v++) {
+      if (inn[v] !== k1) continue;
+      const o = v * 3, dx = pos[o] - xm0, dy = pos[o + 1] - xm1, dz = pos[o + 2] - xm2;
+      // (back to its rest shape: R's transpose)
+      const rx = Xm0 + R[0] * dx + R[3] * dy + R[6] * dz, ry = Xm1 + R[1] * dx + R[4] * dy + R[7] * dz, rz = Xm2 + R[2] * dx + R[5] * dy + R[8] * dz;
+      const ax = rx < 0 ? -rx : rx, ay = ry < 0 ? -ry : ry, az = rz < 0 ? -rz : rz;
+      if (ax < lim && ay < lim && az < lim) continue;
+      const qx = ax - bb, qy = ay - bb, qz = az - bb, px = qx > 0 ? qx : 0, py = qy > 0 ? qy : 0, pz = qz > 0 ? qz : 0;
+      const pl = Math.sqrt(px * px + py * py + pz * pz), mq = qx > qy ? (qx > qz ? qx : qz) : qy > qz ? qy : qz;
+      const out = th + pl + (mq < 0 ? mq : 0) - bev - tol;
+      if (!(out > 0)) continue;
+      // (its slope: out of the inner box's nearest corner or edge, or square off the face it's nearest)
+      const il = pl > 1e-9 ? 1 / pl : 0;
+      let gx = px * il, gy = py * il, gz = pz * il;
+      if (!(pl > 1e-9)) {
+        gx = mq === qx ? 1 : 0;
+        gy = mq !== qx && mq === qy ? 1 : 0;
+        gz = mq !== qx && mq !== qy ? 1 : 0;
+      }
+      if (rx < 0) gx = -gx;
+      if (ry < 0) gy = -gy;
+      if (rz < 0) gz = -gz;
+      const mx = -gx * out, my = -gy * out, mz = -gz * out;
+      pos[o] += R[0] * mx + R[1] * my + R[2] * mz; pos[o + 1] += R[3] * mx + R[4] * my + R[5] * mz; pos[o + 2] += R[6] * mx + R[7] * my + R[8] * mz;
+      nrm[o] = R[0] * gx + R[1] * gy + R[2] * gz; nrm[o + 1] = R[3] * gx + R[4] * gy + R[5] * gz; nrm[o + 2] = R[6] * gx + R[7] * gy + R[8] * gz;
+    }
+  }
+
+  // (...any other shape - bowed faces: its distance, and its slope from either side along each axis)
+  _snapShape(nv, k1, half, bev, shape, th, tol) {
+    const inn = this.inn, pos = this.pos, nrm = this.nrm, R = this._wR, F = this._wF, e = 0.004;
+    const xm0 = F[0], xm1 = F[1], xm2 = F[2], Xm0 = F[3], Xm1 = F[4], Xm2 = F[5];
+    for (let v = 0; v < nv; v++) {
+      if (inn[v] !== k1) continue;
+      const o = v * 3, dx = pos[o] - xm0, dy = pos[o + 1] - xm1, dz = pos[o + 2] - xm2;
+      const rx = Xm0 + R[0] * dx + R[3] * dy + R[6] * dz, ry = Xm1 + R[1] * dx + R[4] * dy + R[7] * dz, rz = Xm2 + R[2] * dx + R[5] * dy + R[8] * dz;
+      const out = th + shapeSDF(rx, ry, rz, half, bev, shape) - tol;
+      if (!(out > 0)) continue;
+      let gx = shapeSDF(rx + e, ry, rz, half, bev, shape) - shapeSDF(rx - e, ry, rz, half, bev, shape);
+      let gy = shapeSDF(rx, ry + e, rz, half, bev, shape) - shapeSDF(rx, ry - e, rz, half, bev, shape);
+      let gz = shapeSDF(rx, ry, rz + e, half, bev, shape) - shapeSDF(rx, ry, rz - e, half, bev, shape);
+      const gl = Math.sqrt(gx * gx + gy * gy + gz * gz);
+      if (!(gl > 1e-12)) continue;
+      gx /= gl; gy /= gl; gz /= gl;
+      const mx = -gx * out, my = -gy * out, mz = -gz * out;
+      pos[o] += R[0] * mx + R[1] * my + R[2] * mz; pos[o + 1] += R[3] * mx + R[4] * my + R[5] * mz; pos[o + 2] += R[6] * mx + R[7] * my + R[8] * mz;
+      nrm[o] = R[0] * gx + R[1] * gy + R[2] * gz; nrm[o + 1] = R[3] * gx + R[4] * gy + R[5] * gz; nrm[o + 2] = R[6] * gx + R[7] * gy + R[8] * gz;
     }
   }
 
@@ -2137,6 +2414,8 @@ export class Fluid {
     for (let a = 0; a < nt; a++) FO[tList[a]] = F[tList[a]];
     if (this.cellsN) this._clip(F, touch, tList, nt, iso, x0, y0, z0, c, gx, gy, gz);
     this._march(F, FC, touch, tList, cList, nt, iso, x0, y0, z0, c, gx, gy, gz);
+    // (on its own, not from _march: called from there, Safari's engine took it fifteen times as long)
+    if (this.inN) this._snapWalls(this.geo.drawRange.count);
     for (let a = 0; a < nm; a++) this.fmask[this.fmL[a]] = 0;
   }
 
@@ -2233,56 +2512,25 @@ export class Fluid {
     }
     const OFF = this._off || (this._off = new Int32Array(8));
     OFF[0] = 0; OFF[1] = 1; OFF[2] = 1 + gx; OFF[3] = gx; OFF[4] = gxy; OFF[5] = 1 + gxy; OFF[6] = 1 + gx + gxy; OFF[7] = gx + gxy;
-    const CX = MC_CX, CY = MC_CY, CZ = MC_CZ, EA = MC_EA, EB = MC_EB;
-    const pos = this.pos, nrm = this.nrm, rgb = this.rgb, maxV = this.maxV;
-    const vv = this._vv, ex = this._ex, en = this._en, ec = this._ec, ei = this._ei, inn = this.inn, M = this.fmask;
+    const inn = this.inn, M = this.fmask, maxV = this.maxV, gr = this._grp;
     let nv = 0, nIn = 0;
     for (let a = 0; a < nc && nv + 15 <= maxV; a++) {
       const cell = cList[a];
-      const k = (cell / gxy) | 0, j = ((cell - k * gxy) / gx) | 0, i = cell - k * gxy - j * gx;
-      let ci = 0;
-      for (let m = 0; m < 8; m++) {
-        const f = F[cell + OFF[m]];
-        vv[m] = f;
-        // (the tables' winding: bit set where it's outside)
-        if (!(f > iso)) ci |= 1 << m;
+      // (corners in a cube full of liquid and out of it - or in two - each side's surface on its own, the
+      // other's corners as nothing: as one, a wall thinner than a cell had none of the grid's points in it,
+      // and the liquid in it and what had run out against it were drawn joined straight through it)
+      const g0 = M[cell];
+      let ng = 1;
+      gr[0] = g0;
+      for (let m = 1; m < 8; m++) {
+        const g = M[cell + OFF[m]];
+        if (g !== g0 && g !== gr[1] && g !== gr[2] && ng < 3) gr[ng++] = g;
       }
-      const em = edgeTable[ci];
-      if (!em) continue;
-      for (let e = 0; e < 12; e++) {
-        if (!(em & (1 << e))) continue;
-        const A = EA[e], B = EB[e], qa = cell + OFF[A], qb = cell + OFF[B];
-        const t = (iso - vv[A]) / (vv[B] - vv[A] || 1e-9);
-        const o = e * 3;
-        // (in a cube full of liquid, as its inside corner is)
-        ei[e] = M[vv[A] > iso ? qa : qb] ? 1 : 0;
-        ex[o] = x0 + (i + CX[A] + (CX[B] - CX[A]) * t) * c;
-        ex[o + 1] = y0 + (j + CY[A] + (CY[B] - CY[A]) * t) * c;
-        ex[o + 2] = z0 + (k + CZ[A] + (CZ[B] - CZ[A]) * t) * c;
-        // normal: down the field's gradient (central differences; one-sided at the floor)
-        const ja = j + CY[A], jb = j + CY[B];
-        const ax = FO[qa - 1] - FO[qa + 1], ay = FO[ja > 0 ? qa - gx : qa] - FO[qa + gx], az = FO[qa - gxy] - FO[qa + gxy];
-        const bx = FO[qb - 1] - FO[qb + 1], by = FO[jb > 0 ? qb - gx : qb] - FO[qb + gx], bz = FO[qb - gxy] - FO[qb + gxy];
-        const nx = ax + (bx - ax) * t, ny = ay + (by - ay) * t, nz = az + (bz - az) * t;
-        const nl = Math.sqrt(nx * nx + ny * ny + nz * nz) || 1;
-        en[o] = nx / nl; en[o + 1] = ny / nl; en[o + 2] = nz / nl;
-        // (a corner the splat never reached has no colour: take the other's)
-        const ta = touch[qa] & 1 && Math.abs(F[qa]) > 1e-6, tb = touch[qb] & 1 && Math.abs(F[qb]) > 1e-6, wa = ta ? 1 / F[qa] : 0, wb = tb ? 1 / F[qb] : 0;
-        for (let cc = 0; cc < 3; cc++) {
-          const ca = FC[qa * 3 + cc] * wa, cb = FC[qb * 3 + cc] * wb;
-          ec[o + cc] = !ta ? cb : !tb ? ca : ca + (cb - ca) * t;
-        }
-      }
-      const base = ci * 16;
-      for (let tIdx = 0; triTable[base + tIdx] !== -1; tIdx++) {
-        const e3 = triTable[base + tIdx] * 3, o = nv * 3;
-        pos[o] = ex[e3]; pos[o + 1] = ex[e3 + 1]; pos[o + 2] = ex[e3 + 2];
-        nrm[o] = en[e3]; nrm[o + 1] = en[e3 + 1]; nrm[o + 2] = en[e3 + 2];
-        rgb[o] = ec[e3]; rgb[o + 1] = ec[e3 + 1]; rgb[o + 2] = ec[e3 + 2];
-        nIn += inn[nv] = ei[triTable[base + tIdx]];
-        nv++;
-      }
+      if (ng === 1) nv = this._cell(F, FC, touch, cell, -1, nv, iso, x0, y0, z0, c, gx, gxy);
+      else for (let q = 0; q < ng && nv + 15 <= maxV; q++) nv = this._cell(F, FC, touch, cell, gr[q], nv, iso, x0, y0, z0, c, gx, gxy);
+      gr[1] = gr[2] = -1;
     }
+    for (let v = 0; v < nv; v++) if (inn[v]) nIn++;
     // (leave it all clean for next time)
     for (let a = 0; a < nc; a++) touch[cList[a]] &= 1;
     for (let a = 0; a < nt; a++) {

@@ -420,6 +420,11 @@ export class JellyView {
     this.backMatRest = createBackMaterial(true);
     this.needRest = false;
     this.rtBackRest = null;
+    // (a cube full of liquid's far walls: the next way out behind the nearest, and the targets for both - see
+    // renderFar)
+    this.backPeelMat = createBackMaterial(false, true);
+    this.rtPeel = this.rtPeel2 = null;
+    this.far = true; // (switched off: as before - its near wall a lens straight through to the room)
     this.frontMat = createJellyMaterial(env, this.layerUniforms);
     // (Mesa - Linux's GL - hung the GPU or crashed compiling a shader while
     // another was still compiling aside: there a set's compiled all at once,
@@ -436,6 +441,7 @@ export class JellyView {
     // (the back faces read it too: what coat the line of sight leaves through)
     this.backMat.uniforms.uCubeTex.value = this.cubeTex;
     this.backMatRest.uniforms.uCubeTex.value = this.cubeTex;
+    this.backPeelMat.uniforms.uCubeTex.value = this.cubeTex;
     // each cube's gradient (layered), as a strip: its absorption and the
     // colour inside along it, two rows a cube (see setCubeLook, CUBE_GLSL)
     this.gradData = new Uint16Array(GRAD_N * GRAD_ROWS * 4);
@@ -1106,6 +1112,10 @@ export class JellyView {
     this.rtBack = new THREE.WebGLRenderTarget(w, h, { type: THREE.HalfFloatType, depthBuffer: true });
     this.rtBackRest?.dispose();
     this.rtBackRest = null;
+    this.rtPeel?.dispose();
+    this.rtPeel2?.dispose();
+    this.rtPeel = this.rtPeel2 = null;
+    this.backPeelMat.uniforms.resolution.value.set(w, h);
     this.frontMat.uniforms.resolution.value.set(w, h);
   }
 
@@ -1687,6 +1697,55 @@ export class JellyView {
     this.scene.overrideMaterial = null;
     r.setClearColor(prevClear, prevAlpha);
     this._renderGlowMap();
+  }
+
+  // A cube full of liquid's far walls - its inside faces seen across its hollow, and on out through them - drawn
+  // into the room's picture first, for its liquid and its near walls to see through. (The jelly's drawn as one
+  // way through each pixel, its nearest front face to its nearest back face: for a hollow cube that's its near
+  // wall alone, and through it the room showed straight across its hollow - a clean lens to the back of it, its
+  // other walls nowhere.) The nearest way out of the jelly, then the next behind it, then its front faces behind
+  // the first shaded through to the second. True if it drew any.
+  renderFar(camera, sb, rtScene, rtTrans) {
+    let any = false;
+    for (let k = 0; k < sb.cHollow.length && !any; k++) any = !!sb.cHollow[k] && !!sb.cLiq[k] && sb.cSize[k] > 0;
+    if (!any || !this.far || !this.allMesh || !this.rtBack) return false;
+    const r = this.renderer, { width: w, height: h } = this.rtBack;
+    if (!this.rtPeel) {
+      this.rtPeel = new THREE.WebGLRenderTarget(w, h, { type: THREE.HalfFloatType, depthBuffer: true });
+      this.rtPeel2 = new THREE.WebGLRenderTarget(w, h, { type: THREE.HalfFloatType, depthBuffer: true });
+    }
+    const auto = r.autoClear, pc = r.getClearColor(this._v2c || (this._v2c = new THREE.Color())), pa = r.getClearAlpha();
+    const vis = this.layerMeshes.map((m) => m.visible), allVis = this.allMesh.visible;
+    for (const m of this.layerMeshes) m.visible = false;
+    this.allMesh.visible = true;
+    r.autoClear = false;
+    r.setClearColor(0x000000, 0);
+    r.setRenderTarget(this.rtPeel);
+    r.clear(true, true, false);
+    this.scene.overrideMaterial = this.backMat;
+    r.render(this.scene, camera);
+    this.backPeelMat.uniforms.tPeel.value = this.rtPeel.texture;
+    r.setRenderTarget(this.rtPeel2);
+    r.clear(true, true, false);
+    this.scene.overrideMaterial = this.backPeelMat;
+    r.render(this.scene, camera);
+    const F = this.frontMat.uniforms, was = [F.tBack.value, F.tBackRest.value, F.uBackRest.value, F.tScene.value];
+    F.tBack.value = F.tBackRest.value = this.rtPeel2.texture;
+    F.uBackRest.value = 0;
+    F.tScene.value = rtTrans.texture;
+    F.tPeel.value = this.rtPeel.texture;
+    F.uPeel.value = 1;
+    r.setClearColor(pc, pa);
+    r.setRenderTarget(rtScene);
+    this.scene.overrideMaterial = this.frontMat;
+    r.render(this.scene, camera);
+    this.scene.overrideMaterial = null;
+    F.uPeel.value = 0;
+    [F.tBack.value, F.tBackRest.value, F.uBackRest.value, F.tScene.value] = was;
+    this.layerMeshes.forEach((m, i) => (m.visible = vis[i]));
+    this.allMesh.visible = allVis;
+    r.autoClear = auto;
+    return true;
   }
 
   // (glow mode: the light its parts cast on the floor, each its own colour)

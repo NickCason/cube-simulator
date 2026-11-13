@@ -392,10 +392,12 @@ export function createCoverMaterial() {
 // crystals, a dusting, flour it's picked up) or frost: 0 for bare jelly. (A
 // gradient up its height takes its rest height there instead, unless the
 // whole rest point goes in the second target.)
-export function createBackMaterial(rest = false) {
+// (peel: only those behind the nearest one there - tPeel, this pass's own output once: a cube full of
+// liquid's far wall's way out - see JellyView.renderFar)
+export function createBackMaterial(rest = false, peel = false) {
   return new THREE.ShaderMaterial({
     side: THREE.BackSide,
-    uniforms: { uCubeTex: { value: emptyFloatTexture() } },
+    uniforms: { uCubeTex: { value: emptyFloatTexture() }, tPeel: { value: null }, resolution: { value: new THREE.Vector2(1, 1) } },
     vertexShader: VERT,
     fragmentShader: /* glsl */ `
       uniform highp sampler2D uCubeTex;
@@ -408,7 +410,9 @@ export function createBackMaterial(rest = false) {
       ${OCT}
       ${SAFE_GLSL}
       ${rest ? 'layout(location = 1) out highp vec4 oRest;' : ''}
+      ${peel ? 'uniform sampler2D tPeel;\n      uniform vec2 resolution;' : ''}
       void main() {
+        ${peel ? 'float pz = texture(tPeel, gl_FragCoord.xy / resolution).r;\n        if (!(pz > 0.0) || -vViewPos.z <= pz + 0.003) discard;' : ''}
         vec3 vn = safeNormalize((viewMatrix * vec4(safeNormalize(vNormal), 0.0)).xyz);
         int k = int(vCube + 0.5);
         vec4 q3 = texelFetch(uCubeTex, ivec2(3, k), 0), q29 = texelFetch(uCubeTex, ivec2(29, k), 0);
@@ -457,6 +461,8 @@ export function createJellyMaterial(env, layerUniforms) {
       uHazeMin: { value: 0 },
       tScene: { value: null },
       tBack: { value: null },
+      tPeel: { value: null }, // (a cube full of liquid's far walls: only what's behind this - see JellyView.renderFar)
+      uPeel: { value: 0 },
       tBackRest: { value: null }, // (where the line of sight leaves: its rest point - see createBackMaterial)
       uBackRest: { value: 0 }, // (whether that's there: else only its height is)
       uGradTex: { value: null },
@@ -510,6 +516,8 @@ export function createJellyMaterial(env, layerUniforms) {
       uniform mat4 projectionMatrix;
       uniform sampler2D tScene;
       uniform sampler2D tBack;
+      uniform sampler2D tPeel;
+      uniform float uPeel;
       uniform sampler2D tBackRest;
       uniform float uBackRest;
       uniform samplerCube envMap;
@@ -864,6 +872,12 @@ export function createJellyMaterial(env, layerUniforms) {
         vec3 dRx = dFdx(vRest), dRy = dFdy(vRest), dPx = dFdx(vWorldPos), dPy = dFdy(vWorldPos);
         // (this cube's look)
         gK = int(vCube + 0.5);
+        // (a cube full of liquid's far walls - its inside faces seen through its hollow, and on out through it: only
+        // what's behind the nearest way out of the jelly here - see JellyView.renderFar)
+        if (uPeel > 0.5) {
+          float pz = texture(tPeel, gl_FragCoord.xy / resolution).r;
+          if (!(pz > 0.0) || -vViewPos.z <= pz + 0.003 || cubeT(35).x < 0.5) discard;
+        }
         vec4 cq0 = cubeT(0), cq1 = cubeT(1), cq2 = cubeT(2), cq3 = cubeT(3), cq4 = cubeT(4), cq5 = cubeT(5), cq6 = cubeT(6);
         vec3 cAbsorb = cq0.rgb, cScatterColor = cq1.rgb, cGlowColor = cq6.rgb;
         float cScatter = cq0.a, cHazeMin = cq1.a, cGlow = cq2.x, cRough = cq2.y, cIor = cq2.z, cDisp = cq2.w;

@@ -493,6 +493,11 @@ export class App {
     // every cube its own material and look (and bubbles)
     const fizz = [];
     for (const cb of this.cubes) {
+      // (snow is a snow globe: full of liquid - one saved before that, or a special, comes as one)
+      if (cb.style.glitter === 'snow' && !(resolveSettings(cb.tune, TEXTURES[cb.style.texture]).liquid > 0.5)) {
+        cb.tune.liquid = 1;
+        if (cb.tune.liqFill === undefined) cb.tune.liqFill = 1;
+      }
       const ct = TEXTURES[cb.style.texture], cs = resolveSettings(cb.tune, ct);
       fizz.push({ slot: cb.slot, count: cs.bubbles, scale: cs.bubbleSize });
       // (its surface map holds on better, or slides: see surfaces.js grip)
@@ -802,6 +807,11 @@ export class App {
 
   setGlitter(id) {
     if (!(id in GLITTER_MODES)) return;
+    // (snow: a snow globe - full of liquid, the snow riding it; made solid, it's silver - see setSetting)
+    if (id === 'snow' && this.style.glitter !== 'snow' && !(this.settings.liquid > 0.5)) {
+      this.tune.liquid = 1;
+      this.tune.liqFill = 1;
+    }
     this.style.glitter = id;
     this.applyStyle();
     if (id !== 'off') this.sb.impulse(0, 0.6, 0, 0, -1, 0, 3, 0.8); // a jiggle to show it off
@@ -833,6 +843,8 @@ export class App {
   // One fine-tuning slider changed (value in physical units).
   setSetting(key, value, final = true) {
     this.tune[key] = value;
+    // (a snow globe made solid: snow in jelly - silver, till there's a glitter studio)
+    if (key === 'liquid' && !(value > 0.5) && this.style.glitter === 'snow') this.style.glitter = 'silver';
     if (!PER_CUBE(key)) for (const cb of this.cubes) cb.tune[key] = value; // (the same in every cube)
     if (key === 'size') {
       if (final) this.setCubeSize(value);
@@ -2904,6 +2916,9 @@ export class App {
 
     const copy = () => this.post.copy(this.rtScene.texture, this.rtTrans);
     copy();
+    // (a cube full of liquid's far walls, across its hollow: into the room's picture, for its liquid and its near
+    // walls to see - see JellyView.renderFar)
+    if (!this.opts.nojelly && !skip.jelly && this.jelly.renderFar(this.camera, this.sb, this.rtScene, this.rtTrans)) copy();
     // the liquid: the room's picture seen through it - and then that, with it, for the jelly to see through
     if (FL.mesh.visible && !skip.room) {
       const auto = r.autoClear;

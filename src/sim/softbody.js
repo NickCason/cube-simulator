@@ -59,6 +59,8 @@ const VOL_SOFT = 0.25;
 // within this much more than their rest gap (m), pulled back over this long (s))
 const STITCH_SLACK = 0.012;
 const STITCH_T = 0.05;
+// (squeezed - see cPress - a slit's lips pushed apart this far, m a share)
+const STITCH_OPEN = 0.8;
 
 function growArr(a, n, C) {
   const b = new C(n);
@@ -254,6 +256,8 @@ export class SoftBody {
     // the liquid it was filled with, its drops marked so: gone - the cube taken out or made afresh - they go too)
     this.cHole = new Float64Array(MAX_CUBES * 6);
     this.cHid = new Int32Array(MAX_CUBES);
+    // (cut into: how hard its liquid's squeezed - see Fluid._pressures, _solveStitches)
+    this.cPress = new Float32Array(MAX_CUBES);
     this.ghostCube = -1;
     for (let k = 0; k < MAX_CUBES; k++) this.setCube(k, this.p, true);
     this.heatActive = false;
@@ -487,6 +491,7 @@ export class SoftBody {
     this.cHollow.fill(0);
     this.cav.fill(null);
     this.cHid.fill(0);
+    this.cPress.fill(0);
     this.cBevel[0] = this.p.bevel;
     const mesh = buildCubeMesh(this.p.res, this.p.size, this.p.bevel, this.shapeOf(0));
     this.cN[0] = mesh.nV;
@@ -522,6 +527,7 @@ export class SoftBody {
     this.cHollow[k] = 0;
     this.cav[k] = null;
     this.cHid[k] = 0;
+    this.cPress[k] = 0;
     this.cBevel[k] = bevel;
     const mesh = buildCubeMesh(res, size, bevel, this.shapeOf(k));
     this.cN[k] = mesh.nV;
@@ -599,6 +605,7 @@ export class SoftBody {
     this.cHollow[k] = 0;
     this.cav[k] = null;
     this.cHid[k] = 0;
+    this.cPress[k] = 0;
   }
 
   // Take whole pieces out (their ids: a Set) - the gel gun's blobs.
@@ -935,10 +942,11 @@ export class SoftBody {
       this.vCube[i] = j;
       this.X[i * 3] += d;
     }
-    for (const a of [this.cMu, this.cLam, this.cDens, this.cDamp, this.cFric, this.cBounce, this.cRigid, this.cAir, this.cBevel, this.cN, this.cGrav, this.cBoost, this.cSize, this.cRes, this.cH, this.cBow, this.cLobeA, this.cLobeP, this.cTrimK, this.cLiq, this.cVisc, this.cSkin, this.cFill, this.cHollow, this.cav, this.cHid]) a[j] = a[k];
+    for (const a of [this.cMu, this.cLam, this.cDens, this.cDamp, this.cFric, this.cBounce, this.cRigid, this.cAir, this.cBevel, this.cN, this.cGrav, this.cBoost, this.cSize, this.cRes, this.cH, this.cBow, this.cLobeA, this.cLobeP, this.cTrimK, this.cLiq, this.cVisc, this.cSkin, this.cFill, this.cHollow, this.cav, this.cHid, this.cPress]) a[j] = a[k];
     this.cHollow[k] = 0;
     this.cav[k] = null;
     this.cHid[k] = 0;
+    this.cPress[k] = 0;
     this.cHole.copyWithin(j * 6, k * 6, k * 6 + 6);
     this.cHole[j * 6] += d;
     this.cHole[j * 6 + 3] += d;
@@ -2417,7 +2425,7 @@ export class SoftBody {
     }
     const n = this._stN;
     if (!n) return;
-    const S = this._stitch, x = this.x, X = this.X, w = this.w, vp = this.vPiece, aw = this._awake;
+    const S = this._stitch, x = this.x, X = this.X, w = this.w, vp = this.vPiece, aw = this._awake, vc = this.vCube, CP = this.cPress;
     const beta = 1 - Math.exp(-h / STITCH_T);
     for (let k = 0; k < n; k += 2) {
       const i = S[k], p = S[k + 1], pc = vp[i];
@@ -2426,8 +2434,19 @@ export class SoftBody {
       if (!(ws > 0)) continue;
       const a = i * 3, b = p * 3;
       const dx = x[b] - x[a], dy = x[b + 1] - x[a + 1], dz = x[b + 2] - x[a + 2], d = Math.sqrt(dx * dx + dy * dy + dz * dz);
-      const rx = X[b] - X[a], ry = X[b + 1] - X[a + 1], rz = X[b + 2] - X[a + 2];
-      const C = d - Math.sqrt(rx * rx + ry * ry + rz * rz) - STITCH_SLACK;
+      const rx = X[b] - X[a], ry = X[b + 1] - X[a + 1], rz = X[b + 2] - X[a + 2], rl = Math.sqrt(rx * rx + ry * ry + rz * rz), pr = CP[vc[i]];
+      // (its liquid squeezed: its lips pushed apart, across the cut - its kerf's way - as far as it's squeezed,
+      // and let gape that far: a slit squeezed shut let nothing out however hard it was squeezed)
+      if (pr > 0 && rl > 1e-7) {
+        const nx = rx / rl, ny = ry / rl, nz = rz / rl, sep = dx * nx + dy * ny + dz * nz, want = rl + STITCH_OPEN * pr;
+        if (sep < want) {
+          const f = (beta * (want - sep)) / ws;
+          x[a] -= nx * f * wi; x[a + 1] -= ny * f * wi; x[a + 2] -= nz * f * wi;
+          x[b] += nx * f * wp; x[b + 1] += ny * f * wp; x[b + 2] += nz * f * wp;
+          continue;
+        }
+      }
+      const C = d - rl - STITCH_SLACK - STITCH_OPEN * pr;
       if (!(C > 0)) continue;
       const f = (beta * C) / (d * ws);
       x[a] += dx * f * wi; x[a + 1] += dy * f * wi; x[a + 2] += dz * f * wi;
