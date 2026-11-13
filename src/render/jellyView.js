@@ -1458,7 +1458,9 @@ export class JellyView {
     const idx = new Int32Array(nV).fill(-1), list = [], rim = [];
     for (let v = 0; v < nV; v++) {
       if (!fr[v] || ot[v]) continue;
-      const kind = hw[v] && !cf[v] ? 3 : ex[v] ? 1 : pl.edge[v] ? 2 : pl.in[v] ? -1 : 0;
+      // (a flat cut's rim - a knife's, a die's - is as straight as the cut: left be. Smoothed along, a die's
+      // corners on the cube's outside were rounded off)
+      const kind = hw[v] && !cf[v] ? 3 : ex[v] ? (pl.plane[v] >= 0 ? -1 : 1) : pl.edge[v] ? 2 : pl.in[v] ? -1 : 0;
       if (kind < 0) continue;
       idx[v] = list.length;
       list.push(v);
@@ -1598,20 +1600,19 @@ export class JellyView {
   }
 
   // A cut's flat faces (see _buildSmooth): its faces joined where they meet in one plane (normals within ~4
-  // degrees, a few mm), each such whole kept if it's wide both ways (two and a half cells: a knife's plane, a
-  // hollow's wall - not a staircase's tread, a cell wide however long). For each vertex: in one (in), on one's
+  // degrees, a few mm), each such whole kept if it's wide both ways (a cell and a half: a knife's plane, a
+  // hollow's wall, a die's face - not a staircase's tread, a cell wide however long. At two and a half, the
+  // dicer's smallest dice, 5 a side - 2.2 cells, their faces' middles spread over 1.9 - were all smoothed into
+  // pebbles). For each vertex: in one (in), on one's
   // edge against the rest of the cut (edge), its plane (plane); those edges (edgeE); the planes (P: n, d).
   _cutPlanes(sb) {
     const nV = sb.nV, nF = sb.nF, S = sb.sTri, tag = sb.sTag, X = sb.X, N = sb.sRestN;
-    const par = new Int32Array(nF), d = new Float64Array(nF);
+    const par = new Int32Array(nF);
     const find = (a) => {
       while (par[a] !== a) (par[a] = par[par[a]]), (a = par[a]);
       return a;
     };
-    for (let f = 0; f < nF; f++) {
-      par[f] = f;
-      d[f] = N[f * 3] * X[S[f * 3] * 3] + N[f * 3 + 1] * X[S[f * 3] * 3 + 1] + N[f * 3 + 2] * X[S[f * 3] * 3 + 2];
-    }
+    for (let f = 0; f < nF; f++) par[f] = f;
     const eMap = new Map();
     for (let f = 0; f < nF; f++) {
       if (tag[f] !== TAG_FRESH) continue;
@@ -1621,31 +1622,49 @@ export class JellyView {
           eMap.set(key, f);
           continue;
         }
+        // (in one plane, here: facing within ~4 degrees, g's far corner within 6 mm of f's plane - not their
+        // planes' distances from the middle, which a degree apart differ 8 mm half a metre out: a snapped cut's
+        // faces, flat to a centimetre, came apart into scraps)
         const dn = N[f * 3] * N[g * 3] + N[f * 3 + 1] * N[g * 3 + 1] + N[f * 3 + 2] * N[g * 3 + 2];
-        if (dn > 0.9976 && Math.abs(d[f] - d[g]) < 0.004) {
+        if (!(dn > 0.9976)) continue;
+        let o3 = S[g * 3];
+        if (o3 === a || o3 === b) o3 = S[g * 3 + 1];
+        if (o3 === a || o3 === b) o3 = S[g * 3 + 2];
+        if (Math.abs(N[f * 3] * (X[o3 * 3] - X[a * 3]) + N[f * 3 + 1] * (X[o3 * 3 + 1] - X[a * 3 + 1]) + N[f * 3 + 2] * (X[o3 * 3 + 2] - X[a * 3 + 2])) < 0.006) {
           const ra = find(f), rb = find(g);
           if (ra !== rb) par[rb] = ra;
         }
       }
     }
-    // each one's size: its faces, and how wide it is the narrow way (its centroids' spread, in its plane)
+    // each one's size: how wide it is the narrow way - the spread of its area, in its plane (each triangle's
+    // own: E[x x^T] = (sum v v^T + s s^T) / 12, s its corners' sum - true of a face however it's cut into
+    // triangles: a flat cut's coarsened into a few big ones, its triangles' middles spread a third as far, and
+    // under six of them it wasn't looked at - a die's face, smoothed into a pebble)
     const acc = new Map();
     for (let f = 0; f < nF; f++) {
       if (tag[f] !== TAG_FRESH) continue;
       const r = find(f);
       let A = acc.get(r);
-      if (!A) acc.set(r, (A = { n: 0, sx: 0, sy: 0, sz: 0, xx: 0, xy: 0, xz: 0, yy: 0, yz: 0, zz: 0 }));
+      if (!A) acc.set(r, (A = { a: 0, sx: 0, sy: 0, sz: 0, xx: 0, xy: 0, xz: 0, yy: 0, yz: 0, zz: 0 }));
       const a = S[f * 3] * 3, b = S[f * 3 + 1] * 3, c = S[f * 3 + 2] * 3;
-      const cx = (X[a] + X[b] + X[c]) / 3, cy = (X[a + 1] + X[b + 1] + X[c + 1]) / 3, cz = (X[a + 2] + X[b + 2] + X[c + 2]) / 3;
-      A.n++; A.sx += cx; A.sy += cy; A.sz += cz;
-      A.xx += cx * cx; A.xy += cx * cy; A.xz += cx * cz; A.yy += cy * cy; A.yz += cy * cz; A.zz += cz * cz;
+      const ex = X[b] - X[a], ey = X[b + 1] - X[a + 1], ez = X[b + 2] - X[a + 2], gx = X[c] - X[a], gy = X[c + 1] - X[a + 1], gz = X[c + 2] - X[a + 2];
+      const ar = 0.5 * Math.hypot(ey * gz - ez * gy, ez * gx - ex * gz, ex * gy - ey * gx);
+      if (!(ar > 0)) continue;
+      const sx = X[a] + X[b] + X[c], sy = X[a + 1] + X[b + 1] + X[c + 1], sz = X[a + 2] + X[b + 2] + X[c + 2], w = ar / 12;
+      A.a += ar; A.sx += (ar * sx) / 3; A.sy += (ar * sy) / 3; A.sz += (ar * sz) / 3;
+      A.xx += w * (X[a] * X[a] + X[b] * X[b] + X[c] * X[c] + sx * sx);
+      A.xy += w * (X[a] * X[a + 1] + X[b] * X[b + 1] + X[c] * X[c + 1] + sx * sy);
+      A.xz += w * (X[a] * X[a + 2] + X[b] * X[b + 2] + X[c] * X[c + 2] + sx * sz);
+      A.yy += w * (X[a + 1] * X[a + 1] + X[b + 1] * X[b + 1] + X[c + 1] * X[c + 1] + sy * sy);
+      A.yz += w * (X[a + 1] * X[a + 2] + X[b + 1] * X[b + 2] + X[c + 1] * X[c + 2] + sy * sz);
+      A.zz += w * (X[a + 2] * X[a + 2] + X[b + 2] * X[b + 2] + X[c + 2] * X[c + 2] + sz * sz);
     }
     const big = new Map(), P = [];
     for (const [r, A] of acc) {
-      if (A.n < 6) continue;
+      if (!(A.a > 0)) continue;
       const cell = sb.cH[sb.vCube[S[r * 3]]] || 0.1;
-      const mx = A.sx / A.n, my = A.sy / A.n, mz = A.sz / A.n;
-      const C = [A.xx / A.n - mx * mx, A.xy / A.n - mx * my, A.xz / A.n - mx * mz, A.yy / A.n - my * my, A.yz / A.n - my * mz, A.zz / A.n - mz * mz];
+      const mx = A.sx / A.a, my = A.sy / A.a, mz = A.sz / A.a;
+      const C = [A.xx / A.a - mx * mx, A.xy / A.a - mx * my, A.xz / A.a - mx * mz, A.yy / A.a - my * my, A.yz / A.a - my * mz, A.zz / A.a - mz * mz];
       // (two axes across its plane; the spread along each and their cross term; the smaller principal one, its
       // width - a spread evenly across w has a variance of w^2/12)
       const nx = N[r * 3], ny = N[r * 3 + 1], nz = N[r * 3 + 2];
@@ -1658,9 +1677,12 @@ export class JellyView {
       const q = (ax, ay, az, bx, by, bz) => ax * (C[0] * bx + C[1] * by + C[2] * bz) + ay * (C[1] * bx + C[3] * by + C[4] * bz) + az * (C[2] * bx + C[4] * by + C[5] * bz);
       const suu = q(ux, uy, uz, ux, uy, uz), svv = q(vx, vy, vz, vx, vy, vz), suv = q(ux, uy, uz, vx, vy, vz);
       const lo = (suu + svv) / 2 - Math.sqrt(Math.max(0, ((suu - svv) * (suu - svv)) / 4 + suv * suv));
-      if (Math.sqrt(12 * Math.max(0, lo)) < 2.5 * cell) continue;
+      if (Math.sqrt(12 * Math.max(0, lo)) < 1.5 * cell) continue;
+      // (and flat, all of it: no thicker than 6 mm across its plane - faces chained a few degrees at a time round
+      // a tunnel or along a torn face's waves are none)
+      if (q(nx, ny, nz, nx, ny, nz) > 0.006 * 0.006) continue;
       big.set(r, P.length / 4);
-      P.push(nx, ny, nz, d[r]);
+      P.push(nx, ny, nz, nx * mx + ny * my + nz * mz);
     }
     const plane = new Int32Array(nV).fill(-1), mixed = new Uint8Array(nV), other = new Uint8Array(nV), inP = new Uint8Array(nV), edge = new Uint8Array(nV), edgeE = new Set();
     for (let f = 0; f < nF; f++) {
