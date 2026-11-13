@@ -40,6 +40,8 @@ const DEFAULTS = {
 // along x), so nothing that works in rest space mixes them up.
 export const MAX_CUBES = 8;
 export const REST_STEP = 10;
+// (a thin firm shell's spring to its shape, ultrathin rubber's: how quick, alone - see SoftBody._shellSpring)
+const SHELL_HZ = 5.5;
 
 // How soft, at the least, the tets' shape and volume terms stay - as a share
 // of hard (a full correction in one substep): see _solveTets. A tet of the
@@ -2211,6 +2213,7 @@ export class SoftBody {
   }
 
   _integrate(h) {
+    this._shellSpring(h);
     const { x, px, v, w } = this;
     const g = this.p.gravity * this.gravityScale * h;
     const gx = this.tilt[0] * this.gravityScale * h, gz = this.tilt[1] * this.gravityScale * h;
@@ -3429,6 +3432,73 @@ export class SoftBody {
         pc.tangleN = 0;
         pc.untangle = 0.7;
         pc.tangleTries++;
+      }
+    }
+  }
+
+  // A cube full of liquid, its shell thin (Skin under medium) and firm: how much more its shell's held to its shape
+  // (0..1) - all of it, ultrathin rubber, less as it's softer (the square of how far up Firmness it is) or thicker,
+  // none from a medium skin up or at pudding. (One tet thick, its tets no harder than a substep can hold, it sagged
+  // like a water balloon at any firmness: ultrathin rubber 93% of its height, its sides out 5%.)
+  _shellFirm(k) {
+    if (!this.cLiq[k] || !this.cHollow[k]) return 0;
+    const thin = 1 - Math.min(1, Math.max(0, this.cSkin[k]) / 0.5);
+    if (!(thin > 0)) return 0;
+    const f = Math.min(1, Math.max(0, Math.log(this.cMu[k] / 45) / Math.log(1000 / 45)));
+    return f * f * thin;
+  }
+
+  // ...held so: each of its pieces sprung toward its shape as made, turned and placed as it is now - a force, so
+  // it wobbles on, a rubber one quicker (pulled there - as Rigidity does - it stood, but its wobble died: a poke's
+  // swing 14% of its size to 4). Ultrathin rubber now 97.5% of its height, its sides out 3%, as a medium skin
+  // stands - a poke's swing 7%, still swinging a second on.
+  _shellSpring(h) {
+    const KS = this._ssK || (this._ssK = new Float64Array(MAX_CUBES));
+    let any = false;
+    for (let k = 0; k < MAX_CUBES; k++) {
+      const s = this._shellFirm(k), F = SHELL_HZ * Math.sqrt(s);
+      KS[k] = s > 0 ? 4 * Math.PI * Math.PI * F * F * h : 0;
+      if (KS[k] > 0) any = true;
+    }
+    if (!any) return;
+    const P = this.pieces, x = this.x, X = this.X, v = this.v, m = this.m, w = this.w, aw = this._awake;
+    const A = this._ssA || (this._ssA = new Float64Array(9)), R = this._ssR || (this._ssR = new Float64Array(9));
+    let held = null;
+    if (this.grabs.length) {
+      held = this._rgHeld && this._rgHeld.length >= this.nV ? this._rgHeld : (this._rgHeld = new Uint8Array(this.vCap));
+      held.fill(0, 0, this.nV);
+      for (const g of this.grabs) for (let j = 0; j < g.n; j++) held[g.idx[j]] = 1;
+    }
+    for (let k = 0; k < P.length; k++) {
+      const pc = P[k], kh = KS[pc.cube];
+      if (!aw[k] || pc.untangle > 0 || !(kh > 0)) continue;
+      const vs = pc.verts;
+      let M = 0, Cx = 0, Cy = 0, Cz = 0, cx = 0, cy = 0, cz = 0;
+      for (let n = 0; n < vs.length; n++) {
+        const i = vs[n], o = i * 3, mi = m[i];
+        M += mi;
+        Cx += X[o] * mi; Cy += X[o + 1] * mi; Cz += X[o + 2] * mi;
+        cx += x[o] * mi; cy += x[o + 1] * mi; cz += x[o + 2] * mi;
+      }
+      if (!(M > 0)) continue;
+      Cx /= M; Cy /= M; Cz /= M; cx /= M; cy /= M; cz /= M;
+      A.fill(0);
+      for (let n = 0; n < vs.length; n++) {
+        const i = vs[n], o = i * 3, mi = m[i];
+        const dx = (x[o] - cx) * mi, dy = (x[o + 1] - cy) * mi, dz = (x[o + 2] - cz) * mi;
+        const rx = X[o] - Cx, ry = X[o + 1] - Cy, rz = X[o + 2] - Cz;
+        A[0] += dx * rx; A[1] += dx * ry; A[2] += dx * rz;
+        A[3] += dy * rx; A[4] += dy * ry; A[5] += dy * rz;
+        A[6] += dz * rx; A[7] += dz * ry; A[8] += dz * rz;
+      }
+      polarRot(pc.ssQ || (pc.ssQ = new Float64Array([0, 0, 0, 1])), A, R, 4);
+      for (let n = 0; n < vs.length; n++) {
+        const i = vs[n];
+        if (w[i] === 0 || (held && held[i])) continue;
+        const o = i * 3, rx = X[o] - Cx, ry = X[o + 1] - Cy, rz = X[o + 2] - Cz;
+        v[o] += kh * (cx + R[0] * rx + R[1] * ry + R[2] * rz - x[o]);
+        v[o + 1] += kh * (cy + R[3] * rx + R[4] * ry + R[5] * rz - x[o + 1]);
+        v[o + 2] += kh * (cz + R[6] * rx + R[7] * ry + R[8] * rz - x[o + 2]);
       }
     }
   }
