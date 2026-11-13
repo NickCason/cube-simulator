@@ -233,7 +233,7 @@ export class App {
     this.stats = { physMs: 0, frameMs: 0, frames: 0, physLast: 0, renderLast: 0 };
     // (parts of the drawing left out, for ?stats' bench - and its time then
     // taken to when the GPU's done with the frame: see ui/stats.js)
-    this.skip = { floorFx: false, refl: false, room: false, jelly: false, fx: false, bloom: false, aa: false, adapt: false, lite: false, whole: false };
+    this.skip = { floorFx: false, refl: false, room: false, jelly: false, fx: false, bloom: false, aa: false, adapt: false, lite: false, whole: false, far: false, liquid: false };
     // (a clip being recorded: its mark drawn over each frame - see ui/clips.js)
     this.recording = false;
     this.markTex = null;
@@ -2912,19 +2912,19 @@ export class App {
     r.clear(true, true, false);
     // (the liquid's shadow with the room's; the liquid itself just after: see Fluid)
     const FL = this.fluid;
-    FL.shadow.visible = FL.mesh.visible;
+    FL.shadow.visible = FL.mesh.visible && !skip.liquid;
     if (!skip.room) r.render(this.scene, this.camera);
 
     const copy = () => this.post.copy(this.rtScene.texture, this.rtTrans);
     copy();
     // (a cube full of liquid's far walls, across its hollow: into the room's picture, for its liquid and its near
     // walls to see - see JellyView.renderFar)
-    if (!this.opts.nojelly && !skip.jelly && this.jelly.renderFar(this.camera, this.sb, this.rtScene, this.rtTrans)) copy();
+    if (!this.opts.nojelly && !skip.jelly && !skip.far && this.jelly.renderFar(this.camera, this.sb, this.rtScene, this.rtTrans)) copy();
     // the liquid: the room's picture seen through it - and then that, with it, for the jelly to see through.
     // (Some of it out of the cubes and in front of one - a run of it down a cube, a pool before one - is drawn
     // after the jelly instead, and its eyes, with them seen through it: drawn before, it hid the jelly - the
     // room seen through it, milky - and an eye under it was cut off where it met it. See _liqSplit)
-    const FU = FL.mat.uniforms, liq = FL.mesh.visible && !skip.room;
+    const FU = FL.mat.uniforms, liq = FL.mesh.visible && !skip.room && !skip.liquid;
     const split = liq && !this.opts.nojelly && !skip.jelly && this._liqSplit();
     if (liq) {
       const auto = r.autoClear;

@@ -177,6 +177,7 @@ export class Fluid {
     this._cupY = new Float64Array(CUP_S * CUP_S * CUP_S);
     this._cupA = new Float64Array(9);
     this._cupR = new Float64Array(3);
+    this._lvY = new Float64Array(N); // (the heights of a cube's liquid, sorted - its level: see _pressures)
     this.asleep = false;
     this.stillT = 0;
     // the jelly's tets near the liquid (hashed by cells of 0.1 m)
@@ -1178,10 +1179,13 @@ export class Fluid {
   }
 
   // How hard each cube full of liquid that's been cut into is squeezed - its hollow's volume short of what it
-  // held as made (only its own faces: not a cut's), past a little give, times how full it is (a part-full
-  // one's air takes it first) - and its middle. (Sealed, its volume's held: see SoftBody._solveCavities.)
+  // held as made (only its own faces: not a cut's), past a little give - and its middle. Its air takes it first,
+  // as a spring: the less air over the liquid, the harder (squeezed by c, air a of it: as c / (a - c) - near full,
+  // stiff; half full, it gives); and an opening into it over the liquid - a cut's, a slit's - lets the air out,
+  // and most of the push with it. (It was as it was squeezed times how full it was, by its drops: Full - a fifth
+  // of it air - pushed as hard as full to the brim. Sealed, its volume's held: see SoftBody._solveCavities.)
   _pressures() {
-    const sb = this.app.sb, P = this.press, C = this.pressC, x = sb.x, X = sb.X, HB = sb.cHole, DI = this.dIn;
+    const sb = this.app.sb, P = this.press, C = this.pressC, x = sb.x, X = sb.X, HB = sb.cHole;
     let on = 0;
     for (let k = 0; k < MAX_CUBES; k++) {
       P[k] = 0;
@@ -1208,15 +1212,59 @@ export class Fluid {
         const ax_ = x[a] - cx, ay = x[a + 1] - cy, az = x[a + 2] - cz, bx = x[b] - cx, by = x[b + 1] - cy, bz = x[b + 2] - cz, dx = x[d] - cx, dy = x[d + 1] - cy, dz = x[d + 2] - cz;
         vol -= (ax_ * (by * dz - bz * dy) + ay * (bz * dx - bx * dz) + az * (bx * dy - by * dx)) / 6;
       }
-      let nIn = 0;
-      for (let i = 0; i < this.n; i++) if (DI[i] === k + 1) nIn++;
-      const full = Math.min(1, (nIn * this.vol) / c.V0);
       // (a cut one stands a few in a hundred under what it was made, unsqueezed: past that)
-      P[k] = Math.max(0, 1 - vol / c.V0 - 0.035) * full;
+      const cmp = Math.max(0, 1 - vol / c.V0 - 0.035);
+      if (!(cmp > 0)) continue;
+      const lv = this._level(k);
+      if (!(lv > -Infinity)) continue;
+      const a = this._airOver(k, lv);
+      P[k] = Math.min(0.3, (0.1 * cmp) / Math.max(a - cmp, 0.05)) * (this._vented(k, lv + 0.5 * this.D) ? 0.4 : 1);
       if (P[k] > 0) on++;
     }
     this.pressOn = on;
     sb.cPress.set(P);
+  }
+
+  // (a cube's liquid's level: the 95th of its drops' heights, and half a drop over - its surface; -Infinity, none)
+  _level(k) {
+    const Y = this._lvY, DI = this.dIn, x = this.x;
+    let m = 0;
+    for (let i = 0; i < this.n; i++) if (DI[i] === k + 1) Y[m++] = x[i * 3 + 1];
+    if (!m) return -Infinity;
+    const L = Y.subarray(0, m);
+    L.sort();
+    return L[Math.min(m - 1, Math.floor(m * 0.95))] + 0.5 * this.D;
+  }
+
+  // (how much of cube k's hollow is over height y - its air: the hollow's rest box, 5 points a side, through the
+  // cube's frame as it stands; not known, a fifth)
+  _airOver(k, y) {
+    if (!this.frameOK[k]) return 0.2;
+    const HB = this.app.sb.cHole, h6 = k * 6, FR = this.frames, f = k * 15;
+    let up = 0;
+    for (let i = 0; i < 5; i++) {
+      const r0 = HB[h6] + ((i + 0.5) / 5) * (HB[h6 + 3] - HB[h6]) - FR[f + 3];
+      for (let j = 0; j < 5; j++) {
+        const r1 = HB[h6 + 1] + ((j + 0.5) / 5) * (HB[h6 + 4] - HB[h6 + 1]) - FR[f + 4];
+        for (let l = 0; l < 5; l++) {
+          const r2 = HB[h6 + 2] + ((l + 0.5) / 5) * (HB[h6 + 5] - HB[h6 + 2]) - FR[f + 5];
+          if (FR[f + 1] + FR[f + 9] * r0 + FR[f + 10] * r1 + FR[f + 11] * r2 > y) up++;
+        }
+      }
+    }
+    return up / 125;
+  }
+
+  // (an opening into cube k - a cut's, a slit's - over height y: its air let out there)
+  _vented(k, y) {
+    const sb = this.app.sb, cm = this.cutMask, T = sb.T, x = sb.x, tc = sb.tCube;
+    if (!cm) return false;
+    for (let t = 0; t < sb.nT; t++) {
+      if (!cm[t] || tc[t] !== k) continue;
+      const o = t * 4;
+      if ((x[T[o] * 3 + 1] + x[T[o + 1] * 3 + 1] + x[T[o + 2] * 3 + 1] + x[T[o + 3] * 3 + 1]) * 0.25 > y) return true;
+    }
+    return false;
   }
 
   // Squeezed (see _pressures), what's at an opening into it - by a cut's faces, in a slit - is pressed out of it:

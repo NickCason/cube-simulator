@@ -314,6 +314,8 @@ export function attachStats(app) {
     ['still', 'no mirror', 'refl'], ['still', 'no bloom', 'bloom'], ['still', 'no edge pass', 'aa'], ['still', 'flakes only', 'whole'],
     ['moving', 'all'], ['moving', 'no caustics', 'caustics'], ['moving', 'no floor effects', 'floorFx'],
     ['moving', 'no room', 'room'], ['moving', 'no jelly', 'jelly'], ['moving', 'no mirror', 'refl'],
+    // (a cube full of liquid: its far walls through its hollow, the liquid itself - see JellyView.renderFar, Fluid)
+    ['moving', 'no far walls', 'far'], ['moving', 'no liquid', 'liquid'],
   ];
   let benchLines = [], benching = false;
   const median = (v) => {
