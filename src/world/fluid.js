@@ -1125,13 +1125,15 @@ export class Fluid {
         }
       // (its cut faces - a knife's go from tet to tet, every way: summed by their size and way out, all the cut's
       // the way its rim's round, square to it, as much as it's big. Mostly one way: a cut that way, flat or not - its
-      // middle and how far from flat; and how far in it comes)
-      const cx = S.cx, tag = sb.sTag, ST = sb.sTet, TP = sb.tPiece, PC = sb.pieces, F = sb.sTri, Rx = sb.X, n = this._fn, cN = S.cutN, cP = S.cutP;
+      // middle and how far from flat; and how far in it comes. Not its hollow's own skin - cut faces too, as made,
+      // all round it: counted, a corner sliced off left its big piece's cut lost among them, no side of it open,
+      // not walled - its liquid the room's, pushed out through its walls on every side)
+      const cx = S.cx, tag = sb.sTag, ST = sb.sTet, TP = sb.tPiece, PC = sb.pieces, F = sb.sTri, Rx = sb.X, n = this._fn, cN = S.cutN, cP = S.cutP, HF = sb.sHollow;
       for (let a = 0; a < 3; a++) (cx[a] = -Infinity), (cx[3 + a] = Infinity);
       S.cutOK = 0;
       let nx = 0, ny = 0, nz = 0, ar = 0, px = 0, py = 0, pz = 0, lo0 = Infinity, lo1 = Infinity, lo2 = Infinity, hi0 = -Infinity, hi1 = -Infinity, hi2 = -Infinity;
       for (let f = 0; f < sb.nF; f++) {
-        if (tag[f] !== TAG_FRESH || PC[TP[ST[f]]] !== pc || !this._faceOut(sb, f)) continue;
+        if (tag[f] !== TAG_FRESH || PC[TP[ST[f]]] !== pc || (HF && HF[f] === 2) || !this._faceOut(sb, f)) continue;
         const A = n[3], a3 = F[f * 3] * 3, b3 = F[f * 3 + 1] * 3, c3 = F[f * 3 + 2] * 3;
         nx += n[0] * A; ny += n[1] * A; nz += n[2] * A; ar += A;
         px += (A * (Rx[a3] + Rx[b3] + Rx[c3])) / 3; py += (A * (Rx[a3 + 1] + Rx[b3 + 1] + Rx[c3 + 1])) / 3; pz += (A * (Rx[a3 + 2] + Rx[b3 + 2] + Rx[c3 + 2])) / 3;
@@ -1152,7 +1154,7 @@ export class Fluid {
           // (flat to a centimetre, on average, its corners: its plane's a way out of it - see _pushOut)
           let e2 = 0, ne = 0;
           for (let f = 0; f < sb.nF; f++) {
-            if (tag[f] !== TAG_FRESH || PC[TP[ST[f]]] !== pc) continue;
+            if (tag[f] !== TAG_FRESH || PC[TP[ST[f]]] !== pc || (HF && HF[f] === 2)) continue;
             for (let m = 0; m < 3; m++) {
               const v3 = F[f * 3 + m] * 3, d = (Rx[v3] - cP[o]) * cN[o] + (Rx[v3 + 1] - cP[o + 1]) * cN[o + 1] + (Rx[v3 + 2] - cP[o + 2]) * cN[o + 2];
               e2 += d * d;
