@@ -45,6 +45,7 @@ const GAIN = 0.8; // (m/s) the most the solver speeds a particle up a substep
 // (how much of the way off a cube full of liquid's shell a drop's pushed each substep, to its own width - see
 // _radius: all of it at once, every drop against a wall chattered on it, and a cube's liquid never came to rest)
 const RADIUS_K = 0.35;
+const UNBEND_AT = 0.08; // (m) a cube bent this far off its best fit, somewhere, or more: its liquid's surface taken back into it as made the long way (see _unbend)
 const BEND_PAD = 0.06; // (m) the most a soft cube's wall's off its best fit, near enough: what's that much further in looked at too (see _snapBox)
 const DG = 7; // (each cube full of liquid's bend from its best fit: on a grid this many points a side over it as made - see _frames, _bend)
 const MV = 10; // (a cube cut into: how its jelly's moved since last frame, on a grid this many points a side over where it was - see _moveGrid)
@@ -144,9 +145,19 @@ export class Fluid {
     // where in it as made, DG a side, x y z and weight: see _frames, _bend)
     this._dG = new Float32Array(MAX_CUBES * DG * DG * DG * 4);
     this._bd = new Float64Array(3);
+    this._bdJ = new Float64Array(9); // (and how it changes across it: see _bendJ)
+    this._ubR = new Float64Array(3); // (a point's place in it as made, solved for, and the jelly's stretch and turn there: see _unbend)
+    this._uF = new Float64Array(9);
+    this._uM = new Float64Array(3);
+    this._uG = new Float64Array(3);
+    this._bendMax = new Float32Array(MAX_CUBES); // (each one's most, m)
     // (each cube full of liquid - its hollow drawn full - and its liquid's colour: see _fillFull)
     this._full = new Uint8Array(MAX_CUBES);
     this._fullC = new Float32Array(MAX_CUBES * 3);
+    // (each cube filled Full: its mark on its drops then, and how many - all of them still in it, it's drawn full, see
+    // _fillFull; 0 none)
+    this.fullHid = new Int32Array(MAX_CUBES);
+    this.fullN = new Int32Array(MAX_CUBES);
     this.cvn = new Float32Array(N);
     // (where each was last outside the jelly: out of it, it goes back that way - see _collide)
     this.lastOut = new Float32Array(N * 3);
@@ -425,6 +436,13 @@ export class Fluid {
     this._setClock = 0;
     app.onHealStart?.push(() => this._healStart());
     this.rc = null; // (called home by a heal: see recall)
+  }
+
+  // (cube k become cube j - see SoftBody.moveCube: what's kept of it here goes with it)
+  moveCube(k, j) {
+    this.fullHid[j] = this.fullHid[k];
+    this.fullN[j] = this.fullN[k];
+    this.fullHid[k] = this.fullN[k] = 0;
   }
 
   setGlow(e) {
@@ -2812,10 +2830,14 @@ export class Fluid {
   // thinner than the surface's grid - ultrathin's 5 cm, the grid's ~6.5 cm - left its edges a sawtooth: along
   // every edge, across every face once the cube turned, seen through the wall, worse the more it moved. The
   // centimetre: a wall bulging out a little, it follows.)
-  _snapWalls(nv) {
+  _snapWalls(nv, bent = false) {
     const sb = this.app.sb, inn = this.inn, FR = this.frames, F = this._wF, R = this._wR;
     let mask = 0;
-    for (let v = 0; v < nv; v++) if (inn[v] > 0) mask |= 1 << (inn[v] - 1);
+    for (let k = 0; k < MAX_CUBES; k++) if (!bent || this._bendMax[k] >= UNBEND_AT) mask |= 1 << k;
+    if (!mask) return;
+    let seen = 0;
+    for (let v = 0; v < nv; v++) if (inn[v] > 0) seen |= 1 << (inn[v] - 1);
+    mask &= seen;
     for (let k = 0; k < MAX_CUBES; k++) {
       if (!(mask & (1 << k)) || !sb.cHollow[k] || !(sb.cSize[k] > 0) || !this.frameOK[k]) continue;
       // (the cube as it stands this frame: see _frames)
@@ -2851,8 +2873,12 @@ export class Fluid {
     tot.fill(0);
     for (const pc of sb.pieces) if (pc) tot[pc.cube] += pc.verts.length;
     for (const pc of sb.pieces) if (pc && pc.verts.length > 0.15 * tot[pc.cube]) big[pc.cube]++;
+    const np = this._npN || (this._npN = new Int32Array(MAX_CUBES));
+    np.fill(0);
+    for (const pc of sb.pieces) if (pc) np[pc.cube]++;
     for (let k = 0; k < MAX_CUBES; k++) {
       this.frameOK[k] = 0;
+      this._bendMax[k] = 0;
       if (!sb.cHollow[k] || !sb.cLiq[k] || !(sb.cSize[k] > 0) || big[k] !== 1) continue;
       let n = 0, xm0 = 0, xm1 = 0, xm2 = 0, Xm0 = 0, Xm1 = 0, Xm2 = 0;
       for (let i = 0; i < sb.nV; i++) {
@@ -2895,6 +2921,13 @@ export class Fluid {
           G[gi] += ex * wt; G[gi + 1] += ey * wt; G[gi + 2] += ez * wt; G[gi + 3] += wt;
         }
       }
+      let bm = 0;
+      for (let gi = g0; gi < g0 + DG * DG * DG * 4; gi += 4) {
+        const wt = G[gi + 3];
+        if (wt > 0.05) bm = Math.max(bm, (G[gi] * G[gi] + G[gi + 1] * G[gi + 1] + G[gi + 2] * G[gi + 2]) / (wt * wt));
+      }
+      // (whole only: a corner cut off and pulled away is in its bend too, and its liquid was put back by that the long way)
+      this._bendMax[k] = np[k] === 1 ? Math.sqrt(bm) : 0;
     }
   }
 
@@ -3232,11 +3265,93 @@ export class Fluid {
     else B[0] = B[1] = B[2] = 0;
   }
 
+  // (_bend, and its change along each way at r - into _bdJ, row by row: d bend / d r)
+  _bendJ(k, rx, ry, rz) {
+    const G = this._dG, g0 = k * DG * DG * DG * 4, sz = this.app.sb.cSize[k], lo = -0.6 * sz, ic = (DG - 1) / (1.2 * sz), B = this._bd, J = this._bdJ, top = DG - 1.001;
+    let u = (rx - lo) * ic, v = (ry - lo) * ic, w = (rz - lo) * ic;
+    const ku = u < 0 || u > top ? 0 : ic, kv = v < 0 || v > top ? 0 : ic, kw = w < 0 || w > top ? 0 : ic;
+    u = Math.min(top, Math.max(0, u)); v = Math.min(top, Math.max(0, v)); w = Math.min(top, Math.max(0, w));
+    const iu = u | 0, iv = v | 0, iw = w | 0, fu = u - iu, fv = v - iv, fw = w - iw;
+    let s0 = 0, s1 = 0, s2 = 0, sw = 0, a0 = 0, a1 = 0, a2 = 0, aw = 0, b0 = 0, b1 = 0, b2 = 0, bw = 0, c0 = 0, c1 = 0, c2 = 0, cw = 0;
+    for (let c = 0; c < 8; c++) {
+      const du = c & 1, dv = (c >> 1) & 1, dw = c >> 2, A = du ? fu : 1 - fu, Bv = dv ? fv : 1 - fv, C = dw ? fw : 1 - fw;
+      const wt = A * Bv * C, wu = (du ? 1 : -1) * Bv * C, wv = A * (dv ? 1 : -1) * C, ww = A * Bv * (dw ? 1 : -1);
+      const gi = g0 + (((iw + dw) * DG + iv + dv) * DG + iu + du) * 4, G0 = G[gi], G1 = G[gi + 1], G2 = G[gi + 2], G3 = G[gi + 3];
+      s0 += G0 * wt; s1 += G1 * wt; s2 += G2 * wt; sw += G3 * wt;
+      a0 += G0 * wu; a1 += G1 * wu; a2 += G2 * wu; aw += G3 * wu;
+      b0 += G0 * wv; b1 += G1 * wv; b2 += G2 * wv; bw += G3 * wv;
+      c0 += G0 * ww; c1 += G1 * ww; c2 += G2 * ww; cw += G3 * ww;
+    }
+    if (!(sw > 1e-6)) {
+      B[0] = B[1] = B[2] = 0;
+      J.fill(0);
+      return;
+    }
+    const i2 = 1 / (sw * sw);
+    B[0] = s0 / sw; B[1] = s1 / sw; B[2] = s2 / sw;
+    J[0] = ku * (a0 * sw - s0 * aw) * i2; J[1] = kv * (b0 * sw - s0 * bw) * i2; J[2] = kw * (c0 * sw - s0 * cw) * i2;
+    J[3] = ku * (a1 * sw - s1 * aw) * i2; J[4] = kv * (b1 * sw - s1 * bw) * i2; J[5] = kw * (c1 * sw - s1 * cw) * i2;
+    J[6] = ku * (a2 * sw - s2 * aw) * i2; J[7] = kv * (b2 * sw - s2 * bw) * i2; J[8] = kw * (c2 * sw - s2 * cw) * i2;
+  }
+
+  // (a point of cube k as it stands - r0 its place in it by its best fit, _wR - back in it as made: the place r its
+  // fit plus its bend there puts where it is - solved for, a few of Newton's steps; into _ubR, and the jelly's stretch
+  // and turn there, its fit's turn and its bend's change, into _uF. Its bend taken off once - at r0, not r - a
+  // pudding slumped to three times as wide as tall had its liquid snapped to a box standing up out of its dome)
+  // (Bent less than UNBEND_AT anywhere - most of the time - its bend's taken off once, at r0, and moved by its turn
+  // alone: within a centimetre, and the long way cost the liquid a fifth more of its time on a phone)
+  _unbend(k, r0x, r0y, r0z) {
+    const R = this._wR, B = this._bd, J = this._bdJ, U = this._ubR, F = this._uF, cap = 0.25 * this.app.sb.cSize[k];
+    this._bend(k, r0x, r0y, r0z);
+    let rx = r0x - (R[0] * B[0] + R[3] * B[1] + R[6] * B[2]), ry = r0y - (R[1] * B[0] + R[4] * B[1] + R[7] * B[2]), rz = r0z - (R[2] * B[0] + R[5] * B[1] + R[8] * B[2]);
+    if (!(this._bendMax[k] >= UNBEND_AT)) {
+      U[0] = rx; U[1] = ry; U[2] = rz;
+      for (let c = 0; c < 9; c++) F[c] = R[c];
+      return;
+    }
+    for (let it = 0; it < 3; it++) {
+      this._bendJ(k, rx, ry, rz);
+      const fx = rx + R[0] * B[0] + R[3] * B[1] + R[6] * B[2] - r0x, fy = ry + R[1] * B[0] + R[4] * B[1] + R[7] * B[2] - r0y, fz = rz + R[2] * B[0] + R[5] * B[1] + R[8] * B[2] - r0z;
+      if (fx * fx + fy * fy + fz * fz < 1e-6) break;
+      const m00 = 1 + R[0] * J[0] + R[3] * J[3] + R[6] * J[6], m01 = R[0] * J[1] + R[3] * J[4] + R[6] * J[7], m02 = R[0] * J[2] + R[3] * J[5] + R[6] * J[8];
+      const m10 = R[1] * J[0] + R[4] * J[3] + R[7] * J[6], m11 = 1 + R[1] * J[1] + R[4] * J[4] + R[7] * J[7], m12 = R[1] * J[2] + R[4] * J[5] + R[7] * J[8];
+      const m20 = R[2] * J[0] + R[5] * J[3] + R[8] * J[6], m21 = R[2] * J[1] + R[5] * J[4] + R[8] * J[7], m22 = 1 + R[2] * J[2] + R[5] * J[5] + R[8] * J[8];
+      const c00 = m11 * m22 - m12 * m21, c01 = m12 * m20 - m10 * m22, c02 = m10 * m21 - m11 * m20, det = m00 * c00 + m01 * c01 + m02 * c02;
+      if (!(det > 0.05)) break;
+      const id = 1 / det;
+      let dx = (c00 * fx + (m02 * m21 - m01 * m22) * fy + (m01 * m12 - m02 * m11) * fz) * id;
+      let dy = (c01 * fx + (m00 * m22 - m02 * m20) * fy + (m02 * m10 - m00 * m12) * fz) * id;
+      let dz = (c02 * fx + (m01 * m20 - m00 * m21) * fy + (m00 * m11 - m01 * m10) * fz) * id;
+      const dl = Math.sqrt(dx * dx + dy * dy + dz * dz);
+      if (dl > cap) (dx *= cap / dl), (dy *= cap / dl), (dz *= cap / dl);
+      rx -= dx; ry -= dy; rz -= dz;
+    }
+    this._bendJ(k, rx, ry, rz);
+    U[0] = rx; U[1] = ry; U[2] = rz;
+    for (let c = 0; c < 9; c++) F[c] = R[c] + J[c];
+  }
+
+  // (a move m as made, at a point _unbend's looked at: as it is in the room, into m - and a slope g as made, facing
+  // so in the room - _uF's inverse transpose, its cofactors - into g, a unit long)
+  _uMove(m, g) {
+    const F = this._uF, mx = m[0], my = m[1], mz = m[2], gx = g[0], gy = g[1], gz = g[2];
+    m[0] = F[0] * mx + F[1] * my + F[2] * mz; m[1] = F[3] * mx + F[4] * my + F[5] * mz; m[2] = F[6] * mx + F[7] * my + F[8] * mz;
+    const c00 = F[4] * F[8] - F[5] * F[7], c01 = F[5] * F[6] - F[3] * F[8], c02 = F[3] * F[7] - F[4] * F[6];
+    const c10 = F[2] * F[7] - F[1] * F[8], c11 = F[0] * F[8] - F[2] * F[6], c12 = F[1] * F[6] - F[0] * F[7];
+    const c20 = F[1] * F[5] - F[2] * F[4], c21 = F[2] * F[3] - F[0] * F[5], c22 = F[0] * F[4] - F[1] * F[3];
+    let nx = c00 * gx + c01 * gy + c02 * gz, ny = c10 * gx + c11 * gy + c12 * gz, nz = c20 * gx + c21 * gy + c22 * gz;
+    if (F[0] * c00 + F[1] * c01 + F[2] * c02 < 0) (nx = -nx), (ny = -ny), (nz = -nz);
+    const l = Math.sqrt(nx * nx + ny * ny + nz * nz) || 1;
+    g[0] = nx / l; g[1] = ny / l; g[2] = nz / l;
+  }
+
   // (cube k1 - 1's, a plain rounded box: its rest shape's distance and slope worked out here, those nowhere near
   // its wall passed over at a glance)
   _snapBox(nv, k1, half, bev, th, tol, band) {
-    const inn = this.inn, pos = this.pos, nrm = this.nrm, R = this._wR, F = this._wF, bb = half - bev, B = this._bd;
-    const xm0 = F[0], xm1 = F[1], xm2 = F[2], Xm0 = F[3], Xm1 = F[4], Xm2 = F[5], lim = half - Math.max(bev, th - tol) - band - BEND_PAD;
+    const inn = this.inn, pos = this.pos, nrm = this.nrm, R = this._wR, F = this._wF, bb = half - bev, U = this._ubR, M = this._uM, Gs = this._uG;
+    // (as far in as its bend reaches looked at: a slumped pudding's walls are 30 cm off its fit)
+    const pad = this._bendMax[k1 - 1] >= UNBEND_AT ? Math.max(BEND_PAD, this._bendMax[k1 - 1] + 0.02) : BEND_PAD;
+    const xm0 = F[0], xm1 = F[1], xm2 = F[2], Xm0 = F[3], Xm1 = F[4], Xm2 = F[5], lim = half - Math.max(bev, th - tol) - band - pad;
     for (let v = 0; v < nv; v++) {
       if (inn[v] !== k1) continue;
       const o = v * 3, dx = pos[o] - xm0, dy = pos[o + 1] - xm1, dz = pos[o + 2] - xm2;
@@ -3245,10 +3360,10 @@ export class Fluid {
       if ((rx < 0 ? -rx : rx) < lim && (ry < 0 ? -ry : ry) < lim && (rz < 0 ? -rz : rz) < lim) continue;
       // (less its bend there: the wall's where the jelly is, bulged or sagged, not where its best fit puts it - so
       // snapped, a soft cube's liquid went up into its lid 4 or 5 cm one frame, flush the next: a flashing blot)
-      this._bend(k1 - 1, rx, ry, rz);
-      rx -= R[0] * B[0] + R[3] * B[1] + R[6] * B[2]; ry -= R[1] * B[0] + R[4] * B[1] + R[7] * B[2]; rz -= R[2] * B[0] + R[5] * B[1] + R[8] * B[2];
+      this._unbend(k1 - 1, rx, ry, rz);
+      rx = U[0]; ry = U[1]; rz = U[2];
       const ax = rx < 0 ? -rx : rx, ay = ry < 0 ? -ry : ry, az = rz < 0 ? -rz : rz;
-      if (ax < lim + BEND_PAD && ay < lim + BEND_PAD && az < lim + BEND_PAD) continue;
+      if (ax < lim + pad && ay < lim + pad && az < lim + pad) continue;
       const qx = ax - bb, qy = ay - bb, qz = az - bb, px = qx > 0 ? qx : 0, py = qy > 0 ? qy : 0, pz = qz > 0 ? qz : 0;
       const pl = Math.sqrt(px * px + py * py + pz * pz), mq = qx > qy ? (qx > qz ? qx : qz) : qy > qz ? qy : qz;
       const out = th + pl + (mq < 0 ? mq : 0) - bev - tol;
@@ -3264,24 +3379,26 @@ export class Fluid {
       if (rx < 0) gx = -gx;
       if (ry < 0) gy = -gy;
       if (rz < 0) gz = -gz;
-      const mx = -gx * out, my = -gy * out, mz = -gz * out;
-      pos[o] += R[0] * mx + R[1] * my + R[2] * mz; pos[o + 1] += R[3] * mx + R[4] * my + R[5] * mz; pos[o + 2] += R[6] * mx + R[7] * my + R[8] * mz;
-      nrm[o] = R[0] * gx + R[1] * gy + R[2] * gz; nrm[o + 1] = R[3] * gx + R[4] * gy + R[5] * gz; nrm[o + 2] = R[6] * gx + R[7] * gy + R[8] * gz;
+      // (moved as the jelly there's stretched and turned, and facing as it is - see _uMove)
+      M[0] = -gx * out; M[1] = -gy * out; M[2] = -gz * out;
+      Gs[0] = gx; Gs[1] = gy; Gs[2] = gz;
+      this._uMove(M, Gs);
+      pos[o] += M[0]; pos[o + 1] += M[1]; pos[o + 2] += M[2];
+      nrm[o] = Gs[0]; nrm[o + 1] = Gs[1]; nrm[o + 2] = Gs[2];
     }
   }
 
   // (...any other shape - bowed faces: its distance, and its slope from either side along each axis)
   _snapShape(nv, k1, half, bev, shape, th, tol, band) {
-    const inn = this.inn, pos = this.pos, nrm = this.nrm, R = this._wR, F = this._wF, e = 0.004;
+    const inn = this.inn, pos = this.pos, nrm = this.nrm, R = this._wR, F = this._wF, e = 0.004, U = this._ubR, M = this._uM, Gs = this._uG;
     const xm0 = F[0], xm1 = F[1], xm2 = F[2], Xm0 = F[3], Xm1 = F[4], Xm2 = F[5];
     for (let v = 0; v < nv; v++) {
       if (inn[v] !== k1) continue;
       const o = v * 3, dx = pos[o] - xm0, dy = pos[o + 1] - xm1, dz = pos[o + 2] - xm2;
       let rx = Xm0 + R[0] * dx + R[3] * dy + R[6] * dz, ry = Xm1 + R[1] * dx + R[4] * dy + R[7] * dz, rz = Xm2 + R[2] * dx + R[5] * dy + R[8] * dz;
       // (less its bend there - see _snapBox)
-      const B = this._bd;
-      this._bend(k1 - 1, rx, ry, rz);
-      rx -= R[0] * B[0] + R[3] * B[1] + R[6] * B[2]; ry -= R[1] * B[0] + R[4] * B[1] + R[7] * B[2]; rz -= R[2] * B[0] + R[5] * B[1] + R[8] * B[2];
+      this._unbend(k1 - 1, rx, ry, rz);
+      rx = U[0]; ry = U[1]; rz = U[2];
       const out = th + shapeSDF(rx, ry, rz, half, bev, shape) - tol;
       if (!(out > -band)) continue;
       let gx = shapeSDF(rx + e, ry, rz, half, bev, shape) - shapeSDF(rx - e, ry, rz, half, bev, shape);
@@ -3290,9 +3407,11 @@ export class Fluid {
       const gl = Math.sqrt(gx * gx + gy * gy + gz * gz);
       if (!(gl > 1e-12)) continue;
       gx /= gl; gy /= gl; gz /= gl;
-      const mx = -gx * out, my = -gy * out, mz = -gz * out;
-      pos[o] += R[0] * mx + R[1] * my + R[2] * mz; pos[o + 1] += R[3] * mx + R[4] * my + R[5] * mz; pos[o + 2] += R[6] * mx + R[7] * my + R[8] * mz;
-      nrm[o] = R[0] * gx + R[1] * gy + R[2] * gz; nrm[o + 1] = R[3] * gx + R[4] * gy + R[5] * gz; nrm[o + 2] = R[6] * gx + R[7] * gy + R[8] * gz;
+      M[0] = -gx * out; M[1] = -gy * out; M[2] = -gz * out;
+      Gs[0] = gx; Gs[1] = gy; Gs[2] = gz;
+      this._uMove(M, Gs);
+      pos[o] += M[0]; pos[o + 1] += M[1]; pos[o + 2] += M[2];
+      nrm[o] = Gs[0]; nrm[o + 1] = Gs[1]; nrm[o + 2] = Gs[2];
     }
   }
 
@@ -3938,6 +4057,9 @@ export class Fluid {
     // (on its own, not from _march: called from there, Safari's engine took it fifteen times as long)
     if (this.inN) this._snapWalls(this.geo.drawRange.count);
     if (this.inN) this._flatTop(this.geo.drawRange.count);
+    // (a cube bent far off its shape - a slumped pudding, a dome: its liquid's top, its edge lifted flat to it, out
+    // through its wall where that leans in - 3 cm - put back on it)
+    if (this.inN) this._snapWalls(this.geo.drawRange.count, true);
     if (this.cellsN) this._pushOut(this.geo.drawRange.count);
     for (let a = 0; a < nm; a++) this.fmask[this.fmL[a]] = 0;
   }
@@ -3946,7 +4068,9 @@ export class Fluid {
   // surface's level, coloured as its liquid is. (Drawn from its drops alone, its top jostled a centimetre or two
   // off its lid and caved in under it - a crumpled crater of facets one frame, flush the next: a dark blot flashing
   // on its top face.) Its liquid's volume over its hollow's: its drops' nominal volume runs a ninth over what they
-  // fill, so Full's 111-115%, nine-tenths' 100-107%, an air gap at its top.
+  // fill, so Full's 111-115%, nine-tenths' 100-107%, an air gap at its top. Or filled Full (see Spill._hollow) and
+  // none of it gone: its drops are laid a little in from its walls, and a thin skin's Full came to 106% - drawn from
+  // its drops, its top sloshing about and a hand's breadth down after a fall: a fifth of it, by the look of it, lost.
   _fillFull(F, FC, touch, tList, nt, x0, y0, z0, c, gx, gy, gz, nm, iso) {
     const sb = this.app.sb, M = this.fmask, L = this.fmL, HB = sb.cHole, own = this.own, n = this.n, FU = this._full, FCol = this._fullC, col = this.col, MS = this.mass, RY = this.revealY;
     let any = false;
@@ -3960,7 +4084,7 @@ export class Fluid {
         const o = i * 3;
         m += MS[i]; r += col[o] * MS[i]; g += col[o + 1] * MS[i]; b += col[o + 2] * MS[i];
       }
-      if (!(m * this.vol >= FULL_AT * Vh)) continue;
+      if (!(m * this.vol >= FULL_AT * Vh) && !(this.fullHid[k] === id && m >= this.fullN[k] - 0.5)) continue;
       FU[k] = 1;
       FCol[k * 3] = r / m; FCol[k * 3 + 1] = g / m; FCol[k * 3 + 2] = b / m;
       any = true;

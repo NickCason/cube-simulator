@@ -286,6 +286,79 @@ window.__kit = (() => {
     return { surface: cnt, past, worstCm: +(100 * worst).toFixed(1) };
   };
 
+  // Cube k's own liquid as drawn against its jelly as it is: its surface's points out of its outside skin (sticking out
+  // of it), in its wall (in the skin, out of its hollow), and its drops out of its hollow - in its wall, out of it
+  K.stickOut = (k = 0) => {
+    const a = A(), sb = a.sb, fl = a.fluid, S = sb.sTri, tag = sb.sTag, ST = sb.sTet, tc = sb.tCube, c = sb.cav[k], id = sb.cHid[k];
+    const P = fl.pos, cnt = fl.geo.drawRange.count, inn = fl.inn;
+    const tri = new Int32Array(sb.nF * 3);
+    let m = 0;
+    for (let f = 0; f < sb.nF; f++) {
+      if (tag[f] !== 1 || tc[ST[f]] !== k) continue;
+      tri[m * 3] = S[f * 3]; tri[m * 3 + 1] = S[f * 3 + 1]; tri[m * 3 + 2] = S[f * 3 + 2];
+      m++;
+    }
+    fl._xzBuild(tri, m);
+    const outSkin = new Uint8Array(cnt), dOut = new Uint8Array(fl.n);
+    let own = 0, sOut = 0, worstUp = 0;
+    let top = -1e9;
+    for (let i = 0; i < sb.nV; i++) if (sb.vCube[i] === k && sb.alive[i]) top = Math.max(top, sb.x[i * 3 + 1]);
+    for (let v = 0; v < cnt; v++) {
+      if (inn[v] !== k + 1) continue;
+      own++;
+      if (!fl._xzOdd(P[v * 3], P[v * 3 + 1], P[v * 3 + 2])) (outSkin[v] = 1), sOut++;
+      worstUp = Math.max(worstUp, P[v * 3 + 1] - top);
+    }
+    // (how far out: to the nearest of its skin's triangles)
+    const X = sb.x;
+    const triD = (px, py, pz, a, b, c) => {
+      // (Ericson's closest point on a triangle)
+      const ax = X[a * 3], ay = X[a * 3 + 1], az = X[a * 3 + 2], bx = X[b * 3], by = X[b * 3 + 1], bz = X[b * 3 + 2], cx = X[c * 3], cy = X[c * 3 + 1], cz = X[c * 3 + 2];
+      const abx = bx - ax, aby = by - ay, abz = bz - az, acx = cx - ax, acy = cy - ay, acz = cz - az, apx = px - ax, apy = py - ay, apz = pz - az;
+      const d1 = abx * apx + aby * apy + abz * apz, d2 = acx * apx + acy * apy + acz * apz;
+      let qx, qy, qz;
+      if (d1 <= 0 && d2 <= 0) (qx = ax), (qy = ay), (qz = az);
+      else {
+        const bpx = px - bx, bpy = py - by, bpz = pz - bz, d3 = abx * bpx + aby * bpy + abz * bpz, d4 = acx * bpx + acy * bpy + acz * bpz;
+        const cpx = px - cx, cpy = py - cy, cpz = pz - cz, d5 = abx * cpx + aby * cpy + abz * cpz, d6 = acx * cpx + acy * cpy + acz * cpz;
+        const vc = d1 * d4 - d3 * d2, vb = d5 * d2 - d1 * d6, va = d3 * d6 - d5 * d4;
+        if (d3 >= 0 && d4 <= d3) (qx = bx), (qy = by), (qz = bz);
+        else if (d6 >= 0 && d5 <= d6) (qx = cx), (qy = cy), (qz = cz);
+        else if (vc <= 0 && d1 >= 0 && d3 <= 0) { const t = d1 / (d1 - d3); qx = ax + abx * t; qy = ay + aby * t; qz = az + abz * t; }
+        else if (vb <= 0 && d2 >= 0 && d6 <= 0) { const t = d2 / (d2 - d6); qx = ax + acx * t; qy = ay + acy * t; qz = az + acz * t; }
+        else if (va <= 0 && d4 - d3 >= 0 && d5 - d6 >= 0) { const t = (d4 - d3) / (d4 - d3 + (d5 - d6)); qx = bx + (cx - bx) * t; qy = by + (cy - by) * t; qz = bz + (cz - bz) * t; }
+        else { const dn = 1 / (va + vb + vc), v = vb * dn, w = vc * dn; qx = ax + abx * v + acx * w; qy = ay + aby * v + acy * w; qz = az + abz * v + acz * w; }
+      }
+      return (px - qx) ** 2 + (py - qy) ** 2 + (pz - qz) ** 2;
+    };
+    let outW = 0, outSum = 0, outN = 0, out1 = 0, oy0 = 1e9, oy1 = -1e9;
+    for (let v = 0; v < cnt; v++) {
+      if (!outSkin[v]) continue;
+      let best = 1e9;
+      for (let f = 0; f < m; f++) best = Math.min(best, triD(P[v * 3], P[v * 3 + 1], P[v * 3 + 2], tri[f * 3], tri[f * 3 + 1], tri[f * 3 + 2]));
+      best = Math.sqrt(best);
+      outW = Math.max(outW, best); outSum += best; outN++;
+      if (best > 0.01) (oy0 = Math.min(oy0, P[v * 3 + 1])), (oy1 = Math.max(oy1, P[v * 3 + 1]));
+      if (best > 0.01) out1++;
+    }
+    let drops = 0, dropsOutSkin = 0;
+    for (let i = 0; i < fl.n; i++) {
+      if (fl.own[i] !== id) continue;
+      drops++;
+      if (!fl._xzOdd(fl.x[i * 3], fl.x[i * 3 + 1], fl.x[i * 3 + 2])) dropsOutSkin++;
+    }
+    let sWall = 0, dropsWall = 0;
+    if (c && c.sealed) {
+      const VV = c.v, F = c.f, mh = F.length / 3, t2 = new Int32Array(mh * 3);
+      for (let e = 0; e < mh * 3; e++) t2[e] = VV[F[e]];
+      fl._xzBuild(t2, mh);
+      for (let v = 0; v < cnt; v++) if (inn[v] === k + 1 && !outSkin[v] && !fl._xzOdd(P[v * 3], P[v * 3 + 1], P[v * 3 + 2])) sWall++;
+      for (let i = 0; i < fl.n; i++) if (fl.own[i] === id && !fl._xzOdd(fl.x[i * 3], fl.x[i * 3 + 1], fl.x[i * 3 + 2])) dropsWall++;
+      dropsWall -= dropsOutSkin;
+    }
+    return { surface: own, outSkin: sOut, outPast1cm: out1, outWorstCm: +(100 * outW).toFixed(1), outMeanCm: +(100 * outSum / Math.max(1, outN)).toFixed(1), outPast1cmY: out1 ? `${oy0.toFixed(2)}..${oy1.toFixed(2)}` : '', inWall: sWall, aboveTopCm: +(100 * worstUp).toFixed(1), drops, dropsOutSkin, dropsInWall: dropsWall, full: fl._full[k], frameOK: fl.frameOK[k], sealed: c?.sealed ? 1 : 0 };
+  };
+
   // A cube full of liquid cut: its frame, its pieces' fits (walls: box, hollow box, open sides, cut plane), the
   // liquid's surface labels (0 the room's, k+1 its own) and drops by their side of their piece's walls
   K.cutDiag = () => {

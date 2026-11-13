@@ -98,6 +98,13 @@ function flicker(t) {
 const liqColourOf = (c) => (typeof c === 'string' && /^#[0-9a-f]{6}$/i.test(c) ? c.toLowerCase() : c === 'rainbow' ? 'rainbow' : '');
 
 export class App {
+  // How it sticks to the floor where it's touched it (0..1 - see SoftBody._solveBounds): its grip past grippy, the
+  // more so gooey; none to a bouncy one, little to a stiff one (a sugar cube's rough, not sticky)
+  static tackOf(grip, goo, bounce, rigidity) {
+    const g = Math.min(1, Math.max(0, (grip - 1) / 0.5)), b = Math.min(1, Math.max(0, 1 - bounce / 0.5));
+    return g * (0.4 + 0.6 * Math.min(1, Math.max(0, (goo || 0) / 0.7))) * b * (1 - Math.min(1, rigidity || 0));
+  }
+
   // Wobble frequency ~ sqrt(mu/rho)/size: above ~sqrt(850)/1 the solver goes
   // unstable at low substep counts (and foamy material even sooner).
   // A floor keeps it from flattening into nothing under its own weight.
@@ -514,7 +521,7 @@ export class App {
       sb.setCube(cb.slot, {
         mu: App.safeMu(cs.mu, cs.weight, sb.cSize[cb.slot], cs.lambda, cs.gravity),
         damping: cs.damping, lambdaRatio: cs.lambda, bounce: cs.bounce, friction: cs.grip * (SURFACE[cb.style.surface]?.grip ?? 1),
-        rigidity: cs.rigidity, density: cs.weight, airDrag: cs.airDrag,
+        rigidity: cs.rigidity, density: cs.weight, airDrag: cs.airDrag, tack: App.tackOf(cs.grip * (SURFACE[cb.style.surface]?.grip ?? 1), cs.goo, cs.bounce, cs.rigidity),
         liquid: cs.liquid > 0.5, liqVisc: cs.liqVisc, liqTension: cs.liqTension, liqSkin: cs.liqSkin, liqFill: cs.liqFill,
       });
       // (its liquid as thick, as clinging, as it's set now - the liquid already in it too)
@@ -2331,6 +2338,7 @@ export class App {
     const last = this.cubes.length === 1 ? this.cubes[0] : null;
     if (last && last.slot !== 0) {
       this.sb.moveCube(last.slot, 0);
+      this.fluid?.moveCube(last.slot, 0);
       for (const w of this.swapper.watch) if (w.slot === last.slot) w.slot = 0;
       last.slot = 0;
     }

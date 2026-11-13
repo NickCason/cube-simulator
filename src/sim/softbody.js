@@ -46,6 +46,16 @@ const SHELL_HZ = 5.5;
 // cm; a medium wall's edges, 4: their tets would have been squashed flat - is drawn out to it, as far as this,
 // and its liquid let fill it: see vShort, JellyView._buildSmooth, Fluid._jellyAt. A dished face's 8 moves 5.)
 export const HOLLOW_SHORT = 0.05;
+// A splat - a cube with next to no bounce (under SPLAT_E) come down hard: squashed as far as it goes, its jiggle
+// damped hard (SPLAT_D a second at first, fading over SPLAT_T) - it oozes back up, not springs - and its feet held
+// to the floor meanwhile as hard as the stickiest's are (see _dampPieces, _solveBounds)
+const SPLAT_E = 0.3, SPLAT_D = 30, SPLAT_T = 0.7;
+// Stuck to the floor (a sticky cube's tack - see setCube - or a splat's): held there by up to STICK_A m/s^2 of pull
+// at its stickiest - a vertex pulled up harder than that a substep lets go; held against a pull, its hold gives at
+// PEEL_RATE a second as hard as it's pulled (a steady pull peels it, from its edges in, given time). (A slime's,
+// two-thirds of that, pulled up by its top: stretched to 1.7 times its height and peeling from its edges in, it
+// pops free. At a third of it, it came up as soon as a cube that didn't stick did)
+const STICK_A = 4000, PEEL_RATE = 1.6;
 
 // How soft, at the least, the tets' shape and volume terms stay - as a share
 // of hard (a full correction in one substep): see _solveTets. A tet of the
@@ -120,9 +130,9 @@ export function polarRot(q, A, R, iters) {
   }
 }
 
-const PIECE_FLOATS = ['sleepT', 'rebT', 'impY', 'rebR', 'impR', 'impUx', 'impUz', 'impT', 'impDv', 'foldUntil', 'buzzT', 'buzzA', 'buzzB', 'untangle', 'tangleTouch', 'touchT', 'vib', 'nwT', 'nwV', 'nwU', 'nwN'];
+const PIECE_FLOATS = ['air', 'lastVy', 'splatT', 'splatK', 'splatV', 'sleepT', 'rebT', 'impY', 'rebR', 'impR', 'impUx', 'impUz', 'impT', 'impDv', 'foldUntil', 'buzzT', 'buzzA', 'buzzB', 'untangle', 'tangleTouch', 'touchT', 'vib', 'nwT', 'nwV', 'nwU', 'nwN'];
 // (piece state a rebuild carries over to an untouched piece: see _buildPieces)
-const CARRY = ['sleepT', 'asleep', 'rebT', 'impY', 'boosted', 'rebR', 'impR', 'impUx', 'impUz', 'boostedR', 'impPend', 'impT', 'impDv', 'sleepLogMu', 'foldUntil', 'foldAsk', 'buzzT', 'buzzA', 'buzzB', 'tangleN', 'untangle', 'tangleTries', 'tangleTouch', 'touchT', 'hinge', 'gap', 'foldN', 'foldTouch', 'foldGiveUp', 'nwT', 'nwV', 'nwU', 'nwN', 'nwS'];
+const CARRY = ['air', 'lastVy', 'splatT', 'splatK', 'splatV', 'sleepT', 'asleep', 'rebT', 'impY', 'boosted', 'rebR', 'impR', 'impUx', 'impUz', 'boostedR', 'impPend', 'impT', 'impDv', 'sleepLogMu', 'foldUntil', 'foldAsk', 'buzzT', 'buzzA', 'buzzB', 'tangleN', 'untangle', 'tangleTries', 'tangleTouch', 'touchT', 'hinge', 'gap', 'foldN', 'foldTouch', 'foldGiveUp', 'nwT', 'nwV', 'nwU', 'nwN', 'nwS'];
 
 // (the parts of a step ?stats times: SoftBody.profT, in this order - the
 // last, how many substeps)
@@ -233,6 +243,8 @@ export class SoftBody {
     this.cDamp = new Float64Array(MAX_CUBES);
     this.cFric = new Float64Array(MAX_CUBES);
     this.cBounce = new Float64Array(MAX_CUBES);
+    this.cTack = new Float64Array(MAX_CUBES); // (0..1: how it sticks to the floor where it's touched it - see _solveBounds)
+    this._pTack = new Float64Array(64); // (each piece's, this step: its cube's, or its splat's while that holds)
     this.cRigid = new Float64Array(MAX_CUBES);
     this.cDens = new Float64Array(MAX_CUBES);
     this.cAir = new Float64Array(MAX_CUBES);
@@ -250,6 +262,7 @@ export class SoftBody {
     // setWind, _wind)
     this.cWind = new Float64Array(MAX_CUBES);
     this._anyWind = false;
+    this._wSum = new Float64Array(MAX_CUBES * 6); // (a substep's: each windy cube's skin's area, its speed through the air, its push - see _wind)
     this.cBoost = new Float64Array(MAX_CUBES).fill(1);
     // full of liquid (0/1), how thick that is (0 water .. 1 near solid), how thick its skin (0 ultrathin .. 1
     // thick): see _liquidTets
@@ -425,6 +438,7 @@ export class SoftBody {
     this.coat = growArr(this.coat, cap * 5, Float32Array);
     this.fpen = growArr(this.fpen, cap, Float32Array); // floor push-out this substep
     this.wpen = growArr(this.wpen, cap, Float32Array); // wall push-out this substep
+    this.stick = growArr(this.stick, cap, Float32Array); // (stuck to the floor: its hold, 0..1 - see _solveBounds)
     this.slitOf = growArr(this.slitOf, cap, Int32Array); // (1 + the vertex across a slit from it - a partial cut's - or 0: see cutBody, Spill)
     this.vCap = cap;
   }
@@ -973,7 +987,7 @@ export class SoftBody {
       this.vCube[i] = j;
       this.X[i * 3] += d;
     }
-    for (const a of [this.cMu, this.cLam, this.cDens, this.cDamp, this.cFric, this.cBounce, this.cRigid, this.cAir, this.cBevel, this.cN, this.cGrav, this.cBoost, this.cSize, this.cRes, this.cH, this.cBow, this.cLobeA, this.cLobeP, this.cTrimK, this.cLiq, this.cVisc, this.cTens, this.cSkin, this.cFill, this.cHollow, this.cav, this.cHid, this.cPress, this.cWind]) a[j] = a[k];
+    for (const a of [this.cMu, this.cLam, this.cDens, this.cDamp, this.cFric, this.cBounce, this.cTack, this.cRigid, this.cAir, this.cBevel, this.cN, this.cGrav, this.cBoost, this.cSize, this.cRes, this.cH, this.cBow, this.cLobeA, this.cLobeP, this.cTrimK, this.cLiq, this.cVisc, this.cTens, this.cSkin, this.cFill, this.cHollow, this.cav, this.cHid, this.cPress, this.cWind]) a[j] = a[k];
     this.cHollow[k] = 0;
     this.cav[k] = null;
     this.cHid[k] = 0;
@@ -995,6 +1009,7 @@ export class SoftBody {
     if (q.damping !== undefined) this.cDamp[k] = q.damping;
     if (q.friction !== undefined) this.cFric[k] = q.friction;
     if (q.bounce !== undefined) this.cBounce[k] = q.bounce;
+    if (q.tack !== undefined) this.cTack[k] = q.tack;
     if (q.rigidity !== undefined) this.cRigid[k] = q.rigidity;
     if (q.airDrag !== undefined) this.cAir[k] = q.airDrag;
     // (full of liquid: its tets' shares of its firmness made again before the next step - see _liquidTets)
@@ -1617,6 +1632,11 @@ export class SoftBody {
         sleepT: 0,
         asleep: false,
         // (all fields up front - see the constructor)
+        air: 0, // (s) left of its having been up off the floor just now - what makes a landing one (see _dampPieces)
+        lastVy: 0, // (m/s) its middle's speed up, the step before
+        splatT: 0, // (s) left of its splat's hold - how hard (0..1), and how fast it came down (m/s)
+        splatK: 0,
+        splatV: 0,
         rebT: 0,
         impY: 0,
         boosted: false,
@@ -2132,6 +2152,12 @@ export class SoftBody {
       this._dampPieces(dt);
       return;
     }
+    // (each piece's hold on the floor: its cube's tack, or its splat's while that lasts - none re-cubing on its own)
+    if (this._pTack.length < NP) this._pTack = new Float64Array(NP * 2);
+    for (let k = 0; k < NP; k++) {
+      const pc = this.pieces[k], c = pc.cube;
+      this._pTack[k] = this.cGrav[c] !== 1 ? 0 : Math.max(this.cTack[c], pc.splatT > 0 ? pc.splatK * (pc.splatT / SPLAT_T) : 0);
+    }
     const multi = (this.pieces.length > 1 || P.selfCollide) && P.collide && this.collisionsEnabled;
     this._grabPress = 0;
     const NPp = this.pieces.length;
@@ -2309,30 +2335,57 @@ export class SoftBody {
   // hard as it drives into the air, C v_n^2 over its area, and each face behind pulled back a third as hard; a
   // third to each corner. The face leading is pushed in more than its sides - square on, it meets the air
   // hardest: falling fast, it's squashed and spread)
+  // (Its push all told as it's made - square on, its face's area: spread flat by it, it met that much more air and
+  // was braked as hard as twice its weight, sprang back, and spread again - a pudding of lead, its shape reset in
+  // mid-air over and over. And the air on each face as it moves against the rest of it: its jiggle damped - a
+  // watery one's spreading and springing back, a few times a second, never settled)
   _wind(h) {
     const S = this.sTri, nF = this.nF, ST = this.sTet, tc = this.tCube, CW = this.cWind, x = this.x, v = this.v, w = this.w, HF = this.sHollow;
-    const aw = this._awake, vp = this.vPiece;
-    for (let f = 0; f < nF; f++) {
-      const C = CW[tc[ST[f]]];
-      if (!(C > 0) || (HF && HF[f] === 2)) continue;
-      const a = S[f * 3], b = S[f * 3 + 1], c = S[f * 3 + 2];
-      if (!aw[vp[a]]) continue;
-      const a3 = a * 3, b3 = b * 3, c3 = c * 3;
-      const ux = x[b3] - x[a3], uy = x[b3 + 1] - x[a3 + 1], uz = x[b3 + 2] - x[a3 + 2], qx = x[c3] - x[a3], qy = x[c3 + 1] - x[a3 + 1], qz = x[c3 + 2] - x[a3 + 2];
-      let nx = uy * qz - uz * qy, ny = uz * qx - ux * qz, nz = ux * qy - uy * qx;
-      const nl = Math.sqrt(nx * nx + ny * ny + nz * nz);
-      if (!(nl > 1e-12)) continue;
-      nx /= nl; ny /= nl; nz /= nl;
-      const ux3 = (v[a3] + v[b3] + v[c3]) / 3, uy3 = (v[a3 + 1] + v[b3 + 1] + v[c3 + 1]) / 3, uz3 = (v[a3 + 2] + v[b3 + 2] + v[c3 + 2]) / 3;
-      const vn = ux3 * nx + uy3 * ny + uz3 * nz, vt2 = Math.max(0, ux3 * ux3 + uy3 * uy3 + uz3 * uz3 - vn * vn);
-      // (and the air streaming past its sides pulls them out - three times as hard as it pushes square on, more than
-      // a bluff thing's sides are (about as hard): sideways, it doesn't slow the fall, and as hard as that a jelly's
-      // hardly moved - and its wake pulls back on the face behind 0.8 as hard: at its critical speed, distended -
-      // its sides bowed out, its back drawn up after it, puffed out like a pillow)
-      const p = (vn > 0 ? C * vn * vn : -0.8 * C * vn * vn) - 3 * C * vt2, J = (-p * 0.5 * nl * h) / 3;
-      v[a3] += nx * J * w[a]; v[a3 + 1] += ny * J * w[a]; v[a3 + 2] += nz * J * w[a];
-      v[b3] += nx * J * w[b]; v[b3 + 1] += ny * J * w[b]; v[b3 + 2] += nz * J * w[b];
-      v[c3] += nx * J * w[c]; v[c3 + 1] += ny * J * w[c]; v[c3 + 2] += nz * J * w[c];
+    const aw = this._awake, vp = this.vPiece, WS = this._wSum;
+    WS.fill(0);
+    // (each windy cube's skin: its area, its speed - the mean of its faces' by area - and its push as is)
+    for (let pass = 0; pass < 2; pass++) {
+      for (let f = 0; f < nF; f++) {
+        const k = tc[ST[f]], C = CW[k];
+        if (!(C > 0) || (HF && HF[f] === 2)) continue;
+        const a = S[f * 3], b = S[f * 3 + 1], c = S[f * 3 + 2];
+        if (!aw[vp[a]]) continue;
+        const a3 = a * 3, b3 = b * 3, c3 = c * 3;
+        const ux = x[b3] - x[a3], uy = x[b3 + 1] - x[a3 + 1], uz = x[b3 + 2] - x[a3 + 2], qx = x[c3] - x[a3], qy = x[c3 + 1] - x[a3 + 1], qz = x[c3 + 2] - x[a3 + 2];
+        let nx = uy * qz - uz * qy, ny = uz * qx - ux * qz, nz = ux * qy - uy * qx;
+        const nl = Math.sqrt(nx * nx + ny * ny + nz * nz);
+        if (!(nl > 1e-12)) continue;
+        nx /= nl; ny /= nl; nz /= nl;
+        const ux3 = (v[a3] + v[b3] + v[c3]) / 3, uy3 = (v[a3 + 1] + v[b3 + 1] + v[c3 + 1]) / 3, uz3 = (v[a3 + 2] + v[b3 + 2] + v[c3 + 2]) / 3;
+        const vn = ux3 * nx + uy3 * ny + uz3 * nz, ar = 0.5 * nl, k6 = k * 6;
+        if (!pass) {
+          WS[k6] += ar;
+          WS[k6 + 1] += ux3 * ar; WS[k6 + 2] += uy3 * ar; WS[k6 + 3] += uz3 * ar;
+          if (vn > 0) WS[k6 + 4] += vn * vn * ar;
+          continue;
+        }
+        const vt2 = Math.max(0, ux3 * ux3 + uy3 * uy3 + uz3 * uz3 - vn * vn);
+        // (and the air streaming past its sides pulls them out - three times as hard as it pushes square on, more than
+        // a bluff thing's sides are (about as hard): sideways, it doesn't slow the fall, and as hard as that a jelly's
+        // hardly moved - and its wake pulls back on the face behind 0.8 as hard: at its critical speed, distended -
+        // its sides bowed out, its back drawn up after it, puffed out like a pillow)
+        const rel = vn - (WS[k6 + 1] * nx + WS[k6 + 2] * ny + WS[k6 + 3] * nz);
+        const p = ((vn > 0 ? C * vn * vn : -0.8 * C * vn * vn) - 3 * C * vt2) * WS[k6 + 4] + C * WS[k6 + 5] * rel, J = (-p * ar * h) / 3;
+        v[a3] += nx * J * w[a]; v[a3 + 1] += ny * J * w[a]; v[a3 + 2] += nz * J * w[a];
+        v[b3] += nx * J * w[b]; v[b3 + 1] += ny * J * w[b]; v[b3 + 2] += nz * J * w[b];
+        v[c3] += nx * J * w[c]; v[c3 + 1] += ny * J * w[c]; v[c3 + 2] += nz * J * w[c];
+      }
+      if (pass) break;
+      // (its speed; its push as is, over what it'd be square on with a face's area as made - the most it's let be;
+      // the air's hold on its jiggle, 8 times its push's rate a m/s, as fast as it goes)
+      for (let k = 0; k < MAX_CUBES; k++) {
+        const k6 = k * 6, A = WS[k6];
+        if (!(CW[k] > 0) || !(A > 0)) continue;
+        const vx = WS[k6 + 1] / A, vy = WS[k6 + 2] / A, vz = WS[k6 + 3] / A, v2 = vx * vx + vy * vy + vz * vz, A0 = this.cSize[k] * this.cSize[k];
+        WS[k6 + 1] = vx; WS[k6 + 2] = vy; WS[k6 + 3] = vz;
+        WS[k6 + 4] = WS[k6 + 4] > v2 * A0 ? (v2 * A0) / WS[k6 + 4] : 1;
+        WS[k6 + 5] = 8 * Math.sqrt(v2);
+      }
     }
   }
 
@@ -2771,6 +2824,9 @@ export class SoftBody {
     const top = this.p.ceiling;
     const n = this.nV;
     const aw = this._awake, vp = this.vPiece, I = this._imp;
+    // (sticky: each vertex that's touched the floor held to it - see STICK_A - by its piece's tack; and that hold
+    // added to its weight's for its grip on it, see _updateVelocities: stuck, it doesn't slide either)
+    const SK = this.stick, PT = this._pTack, hold1 = STICK_A * h * h;
     for (let i = 0; i < n; i++) {
       if (w[i] === 0 || !aw[vp[i]]) continue;
       const o = i * 3;
@@ -2782,6 +2838,20 @@ export class SoftBody {
         fpen[i] = -y;
         const q = vp[i] * 12, J = -y * m[i];
         I[q] += J; I[q + 1] += J * x[o]; I[q + 3] += J * x[o + 2];
+        const tk = PT[vp[i]];
+        if (tk > 0) (SK[i] = 1), (fpen[i] += tk * hold1);
+        else SK[i] = 0;
+      } else if (SK[i] > 0) {
+        // (stuck, and pulled up off it: put back, as long as its hold holds - giving a little for it, as hard as it's
+        // pulled; pulled harder than it holds, or given out, it lets go - peeled off)
+        const H = PT[vp[i]] * hold1 * SK[i];
+        if (!(y < H)) SK[i] = 0;
+        else {
+          x[o + 1] = 0;
+          fpen[i] = H;
+          SK[i] -= (h * PEEL_RATE * y) / H;
+          if (SK[i] < 0.05) SK[i] = 0;
+        }
       } else if (y > top) x[o + 1] = top;
       // (the glass room: square walls, half its width R out)
       if (box) {
@@ -2908,23 +2978,51 @@ export class SoftBody {
       // to exactly e x the impact speed (0 = splat, 0.95 = super ball).
       const e = this.cBounce[pc.cube];
       if (e >= 0 && !pc.asleep) {
-        if (y0 < 0.02 && vy < -1.2 && !pc.rebT) pc.impY = Math.min(pc.impY || 0, vy);
-        if (pc.impY && !pc.rebT && vy > -0.25) pc.rebT = 0.22;
-        if (pc.rebT) {
-          const want = -pc.impY * e;
-          const dv = want - vy;
-          if ((dv > 0 && !pc.boosted) || dv < 0) {
-            for (let k = 0; k < vs.length; k++) v[vs[k] * 3 + 1] += dv;
-            vy = want;
-            if (dv > 0) pc.boosted = true;
-          }
-          pc.rebT -= dt;
-          if (pc.rebT <= 0) {
-            pc.rebT = 0;
+        // (up off the floor just now, or not: a landing's only one coming down out of the air)
+        if (y0 > 0.02) pc.air = 0.25;
+        else if (pc.air > 0) pc.air = Math.max(0, pc.air - dt);
+        if (e < SPLAT_E) {
+          // A splat (next to no bounce): squashed as far as it goes, its bounce taken out of it - see SPLAT_E. (Its
+          // middle held still for the window after, as a bouncier one's is held to its rebound, a pudding's squash
+          // kept on pushing into the floor all the while, and sprang it up a cube's height after - and its top
+          // flopping back down onto its bottom, standing up off its splat, was taken for a landing, and so again)
+          // (how fast it came down: the step before it touched too - from 25 m/s, squashed flat and sprung back up
+          // within the step it landed in, its middle read 7 coming down)
+          const vd = Math.min(vy, pc.lastVy);
+          if (y0 < 0.02 && vd < -1.2 && (pc.air > 0 || pc.impY < 0)) pc.impY = Math.min(pc.impY, vd);
+          if (pc.impY < 0 && vy > -0.25) {
+            pc.splatT = SPLAT_T;
+            pc.splatK = (1 - e / SPLAT_E) * Math.min(1, -pc.impY / 4);
+            pc.splatV = -pc.impY;
             pc.impY = 0;
-            pc.boosted = false;
+          }
+          // (and up off it no faster than its bounce takes it, or than it oozes back up into shape: faster's a bounce
+          // - from that, squashed flat and sprung back within the step, it went up 3 m)
+          const cap = Math.max(e * pc.splatV, 0.6);
+          if (pc.splatT > 0 && vy > cap) {
+            for (let k = 0; k < vs.length; k++) v[vs[k] * 3 + 1] += cap - vy;
+            vy = cap;
+          }
+        } else {
+          if (y0 < 0.02 && vy < -1.2 && !pc.rebT) pc.impY = Math.min(pc.impY || 0, vy);
+          if (pc.impY && !pc.rebT && vy > -0.25) pc.rebT = 0.22;
+          if (pc.rebT) {
+            const want = -pc.impY * e;
+            const dv = want - vy;
+            if ((dv > 0 && !pc.boosted) || dv < 0) {
+              for (let k = 0; k < vs.length; k++) v[vs[k] * 3 + 1] += dv;
+              vy = want;
+              if (dv > 0) pc.boosted = true;
+            }
+            pc.rebT -= dt;
+            if (pc.rebT <= 0) {
+              pc.rebT = 0;
+              pc.impY = 0;
+              pc.boosted = false;
+            }
           }
         }
+        pc.lastVy = pc.vel[1];
         const rc = Math.hypot(cx, cz) || 1;
         const ux = cx / rc, uz = cz / rc;
         const rmax = Math.max(Math.hypot(x0, z0), Math.hypot(x1, z0), Math.hypot(x0, z1), Math.hypot(x1, z1));
@@ -3086,6 +3184,9 @@ export class SoftBody {
         }
       } else pc.sleepT = 0;
       let dev2 = 0;
+      // (a splat's jiggle, damped hard - less and less as its hold wears off)
+      const kd0 = pc.splatT > 0 ? Math.max(kd, 1 - Math.exp(-SPLAT_D * pc.splatK * (pc.splatT / SPLAT_T) * dk)) : kd;
+      if (pc.splatT > 0) pc.splatT = Math.max(0, pc.splatT - dt);
       // (a corner of a sliver a cut left - a tet a hundredth the size of the
       // rest, see _slivers - damped hard: they buzzed at metres a second in
       // a cube shot full of holes, kept the rest of it ringing, and it never
@@ -3097,7 +3198,7 @@ export class SoftBody {
         const rvx = vx + wy * rz - wz * ry, rvy = vy + wz * rx - wx * rz, rvz = vz + wx * ry - wy * rx;
         const ux = v[o] - rvx, uy = v[o + 1] - rvy, uz = v[o + 2] - rvz;
         dev2 += m[i] * (ux * ux + uy * uy + uz * uz);
-        const kv = SL && SL[i] ? Math.max(kd, ks) : kd;
+        const kv = SL && SL[i] ? Math.max(kd0, ks) : kd0;
         v[o] = (rvx + (v[o] - rvx) * (1 - kv)) * air;
         v[o + 1] = (rvy + (v[o + 1] - rvy) * (1 - kv)) * air;
         v[o + 2] = (rvz + (v[o + 2] - rvz) * (1 - kv)) * air;

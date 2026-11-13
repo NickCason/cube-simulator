@@ -52,6 +52,68 @@ export class Spill {
     if (sb.topoVersion !== this.ver || sb.cubeVersion !== this.cv) this._seal(sb);
   }
 
+  // (where in cube k as made a point of it as it stands is - by the tet it's in, its corners' weights: the function
+  // returns whether it's in one, the place in its r)
+  _restMap(sb, k, c) {
+    const T = sb.T, x = sb.x, X = sb.X, tc = sb.tCube, ic = 1 / c, ts = [];
+    let x0 = Infinity, y0 = Infinity, z0 = Infinity, x1 = -Infinity, y1 = -Infinity, z1 = -Infinity;
+    for (let t = 0; t < sb.nT; t++) {
+      if (tc[t] !== k || !(sb.vol0[t] > 0)) continue;
+      ts.push(t);
+      for (let j = 0; j < 4; j++) {
+        const o = T[t * 4 + j] * 3;
+        if (x[o] < x0) x0 = x[o]; if (x[o] > x1) x1 = x[o];
+        if (x[o + 1] < y0) y0 = x[o + 1]; if (x[o + 1] > y1) y1 = x[o + 1];
+        if (x[o + 2] < z0) z0 = x[o + 2]; if (x[o + 2] > z1) z1 = x[o + 2];
+      }
+    }
+    const gx = Math.max(1, Math.ceil((x1 - x0) * ic)), gy = Math.max(1, Math.ceil((y1 - y0) * ic)), gz = Math.max(1, Math.ceil((z1 - z0) * ic));
+    const cells = new Map();
+    for (const t of ts) {
+      let a0 = Infinity, b0 = Infinity, c0 = Infinity, a1 = -Infinity, b1 = -Infinity, c1 = -Infinity;
+      for (let j = 0; j < 4; j++) {
+        const o = T[t * 4 + j] * 3;
+        a0 = Math.min(a0, x[o]); a1 = Math.max(a1, x[o]); b0 = Math.min(b0, x[o + 1]); b1 = Math.max(b1, x[o + 1]); c0 = Math.min(c0, x[o + 2]); c1 = Math.max(c1, x[o + 2]);
+      }
+      const i0 = Math.max(0, Math.floor((a0 - x0) * ic)), i1 = Math.min(gx - 1, Math.floor((a1 - x0) * ic));
+      const j0 = Math.max(0, Math.floor((b0 - y0) * ic)), j1 = Math.min(gy - 1, Math.floor((b1 - y0) * ic));
+      const k0 = Math.max(0, Math.floor((c0 - z0) * ic)), k1 = Math.min(gz - 1, Math.floor((c1 - z0) * ic));
+      for (let kk = k0; kk <= k1; kk++)
+        for (let j = j0; j <= j1; j++)
+          for (let i = i0; i <= i1; i++) {
+            const q = (kk * gy + j) * gx + i, l = cells.get(q);
+            if (l) l.push(t);
+            else cells.set(q, [t]);
+          }
+    }
+    const r = [0, 0, 0];
+    const back = (px, py, pz) => {
+      const i = Math.floor((px - x0) * ic), j = Math.floor((py - y0) * ic), kk = Math.floor((pz - z0) * ic);
+      if (i < 0 || j < 0 || kk < 0 || i >= gx || j >= gy || kk >= gz) return false;
+      const l = cells.get((kk * gy + j) * gx + i);
+      if (!l) return false;
+      for (const t of l) {
+        const a = T[t * 4] * 3, b = T[t * 4 + 1] * 3, cc = T[t * 4 + 2] * 3, e = T[t * 4 + 3] * 3;
+        const u0 = x[b] - x[a], u1 = x[b + 1] - x[a + 1], u2 = x[b + 2] - x[a + 2];
+        const v0 = x[cc] - x[a], v1 = x[cc + 1] - x[a + 1], v2 = x[cc + 2] - x[a + 2];
+        const w0 = x[e] - x[a], w1 = x[e + 1] - x[a + 1], w2 = x[e + 2] - x[a + 2];
+        const p0 = px - x[a], p1 = py - x[a + 1], p2 = pz - x[a + 2];
+        const det = u0 * (v1 * w2 - v2 * w1) - v0 * (u1 * w2 - u2 * w1) + w0 * (u1 * v2 - u2 * v1);
+        if (!(Math.abs(det) > 1e-14)) continue;
+        const l1 = (p0 * (v1 * w2 - v2 * w1) - v0 * (p1 * w2 - p2 * w1) + w0 * (p1 * v2 - p2 * v1)) / det;
+        const l2 = (u0 * (p1 * w2 - p2 * w1) - p0 * (u1 * w2 - u2 * w1) + w0 * (u1 * p2 - u2 * p1)) / det;
+        const l3 = (u0 * (v1 * p2 - v2 * p1) - v0 * (u1 * p2 - u2 * p1) + p0 * (u1 * v2 - u2 * v1)) / det;
+        const l0 = 1 - l1 - l2 - l3;
+        if (l0 < -1e-6 || l1 < -1e-6 || l2 < -1e-6 || l3 < -1e-6) continue;
+        for (let q = 0; q < 3; q++) r[q] = l0 * X[a + q] + l1 * X[b + q] + l2 * X[cc + q] + l3 * X[e + q];
+        return true;
+      }
+      return false;
+    };
+    back.r = r;
+    return back;
+  }
+
   // Cube k made a shell: its inside out, its wall as thick as its skin, and its hollow filled from the bottom as
   // full as it's to be.
   _hollow(sb, k) {
@@ -110,9 +172,11 @@ export class Spill {
     if (!fl.n) fl.setDrop(Math.max(0.065, Math.cbrt((OVER * V) / Math.max(1, Math.min(room, FILL_N)))));
     const D = fl.D, d = D / Math.cbrt(OVER), fill = Math.min(1, Math.max(0, sb.cFill[k]));
     // where they go: a lattice d apart over it as it stands, each point taken back into its rest shape by the
-    // turn and kept if it's that deep and half a spacing more. (Laid through its rest shape and carried out by
-    // its sag as it stood, they were a tenth too close: packed in from the start, the column fell in on itself
-    // to half its height.)
+    // tet it's in (by the turn, if it's in none) and kept if it's that deep and half a spacing more. (Laid through
+    // its rest shape and carried out by its sag as it stood, they were a tenth too close: packed in from the start,
+    // the column fell in on itself to half its height. Taken back by the turn alone, a soft heavy cube slumped to
+    // twice its width was filled only as far as its hollow as made reached into it - three-quarters of Full.)
+    const back = this._restMap(sb, k, d);
     let lo0 = Infinity, lo1 = Infinity, lo2 = Infinity, hi0 = -Infinity, hi1 = -Infinity, hi2 = -Infinity;
     for (let i = 0; i < sb.nV; i++) {
       if (vc[i] !== k || !sb.alive[i]) continue;
@@ -127,14 +191,20 @@ export class Spill {
         for (let iz = Math.ceil(lo2 / d); iz * d <= hi2; iz++) {
           const px = ix * d - xm[0], py = iy * d - xm[1], pz = iz * d - xm[2];
           // (R's transpose: world back to rest)
-          const rx = Xm[0] + R[0] * px + R[3] * py + R[6] * pz, ry = Xm[1] + R[1] * px + R[4] * py + R[7] * pz, rz = Xm[2] + R[2] * px + R[5] * py + R[8] * pz;
+          let rx = Xm[0] + R[0] * px + R[3] * py + R[6] * pz, ry = Xm[1] + R[1] * px + R[4] * py + R[7] * pz, rz = Xm[2] + R[2] * px + R[5] * py + R[8] * pz;
+          if (!globalThis.__fillRigid && back(ix * d, iy * d, iz * d)) (rx = back.r[0]), (ry = back.r[1]), (rz = back.r[2]);
           if (deep(rx, ry, rz) > need) P.push([ix * d, iy * d, iz * d, rx, ry, rz]);
         }
     // as full as it's to be: its lowest share of them - of as many as its hollow holds as made (laid through it
     // stretched or squashed as it was just then, a few in ten more or less: re-cubed, it came out overfull)
     // - as many as there's room for
     P.sort((p, q) => p[1] - q[1]);
-    const n = Math.min(room, P.length, Math.round(fill * ((OVER * V) / D ** 3)));
+    // (and no more than its lattice holds in it as made, upright - taken back by the tets, a cube's held a twentieth more
+    // than that, and cut open it had its liquid pressed out into the cut's jelly. Full's drawn full: see Fluid._fillFull)
+    let Pr = 0;
+    const mr = Math.ceil(half / d);
+    for (let a = -mr; a <= mr; a++) for (let b = -mr; b <= mr; b++) for (let c = -mr; c <= mr; c++) if (deep(ox + a * d, b * d, c * d) > need) Pr++;
+    const n = Math.min(room, P.length, Pr, Math.round(fill * ((OVER * V) / D ** 3)));
     const [fv, ft] = liquidVisc(sb.cVisc[k]), p0 = fl.n;
     // (its colour: its own, if it's been given one - a rainbow, in bands from red at the bottom of it to violet at
     // its top, however full, by where each was poured (lowest first): mixing as it's sloshed - else its jelly's,
@@ -151,6 +221,9 @@ export class Spill {
     // GAIN - else the column fell in on itself before it could; and marked as this cube's)
     sb.cHid[k] = ++this.hid;
     for (let i = p0; i < fl.n; i++) (fl.age[i] = 1), (fl.own[i] = this.hid), (fl.tens[i] = sb.cTens[k]);
+    // (filled Full: drawn full while it's all still in it - see Fluid._fillFull)
+    fl.fullHid[k] = fill > 0.995 && fl.n > p0 ? this.hid : 0;
+    fl.fullN[k] = fl.n - p0;
     this.drained += (fl.n - p0) * fl.vol;
     // (what's in it - the glitter on the nearest of them; its bubbles all through it, none left in its wall or
     // hollow: see Bubbles.intoLiquid)

@@ -42,6 +42,7 @@ export class DropMode {
     this._slowWas = undefined; // (time slowed just before it lands: what it was)
     this._slowed = false;
     this.fovKick = 0; // (0..1: the view widened with its speed - see App._updateCamera)
+    this._tack = -1; // (a sticky one's tack, put by while it's on the hook - see start; -1 none)
   }
 
   setHeight(h) {
@@ -63,6 +64,7 @@ export class DropMode {
   exit() {
     if (!this.on) return;
     this._release();
+    this._restick();
     this.fx.stop();
     this._view(false);
     this._slow(false);
@@ -96,12 +98,17 @@ export class DropMode {
     const { pc, i } = P, size = sb.cSize[this.slot], top = pc.bbox[4], bot = pc.bbox[1];
     // (out of the room's reach above: its ceiling over the hook - see SoftBody._solveBounds)
     sb.p.ceiling = Math.max(sb.p.ceiling, this.height + 3 * size + 2);
-    this.grab = sb.startGrab({ point: [pc.com[0], top, pc.com[2]], piece: i }, pc.com[0], top, pc.com[2], 0.3 * size);
+    // (by all its top - a hold centred over it, reaching its edges: by its middle alone, a soft heavy one hung by a
+    // neck, a bungee five times its height, and let go it sprang back to a cube in the air)
+    this.grab = sb.startGrab({ point: [pc.com[0], top + 0.25 * size, pc.com[2]], piece: i }, pc.com[0], top + 0.25 * size, pc.com[2], 0.55 * size);
     if (!this.grab) return;
+    // (a sticky one let go of the floor - its tack back as it's let go, for its landing: torn off it by the hook, its
+    // top was crumpled in and it fell lumpy, wobbling - see SoftBody._solveBounds)
+    this._unstick();
     // (a hook, not a hand: as fast as it's taken up - see SoftBody._solveGrab)
     this.grab.boost = 3;
-    this.y0 = top;
-    this.yTop = this.height + (top - bot);
+    this.y0 = top + 0.25 * size;
+    this.yTop = this.height + (top - bot) + 0.25 * size;
     this.fx.scatter(pc.com[0], pc.com[2], this.yTop);
     this.dur = Math.max(1.2, (1.5 * (this.yTop - this.y0)) / LIFT_V);
     this.phase = 'lift';
@@ -116,6 +123,7 @@ export class DropMode {
   letGo() {
     if (this.phase !== 'lift' && this.phase !== 'hang') return;
     this._release();
+    this._restick();
     this._view(true);
     this.app.audio?.whoosh(0.8);
     this.app.sb.setWind(this.slot, VT);
@@ -130,6 +138,18 @@ export class DropMode {
     this.grab = null;
   }
 
+  _unstick() {
+    const sb = this.app.sb, k = this.slot;
+    if (this._tack < 0) this._tack = sb.cTack[k];
+    sb.cTack[k] = 0;
+    for (let i = 0; i < sb.nV; i++) if (sb.vCube[i] === k) sb.stick[i] = 0;
+  }
+
+  _restick() {
+    if (this._tack >= 0) this.app.sb.cTack[this.slot] = this._tack;
+    this._tack = -1;
+  }
+
   update(dt) {
     if (!this.on || !this.phase) return;
     this.t += dt;
@@ -137,6 +157,7 @@ export class DropMode {
     // (re-cubed, swapped, gone from under it: back to the start)
     if (!P || (this.grab && !sb.grabs.includes(this.grab))) {
       this._release();
+      this._restick();
       sb.setWind(this.slot, 0);
       this.phase = '';
       this.frameY = null;
@@ -151,9 +172,13 @@ export class DropMode {
       this.grab.ty = this.y0 + (this.yTop - this.y0) * e;
       if (u >= 1) {
         this.phase = 'hang';
+        this.t = 0;
         this._changed();
       }
     }
+    // (slowing at the top, and its first second hung there: its bounce on the hook damped - it hangs, swaying, not
+    // bouncing - see SoftBody._dampPieces's hush)
+    if ((this.phase === 'lift' && this.t > 0.6 * this.dur) || (this.phase === 'hang' && this.t < 1)) pc.hush = Math.max(pc.hush, 0.05);
     // (fast: the view widening and buffeted by the wind, more the faster - none once it's down)
     const kick = this.phase === 'fall' && this.landT < 0 ? Math.min(1, Math.max(0, (this.speed - 6) / 16)) : 0;
     this.fovKick += (kick - this.fovKick) * (1 - Math.exp(-dt * 4));
@@ -167,6 +192,8 @@ export class DropMode {
         this.landT = this.t;
         this.hitV = this.peak;
         this.fx.impact(this, pc, this.hitV);
+        // (down: the air off it - its bounce, as it's made; left on, a rubber one's leap was braked to a fifth of it)
+        this.app.sb.setWind(this.slot, 0);
       }
       if (this._slowed && this.landT >= 0 && this.t - this.landT > 0.3) this._slow(false);
       if (this.landT >= 0) {
