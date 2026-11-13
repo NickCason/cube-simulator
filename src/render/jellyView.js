@@ -2,7 +2,10 @@ import { shapeSDF, shapeNormal, shapeRadius, shapeFlat } from '../sim/mesh.js';
 import * as THREE from 'three';
 import { biasExp, RUBIK_COLORS, gradAt, gradSequence, GRAD_SHAPE_INDEX, rubikPack, rubikStateOf, TRIM } from '../styles.js';
 import { FREE_N, bakeFree } from '../freeform.js';
-import { MAX_CUBES, REST_STEP } from '../sim/softbody.js';
+import { MAX_CUBES, REST_STEP, TAG_FRESH, TAG_EXTERIOR } from '../sim/softbody.js';
+
+// (cut surfaces drawn smooth - see JellyView._buildSmooth: Taubin's lambda|mu, rounds of the pair)
+const SMOOTH_L = 0.6307, SMOOTH_M = -0.6732, SMOOTH_IT = 10;
 const GLOW_BIT = 32; // (JELLY_GLOW: see jellyMaterials.js JELLY_FEATURES)
 import {
   createBackMaterial,
@@ -425,6 +428,9 @@ export class JellyView {
     // renderFar)
     this.backPeelMat = createBackMaterial(false, true);
     this.rtPeel = this.rtPeel2 = null;
+    // (cut surfaces drawn smooth: see _buildSmooth)
+    this.smN = 0;
+    this.smV = this.smT = this.smB = this.smR0 = this.smRN = this.smF = this.smMark = this.smAcc = null;
     this.far = true; // (switched off: as before - its near wall a lens straight through to the room)
     this.frontMat = createJellyMaterial(env, this.layerUniforms);
     // (Mesa - Linux's GL - hung the GPU or crashed compiling a shader while
@@ -1127,6 +1133,7 @@ export class JellyView {
     if (sb.topoVersion === this.topoVersion && sb.restVersion === this._restVersion) return false;
     this.topoVersion = sb.topoVersion;
     this._restVersion = sb.restVersion;
+    this._buildSmooth(sb);
     for (const m of [this.allMesh, ...this.layerMeshes]) {
       if (!m) continue;
       this.scene.remove(m);
@@ -1344,6 +1351,7 @@ export class JellyView {
     this._dataAt = now;
     const pos = this.pos, nrm = this.nrm, data = this.data;
     sb.writeRender(pos, nrm, data, this.coat, this.coatM);
+    if (this.smN) this._smoothCuts(sb);
     if (fill) this._fill(sb, sb.fill);
     tessellate(pos, nrm, data, this.mids1, this.nBase, this.disp1, this.coat, this.coatM, this._formTri ? this.disp31 : null, this._formTri ? this.twin1 : null);
     tessellate(pos, nrm, data, this.mids2, this.nL1, this.disp2, this.coat, this.coatM, this._formTri ? this.disp32 : null, this._formTri ? this.twin2 : null);
@@ -1360,6 +1368,194 @@ export class JellyView {
       this.aCoatM.needsUpdate = true;
     }
     this._coatShown = ds > 0;
+  }
+
+  // Cut surfaces drawn smooth. A cut's faces - a bullet's tunnel, a hollow's walls, a shatter's, a tear's - are the
+  // faces of whole tets: a staircase, sawteeth, a crystal of facets, a cell (~9 cm) to a step. (A knife's are
+  // flat: it splits the tets on its plane.) Drawn instead as that surface smoothed - at rest, Taubin's lambda|mu
+  // (it doesn't shrink), its rim on the cube's outside held - each of its points kept where it is in a tet by it
+  // (barycentric, a little outside it as may be), so it bends and turns with the jelly as that does. Only drawn:
+  // the jelly itself is as it was. Once a cut (here); each frame, its points and one normal each (_smoothCuts).
+  _buildSmooth(sb) {
+    this.smN = 0;
+    const nV = sb.nV, nF = sb.nF, S = sb.sTri, tag = sb.sTag, X = sb.X, ST = sb.sTet, T = sb.T, rSim = sb.rSim, rI = sb.rIndex;
+    if (!nF || !rSim) return;
+    // (each vertex: on a cut's face, the outside's, any other's - a melt's: left be)
+    const fr = new Uint8Array(nV), ex = new Uint8Array(nV), ot = new Uint8Array(nV), face = new Int32Array(nV).fill(-1);
+    for (let f = 0; f < nF; f++) {
+      const g = tag[f];
+      for (let c = 0; c < 3; c++) {
+        const v = S[f * 3 + c];
+        if (g === TAG_FRESH) {
+          if (!fr[v]) (fr[v] = 1), (face[v] = f);
+        } else if (g === TAG_EXTERIOR) ex[v] = 1;
+        else ot[v] = 1;
+      }
+    }
+    // free: a cut's face's, and none else's; rim: on the outside too - where a cut comes out of it
+    const idx = new Int32Array(nV).fill(-1), list = [], rim = [];
+    for (let v = 0; v < nV; v++) {
+      if (!fr[v] || ot[v]) continue;
+      idx[v] = list.length;
+      list.push(v);
+      rim.push(ex[v] ? 1 : 0);
+    }
+    const n = list.length;
+    if (!n) return;
+    // (neighbours: a free one's along its cut's faces; a rim one's along the rim - edges both a cut's and the
+    // outside's - a run of it, two a vertex; else it's held where it is)
+    const exE = new Set();
+    for (let f = 0; f < nF; f++) {
+      if (tag[f] !== TAG_EXTERIOR) continue;
+      for (let c = 0; c < 3; c++) {
+        const a = S[f * 3 + c], b = S[f * 3 + ((c + 1) % 3)];
+        exE.add(a < b ? a * nV + b : b * nV + a);
+      }
+    }
+    const nbs = list.map(() => []);
+    for (let f = 0; f < nF; f++) {
+      if (tag[f] !== TAG_FRESH) continue;
+      for (let c = 0; c < 3; c++) {
+        const a = S[f * 3 + c], b = S[f * 3 + ((c + 1) % 3)], ja = idx[a], jb = idx[b];
+        const onRim = rim[ja] && jb >= 0 && rim[jb] && exE.has(a < b ? a * nV + b : b * nV + a);
+        for (const [j, o] of [[ja, b], [jb, a]]) {
+          if (j < 0) continue;
+          if (rim[j] ? onRim : true) nbs[j].push(o);
+        }
+      }
+    }
+    for (let j = 0; j < n; j++) {
+      if (!rim[j]) continue;
+      // (the rim's: each of its two once - the same edge on two cut faces counted twice)
+      const u = [...new Set(nbs[j])];
+      nbs[j] = u.length === 2 ? u : [];
+    }
+    const P = Float64Array.from(X.subarray(0, nV * 3)), Q = new Float64Array(n * 3);
+    const taubin = (which) => {
+      for (let it = 0; it < 2 * SMOOTH_IT; it++) {
+        const k = it & 1 ? SMOOTH_M : SMOOTH_L;
+        for (let j = 0; j < n; j++) {
+          const v = list[j] * 3, nb = nbs[j];
+          if (rim[j] !== which || !nb.length) {
+            Q[j * 3] = P[v]; Q[j * 3 + 1] = P[v + 1]; Q[j * 3 + 2] = P[v + 2];
+            continue;
+          }
+          let sx = 0, sy = 0, sz = 0;
+          for (const u of nb) (sx += P[u * 3]), (sy += P[u * 3 + 1]), (sz += P[u * 3 + 2]);
+          const m = nb.length;
+          Q[j * 3] = P[v] + k * (sx / m - P[v]); Q[j * 3 + 1] = P[v + 1] + k * (sy / m - P[v + 1]); Q[j * 3 + 2] = P[v + 2] + k * (sz / m - P[v + 2]);
+        }
+        for (let j = 0; j < n; j++) (P[list[j] * 3] = Q[j * 3]), (P[list[j] * 3 + 1] = Q[j * 3 + 1]), (P[list[j] * 3 + 2] = Q[j * 3 + 2]);
+      }
+    };
+    // the rim first - its run smoothed, then put back on the cube's own shape at rest (a scalloped one's, left)
+    taubin(1);
+    const g = [0, 0, 0];
+    for (let j = 0; j < n; j++) {
+      if (!rim[j] || !nbs[j].length) continue;
+      const v = list[j], k = sb.vCube[v];
+      if (sb.cLobeA[k] > 0) continue;
+      const half = sb.cSize[k] / 2, bev = sb.cBevel[k], fm = sb.formOf(k), o = v * 3, lx = P[o] - k * REST_STEP;
+      const d = shapeSDF(lx, P[o + 1], P[o + 2], half, bev, fm);
+      shapeNormal(lx, P[o + 1], P[o + 2], half, bev, fm, g);
+      P[o] -= g[0] * d; P[o + 1] -= g[1] * d; P[o + 2] -= g[2] * d;
+    }
+    // then the cut's faces, the rim holding their edge
+    taubin(0);
+    // each in a tet of its own (its first cut face's): barycentric, at rest
+    const smT = new Int32Array(n), smB = new Float32Array(n * 4);
+    for (let j = 0; j < n; j++) {
+      const v = list[j], t = ST[face[v]], o = t * 4, a = T[o] * 3, b = T[o + 1] * 3, c = T[o + 2] * 3, d = T[o + 3] * 3;
+      const e1x = X[b] - X[a], e1y = X[b + 1] - X[a + 1], e1z = X[b + 2] - X[a + 2];
+      const e2x = X[c] - X[a], e2y = X[c + 1] - X[a + 1], e2z = X[c + 2] - X[a + 2];
+      const e3x = X[d] - X[a], e3y = X[d + 1] - X[a + 1], e3z = X[d + 2] - X[a + 2];
+      const rx = P[v * 3] - X[a], ry = P[v * 3 + 1] - X[a + 1], rz = P[v * 3 + 2] - X[a + 2];
+      const det = e1x * (e2y * e3z - e2z * e3y) - e1y * (e2x * e3z - e2z * e3x) + e1z * (e2x * e3y - e2y * e3x);
+      smT[j] = t;
+      if (!(Math.abs(det) > 1e-15)) {
+        // (a flat one: where the vertex is)
+        const q = T[o] === v ? 0 : T[o + 1] === v ? 1 : T[o + 2] === v ? 2 : 3;
+        smB[j * 4 + q] = 1;
+        continue;
+      }
+      const b1 = (rx * (e2y * e3z - e2z * e3y) - ry * (e2x * e3z - e2z * e3x) + rz * (e2x * e3y - e2y * e3x)) / det;
+      const b2 = (e1x * (ry * e3z - rz * e3y) - e1y * (rx * e3z - rz * e3x) + e1z * (rx * e3y - ry * e3x)) / det;
+      const b3 = (e1x * (e2y * rz - e2z * ry) - e1y * (e2x * rz - e2z * rx) + e1z * (e2x * ry - e2y * rx)) / det;
+      smB[j * 4] = 1 - b1 - b2 - b3; smB[j * 4 + 1] = b1; smB[j * 4 + 2] = b2; smB[j * 4 + 3] = b3;
+    }
+    // (each one's render points - a run of them, as they were made, vertex by vertex: 1 a free one's, its normal
+    // one over them all; 2 a rim one's, each its own - the crease where a cut comes out of the outside kept - and
+    // the faces they're on)
+    const rFirst = new Int32Array(n).fill(-1), rCount = new Int32Array(n), mark = new Uint8Array(rSim.length);
+    for (let r = 0; r < rSim.length; r++) {
+      const j = idx[rSim[r]];
+      if (j < 0) continue;
+      if (rFirst[j] < 0) rFirst[j] = r;
+      rCount[j]++;
+      mark[r] = rim[j] ? 2 : 1;
+    }
+    const faces = [];
+    for (let k = 0; k < rI.length; k += 3) if (mark[rI[k]] || mark[rI[k + 1]] || mark[rI[k + 2]]) faces.push(k);
+    this.smN = n;
+    this.smV = Int32Array.from(list);
+    this.smT = smT;
+    this.smB = smB;
+    this.smR0 = rFirst;
+    this.smRN = rCount;
+    this.smF = Int32Array.from(faces);
+    this.smMark = mark;
+    this.smAcc = new Float32Array(rSim.length * 3);
+  }
+
+  // (each frame: the smoothed cut's points where their tets have them now, and each one normal over all its
+  // faces - its render points split at the steps' creases, those creases gone)
+  _smoothCuts(sb) {
+    const x = sb.x, T = sb.T, pos = this.pos, nrm = this.nrm, B = this.smB, TT = this.smT, R0 = this.smR0, RN = this.smRN, n = this.smN;
+    for (let j = 0; j < n; j++) {
+      const o = TT[j] * 4, a = T[o] * 3, b = T[o + 1] * 3, c = T[o + 2] * 3, d = T[o + 3] * 3, w = j * 4;
+      const px = B[w] * x[a] + B[w + 1] * x[b] + B[w + 2] * x[c] + B[w + 3] * x[d];
+      const py = B[w] * x[a + 1] + B[w + 1] * x[b + 1] + B[w + 2] * x[c + 1] + B[w + 3] * x[d + 1];
+      const pz = B[w] * x[a + 2] + B[w + 1] * x[b + 2] + B[w + 2] * x[c + 2] + B[w + 3] * x[d + 2];
+      for (let r = R0[j], r1 = R0[j] + RN[j]; r < r1; r++) (pos[r * 3] = px), (pos[r * 3 + 1] = py), (pos[r * 3 + 2] = pz);
+    }
+    // normals: its faces' (area-weighted) summed per render point, then over all of each one's points - and the
+    // cut's side of its rim (held, but its faces moved), each as it is
+    const acc = this.smAcc, F = this.smF, rI = sb.rIndex, M = this.smMark;
+    for (let k = 0; k < F.length; k++) {
+      const f = F[k];
+      for (let q = 0; q < 3; q++) {
+        const r = rI[f + q] * 3;
+        acc[r] = acc[r + 1] = acc[r + 2] = 0;
+      }
+    }
+    for (let k = 0; k < F.length; k++) {
+      const f = F[k], a = rI[f] * 3, b = rI[f + 1] * 3, c = rI[f + 2] * 3;
+      const ux = pos[b] - pos[a], uy = pos[b + 1] - pos[a + 1], uz = pos[b + 2] - pos[a + 2];
+      const vx = pos[c] - pos[a], vy = pos[c + 1] - pos[a + 1], vz = pos[c + 2] - pos[a + 2];
+      const nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx;
+      acc[a] += nx; acc[a + 1] += ny; acc[a + 2] += nz;
+      acc[b] += nx; acc[b + 1] += ny; acc[b + 2] += nz;
+      acc[c] += nx; acc[c + 1] += ny; acc[c + 2] += nz;
+    }
+    for (let j = 0; j < n; j++) {
+      if (M[R0[j]] !== 1) continue;
+      let sx = 0, sy = 0, sz = 0;
+      const r0 = R0[j], r1 = r0 + RN[j];
+      for (let r = r0; r < r1; r++) (sx += acc[r * 3]), (sy += acc[r * 3 + 1]), (sz += acc[r * 3 + 2]);
+      const l = Math.sqrt(sx * sx + sy * sy + sz * sz);
+      if (!(l > 1e-20)) continue;
+      sx /= l; sy /= l; sz /= l;
+      for (let r = r0; r < r1; r++) (nrm[r * 3] = sx), (nrm[r * 3 + 1] = sy), (nrm[r * 3 + 2] = sz);
+    }
+    for (let k = 0; k < F.length; k++) {
+      const f = F[k];
+      for (let q = 0; q < 3; q++) {
+        const r = rI[f + q];
+        if (M[r] !== 2) continue;
+        const o = r * 3, l = Math.sqrt(acc[o] * acc[o] + acc[o + 1] * acc[o + 1] + acc[o + 2] * acc[o + 2]);
+        if (l > 1e-20) (nrm[o] = acc[o] / l), (nrm[o + 1] = acc[o + 1] / l), (nrm[o + 2] = acc[o + 2] / l);
+      }
+    }
   }
 
   // The heal's liquid fill: what was missing rises from its holes' walls
