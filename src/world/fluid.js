@@ -48,6 +48,7 @@ const RADIUS_K = 0.35;
 const BEND_PAD = 0.06; // (m) the most a soft cube's wall's off its best fit, near enough: what's that much further in looked at too (see _snapBox)
 const DG = 7; // (each cube full of liquid's bend from its best fit: on a grid this many points a side over it as made - see _frames, _bend)
 const MV = 10; // (a cube cut into: how its jelly's moved since last frame, on a grid this many points a side over where it was - see _moveGrid)
+const FAR_CUT = 0.3; // (m: a cube cut into's drop out of its skin, its way out further than this from every cut - through a wall: see _contain)
 const FULL_AT = 1.08; // (a cube's liquid this much of its hollow by its drops' nominal volume, or more: drawn full - see _fillFull)
 const COH = 0.3; // cohesion: how hard thin parts pull together (vs packed parts pushing apart) - at the highest surface tension
 const EPS = +(globalThis.__fluidEps ?? 1); // constraint relaxation, x a full neighbourhood's gradient sum
@@ -155,6 +156,7 @@ export class Fluid {
     this._contained = 0;
     this._tri = new Int32Array(3 * 1024);
     this._cuts = new Float32Array(3 * 256);
+    this._cutsD = new Float32Array(3 * 1024); // (points all over each of them: see _contain)
     this._xzTri = this._tri;
     this._xzG = new Float64Array(6);
     this.envIn = new Uint8Array(N);
@@ -940,22 +942,7 @@ export class Fluid {
           const o = i * 3, px = x[o], py = x[o + 1], pz = x[o + 2];
           if (this._xzOdd(px, py, pz) || this._inTet(px, py, pz) >= 0) continue;
           // (out: back in, by the nearest of its faces)
-          let best = -1, bd = Infinity;
-          for (let f = 0; f < m; f++) {
-            const a = tri[f * 3] * 3, b = tri[f * 3 + 1] * 3, d = tri[f * 3 + 2] * 3;
-            const cx = (X[a] + X[b] + X[d]) / 3 - px, cy = (X[a + 1] + X[b + 1] + X[d + 1]) / 3 - py, cz = (X[a + 2] + X[b + 2] + X[d + 2]) / 3 - pz, d2 = cx * cx + cy * cy + cz * cz;
-            if (d2 < bd) (bd = d2), (best = f);
-          }
-          if (best < 0) continue;
-          const a = tri[best * 3] * 3, b = tri[best * 3 + 1] * 3, d = tri[best * 3 + 2] * 3;
-          const ux = X[b] - X[a], uy = X[b + 1] - X[a + 1], uz = X[b + 2] - X[a + 2], wx = X[d] - X[a], wy = X[d + 1] - X[a + 1], wz = X[d + 2] - X[a + 2];
-          let nx = uy * wz - uz * wy, ny = uz * wx - ux * wz, nz = ux * wy - uy * wx;
-          const nl = Math.sqrt(nx * nx + ny * ny + nz * nz) || 1, r = R_P + 0.005;
-          nx /= nl; ny /= nl; nz /= nl;
-          x[o] = (X[a] + X[b] + X[d]) / 3 + nx * r; x[o + 1] = (X[a + 1] + X[b + 1] + X[d + 1]) / 3 + ny * r; x[o + 2] = (X[a + 2] + X[b + 2] + X[d + 2]) / 3 + nz * r;
-          v[o] = (SV[a] + SV[b] + SV[d]) / 3; v[o + 1] = (SV[a + 1] + SV[b + 1] + SV[d + 1]) / 3; v[o + 2] = (SV[a + 2] + SV[b + 2] + SV[d + 2]) / 3;
-          this.lastOut[o] = x[o]; this.lastOut[o + 1] = x[o + 1]; this.lastOut[o + 2] = x[o + 2];
-          this._contained++;
+          if (this._backIn(VV, F, i, k)) this._contained++;
         }
         continue;
       }
@@ -966,7 +953,7 @@ export class Fluid {
       // its outside skin, and its cuts' faces (not its outside, nor its hollow's - in its rest shape, out past the
       // hollow's box by more than a quarter of a cell) where they are now
       const S = sb.sTri, tag = sb.sTag, ST = sb.sTet, tc = sb.tCube, XR = sb.X, HB = sb.cHole, h6 = k * 6, q4 = 0.25 * sb.cH[k];
-      let m = 0, nc = 0;
+      let m = 0, nc = 0, ncd = 0;
       if (this._tri.length < sb.nF * 3) this._tri = new Int32Array(sb.nF * 6);
       if (this._cuts.length < sb.nF * 3) this._cuts = new Float32Array(sb.nF * 6);
       const tri = this._tri, cuts = this._cuts;
@@ -986,6 +973,21 @@ export class Fluid {
         if (o2 <= q4 * q4) continue;
         for (let ax = 0; ax < 3; ax++) cuts[nc * 3 + ax] = (X[a * 3 + ax] + X[b * 3 + ax] + X[d * 3 + ax]) / 3;
         nc++;
+        // (and all over it - its corners, its edges' middles, its middle: a knife's cut's faces are made a few big
+        // ones, their middles half a metre apart - see _cutsOff)
+        if (this._cutsD.length < (ncd + 7) * 3) {
+          const g = new Float32Array((ncd + 7) * 6);
+          g.set(this._cutsD.subarray(0, ncd * 3));
+          this._cutsD = g;
+        }
+        const CD = this._cutsD, a3 = a * 3, b3 = b * 3, d3 = d * 3;
+        for (let ax = 0; ax < 3; ax++) {
+          const A = X[a3 + ax], B = X[b3 + ax], C = X[d3 + ax];
+          CD[ncd * 3 + ax] = A; CD[(ncd + 1) * 3 + ax] = B; CD[(ncd + 2) * 3 + ax] = C;
+          CD[(ncd + 3) * 3 + ax] = (A + B) / 2; CD[(ncd + 4) * 3 + ax] = (B + C) / 2; CD[(ncd + 5) * 3 + ax] = (C + A) / 2;
+          CD[(ncd + 6) * 3 + ax] = (A + B + C) / 3;
+        }
+        ncd += 7;
       }
       if (!m) continue;
       this._xzBuild(tri, m);
@@ -1018,13 +1020,24 @@ export class Fluid {
           ex += M[0]; ey += M[1]; ez += M[2];
         }
         // (nor through a hole in its skin - out through a slit pulled wide, away from its sides - only through the
-        // skin itself: kept so, held open, it never drained)
-        if (!this._xzCrosses(ex, ey, ez, px, py, pz)) continue;
-        // (out through a wall: back where it was in it, moving as the jelly there is)
-        if (grid === 1) (v[o] = M[3]), (v[o + 1] = M[4]), (v[o + 2] = M[5]);
-        else v[o] = v[o + 1] = v[o + 2] = 0;
-        x[o] = EP[o] = ex; x[o + 1] = EP[o + 1] = ey; x[o + 2] = EP[o + 2] = ez;
-        this.lastOut[o] = x[o]; this.lastOut[o + 1] = x[o + 1]; this.lastOut[o + 2] = x[o + 2];
+        // skin itself: kept so, held open, it never drained. Unless its way out - from where it was carried to - came
+        // nowhere near a cut, none within 30 cm: it can't have gone out by one. A wall its look missed - shaken by
+        // a shot cube's top, its walls carried short where the finger drags them hardest, or a hole's shadow upset
+        // its count of faces over it; and a cube yanked away from what it let out of its hole is near that hole's
+        // way. Back where it was carried to if that's in its skin, else just inside its hollow's nearest face)
+        let back = this._xzCrosses(ex, ey, ez, px, py, pz) ? 1 : 0;
+        if (!back && this._cutsOff(this._cutsD, ncd, ex, ey, ez, px, py, pz, FAR_CUT * FAR_CUT)) back = this._xzOdd(ex, ey, ez) ? 1 : 2;
+        if (!back) continue;
+        if (back === 2) {
+          if (!this._backIn(c.v, c.f, i, k)) continue;
+          EP[o] = x[o]; EP[o + 1] = x[o + 1]; EP[o + 2] = x[o + 2];
+        } else {
+          // (out through a wall: back where it was in it, moving as the jelly there is)
+          if (grid === 1) (v[o] = M[3]), (v[o + 1] = M[4]), (v[o + 2] = M[5]);
+          else v[o] = v[o + 1] = v[o + 2] = 0;
+          x[o] = EP[o] = ex; x[o + 1] = EP[o + 1] = ey; x[o + 2] = EP[o + 2] = ez;
+          this.lastOut[o] = x[o]; this.lastOut[o + 1] = x[o + 1]; this.lastOut[o + 2] = x[o + 2];
+        }
         EI[i] = 1;
         this._contained++;
       }
@@ -1199,6 +1212,46 @@ export class Fluid {
       const sx = (at(px + hc, pz) - at(px - hc, pz)) / (2 * hc), sz = (at(px, pz + hc) - at(px, pz - hc)) / (2 * hc), l = 1 / Math.sqrt(sx * sx + 1 + sz * sz);
       N[o] = -sx * l; N[o + 1] = l; N[o + 2] = -sz * l;
     }
+  }
+
+  // (drop i out of cube k's hollow - VV, F: its faces, see Spill._seal - back in: just inside the nearest of them,
+  // moving as that is. Not a cut's face joined on to it - in its rest shape out past its hollow's box by a quarter
+  // of a cell, as _contain's cuts: put just inside a shot's tunnel, it ran on out of the hole)
+  _backIn(VV, F, i, k) {
+    const sb = this.app.sb, X = sb.x, XR = sb.X, SV = sb.v, HB = sb.cHole, h6 = k * 6, q4 = 0.25 * sb.cH[k], x = this.x, v = this.v, o = i * 3, px = x[o], py = x[o + 1], pz = x[o + 2], m = F.length / 3;
+    let best = -1, bd = Infinity;
+    for (let f = 0; f < m; f++) {
+      const a = VV[F[f * 3]] * 3, b = VV[F[f * 3 + 1]] * 3, d = VV[F[f * 3 + 2]] * 3;
+      let o2 = 0;
+      for (let ax = 0; ax < 3; ax++) {
+        const r = (XR[a + ax] + XR[b + ax] + XR[d + ax]) / 3, out = Math.max(HB[h6 + ax] - r, 0, r - HB[h6 + 3 + ax]);
+        o2 += out * out;
+      }
+      if (o2 > q4 * q4) continue;
+      const cx = (X[a] + X[b] + X[d]) / 3 - px, cy = (X[a + 1] + X[b + 1] + X[d + 1]) / 3 - py, cz = (X[a + 2] + X[b + 2] + X[d + 2]) / 3 - pz, d2 = cx * cx + cy * cy + cz * cz;
+      if (d2 < bd) (bd = d2), (best = f);
+    }
+    if (best < 0) return false;
+    const a = VV[F[best * 3]] * 3, b = VV[F[best * 3 + 1]] * 3, d = VV[F[best * 3 + 2]] * 3;
+    const ux = X[b] - X[a], uy = X[b + 1] - X[a + 1], uz = X[b + 2] - X[a + 2], wx = X[d] - X[a], wy = X[d + 1] - X[a + 1], wz = X[d + 2] - X[a + 2];
+    let nx = uy * wz - uz * wy, ny = uz * wx - ux * wz, nz = ux * wy - uy * wx;
+    const nl = Math.sqrt(nx * nx + ny * ny + nz * nz) || 1, r = R_P + 0.005;
+    nx /= nl; ny /= nl; nz /= nl;
+    x[o] = (X[a] + X[b] + X[d]) / 3 + nx * r; x[o + 1] = (X[a + 1] + X[b + 1] + X[d + 1]) / 3 + ny * r; x[o + 2] = (X[a + 2] + X[b + 2] + X[d + 2]) / 3 + nz * r;
+    v[o] = (SV[a] + SV[b] + SV[d]) / 3; v[o + 1] = (SV[a + 1] + SV[b + 1] + SV[d + 1]) / 3; v[o + 2] = (SV[a + 2] + SV[b + 2] + SV[d + 2]) / 3;
+    this.lastOut[o] = x[o]; this.lastOut[o + 1] = x[o + 1]; this.lastOut[o + 2] = x[o + 2];
+    return true;
+  }
+
+  // (is every point of the cuts' - cuts[0..nc*3) - further than sqrt(far2) from the way from a to b?)
+  _cutsOff(cuts, nc, ax, ay, az, bx, by, bz, far2) {
+    const dx = bx - ax, dy = by - ay, dz = bz - az, L2 = dx * dx + dy * dy + dz * dz;
+    for (let e = 0; e < nc; e++) {
+      const cx = cuts[e * 3] - ax, cy = cuts[e * 3 + 1] - ay, cz = cuts[e * 3 + 2] - az;
+      const t = L2 > 1e-12 ? Math.min(1, Math.max(0, (cx * dx + cy * dy + cz * dz) / L2)) : 0, qx = cx - dx * t, qy = cy - dy * t, qz = cz - dz * t;
+      if (qx * qx + qy * qy + qz * qz < far2) return false;
+    }
+    return true;
   }
 
   // (how cube k's jelly has moved since _contain last kept its liquid in - and how fast it's going now - on a grid
