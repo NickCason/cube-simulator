@@ -56,6 +56,9 @@ export function relocateAnchors(sb, anchors) {
  *   before the body is stepped or drawn)
  * opts.glueAll: split the tets along it but glue it all back - the seam a
  *   tear will open later (see unglue); its vertices come back as .seam
+ * opts.rest: the field is in the jelly's rest shape, not the room - a tear
+ *   carrying on a part cut, along its plane as made however its lips have
+ *   been pulled about (a seam: glueAll, no separate)
  * Returns { changed, pieces: [pieceIds touched], sideOfVertex }
  */
 export function cutBody(sb, field, opts = {}) {
@@ -67,19 +70,20 @@ export function cutBody(sb, field, opts = {}) {
   const region = field.inRegion || null;
   const nrm = [0, 0, 0];
 
-  // signed values
+  // signed values (where the field is: the room, or the rest shape)
+  const PX = opts.rest ? sb.X : sb.x;
   const s = new Float64Array(nV0);
   for (let i = 0; i < nV0; i++) {
     if (!sb.alive[i]) continue;
     const o = i * 3;
-    s[i] = field.value(sb.x[o], sb.x[o + 1], sb.x[o + 2]);
+    s[i] = field.value(PX[o], PX[o + 1], PX[o + 2]);
   }
 
   // --- affected pieces: a straddling tet with its crossing in region
   const affected = new Uint8Array(sb.pieces.length);
   let anyAffected = false;
   {
-    const T = sb.T, x = sb.x;
+    const T = sb.T, x = PX;
     for (let t = 0; t < nT0; t++) {
       if (sb.vol0[t] <= 0) continue;
       const pc = sb.tPiece[t];
@@ -115,7 +119,7 @@ export function cutBody(sb, field, opts = {}) {
       if (s[i] !== 0 && Math.abs(s[i]) < thr) cand.push(i);
     }
     cand.sort((a, b) => Math.abs(s[a]) - Math.abs(s[b]));
-    const { x, px, X, T, vtStart, vtList } = sb;
+    const { px, X, T, vtStart, vtList } = sb, x = PX;
     // (one on the piece's surface moves only along it: a face lying along the cut - an earlier cut's a
     // slice away, or the cube's own side - had its corners snapped onto the cut, and a thin slice came out
     // notched and crumpled, raw tets and shards, like refrozen slime. A vertex on a face turned within 45°
@@ -153,6 +157,37 @@ export function cutBody(sb, field, opts = {}) {
       const o = i * 3;
       field.normal(x[o], x[o + 1], x[o + 2], nrm);
       const dx = -s[i] * nrm[0], dy = -s[i] * nrm[1], dz = -s[i] * nrm[2];
+      // (in the rest shape already: so far there at rest, and in the room as its largest tet's stretched)
+      if (opts.rest) {
+        let bt = -1, bv = 0;
+        for (let k = vtStart[i]; k < vtStart[i + 1]; k++) if (sb.vol0[vtList[k]] > bv) (bv = sb.vol0[vtList[k]]), (bt = vtList[k]);
+        if (bt < 0) continue;
+        const wx = sb.x, A = T[bt * 4] * 3, B = T[bt * 4 + 1] * 3, C = T[bt * 4 + 2] * 3, D = T[bt * 4 + 3] * 3;
+        const m00 = X[B] - X[A], m10 = X[B + 1] - X[A + 1], m20 = X[B + 2] - X[A + 2], m01 = X[C] - X[A], m11 = X[C + 1] - X[A + 1], m21 = X[C + 2] - X[A + 2], m02 = X[D] - X[A], m12 = X[D + 1] - X[A + 1], m22 = X[D + 2] - X[A + 2];
+        const dm = m00 * (m11 * m22 - m12 * m21) - m01 * (m10 * m22 - m12 * m20) + m02 * (m10 * m21 - m11 * m20);
+        if (Math.abs(dm) < 1e-12) continue;
+        const im = 1 / dm;
+        const y0 = ((m11 * m22 - m12 * m21) * dx + (m02 * m21 - m01 * m22) * dy + (m01 * m12 - m02 * m11) * dz) * im;
+        const y1 = ((m12 * m20 - m10 * m22) * dx + (m00 * m22 - m02 * m20) * dy + (m02 * m10 - m00 * m12) * dz) * im;
+        const y2 = ((m10 * m21 - m11 * m20) * dx + (m01 * m20 - m00 * m21) * dy + (m00 * m11 - m01 * m10) * dz) * im;
+        const ex = (wx[B] - wx[A]) * y0 + (wx[C] - wx[A]) * y1 + (wx[D] - wx[A]) * y2, ey = (wx[B + 1] - wx[A + 1]) * y0 + (wx[C + 1] - wx[A + 1]) * y1 + (wx[D + 1] - wx[A + 1]) * y2, ez = (wx[B + 2] - wx[A + 2]) * y0 + (wx[C + 2] - wx[A + 2]) * y1 + (wx[D + 2] - wx[A + 2]) * y2;
+        const oldR = [];
+        for (let k = vtStart[i]; k < vtStart[i + 1]; k++) oldR.push(restVolume(X, T[vtList[k] * 4], T[vtList[k] * 4 + 1], T[vtList[k] * 4 + 2], T[vtList[k] * 4 + 3]));
+        X[o] += dx; X[o + 1] += dy; X[o + 2] += dz;
+        let fine = true;
+        for (let k = vtStart[i], q = 0; k < vtStart[i + 1] && fine; k++, q++) {
+          const nv = restVolume(X, T[vtList[k] * 4], T[vtList[k] * 4 + 1], T[vtList[k] * 4 + 2], T[vtList[k] * 4 + 3]);
+          if (nv < 0.3 * oldR[q] || nv <= 1e-12) fine = false;
+        }
+        if (!fine) {
+          X[o] -= dx; X[o + 1] -= dy; X[o + 2] -= dz;
+          continue;
+        }
+        wx[o] += ex; wx[o + 1] += ey; wx[o + 2] += ez;
+        px[o] += ex; px[o + 1] += ey; px[o + 2] += ez;
+        s[i] = 0;
+        continue;
+      }
       // deformation gradient of the largest incident tet: dX = Dm * Ds^-1 * dx
       let bestT = -1, bestV = 0;
       for (let k = vtStart[i]; k < vtStart[i + 1]; k++) {
@@ -359,7 +394,7 @@ export function cutBody(sb, field, opts = {}) {
       if (cut.length >= 3) {
         // order around centroid in the cut plane
         let cx = 0, cy = 0, cz = 0;
-        const P = cut.map((id) => posOf(id, [0, 0, 0]));
+        const P = cut.map((id) => (opts.rest ? restOf(id) : posOf(id, [0, 0, 0])));
         for (const p of P) { cx += p[0]; cy += p[1]; cz += p[2]; }
         cx /= P.length; cy /= P.length; cz /= P.length;
         field.normal(cx, cy, cz, nrm);

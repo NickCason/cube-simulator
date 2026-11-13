@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { cutBody, planeField, unglue, removeSmallPieces, removeTets } from '../sim/cutting.js';
 import { maxStretch } from '../sim/strain.js';
 import { polarRot } from '../sim/softbody.js';
-import { WEAK, weakMap, weakest, worldPlane } from '../sim/weak.js';
+import { WEAK, weakMap, weakest, worldPlane, slitCalm } from '../sim/weak.js';
 import { makeNailGun, makeHoleGun } from '../world/models.js';
 
 const _v = new THREE.Vector3();
@@ -339,6 +339,7 @@ export class HandTool {
     // straighter, hole to hole, and none of the ragging at a slit, which
     // would slice slivers off its sides)
     const wk = best.wk && best.wk.share < WEAK ? best.wk : null, wp = wk && this._worldPlane(best.k, wk);
+    let rest = false;
     if (wp) {
       [nx, ny, nz] = wp.n;
       const dp = nx * wp.o[0] + ny * wp.o[1] + nz * wp.o[2];
@@ -348,12 +349,18 @@ export class HandTool {
         const e = nx * o[0] + ny * o[1] + nz * o[2] - dp;
         o = [o[0] - nx * e, o[1] - ny * e, o[2] - nz * e];
       }
-      field = ragged(planeField(nx, ny, nz, dp), amp * (wk.slit ? 1 : 0.35 + 0.65 * share), sb.p.size, wp.calm);
+      // (a part cut carried on along its own plane as made - cut in the rest shape, however its lips are pulled
+      // about: put through them in the room, a rigid cube's hinged open, the plane a centimetre off took a
+      // sliver off one, alongside the cut, and a pull at a slant tore beside it)
+      if (wk.slit) {
+        field = ragged(planeField(wk.n[0], wk.n[1], wk.n[2], wk.d), amp, sb.p.size, slitCalm(sb, wk, sb.X));
+        rest = true;
+      } else field = ragged(planeField(nx, ny, nz, dp), amp * (0.35 + 0.65 * share), sb.p.size, wp.calm);
     } else {
       if (!o) return null;
       field = ragged(planeField(nx, ny, nz, nx * o[0] + ny * o[1] + nz * o[2]), amp, sb.p.size);
     }
-    const res = cutBody(sb, field, { glueAll: true, anchors: app.allAnchors(), pieces: [best.k] });
+    const res = cutBody(sb, field, { glueAll: true, anchors: app.allAnchors(), pieces: [best.k], rest });
     if (!res.changed || !res.seam.length) return null;
     app.onTopologyChanged();
     const seam = res.seam.filter((i) => sb.alive[i]);
@@ -365,7 +372,10 @@ export class HandTool {
     for (const t of pc.tets) {
       if (sb.vol0[t] <= 0) continue;
       const c = tetCentre(sb, t);
-      if (field.value(c[0], c[1], c[2]) > 0) plus[t] = 1;
+      if (rest) {
+        const X = sb.X, q4 = t * 4, A = sb.T[q4] * 3, B = sb.T[q4 + 1] * 3, C = sb.T[q4 + 2] * 3, D = sb.T[q4 + 3] * 3;
+        if (field.value((X[A] + X[B] + X[C] + X[D]) / 4, (X[A + 1] + X[B + 1] + X[C + 1] + X[D + 1]) / 4, (X[A + 2] + X[B + 2] + X[C + 2] + X[D + 2]) / 4) > 0) plus[t] = 1;
+      } else if (field.value(c[0], c[1], c[2]) > 0) plus[t] = 1;
       const d = Math.abs((c[0] - o[0]) * nx + (c[1] - o[1]) * ny + (c[2] - o[2]) * nz);
       if (d >= half) continue;
       band.push(t);

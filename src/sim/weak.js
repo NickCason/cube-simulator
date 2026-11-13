@@ -19,13 +19,21 @@ for (const th of [12.5, 25]) for (let k = 0; k < 6; k++) DIRS.push([(th * Math.P
 // was whole (2: a hole, a scoop, a bite, a pit melted or eaten out - or a
 // bit that's come away, the ball a scoop took). (Another big piece's jelly,
 // or outside the cube, isn't counted either way: that's where it ends, not
-// where it's weak.) And its slits, cut faces with its own jelly just the
-// other side (a part cut, a tear let go of part way): each face's middle,
-// outward normal, area and index. Good till the jelly's cut again (topo).
+// where it's weak - nor a cube full of liquid's hollow: made so. Counted, it
+// was most of what was missing anywhere, a slit in its wall nothing beside
+// it: pulled apart, it tore where it was stretched most, beside the slit.)
+// And its slits, cut faces with its own jelly just the other side (a part
+// cut, a tear let go of part way): each face's middle, outward normal, area
+// and index. Good till the jelly's cut again (topo).
 export function weakMap(sb, k) {
   const pc = sb.pieces[k], X = sb.X, T = sb.T, g = 0.5 * sb.hCell, hit = {};
   // (the whole cube it's of, in the rest shape)
   const cb = sb.vCube[pc.verts[0]], half = sb.cSize[cb] / 2, bevel = sb.cBevel[cb], ox = cb * REST_STEP, bit = 0.15 * sb.cSize[cb] ** 3;
+  const hol = sb.cHollow[cb] && sb.cLiq[cb] ? sb.wallTh(cb) - 0.5 * g : Infinity;
+  const gap = (px, py, pz) => {
+    const d = roundBoxSDF(px - ox, py, pz, half, bevel);
+    return d < -0.25 * g && !(d < -hol);
+  };
   const lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
   for (const i of pc.verts)
     for (let c = 0; c < 3; c++) {
@@ -42,8 +50,8 @@ export function weakMap(sb, k) {
         if (sb.locateRestFast(px, py, pz, hit)) {
           const q = sb.tPiece[hit.tet];
           if (q === k) cells.push(px, py, pz, 1);
-          else if (sb.pieces[q].volume < bit && roundBoxSDF(px - ox, py, pz, half, bevel) < -0.25 * g) cells.push(px, py, pz, 2);
-        } else if (roundBoxSDF(px - ox, py, pz, half, bevel) < -0.25 * g) cells.push(px, py, pz, 2);
+          else if (sb.pieces[q].volume < bit && gap(px, py, pz)) cells.push(px, py, pz, 2);
+        } else if (gap(px, py, pz)) cells.push(px, py, pz, 2);
       }
   const slits = [], { sTri, sTag, sTet, tPiece } = sb, e = 0.25 * g;
   for (let f = 0; f < sb.nF; f++) {
@@ -90,10 +98,30 @@ export function weakest(W, A, B) {
   u[0] /= ul; u[1] /= ul; u[2] /= ul;
   const v = [n0[1] * u[2] - n0[2] * u[1], n0[2] * u[0] - n0[0] * u[2], n0[0] * u[1] - n0[1] * u[0]];
   const g3 = g * g * g, NB = 64, jel = new Float64Array(NB), gap = new Float64Array(NB), sl = new Float64Array(NB);
-  let big = 0, best = null;
-  for (const [th, ph] of DIRS) {
+  // the ways: square to it and tilted off it (DIRS) - and each slit's own, its faces gathered by the way they
+  // face, where pulling this way opens it (60 degrees off square at most: pulled at a slant across a part cut,
+  // the ways square-ish to the pull missed it, and it tore beside it)
+  const ways = DIRS.map(([th, ph]) => {
     const ct = Math.cos(th), st = Math.sin(th), cp = Math.cos(ph), sp = Math.sin(ph);
-    const nx = ct * n0[0] + st * (cp * u[0] + sp * v[0]), ny = ct * n0[1] + st * (cp * u[1] + sp * v[1]), nz = ct * n0[2] + st * (cp * u[2] + sp * v[2]);
+    return [th, ct * n0[0] + st * (cp * u[0] + sp * v[0]), ct * n0[1] + st * (cp * u[1] + sp * v[1]), ct * n0[2] + st * (cp * u[2] + sp * v[2])];
+  });
+  const groups = [];
+  for (let i = 0; i < S.length; i += 8) {
+    const sg = S[i + 3] * n0[0] + S[i + 4] * n0[1] + S[i + 5] * n0[2] < 0 ? -1 : 1, fx = S[i + 3] * sg, fy = S[i + 4] * sg, fz = S[i + 5] * sg, ar = S[i + 6];
+    let gr = null;
+    for (const q of groups) {
+      const l = Math.hypot(q[0], q[1], q[2]);
+      if ((q[0] * fx + q[1] * fy + q[2] * fz) / l > 0.96) gr = q;
+    }
+    if (!gr && groups.length < 6) groups.push((gr = [0, 0, 0]));
+    if (gr) (gr[0] += fx * ar), (gr[1] += fy * ar), (gr[2] += fz * ar);
+  }
+  for (const q of groups) {
+    const l = Math.hypot(q[0], q[1], q[2]), c = (q[0] * n0[0] + q[1] * n0[1] + q[2] * n0[2]) / l;
+    if (l > 0 && c >= 0.5 && c < 0.995) ways.push([Math.acos(c), q[0] / l, q[1] / l, q[2] / l]);
+  }
+  let big = 0, best = null;
+  for (const [th, nx, ny, nz] of ways) {
     const a = nx * A[0] + ny * A[1] + nz * A[2], b = nx * B[0] + ny * B[1] + nz * B[2];
     const lo = a + 0.2 * (b - a), hi = b - 0.2 * (b - a);
     const nb = Math.min(NB, Math.max(1, Math.round((hi - lo) / g))), w = (hi - lo) / nb;
@@ -201,28 +229,29 @@ export function worldPlane(sb, W, k, wk) {
   const nl = Math.hypot(n[0], n[1], n[2]);
   if (!(nl > 0)) return null;
   for (let q = 0; q < 3; q++) n[q] /= nl;
-  let calm = null;
-  if (wk.slit) {
-    // (by a slit, flat: its faces' middles, now, on a grid a cell across)
-    const h = sb.hCell, cells = new Map(), sTri = sb.sTri, key = (p, q, r) => (p + 4096) * 67108864 + (q + 4096) * 8192 + (r + 4096);
-    for (const f of wk.faces) {
-      const c = [0, 1, 2].map((q) => (x[sTri[f * 3] * 3 + q] + x[sTri[f * 3 + 1] * 3 + q] + x[sTri[f * 3 + 2] * 3 + q]) / 3);
-      const kk = key(Math.floor(c[0] / h), Math.floor(c[1] / h), Math.floor(c[2] / h));
-      if (!cells.has(kk)) cells.set(kk, []);
-      cells.get(kk).push(c);
-    }
-    calm = (px, py, pz) => {
-      let d2 = Infinity;
-      const i0 = Math.floor(px / h), j0 = Math.floor(py / h), k0 = Math.floor(pz / h);
-      for (let i = i0 - 2; i <= i0 + 2; i++)
-        for (let j = j0 - 2; j <= j0 + 2; j++)
-          for (let q = k0 - 2; q <= k0 + 2; q++) {
-            const l = cells.get(key(i, j, q));
-            if (l) for (const c of l) d2 = Math.min(d2, (c[0] - px) ** 2 + (c[1] - py) ** 2 + (c[2] - pz) ** 2);
-          }
-      const s = (Math.sqrt(d2) / h - 0.75) / 1.25;
-      return s <= 0 ? 0 : s >= 1 ? 1 : s * s * (3 - 2 * s);
-    };
+  return { n, o, calm: wk.slit ? slitCalm(sb, wk, x) : null };
+}
+
+// (by a slit, flat: its faces' middles - where P has them, the room's x or the rest shape's X - on a grid a
+// cell across: calm(x, y, z), how ragged a torn face is let be there, 0 right by it)
+export function slitCalm(sb, wk, P) {
+  const h = sb.hCell, cells = new Map(), sTri = sb.sTri, key = (p, q, r) => (p + 4096) * 67108864 + (q + 4096) * 8192 + (r + 4096);
+  for (const f of wk.faces) {
+    const c = [0, 1, 2].map((q) => (P[sTri[f * 3] * 3 + q] + P[sTri[f * 3 + 1] * 3 + q] + P[sTri[f * 3 + 2] * 3 + q]) / 3);
+    const kk = key(Math.floor(c[0] / h), Math.floor(c[1] / h), Math.floor(c[2] / h));
+    if (!cells.has(kk)) cells.set(kk, []);
+    cells.get(kk).push(c);
   }
-  return { n, o, calm };
+  return (px, py, pz) => {
+    let d2 = Infinity;
+    const i0 = Math.floor(px / h), j0 = Math.floor(py / h), k0 = Math.floor(pz / h);
+    for (let i = i0 - 2; i <= i0 + 2; i++)
+      for (let j = j0 - 2; j <= j0 + 2; j++)
+        for (let q = k0 - 2; q <= k0 + 2; q++) {
+          const l = cells.get(key(i, j, q));
+          if (l) for (const c of l) d2 = Math.min(d2, (c[0] - px) ** 2 + (c[1] - py) ** 2 + (c[2] - pz) ** 2);
+        }
+    const s = (Math.sqrt(d2) / h - 0.75) / 1.25;
+    return s <= 0 ? 0 : s >= 1 ? 1 : s * s * (3 - 2 * s);
+  };
 }
