@@ -29,6 +29,8 @@ when done (`> scenario build params seed N: ...`, for Monitor), then a table of 
 | `hollow` | the hollow as drawn against its shape | cube=plainLiquid skin=0 edges= |
 | `look` | pictures: views `+z/-x/app` x skips `all/liquid/jelly`, tiled | cube views=+z skips=all cut=none place=diner skin fill radius phi |
 | `perf` | "go wild" on a liquid+glitter cube: each frame and its parts timed | cube=aqua fill=1 glitter=holo fps=60 |
+| `yank` | shot through (the shot exits its bottom), left to dribble, yanked up by its top: drops through its bottom face | cube=blueGold gun=holegun wait=60 gu=0.5 gv=0.2 rise=320 over=4 hold=30 pics=0 |
+| `slit` | slit from the top, kept in one piece: held open (drains) or dragged round (stays in): drops out of its box | cube=plainLiquid skin=0.5 depth=0.5 hold=open\|drag\|none pull=1.5 steps=20 frames=90 r=80 |
 
 Examples:
 
@@ -40,7 +42,7 @@ node tools/kit/run.mjs look --set cube=aqua,views=+z/-z/+x/-x,skips=all/jelly,cu
 ```
 
 Cubes by name (`cubes.mjs`): `plain`, `plainLiquid`, `plainSharp`, `aqua`, `fluorescent` (empty, as shared),
-`fluorescentFilled` - or any share code. In a code `lk` is the liquid's skin, `lf` its fill; `sk` is NOT skin.
+`fluorescentFilled`, `blueGold` (soft, blue, gold glitter, full) - or any share code. In a code `lk` is the liquid's skin, `lf` its fill; `sk` is NOT skin.
 
 ## Builds
 

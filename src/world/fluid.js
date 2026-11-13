@@ -47,6 +47,7 @@ const GAIN = 0.8; // (m/s) the most the solver speeds a particle up a substep
 const RADIUS_K = 0.35;
 const BEND_PAD = 0.06; // (m) the most a soft cube's wall's off its best fit, near enough: what's that much further in looked at too (see _snapBox)
 const DG = 7; // (each cube full of liquid's bend from its best fit: on a grid this many points a side over it as made - see _frames, _bend)
+const MV = 10; // (a cube cut into: how its jelly's moved since last frame, on a grid this many points a side over where it was - see _moveGrid)
 const FULL_AT = 1.08; // (a cube's liquid this much of its hollow by its drops' nominal volume, or more: drawn full - see _fillFull)
 const COH = 0.3; // cohesion: how hard thin parts pull together (vs packed parts pushing apart) - at the highest surface tension
 const EPS = +(globalThis.__fluidEps ?? 1); // constraint relaxation, x a full neighbourhood's gradient sum
@@ -203,6 +204,18 @@ export class Fluid {
     // and whether that's there: for its liquid's surface against its wall and what's carried in it, see _frames)
     this.frames = new Float64Array(MAX_CUBES * 15);
     this.frameOK = new Uint8Array(MAX_CUBES);
+    // (the jelly as it was last time the liquid was kept in a cube cut into - where, and as made - and when; how
+    // it's moved since, on a grid over where it was, and a point's move: see _contain, _moveGrid)
+    this._skP = new Float64Array(0);
+    this._skR = new Float64Array(0);
+    this._skN = 0;
+    this._skAt = -1;
+    this._contN = 0;
+    this._mvW = new Uint8Array(MV * MV * MV);
+    this._mvWt = new Float64Array(MV * MV * MV);
+    this._mvD = new Float64Array(MV * MV * MV * 6);
+    this._mvB = new Float64Array(6);
+    this._mvM = new Float64Array(6);
     this._bigN = this._totN = null; // (each cube's pieces of size, and its points: see _frames)
     // (the cups - pieces of a hollow cube cut open - holding air under the liquid this frame, and each piece's own
     // turn, hollow and air, kept from frame to frame: see _cups, _air)
@@ -884,6 +897,8 @@ export class Fluid {
   _contain() {
     const sb = this.app.sb, own = this.own, x = this.x, v = this.v, X = sb.x, SV = sb.v, n = this.n, EI = this.envIn, EP = this.envPrev;
     if (this._envN !== n) (this._envN = n), EI.fill(2, 0, n);
+    const cn = ++this._contN, sN = this._skAt === cn - 1 ? this._skN : 0;
+    let kept = false;
     for (let k = 0; k < sb.cav.length; k++) {
       const c = sb.cav[k], id = sb.cHid[k];
       if (!c || !id) continue;
@@ -950,7 +965,9 @@ export class Fluid {
       }
       if (!m) continue;
       this._xzBuild(tri, m);
-      const near2 = (0.9 * sb.cH[k]) ** 2;
+      kept = true;
+      const near2 = (0.9 * sb.cH[k]) ** 2, M = this._mvM;
+      let grid = 0;
       for (let i = 0; i < n; i++) {
         if (own[i] !== id) continue;
         const o = i * 3, px = x[o], py = x[o + 1], pz = x[o + 2], inside = this._xzOdd(px, py, pz), was = EI[i];
@@ -965,16 +982,123 @@ export class Fluid {
           const dx = cuts[e * 3] - px, dy = cuts[e * 3 + 1] - py, dz = cuts[e * 3 + 2] - pz;
           near = dx * dx + dy * dy + dz * dz < near2;
         }
+        if (near) continue;
+        // (where it was, carried with the jelly round it as that's moved since: yanked up, a cube's floor swept up
+        // past its drops half a metre a frame, none of them through it themselves, and every one under it was let
+        // go - a sheet out of its bottom face. By the cube's best fit, stretched to twice its height, they were left
+        // under it still)
+        let ex = EP[o], ey = EP[o + 1], ez = EP[o + 2];
+        if (sN && grid === 0) grid = this._moveGrid(k, sN) ? 1 : 2;
+        if (grid === 1) {
+          this._moveAt(ex, ey, ez, M);
+          ex += M[0]; ey += M[1]; ez += M[2];
+        }
         // (nor through a hole in its skin - out through a slit pulled wide, away from its sides - only through the
         // skin itself: kept so, held open, it never drained)
-        if (near || !this._xzCrosses(EP[o], EP[o + 1], EP[o + 2], px, py, pz)) continue;
-        // (out through a wall: back where it was, still)
-        x[o] = EP[o]; x[o + 1] = EP[o + 1]; x[o + 2] = EP[o + 2];
-        v[o] = v[o + 1] = v[o + 2] = 0;
+        if (!this._xzCrosses(ex, ey, ez, px, py, pz)) continue;
+        // (out through a wall: back where it was in it, moving as the jelly there is)
+        if (grid === 1) (v[o] = M[3]), (v[o + 1] = M[4]), (v[o + 2] = M[5]);
+        else v[o] = v[o + 1] = v[o + 2] = 0;
+        x[o] = EP[o] = ex; x[o + 1] = EP[o + 1] = ey; x[o + 2] = EP[o + 2] = ez;
         this.lastOut[o] = x[o]; this.lastOut[o + 1] = x[o + 1]; this.lastOut[o + 2] = x[o + 2];
         EI[i] = 1;
         this._contained++;
       }
+    }
+    // (the jelly as it is now, for next time)
+    if (kept) {
+      const L = sb.nV * 3;
+      if (this._skP.length < L) (this._skP = new Float64Array(L * 2)), (this._skR = new Float64Array(L * 2));
+      this._skP.set(X.subarray(0, L));
+      this._skR.set(sb.X.subarray(0, L));
+      this._skN = sb.nV;
+      this._skAt = cn;
+    }
+  }
+
+  // (how cube k's jelly has moved since _contain last kept its liquid in - and how fast it's going now - on a grid
+  // over where it was: each of its points' move, those still the points they were, spread to the grid's points
+  // round where it was; the rest - the hollow's middle, none of its points near - filled in from round them, ring
+  // by ring. Its hollow stretched to twice its height, a drop half way up moves half as far as its floor)
+  _moveGrid(k, sN) {
+    const sb = this.app.sb, X = sb.x, XR = sb.X, SV = sb.v, vc = sb.vCube, al = sb.alive, SP = this._skP, SR = this._skR, K = this._mvW, W = this._mvWt, D = this._mvD, B = this._mvB, N = MV;
+    let x0 = Infinity, y0 = Infinity, z0 = Infinity, x1 = -Infinity, y1 = -Infinity, z1 = -Infinity;
+    for (let i = 0; i < sN; i++) {
+      if (vc[i] !== k || !al[i]) continue;
+      const o = i * 3;
+      if (SP[o] < x0) x0 = SP[o];
+      if (SP[o] > x1) x1 = SP[o];
+      if (SP[o + 1] < y0) y0 = SP[o + 1];
+      if (SP[o + 1] > y1) y1 = SP[o + 1];
+      if (SP[o + 2] < z0) z0 = SP[o + 2];
+      if (SP[o + 2] > z1) z1 = SP[o + 2];
+    }
+    if (!(x1 > x0 && y1 > y0 && z1 > z0)) return false;
+    const ix = (N - 1) / (x1 - x0), iy = (N - 1) / (y1 - y0), iz = (N - 1) / (z1 - z0);
+    B[0] = x0; B[1] = y0; B[2] = z0; B[3] = ix; B[4] = iy; B[5] = iz;
+    W.fill(0);
+    D.fill(0);
+    for (let i = 0; i < sN; i++) {
+      if (vc[i] !== k || !al[i]) continue;
+      const o = i * 3;
+      if (XR[o] !== SR[o] || XR[o + 1] !== SR[o + 1] || XR[o + 2] !== SR[o + 2]) continue;
+      const u = Math.min(N - 1.001, (SP[o] - x0) * ix), v = Math.min(N - 1.001, (SP[o + 1] - y0) * iy), w = Math.min(N - 1.001, (SP[o + 2] - z0) * iz);
+      const iu = u | 0, iv = v | 0, iw = w | 0, fu = u - iu, fv = v - iv, fw = w - iw;
+      const dx = X[o] - SP[o], dy = X[o + 1] - SP[o + 1], dz = X[o + 2] - SP[o + 2];
+      for (let c = 0; c < 8; c++) {
+        const du = c & 1, dv = (c >> 1) & 1, dw = c >> 2, wt = (du ? fu : 1 - fu) * (dv ? fv : 1 - fv) * (dw ? fw : 1 - fw), g = ((iw + dw) * N + iv + dv) * N + iu + du, g6 = g * 6;
+        W[g] += wt;
+        D[g6] += dx * wt; D[g6 + 1] += dy * wt; D[g6 + 2] += dz * wt;
+        D[g6 + 3] += SV[o] * wt; D[g6 + 4] += SV[o + 1] * wt; D[g6 + 5] += SV[o + 2] * wt;
+      }
+    }
+    const NN = N * N * N;
+    let left = 0;
+    for (let g = 0; g < NN; g++) {
+      if (W[g] > 1e-6) {
+        const r = 1 / W[g];
+        for (let c = 0; c < 6; c++) D[g * 6 + c] *= r;
+        K[g] = 1;
+      } else (K[g] = 0), left++;
+    }
+    if (left === NN) return false;
+    // (each ring from the one before only - 2 while it's being filled)
+    while (left) {
+      for (let g = 0; g < NN; g++) {
+        if (K[g]) continue;
+        const iu = g % N, iv = ((g / N) | 0) % N, iw = (g / (N * N)) | 0;
+        let c0 = 0, c1 = 0, c2 = 0, c3 = 0, c4 = 0, c5 = 0, nb = 0;
+        for (let e = 0; e < 6; e++) {
+          const a = NB6[e], ju = iu + a[0], jv = iv + a[1], jw = iw + a[2];
+          if (ju < 0 || jv < 0 || jw < 0 || ju >= N || jv >= N || jw >= N) continue;
+          const h = (jw * N + jv) * N + ju;
+          if (K[h] !== 1) continue;
+          const h6 = h * 6;
+          c0 += D[h6]; c1 += D[h6 + 1]; c2 += D[h6 + 2]; c3 += D[h6 + 3]; c4 += D[h6 + 4]; c5 += D[h6 + 5];
+          nb++;
+        }
+        if (!nb) continue;
+        const g6 = g * 6;
+        D[g6] = c0 / nb; D[g6 + 1] = c1 / nb; D[g6 + 2] = c2 / nb; D[g6 + 3] = c3 / nb; D[g6 + 4] = c4 / nb; D[g6 + 5] = c5 / nb;
+        K[g] = 2;
+      }
+      let filled = 0;
+      for (let g = 0; g < NN; g++) if (K[g] === 2) (K[g] = 1), filled++;
+      if (!filled) break;
+      left -= filled;
+    }
+    return true;
+  }
+
+  // (_moveGrid's move at p - and the jelly's speed there - into M)
+  _moveAt(px, py, pz, M) {
+    const B = this._mvB, D = this._mvD, N = MV;
+    const u = Math.min(N - 1.001, Math.max(0, (px - B[0]) * B[3])), v = Math.min(N - 1.001, Math.max(0, (py - B[1]) * B[4])), w = Math.min(N - 1.001, Math.max(0, (pz - B[2]) * B[5]));
+    const iu = u | 0, iv = v | 0, iw = w | 0, fu = u - iu, fv = v - iv, fw = w - iw;
+    M.fill(0);
+    for (let c = 0; c < 8; c++) {
+      const du = c & 1, dv = (c >> 1) & 1, dw = c >> 2, wt = (du ? fu : 1 - fu) * (dv ? fv : 1 - fv) * (dw ? fw : 1 - fw), g6 = (((iw + dw) * N + iv + dv) * N + iu + du) * 6;
+      for (let e = 0; e < 6; e++) M[e] += D[g6 + e] * wt;
     }
   }
 
