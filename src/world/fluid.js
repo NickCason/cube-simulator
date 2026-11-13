@@ -45,6 +45,9 @@ const GAIN = 0.8; // (m/s) the most the solver speeds a particle up a substep
 // (how much of the way off a cube full of liquid's shell a drop's pushed each substep, to its own width - see
 // _radius: all of it at once, every drop against a wall chattered on it, and a cube's liquid never came to rest)
 const RADIUS_K = 0.35;
+const BEND_PAD = 0.06; // (m) the most a soft cube's wall's off its best fit, near enough: what's that much further in looked at too (see _snapBox)
+const DG = 7; // (each cube full of liquid's bend from its best fit: on a grid this many points a side over it as made - see _frames, _bend)
+const FULL_AT = 1.08; // (a cube's liquid this much of its hollow by its drops' nominal volume, or more: drawn full - see _fillFull)
 const COH = 0.3; // cohesion: how hard thin parts pull together (vs packed parts pushing apart) - at the highest surface tension
 const EPS = +(globalThis.__fluidEps ?? 1); // constraint relaxation, x a full neighbourhood's gradient sum
 const VISC = 0.25; // XSPH: how much each takes on its neighbours' velocity
@@ -120,6 +123,13 @@ export class Fluid {
     // it's against)
     this.cpush = new Float32Array(N * 3);
     this.cvel = new Float32Array(N * 3);
+    // (each cube full of liquid's bend from its best fit - where its jelly is, less where the fit puts it - by
+    // where in it as made, DG a side, x y z and weight: see _frames, _bend)
+    this._dG = new Float32Array(MAX_CUBES * DG * DG * DG * 4);
+    this._bd = new Float64Array(3);
+    // (each cube full of liquid - its hollow drawn full - and its liquid's colour: see _fillFull)
+    this._full = new Uint8Array(MAX_CUBES);
+    this._fullC = new Float32Array(MAX_CUBES * 3);
     this.cvn = new Float32Array(N);
     // (where each was last outside the jelly: out of it, it goes back that way - see _collide)
     this.lastOut = new Float32Array(N * 3);
@@ -2365,21 +2375,58 @@ export class Fluid {
       FR[fo] = xm0; FR[fo + 1] = xm1; FR[fo + 2] = xm2; FR[fo + 3] = Xm0; FR[fo + 4] = Xm1; FR[fo + 5] = Xm2;
       for (let c = 0; c < 9; c++) FR[fo + 6 + c] = R[c];
       this.frameOK[k] = 1;
+      // (and how far each of its points is from where the fit puts it, on a grid over it as made: a soft cube
+      // bulges and sags off any one turn of it - 2.4 cm on average at rest, its lid 4 or 5, more as it wobbles)
+      const G = this._dG, g0 = k * DG * DG * DG * 4, sz = sb.cSize[k], lo = -0.6 * sz, ic = (DG - 1) / (1.2 * sz), off = k * REST_STEP;
+      G.fill(0, g0, g0 + DG * DG * DG * 4);
+      for (let i = 0; i < sb.nV; i++) {
+        if (vc[i] !== k || !sb.alive[i]) continue;
+        const o = i * 3, b0 = X[o] - Xm0, b1 = X[o + 1] - Xm1, b2 = X[o + 2] - Xm2;
+        const ex = x[o] - (xm0 + R[0] * b0 + R[1] * b1 + R[2] * b2), ey = x[o + 1] - (xm1 + R[3] * b0 + R[4] * b1 + R[5] * b2), ez = x[o + 2] - (xm2 + R[6] * b0 + R[7] * b1 + R[8] * b2);
+        const u = Math.min(DG - 1.001, Math.max(0, (X[o] - off - lo) * ic)), v = Math.min(DG - 1.001, Math.max(0, (X[o + 1] - lo) * ic)), w = Math.min(DG - 1.001, Math.max(0, (X[o + 2] - lo) * ic));
+        const iu = u | 0, iv = v | 0, iw = w | 0, fu = u - iu, fv = v - iv, fw = w - iw;
+        for (let c = 0; c < 8; c++) {
+          const du = c & 1, dv = (c >> 1) & 1, dw = c >> 2, wt = (du ? fu : 1 - fu) * (dv ? fv : 1 - fv) * (dw ? fw : 1 - fw);
+          const gi = g0 + (((iw + dw) * DG + iv + dv) * DG + iu + du) * 4;
+          G[gi] += ex * wt; G[gi + 1] += ey * wt; G[gi + 2] += ez * wt; G[gi + 3] += wt;
+        }
+      }
     }
+  }
+
+  // (cube k's bend from its best fit at r - where in it as made, its middle at 0 - into _bd: its points' round there,
+  // weighted)
+  _bend(k, rx, ry, rz) {
+    const G = this._dG, g0 = k * DG * DG * DG * 4, sz = this.app.sb.cSize[k], lo = -0.6 * sz, ic = (DG - 1) / (1.2 * sz), B = this._bd;
+    const u = Math.min(DG - 1.001, Math.max(0, (rx - lo) * ic)), v = Math.min(DG - 1.001, Math.max(0, (ry - lo) * ic)), w = Math.min(DG - 1.001, Math.max(0, (rz - lo) * ic));
+    const iu = u | 0, iv = v | 0, iw = w | 0, fu = u - iu, fv = v - iv, fw = w - iw;
+    let sx = 0, sy = 0, sz2 = 0, sw = 0;
+    for (let c = 0; c < 8; c++) {
+      const du = c & 1, dv = (c >> 1) & 1, dw = c >> 2, wt = (du ? fu : 1 - fu) * (dv ? fv : 1 - fv) * (dw ? fw : 1 - fw);
+      const gi = g0 + (((iw + dw) * DG + iv + dv) * DG + iu + du) * 4;
+      sx += G[gi] * wt; sy += G[gi + 1] * wt; sz2 += G[gi + 2] * wt; sw += G[gi + 3] * wt;
+    }
+    if (sw > 1e-6) (B[0] = sx / sw), (B[1] = sy / sw), (B[2] = sz2 / sw);
+    else B[0] = B[1] = B[2] = 0;
   }
 
   // (cube k1 - 1's, a plain rounded box: its rest shape's distance and slope worked out here, those nowhere near
   // its wall passed over at a glance)
   _snapBox(nv, k1, half, bev, th, tol, band) {
-    const inn = this.inn, pos = this.pos, nrm = this.nrm, R = this._wR, F = this._wF, bb = half - bev;
-    const xm0 = F[0], xm1 = F[1], xm2 = F[2], Xm0 = F[3], Xm1 = F[4], Xm2 = F[5], lim = half - Math.max(bev, th - tol) - band;
+    const inn = this.inn, pos = this.pos, nrm = this.nrm, R = this._wR, F = this._wF, bb = half - bev, B = this._bd;
+    const xm0 = F[0], xm1 = F[1], xm2 = F[2], Xm0 = F[3], Xm1 = F[4], Xm2 = F[5], lim = half - Math.max(bev, th - tol) - band - BEND_PAD;
     for (let v = 0; v < nv; v++) {
       if (inn[v] !== k1) continue;
       const o = v * 3, dx = pos[o] - xm0, dy = pos[o + 1] - xm1, dz = pos[o + 2] - xm2;
       // (back to its rest shape: R's transpose)
-      const rx = Xm0 + R[0] * dx + R[3] * dy + R[6] * dz, ry = Xm1 + R[1] * dx + R[4] * dy + R[7] * dz, rz = Xm2 + R[2] * dx + R[5] * dy + R[8] * dz;
+      let rx = Xm0 + R[0] * dx + R[3] * dy + R[6] * dz, ry = Xm1 + R[1] * dx + R[4] * dy + R[7] * dz, rz = Xm2 + R[2] * dx + R[5] * dy + R[8] * dz;
+      if ((rx < 0 ? -rx : rx) < lim && (ry < 0 ? -ry : ry) < lim && (rz < 0 ? -rz : rz) < lim) continue;
+      // (less its bend there: the wall's where the jelly is, bulged or sagged, not where its best fit puts it - so
+      // snapped, a soft cube's liquid went up into its lid 4 or 5 cm one frame, flush the next: a flashing blot)
+      this._bend(k1 - 1, rx, ry, rz);
+      rx -= R[0] * B[0] + R[3] * B[1] + R[6] * B[2]; ry -= R[1] * B[0] + R[4] * B[1] + R[7] * B[2]; rz -= R[2] * B[0] + R[5] * B[1] + R[8] * B[2];
       const ax = rx < 0 ? -rx : rx, ay = ry < 0 ? -ry : ry, az = rz < 0 ? -rz : rz;
-      if (ax < lim && ay < lim && az < lim) continue;
+      if (ax < lim + BEND_PAD && ay < lim + BEND_PAD && az < lim + BEND_PAD) continue;
       const qx = ax - bb, qy = ay - bb, qz = az - bb, px = qx > 0 ? qx : 0, py = qy > 0 ? qy : 0, pz = qz > 0 ? qz : 0;
       const pl = Math.sqrt(px * px + py * py + pz * pz), mq = qx > qy ? (qx > qz ? qx : qz) : qy > qz ? qy : qz;
       const out = th + pl + (mq < 0 ? mq : 0) - bev - tol;
@@ -2408,7 +2455,11 @@ export class Fluid {
     for (let v = 0; v < nv; v++) {
       if (inn[v] !== k1) continue;
       const o = v * 3, dx = pos[o] - xm0, dy = pos[o + 1] - xm1, dz = pos[o + 2] - xm2;
-      const rx = Xm0 + R[0] * dx + R[3] * dy + R[6] * dz, ry = Xm1 + R[1] * dx + R[4] * dy + R[7] * dz, rz = Xm2 + R[2] * dx + R[5] * dy + R[8] * dz;
+      let rx = Xm0 + R[0] * dx + R[3] * dy + R[6] * dz, ry = Xm1 + R[1] * dx + R[4] * dy + R[7] * dz, rz = Xm2 + R[2] * dx + R[5] * dy + R[8] * dz;
+      // (less its bend there - see _snapBox)
+      const B = this._bd;
+      this._bend(k1 - 1, rx, ry, rz);
+      rx -= R[0] * B[0] + R[3] * B[1] + R[6] * B[2]; ry -= R[1] * B[0] + R[4] * B[1] + R[7] * B[2]; rz -= R[2] * B[0] + R[5] * B[1] + R[8] * B[2];
       const out = th + shapeSDF(rx, ry, rz, half, bev, shape) - tol;
       if (!(out > -band)) continue;
       let gx = shapeSDF(rx + e, ry, rz, half, bev, shape) - shapeSDF(rx - e, ry, rz, half, bev, shape);
@@ -2851,7 +2902,7 @@ export class Fluid {
   // grid cell's staircase of shards and flecks all over a cube held up.)
   _clip(F, touch, tList, nt, iso, x0, y0, z0, c, gx, gy, gz) {
     const gxy = gx * gy, ic = 1 / c;
-    const CR = this._cRange, T = this.app.sb.T, X = this.app.sb.x, IM = this.innerMask, DEP = this.fdep, FN = this.fnew;
+    const CR = this._cRange, T = this.app.sb.T, X = this.app.sb.x, XR = this.app.sb.X, TC = this.app.sb.tCube, HB = this.app.sb.cHole, IM = this.innerMask, DEP = this.fdep, FN = this.fnew;
     for (let l = 0; l < this.cellsN; l++) {
       const t = CR[l * 7], o = t * 4, a = T[o] * 3, b = T[o + 1] * 3, d = T[o + 2] * 3, e = T[o + 3] * 3;
       const i0 = Math.max(0, Math.ceil((Math.min(X[a], X[b], X[d], X[e]) - x0) * ic)), i1 = Math.min(gx - 1, Math.floor((Math.max(X[a], X[b], X[d], X[e]) - x0) * ic));
@@ -2882,6 +2933,19 @@ export class Fluid {
             if (mk & 2) dp = Math.min(dp, b1 * h1);
             if (mk & 4) dp = Math.min(dp, b2 * h2);
             if (mk & 8) dp = Math.min(dp, b3 * h3);
+            // (none of its tet's faces on the hollow's side - a wall's tet one back from it: how far past its
+            // hollow's box it is in the cube as made. Taken as a whole cell, a lid's points so put its liquid's top a
+            // centimetre over the point under it wherever the lid was - two or three under it, then flush, as the
+            // lid bobbed and its points went from tet to tet: a crater flashing under a full cube's top)
+            if (!mk) {
+              const h6 = TC[t] * 6;
+              let o2 = 0;
+              for (let ax = 0; ax < 3; ax++) {
+                const r = b0 * XR[a + ax] + b1 * XR[b + ax] + b2 * XR[d + ax] + b3 * XR[e + ax], u = Math.max(HB[h6 + ax] - r, 0, r - HB[h6 + 3 + ax]);
+                o2 += u * u;
+              }
+              dp = Math.min(c, Math.sqrt(o2));
+            }
             if (!(touch[q] & 4)) (touch[q] |= 4), (DEP[q] = dp);
             else if (dp < DEP[q]) DEP[q] = dp;
           }
@@ -2976,6 +3040,7 @@ export class Fluid {
     let nt = this._splat(F, FC, touch, tList, x0, y0, z0, c, gx, gy, gz, R, nm);
     if (nm) nt = this._splatWalls(F, FC, touch, tList, nt, x0, y0, z0, c, gx, gy, gz, R);
     nt = this._splatCling(F, FC, touch, tList, nt, x0, y0, z0, c, gx, gy, gz, nm);
+    if (nm) nt = this._fillFull(F, FC, touch, tList, nt, x0, y0, z0, c, gx, gy, gz, nm, SPLAT_ISO);
     const iso = SPLAT_ISO;
     // (the field as splatted, kept for the surface's normals: brought down to meet the jelly, its slope's a
     // crumple of steps from tet to tet - lit so, a cube's liquid was crinkled foil all over)
@@ -2986,6 +3051,49 @@ export class Fluid {
     // (on its own, not from _march: called from there, Safari's engine took it fifteen times as long)
     if (this.inN) this._snapWalls(this.geo.drawRange.count);
     for (let a = 0; a < nm; a++) this.fmask[this.fmL[a]] = 0;
+  }
+
+  // A cube full of liquid - as much in it as its hollow holds - drawn full: no point of its hollow under the
+  // surface's level, coloured as its liquid is. (Drawn from its drops alone, its top jostled a centimetre or two
+  // off its lid and caved in under it - a crumpled crater of facets one frame, flush the next: a dark blot flashing
+  // on its top face.) Its liquid's volume over its hollow's: its drops' nominal volume runs a ninth over what they
+  // fill, so Full's 111-115%, nine-tenths' 100-107%, an air gap at its top.
+  _fillFull(F, FC, touch, tList, nt, x0, y0, z0, c, gx, gy, gz, nm, iso) {
+    const sb = this.app.sb, M = this.fmask, L = this.fmL, HB = sb.cHole, own = this.own, n = this.n, FU = this._full, FCol = this._fullC, col = this.col, MS = this.mass, RY = this.revealY;
+    let any = false;
+    for (let k = 0; k < MAX_CUBES; k++) {
+      FU[k] = 0;
+      if (!sb.cHollow[k] || !sb.cLiq[k] || !sb.cHid[k] || !this.frameOK[k] || RY[k] < Infinity) continue;
+      const id = sb.cHid[k], h6 = k * 6, Vh = (HB[h6 + 3] - HB[h6]) * (HB[h6 + 4] - HB[h6 + 1]) * (HB[h6 + 5] - HB[h6 + 2]);
+      let m = 0, r = 0, g = 0, b = 0;
+      for (let i = 0; i < n; i++) {
+        if (own[i] !== id) continue;
+        const o = i * 3;
+        m += MS[i]; r += col[o] * MS[i]; g += col[o + 1] * MS[i]; b += col[o + 2] * MS[i];
+      }
+      if (!(m * this.vol >= FULL_AT * Vh)) continue;
+      FU[k] = 1;
+      FCol[k * 3] = r / m; FCol[k * 3 + 1] = g / m; FCol[k * 3 + 2] = b / m;
+      any = true;
+    }
+    if (!any) return nt;
+    // (every point inside its outside skin: those in its walls _clip then sets so the surface lands where the jelly
+    // starts - its hollow as it is, bulged or not: by its hollow's box as the cube best fits, a soft cube's lid
+    // flexing up left a gap under it, the crater still flashing there)
+    const lv = 1.3 * iso;
+    for (let a = 0; a < nm; a++) {
+      const q = L[a], k = M[q] - 1;
+      if (k < 0 || !FU[k] || F[q] >= lv) continue;
+      if (!touch[q]) {
+        touch[q] = 1;
+        tList[nt++] = q;
+        FC[q * 3] = FC[q * 3 + 1] = FC[q * 3 + 2] = 0;
+      }
+      const w = lv - F[q];
+      F[q] = lv;
+      FC[q * 3] += FCol[k * 3] * w; FC[q * 3 + 1] += FCol[k * 3 + 1] * w; FC[q * 3 + 2] += FCol[k * 3 + 2] * w;
+    }
+    return nt;
   }
 
   // (the drops splatted into the field and its colour - the points touched, listed: how many)
