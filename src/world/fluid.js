@@ -47,18 +47,19 @@ const RADIUS_K = 0.35;
 const COH = 0.3; // cohesion: how hard thin parts pull together (vs packed parts pushing apart)
 const EPS = +(globalThis.__fluidEps ?? 1); // constraint relaxation, x a full neighbourhood's gradient sum
 const VISC = 0.25; // XSPH: how much each takes on its neighbours' velocity
-// (thicker than this - putty - and slow, in among its own: it stays where it is, holding its shape till it's pushed;
-// how slow: 1 cm/s for each 1/s of its drag past it - see _step)
-const YIELD_TK = 22;
+// (thicker than this - slime, putty - it moves with what's round it, not through it, unless it's pushed hard: how
+// hard, YIELD_K m/s for each unit of XSPH past it - see _step)
+const YIELD_V = 0.6, YIELD_K = 4.0;
 
 // A cube full of liquid's Viscosity (0..1, water to putty) as its drops have it: how much each takes on its
 // neighbours' velocity (XSPH), and a drag on it (1/s). (It was set as a cube was filled, and kept: the slider did
 // nothing to the liquid already in it; and it went from a syrupy 0.12 to glue - see Fluid.setVisc.)
 // (Curved so the default, 0.15, is the liquid as it was - 0.205, 0.675/s: thinner there, a cube's liquid at rest
-// kept on sloshing and never slept, 8 ms a frame for nothing.)
+// kept on sloshing and never slept, 8 ms a frame for nothing. The drag held to 1/s: thickness is in how it moves
+// against itself - a drag on all of it was slow motion, putty falling as on the moon.)
 export function liquidVisc(v) {
   const c = Math.min(1, Math.max(0, v));
-  return [0.04 + 0.91 * Math.pow(c, 0.9), 60 * Math.pow(c, 2.37)];
+  return [0.04 + 0.91 * Math.pow(c, 0.9), Math.min(1, 60 * Math.pow(c, 2.37))];
 }
 // its surface: each particle a smooth bump out to SPLAT_R particles' spacing, the surface where they add up to
 // SPLAT_ISO - wider bumps, a higher level: a smoother skin on it, a pool flat (at 1.6 and 0.55 it was lumpy,
@@ -105,6 +106,9 @@ export class Fluid {
     // (how it clings - its cube's Surface tension, 0..1, water 0.5: to its walls as drawn, see _splatWall, and to
     // the bubbles at its top, see Bubbles.poolTick)
     this.tens = new Float32Array(N).fill(0.5);
+    this._sw = new Float32Array(N); // (each drop's neighbours' weight, summed - their velocity's mean: see _step)
+    // (thick stuff - slime, putty - at rest on what's under it: no gravity for it the next substep - see _step)
+    this._rested = new Uint8Array(N);
     this._gw = new Float64Array(3);
     this._colTop = new Float32Array(COL_HASH);
     // (and how much of it each carries, in particles' worth - more than one, a spill bigger than the pool has
@@ -1465,10 +1469,13 @@ export class Fluid {
     // (the table tipped - see Tilt: the liquid's pulled sideways as the jelly is; not, the jelly leaned into it
     // as it stood, rammed it through its walls)
     const tl = this.app.sb.tilt, tx = tl ? tl[0] || 0 : 0, tz = tl ? tl[1] || 0 : 0;
+    // (thick stuff resting on something - see _onSome - only a little of its weight: putty creeps, slime slumps)
+    const RS = this._rested, VS = this.visc;
     for (let o = 0; o < n * 3; o += 3) {
-      v[o] += tx * h;
-      v[o + 1] += g * h;
-      v[o + 2] += tz * h;
+      const gs = RS[o / 3] ? 0.04 + (0.5 * Math.max(0, 0.95 - VS[o / 3])) / 0.35 : 1;
+      v[o] += tx * h * gs;
+      v[o + 1] += g * h * gs;
+      v[o + 2] += tz * h * gs;
       q[o] = x[o] + v[o] * h; q[o + 1] = x[o + 1] + v[o + 1] * h; q[o + 2] = x[o + 2] + v[o + 2] * h;
     }
     this.cpush.fill(0, 0, n * 3);
@@ -1576,18 +1583,20 @@ export class Fluid {
       }
       v[o] = vx; v[o + 1] = vy; v[o + 2] = vz;
     }
-    const dv = this.dp;
+    const dv = this.dp, SW = this._sw;
     for (let i = 0; i < n; i++) {
       const o = i * 3, px = q[o], py = q[o + 1], pz = q[o + 2];
-      let ax = 0, ay = 0, az = 0;
+      let ax = 0, ay = 0, az = 0, sw = 0;
       for (let e = NS[i], e1 = NS[i + 1]; e < e1; e++) {
         const p = NB[e] * 3, dx = px - q[p], dy = py - q[p + 1], dz = pz - q[p + 2];
         const d2 = dx * dx + dy * dy + dz * dz;
         if (d2 >= H2) continue;
         const u = H2 - d2, w = K6 * u * u * u * irho;
         ax += (v[p] - v[o]) * w; ay += (v[p + 1] - v[o + 1]) * w; az += (v[p + 2] - v[o + 2]) * w;
+        sw += w;
       }
       dv[o] = ax; dv[o + 1] = ay; dv[o + 2] = az;
+      SW[i] = sw;
     }
     const damp = Math.exp(-1.2 * h), fr = 1 - Math.min(1, 6 * h), slush = Math.exp(-14 * h), settle = Math.exp(-5 * h), temp = this.temp, VI = this.visc, TK = this.thick;
     for (let o = 0; o < n * 3; o += 3) {
@@ -1597,12 +1606,20 @@ export class Fluid {
       // pushed back - that never died away, and never slept; flowing, it's left be)
       const sp2 = v[o] * v[o] + v[o + 1] * v[o + 1] + v[o + 2] * v[o + 2];
       const dm = (temp[i] < SET_T ? slush : damp) * tk * (sp2 < 0.0625 ? settle : 1);
-      v[o] = (v[o] + vi * dv[o]) * dm; v[o + 1] = (v[o + 1] + vi * dv[o + 1]) * (temp[i] < SET_T ? damp * tk : dm); v[o + 2] = (v[o + 2] + vi * dv[o + 2]) * dm;
-      // (putty: slow, and in among its own, it stays where it is - a heap holds, till it's pushed)
-      if (TK[i] > YIELD_TK && NS[i + 1] - NS[i] >= 4) {
-        const ys = (TK[i] - YIELD_TK) * 0.01;
-        if (v[o] * v[o] + v[o + 1] * v[o + 1] + v[o + 2] * v[o + 2] < ys * ys) v[o] = v[o + 1] = v[o + 2] = 0;
+      // (slime, putty: moving against what's round it slower than it yields, it moves with it - its neighbours'
+      // velocity, all of it: a lump falls as a lump, a heap holds, till it's pushed hard)
+      let rx = vi * dv[o], ry = vi * dv[o + 1], rz = vi * dv[o + 2], rest = 0;
+      if (vi > YIELD_V && SW[i] > 1e-6 && NS[i + 1] - NS[i] >= 4) {
+        const s = 1 / SW[i], ax = dv[o] * s, ay = dv[o + 1] * s, az = dv[o + 2] * s, ys = (vi - YIELD_V) * YIELD_K;
+        if (ax * ax + ay * ay + az * az < ys * ys) {
+          rx = ax; ry = ay; rz = az;
+          // (and resting on what's under it - the floor, the jelly, its own below it - slow: its weight on that,
+          // not pressing it out sideways: the solver let a heap of it creep flat however its velocities were held)
+          if (v[o] * v[o] + v[o + 1] * v[o + 1] + v[o + 2] * v[o + 2] < ys * ys && this._onSome(i, q, NS, NB)) rest = 1;
+        }
       }
+      this._rested[i] = rest;
+      v[o] = (v[o] + rx) * dm; v[o + 1] = (v[o + 1] + ry) * (temp[i] < SET_T ? damp * tk : dm); v[o + 2] = (v[o + 2] + rz) * dm;
       // (floor friction: thick stuff drags)
       if (q[o + 1] <= R_P * 1.05) {
         v[o] *= fr;
@@ -1610,6 +1627,22 @@ export class Fluid {
       }
       x[o] = q[o]; x[o + 1] = q[o + 1]; x[o + 2] = q[o + 2];
     }
+  }
+
+  // (drop i on something: the floor, the jelly (pushed off it this substep), or one of its own under it that's
+  // itself resting so - held up from the ground, not by each other: a lump in the air hung there)
+  _onSome(i, q, NS, NB) {
+    const o = i * 3, RS = this._rested;
+    if (q[o + 1] <= R_P * 1.1 || this.cvn[i] > 0) return true;
+    const px = q[o], py = q[o + 1] - 0.4 * D, pz = q[o + 2], r2 = 0.64 * D * D;
+    for (let e = NS[i], e1 = NS[i + 1]; e < e1; e++) {
+      if (!RS[NB[e]]) continue;
+      const p = NB[e] * 3;
+      if (q[p + 1] > py) continue;
+      const dx = q[p] - px, dz = q[p + 2] - pz;
+      if (dx * dx + dz * dz < r2) return true;
+    }
+    return false;
   }
 
   // The jelly's tets round the liquid, hashed by cells of 0.1 m (once a
