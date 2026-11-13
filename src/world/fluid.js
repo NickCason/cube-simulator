@@ -36,6 +36,7 @@ const PRESS_FREE = 0.06, PRESS_ACC = 80;
 const ITER = 3; // solver rounds a substep
 const MAXNB = 48; // neighbours kept per particle
 const CELL_HASH = 1 << 14; // buckets for the jelly's tets near the liquid
+const CUP_S = 6; // (a cup's hollow, looked at in so many points along each side: see _cups)
 const NB6 = [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]];
 const VMAX = 7; // (m/s)
 const GAIN = 0.8; // (m/s) the most the solver speeds a particle up a substep
@@ -168,6 +169,14 @@ export class Fluid {
     // and whether that's there: for its liquid's surface against its wall and what's carried in it, see _frames)
     this.frames = new Float64Array(MAX_CUBES * 15);
     this.frameOK = new Uint8Array(MAX_CUBES);
+    // (the cups - pieces of a hollow cube cut open - holding air under the liquid this frame, and each piece's own
+    // turn, hollow and air, kept from frame to frame: see _cups, _air)
+    this.cups = [];
+    this._cupOf = new WeakMap();
+    this._cupN = new Int32Array(MAX_CUBES);
+    this._cupY = new Float64Array(CUP_S * CUP_S * CUP_S);
+    this._cupA = new Float64Array(9);
+    this._cupR = new Float64Array(3);
     this.asleep = false;
     this.stillT = 0;
     // the jelly's tets near the liquid (hashed by cells of 0.1 m)
@@ -966,9 +975,206 @@ export class Fluid {
     const nS = Math.floor(this._acc / STEP + 1e-6);
     this._acc -= nS * STEP;
     this.atCut.fill(0, 0, this.n);
+    this._cups();
     for (let s = 0; s < nS; s++) this._step(STEP);
     this._gaps(F);
     this._squeeze(F);
+  }
+
+  // A cup - a piece of a hollow cube cut open - holds air. Its rim under the liquid, that air can't get out, and
+  // keeps the liquid out of it: upturned in a pool, it pushes the pool aside (it filled, as though there were
+  // nothing in it). The air's what there was when its rim went under: tipped, all that's above its rim's highest
+  // point stays and the rest bubbles out; out of the liquid, it's open to the room again. Each frame: each cup's
+  // hollow (the hollow's rest box, clipped to the piece's), its turn (a fit, warm), where its rim's highest, how
+  // much liquid's in it, whether it's under - and the level its air comes down to, below which the drops are kept
+  // (_air, each substep).
+  _cups() {
+    const sb = this.app.sb, list = this.cups, N = this._cupN;
+    list.length = 0;
+    N.fill(0);
+    let cut = false;
+    for (const pc of sb.pieces) if (pc && sb.cHollow[pc.cube] && ++N[pc.cube] > 1) cut = true;
+    if (!cut || !this.n) return;
+    for (const pc of sb.pieces) if (pc && N[pc.cube] > 1) this._cup(sb, pc);
+  }
+
+  _cup(sb, pc) {
+    let S = this._cupOf.get(pc);
+    if (!S) {
+      S = { q: new Float64Array([0, 0, 0, 1]), xm: new Float64Array(3), Xm: new Float64Array(3), R: new Float64Array(9), C: new Float64Array(6), rb: new Float64Array(6), rbTopo: -1, A: -1, Vc: 0, sealed: false, spill: 0, ya: 0, low: 0, top: new Float64Array(3), err: 0 };
+      this._cupOf.set(pc, S);
+    }
+    const k = pc.cube, HB = sb.cHole, h6 = k * 6, X = sb.X, x = sb.x, vs = pc.verts, al = sb.alive, rb = S.rb, C = S.C, D = this.D;
+    // (its rest box: once a cut)
+    if (S.rbTopo !== sb.topoVersion) {
+      S.rbTopo = sb.topoVersion;
+      rb[0] = rb[1] = rb[2] = Infinity;
+      rb[3] = rb[4] = rb[5] = -Infinity;
+      for (const i of vs)
+        for (let a = 0; a < 3 && al[i]; a++) {
+          const r = X[i * 3 + a];
+          if (r < rb[a]) rb[a] = r;
+          if (r > rb[3 + a]) rb[3 + a] = r;
+        }
+    }
+    // the hollow it has - and which of its sides are open (where the piece stops short of the hollow's own)
+    const tol = 0.5 * sb.cH[k];
+    let open = 0;
+    for (let a = 0; a < 3; a++) {
+      C[a] = Math.max(rb[a], HB[h6 + a]);
+      C[3 + a] = Math.min(rb[3 + a], HB[h6 + 3 + a]);
+      if (!(C[3 + a] - C[a] > 2 * D)) return;
+      if (rb[a] > HB[h6 + a] + tol) open |= 1 << a;
+      if (rb[3 + a] < HB[h6 + 3 + a] - tol) open |= 8 << a;
+    }
+    // (a cup: one side open - a half. More, and the air's away out of the side: a die off a diced one, a quarter)
+    if (!open || (open & (open - 1))) return;
+    // (no liquid near it: nothing to keep out - its air, as much as it holds, worked out once some comes)
+    const bb = pc.bbox, pad = 1.5 * D, fx = this.x, n = this.n;
+    let near = false;
+    for (let p = 0; p < n && !near; p++) {
+      const o = p * 3, px = fx[o], py = fx[o + 1], pz = fx[o + 2];
+      near = px > bb[0] - pad && px < bb[3] + pad && py > bb[1] - pad && py < bb[4] + pad && pz > bb[2] - pad && pz < bb[5] + pad;
+    }
+    if (!near) {
+      S.A = -1;
+      return;
+    }
+    // its turn: rest to as it is now
+    const xm = S.xm, Xm = S.Xm, A = this._cupA, R = S.R;
+    xm[0] = xm[1] = xm[2] = Xm[0] = Xm[1] = Xm[2] = 0;
+    let nv = 0;
+    for (const i of vs) {
+      if (!al[i]) continue;
+      nv++;
+      const o = i * 3;
+      xm[0] += x[o]; xm[1] += x[o + 1]; xm[2] += x[o + 2];
+      Xm[0] += X[o]; Xm[1] += X[o + 1]; Xm[2] += X[o + 2];
+    }
+    if (nv < 8) return;
+    const iv = 1 / nv;
+    for (let a = 0; a < 3; a++) (xm[a] *= iv), (Xm[a] *= iv);
+    A.fill(0);
+    for (const i of vs) {
+      if (!al[i]) continue;
+      const o = i * 3, a0 = x[o] - xm[0], a1 = x[o + 1] - xm[1], a2 = x[o + 2] - xm[2], b0 = X[o] - Xm[0], b1 = X[o + 1] - Xm[1], b2 = X[o + 2] - Xm[2];
+      A[0] += a0 * b0; A[1] += a0 * b1; A[2] += a0 * b2;
+      A[3] += a1 * b0; A[4] += a1 * b1; A[5] += a1 * b2;
+      A[6] += a2 * b0; A[7] += a2 * b1; A[8] += a2 * b2;
+    }
+    polarRot(S.q, A, R, 8);
+    // (crumpled - a quarter of its size from its shape as made, turned, on average: no telling which way its
+    // hollow's facing, and no air kept. A shell carried by a corner sags an eighth.)
+    let err = 0, ne = 0;
+    for (let j = 0; j < vs.length; j += 4) {
+      if (!al[vs[j]]) continue;
+      const o = vs[j] * 3, b0 = X[o] - Xm[0], b1 = X[o + 1] - Xm[1], b2 = X[o + 2] - Xm[2];
+      const ex = x[o] - xm[0] - (R[0] * b0 + R[1] * b1 + R[2] * b2), ey = x[o + 1] - xm[1] - (R[3] * b0 + R[4] * b1 + R[5] * b2), ez = x[o + 2] - xm[2] - (R[6] * b0 + R[7] * b1 + R[8] * b2);
+      err += ex * ex + ey * ey + ez * ez;
+      ne++;
+    }
+    S.err = Math.sqrt(err / Math.max(1, ne));
+    if (!(err / Math.max(1, ne) < (0.25 * sb.cSize[k]) ** 2)) {
+      S.A = -1;
+      return;
+    }
+    // (a rest point's height now)
+    const yOf = (r0, r1, r2) => xm[1] + R[3] * (r0 - Xm[0]) + R[4] * (r1 - Xm[1]) + R[5] * (r2 - Xm[2]);
+    // its rim's highest point: the open sides' corners
+    let spill = -Infinity, ta = 0, tb = 0, tc = 0;
+    const r = this._cupR;
+    for (let a = 0; a < 3; a++)
+      for (let side = 0; side < 2; side++) {
+        if (!(open & ((side ? 8 : 1) << a))) continue;
+        const b = (a + 1) % 3, c = (a + 2) % 3;
+        for (let m = 0; m < 4; m++) {
+          r[a] = C[side ? 3 + a : a];
+          r[b] = C[m & 1 ? 3 + b : b];
+          r[c] = C[m & 2 ? 3 + c : c];
+          const y = yOf(r[0], r[1], r[2]);
+          if (y > spill) (spill = y), (ta = r[0]), (tb = r[1]), (tc = r[2]);
+        }
+      }
+    S.spill = spill;
+    // (and where that is: the air that gets out, out there)
+    S.top[0] = xm[0] + R[0] * (ta - Xm[0]) + R[1] * (tb - Xm[1]) + R[2] * (tc - Xm[2]);
+    S.top[1] = spill;
+    S.top[2] = xm[2] + R[6] * (ta - Xm[0]) + R[7] * (tb - Xm[1]) + R[8] * (tc - Xm[2]);
+    // the hollow's points' heights, sorted - how much of it's above a height
+    const Y = this._cupY, ns = CUP_S;
+    let m = 0;
+    for (let i = 0; i < ns; i++)
+      for (let j = 0; j < ns; j++)
+        for (let l = 0; l < ns; l++) Y[m++] = yOf(C[0] + ((i + 0.5) / ns) * (C[3] - C[0]), C[1] + ((j + 0.5) / ns) * (C[4] - C[1]), C[2] + ((l + 0.5) / ns) * (C[5] - C[2]));
+    Y.sort();
+    const Vc = (C[3] - C[0]) * (C[4] - C[1]) * (C[5] - C[2]);
+    S.Vc = Vc;
+    // the liquid in it - and, out of it round it, any at its rim's highest point (not above: liquid on an upturned
+    // cup's top doesn't close it): under, if there is
+    const y0 = spill - 0.5 * D, y1 = spill + 1.5 * D, y2 = spill + 0.3 * D;
+    let nIn = 0, under = false, deep = false;
+    for (let p = 0; p < n; p++) {
+      const o = p * 3, px = fx[o], py = fx[o + 1], pz = fx[o + 2];
+      if (px < bb[0] - pad || px > bb[3] + pad || py < bb[1] - pad || py > bb[4] + pad || pz < bb[2] - pad || pz > bb[5] + pad) continue;
+      const dx = px - xm[0], dy = py - xm[1], dz = pz - xm[2];
+      const r0 = Xm[0] + R[0] * dx + R[3] * dy + R[6] * dz, r1 = Xm[1] + R[1] * dx + R[4] * dy + R[7] * dz, r2 = Xm[2] + R[2] * dx + R[5] * dy + R[8] * dz;
+      if (r0 > C[0] && r0 < C[3] && r1 > C[1] && r1 < C[4] && r2 > C[2] && r2 < C[5]) nIn++;
+      else if (py > y0 && py < y1) {
+        under = true;
+        if (py > y2) deep = true;
+      }
+    }
+    S.sealed = under;
+    // its air: open, all that isn't liquid; under, what it had - less what's above its rim's highest point, out
+    let above = 0;
+    while (above < m && Y[m - 1 - above] > spill) above++;
+    const was = S.A;
+    if (!S.sealed || was < 0) S.A = Math.max(0, Vc - nIn * this.vol);
+    else S.A = Math.min(was, (Vc * above) / m);
+    // (bubbling out only where its rim's top is under the liquid: an upright cup in a pool to its brim has none)
+    if (deep && was > 0 && was - S.A > 0.02 * Vc) this._burp(S, was - S.A);
+    if (!S.sealed || !(S.A > 0.02 * Vc)) return;
+    // the air's level: the top A of the hollow - the drops kept under it
+    const at = Math.min(m - 1, Math.max(0, Math.round((1 - S.A / Vc) * m)));
+    S.ya = Y[at];
+    S.low = Math.max(S.ya - 0.45 * D, R_P);
+    this.cups.push(S);
+  }
+
+  // (the air that's got out of a cup, tipped: a few bubbles up out of the liquid at its rim's highest point, and
+  // their sound)
+  _burp(S, vol) {
+    const app = this.app, P = app.particles?.add, t = S.top, n = Math.min(10, 2 + Math.round(vol * 400));
+    for (let i = 0; P && i < n; i++) {
+      const th = Math.random() * Math.PI * 2, r = 0.02 + Math.random() * 0.05, s = 0.15 + 0.25 * Math.random();
+      P.spawn(t[0] + Math.cos(th) * r, t[1] + 0.06 + Math.random() * 0.08, t[2] + Math.sin(th) * r, Math.cos(th) * s * 0.4, 0.4 + s, Math.sin(th) * s * 0.4, 0.2 + 0.15 * Math.random(), 0.006, 0.002, [1, 1, 1, 0.7], [1, 1, 1, 0], 4, 0);
+    }
+    app.audio?.bubble?.(0.02 + Math.min(0.05, vol * 0.2), app._pan ? app._pan(t[0], t[1], t[2]) : 0);
+  }
+
+  // (each substep, after the jelly's pushed the liquid out of itself: what of it's up in a cup's air, pressed back
+  // down toward the air's level - as against a wall, an eighth of a drop a substep at most: put straight there,
+  // the liquid caught under an upturned cup on the floor packed into a layer too thick for itself and threw the
+  // cup aside; pressed, it gives a little, as air does)
+  _air(q) {
+    const n = this.n, cp = this.cpush, step = 0.12 * this.D;
+    for (const S of this.cups) {
+      const xm = S.xm, Xm = S.Xm, R = S.R, C = S.C, low = S.low;
+      for (let i = 0; i < n; i++) {
+        const o = i * 3, py = q[o + 1];
+        if (py <= low) continue;
+        const dx = q[o] - xm[0], dy = py - xm[1], dz = q[o + 2] - xm[2];
+        const r0 = Xm[0] + R[0] * dx + R[3] * dy + R[6] * dz;
+        if (r0 <= C[0] || r0 >= C[3]) continue;
+        const r1 = Xm[1] + R[1] * dx + R[4] * dy + R[7] * dz;
+        if (r1 <= C[1] || r1 >= C[4]) continue;
+        const r2 = Xm[2] + R[2] * dx + R[5] * dy + R[8] * dz;
+        if (r2 <= C[2] || r2 >= C[5]) continue;
+        const d = Math.min(py - low, step);
+        q[o + 1] = py - d;
+        cp[o + 1] -= d;
+      }
+    }
   }
 
   // How hard each cube full of liquid that's been cut into is squeezed - its hollow's volume short of what it
@@ -1232,7 +1438,10 @@ export class Fluid {
       for (let k = 0; k < n * 3; k++) q[k] += dp[k];
       // (out of the jelly after the last round: after every one, it took a fifth of the liquid's time - a held
       // cube's, on a phone, its frame rate)
-      if (it === rounds - 1) this._collide(q);
+      if (it === rounds - 1) {
+        this._collide(q);
+        if (this.cups.length) this._air(q);
+      }
     }
     // velocities, then the viscosity. (The solver may stop it dead, but
     // speeds it up only a little a substep - squeezed, it oozes rather than
