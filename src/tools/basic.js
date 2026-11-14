@@ -610,7 +610,7 @@ export class HandTool {
 // (scale: the size the waves are for. Never steeper than ~half the cut's own
 // slope: steeper, the torn face folded over itself - thin slabs of jelly
 // either side of a fold, shards that tangled and stuck)
-function ragged(f, amp, scale = 1, calm = null) {
+export function ragged(f, amp, scale = 1, calm = null) {
   const W = [];
   let ks = 0;
   for (let i = 0; i < 4; i++) {
@@ -741,6 +741,8 @@ export class NailGunTool {
 
   activate() {
     this.model.visible = true;
+    // (its flash lights the jelly: that set of its shader, compiled now - see JellyView.prewarm)
+    this.app.jelly?.prewarm?.(64, this.app.sb, this.app.camera);
   }
 
   deactivate() {
@@ -806,7 +808,8 @@ export class NailGunTool {
     // muzzle of the viewmodel
     const origin = this.model.localToWorld(new THREE.Vector3(0, 0, 0.06).multiplyScalar(-1));
     this.recoil = 1;
-    this.app.particles.flash(origin, 0.05, [6, 5, 4]);
+    app.gunfx.muzzle(origin, this.aim.clone().sub(origin).normalize(), 0.35, { smoke: 1 });
+    app.kick(0.008);
     const hit = app.pickJelly(r);
     let target;
     if (hit) target = new THREE.Vector3(...hit.point);
@@ -854,10 +857,30 @@ export class HoleGunTool extends NailGunTool {
     app.tally?.('shots');
     const muzzle = this.model.localToWorld(new THREE.Vector3(0, 0.05, -0.09));
     this.recoil = 1.6;
-    app.particles.flash(muzzle, 0.09, [9, 7, 4]);
-    app.particles.smoke(muzzle, 3, 0.15, 0.6, 0.4, 0.15);
+    app.gunfx.muzzle(muzzle, this.aim.clone().sub(muzzle).normalize(), 1.25, { screen: 0.05, smoke: 4 });
+    app.kick(0.04);
     app.shake(0.012);
+    this._brass();
     this.bore(this.ray.origin, this.ray.direction);
+  }
+
+  // its spent case flicked out of the slide's port, up and right, out into the room
+  _brass() {
+    const app = this.app, cam = app.camera;
+    const right = new THREE.Vector3(1, 0, 0).applyQuaternion(cam.quaternion);
+    const fwd = new THREE.Vector3(0, 0, -1).applyQuaternion(cam.quaternion);
+    fwd.y = 0;
+    fwd.normalize();
+    const v = right.multiplyScalar(1 + Math.random() * 0.7).addScaledVector(fwd, 1.3 + Math.random() * 1.1);
+    v.y += 2 + Math.random() * 1;
+    app.gunfx.eject('brass', this.model.localToWorld(new THREE.Vector3(0.03, 0.07, 0.06)), v);
+  }
+
+  // (a round that met no jelly: into the floor, if it gets there)
+  _floor(o, d, big = 1) {
+    if (!(d.y < -1e-3)) return;
+    const t = -o.y / d.y;
+    if (t < 16) this.app.gunfx.floorHit(new THREE.Vector3(o.x + d.x * t, 0, o.z + d.z * t), d, big);
   }
 
   // A round along o + t d (d unit): its tunnel, spray and cavity. (light: a
@@ -867,6 +890,7 @@ export class HoleGunTool extends NailGunTool {
     const app = this.app, sb = app.sb, p = sb.p, size = p.size;
     const segs = jellyAlong(sb, o, d);
     if (!segs.length || sb.nT > 30000) {
+      if (!segs.length) this._floor(o, d, light ? 0.6 : 1);
       if (!light) app.audio?.gunshot(0);
       return false;
     }
@@ -950,9 +974,14 @@ export class HoleGunTool extends NailGunTool {
     const CA = at(t0 + inset), CB = at(t1 - inset);
     sb.cavity(CA.x, CA.y, CA.z, CB.x, CB.y, CB.z, (0.24 + 0.18 * (1 - firm)) * size * Math.pow(power, 0.4), kick, through ? 0.55 : 0.2, 1.8 * power * (1 - firm) * (1 - 0.7 * p.rigidity));
     app.glowPulse?.(entry.x, entry.y, entry.z, light ? 0.6 : 1);
+    // (through and out of it: on into the floor beyond, if it gets there)
+    if (through) {
+      const tz = segs[segs.length - 1][1];
+      this._floor(at(tz), d, light ? 0.5 : 0.8);
+    }
     if (light) return true;
     app.hitStop?.(0.05);
-    app.audio?.gunshot(through ? 1 : 0.7);
+    app.audio?.gunshot(through ? 1 : 0.7, app.audio?._panOf?.(entry) ?? 0);
     return true;
   }
 }

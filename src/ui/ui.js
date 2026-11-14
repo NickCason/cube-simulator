@@ -58,6 +58,8 @@ export const ICONS = {
   ),
   dicer: svg('<rect x="3.8" y="3.8" width="16.4" height="16.4" rx="3"/><path d="M9.3 3.8v16.4M14.7 3.8v16.4M3.8 9.3h16.4M3.8 14.7h16.4"/>'),
   autogun: svg('<path d="M9.5 9.2h11M9.5 12h11.5M9.5 14.8h11"/><rect x="3.4" y="8" width="6.6" height="8" rx="2"/><path d="M5.6 16v3.6"/>'),
+  // (a pump gun, side on: barrel and tube out to the right, the ribbed fore-end on them, the stock dropping away left)
+  shotgun: svg('<path d="M9 9.2h13.2M9 11.6h10"/><path d="M12.6 10.9h4.6v2.2h-4.6z"/><path d="M13.6 10.9v2.2M15.4 10.9v2.2"/><path d="M9.6 8.4H7.2L2 11.5l.8 2.4 4.8-1.6h2.4V8.4z"/><path d="M8.4 12.3v1.9"/>'),
   feed: svg('<path d="M3.5 10.5h12a6 6 0 0 1-12 0Z"/><path d="m15.5 10.5 5-6.2"/><path d="M8.4 6.6c0-1 .8-1.6.8-2.6M11.6 6.6c0-1 .8-1.6.8-2.6"/>'),
   eyes: svg('<circle cx="7.6" cy="12" r="5"/><circle cx="16.4" cy="12" r="5"/><circle cx="8.4" cy="13.7" r="1.9" fill="currentColor"/><circle cx="17.2" cy="13.7" r="1.9" fill="currentColor"/>'),
   flour: svg('<circle cx="10" cy="8.5" r="5.5"/><path d="M15.4 7.4 21 5.6"/><path d="M5.6 7h8.8M5.2 10h9.6M7.4 4.5h5.2M8 13h4"/><circle cx="7.6" cy="17.6" r=".7"/><circle cx="11" cy="19.4" r=".7"/><circle cx="13.4" cy="16.6" r=".7"/><circle cx="9.2" cy="21.2" r=".55"/>'),
@@ -95,6 +97,7 @@ export const TOOL_DEFS = [
   { id: 'nailgun', label: 'Nail gun', hint: 'Click to fire · hold for auto', key: '3' },
   { id: 'holegun', label: 'Hole gun', hint: 'Click to shoot a hole through it', key: 'g' },
   { id: 'autogun', label: 'Full auto', hint: 'Hold to let it rip · the barrels spin up first', key: 'f' },
+  { id: 'shotgun', label: 'Shotgun', hint: 'Click to blast it with buckshot · it pumps itself · hold to keep firing', key: 'x' },
   { id: 'mallet', label: 'Mallet', hint: 'Click to smack · hit on its beat to build resonance · frozen, sugar and ice cubes shatter', key: '4' },
   { id: 'torch', label: 'Torch', hint: 'Hold over the jelly to melt it · it runs off as liquid', key: '5' },
   { id: 'freeze', label: 'Cryo spray', hint: 'Hold to freeze it solid · spray a puddle to set it back into jelly', key: '6' },

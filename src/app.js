@@ -9,6 +9,8 @@ import { Post } from './render/post.js';
 import { JellyView } from './render/jellyView.js';
 import { NailSystem } from './world/nails.js';
 import { Particles } from './world/particles.js';
+import { GunFx } from './world/gunfx.js';
+import { ShotgunTool } from './tools/shotgun.js';
 import { Healer } from './heal.js';
 import { Swapper } from './swap.js';
 import { DropMode } from './drop.js';
@@ -153,6 +155,7 @@ export class App {
     this.orbit = { theta: 0.38, phi: 0.36, radius: 4.1, target: new THREE.Vector3(0, 0.44, 0) };
     this.orbitGoal = { theta: this.orbit.theta, phi: this.orbit.phi, radius: this.orbit.radius };
     this._shake = 0;
+    this._kick = 0; // (rad: a gun's recoil, the view kicked up - see kick)
     this._applyOrbit();
 
     const key = (this.keyLight = new THREE.DirectionalLight(0xfff6ec, 3.2));
@@ -205,6 +208,7 @@ export class App {
     this.nails = new NailSystem(this);
     this.particles = new Particles(this);
     this.fxScene = this.particles.scene;
+    this.gunfx = new GunFx(this); // (the guns' flashes, spent cases, holes in the floor: see world/gunfx.js)
     this.healer = new Healer(this);
     this.swapper = new Swapper(this); // (putting on a saved cube, with ceremony)
     this.drop = new DropMode(this); // (an exhibition mode: the cube taken up into the sky and let fall)
@@ -308,6 +312,7 @@ export class App {
       nailgun: new NailGunTool(this),
       holegun: new HoleGunTool(this),
       autogun: new AutoGunTool(this),
+      shotgun: new ShotgunTool(this),
       gelgun: new GelGunTool(this),
       acid: new AcidTool(this),
       flour: new FlourTool(this),
@@ -372,6 +377,7 @@ export class App {
     const bomb = makeBomb(this.M);
     this.scene.add(bomb);
     undo.push(() => this.scene.remove(bomb));
+    undo.push(this.gunfx.warmShow());
     for (const o of [this.nails.mesh, this.droplets.mesh]) {
       if (o.count !== 0) continue;
       const vis = o.visible;
@@ -1178,6 +1184,12 @@ export class App {
     this._shake = Math.min(0.05, this._shake + a);
   }
 
+  // a gun's recoil: the view kicked up (a rad), and back down as it settles - see _applyOrbit
+  kick(a) {
+    if (this.reducedMotion) return;
+    this._kick = Math.min(0.14, this._kick + a);
+  }
+
   // Intro: hold the cube up while the warm-up job runs a few ms per frame,
   // and let it drop once the job has warmed the falling and landing code and
   // the first runs of the cutting and contact code (or after 1.2 s, or at
@@ -1314,6 +1326,7 @@ export class App {
       c.position.x += (Math.random() - 0.5) * this._shake;
       c.position.y += (Math.random() - 0.5) * this._shake;
     }
+    if (this._kick > 1e-5) c.rotateX(this._kick);
     // (the sky's dome, 48 m round the middle of the room, up with the eye once that's over 3 m - taken up into the
     // sky in Drop, the eye went out through its top. Its colours go by the way out from its middle: as they were)
     if (this.sky) this.sky.position.y = Math.max(0, c.position.y - 3);
@@ -1373,6 +1386,7 @@ export class App {
     if (Math.abs(g.phi - o.phi) < 1e-5) o.phi = g.phi;
     if (Math.abs(g.radius - o.radius) < 1e-5) o.radius = g.radius;
     this._shake *= Math.exp(-dt * 14);
+    this._kick *= Math.exp(-dt * 11);
     this._applyOrbit();
   }
 
@@ -1708,6 +1722,7 @@ export class App {
       this.bubbles.update();
       for (const k in this.tools) if (this.tools[k] !== this.tool && this.tools[k].background) this.tools[k].update(sdt, dt);
       this.particles.update(sdt);
+      this.gunfx.update(sdt);
       this._impactSounds();
       this._wobbleSounds();
       this._impactGlow();

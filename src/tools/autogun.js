@@ -25,6 +25,15 @@ export class AutoGunTool extends HoleGunTool {
     this.model.traverse((o) => (o.castShadow = false));
     app.scene.add(this.model);
     this.spinner = this.model.getObjectByName('spin');
+    // (its barrels heat as it fires - red, then orange - and smoke as they cool: their own steel)
+    this.hotMat = app.M.darkSteel.clone();
+    this.hotMat.emissive = new THREE.Color(0, 0, 0);
+    this.spinner?.traverse((o) => {
+      if (o.isMesh && o.geometry?.parameters?.radiusTop === 0.008) o.material = this.hotMat;
+    });
+    this.heat = 0;
+    this.wisp = 0;
+    this.burst = 0;
     this.spin = 0;
     this.angle = 0;
     this.round = 0;
@@ -85,6 +94,7 @@ export class AutoGunTool extends HoleGunTool {
       return;
     }
     this._placeModel(t);
+    this._heat(t);
     this.spin = this.firing ? Math.min(1, this.spin + t / SPIN_UP) : Math.max(0, this.spin - t / SPIN_DOWN);
     this.angle += this.spin * 38 * t;
     if (this.spinner) this.spinner.rotation.z = this.angle;
@@ -100,7 +110,11 @@ export class AutoGunTool extends HoleGunTool {
         this.cool += 1 / (RATE * (this.app.st?.autoRate ?? 1));
       }
       if (this.cool < 0) this.cool = 0;
-    } else this.cool = 0;
+    } else {
+      this.cool = 0;
+      // (a burst over: its roll round the room)
+      if (this.burst) (this.burst = 0), this.app.audio?.autoTail();
+    }
     this._brass(dt);
     this._fade(t);
   }
@@ -111,10 +125,11 @@ export class AutoGunTool extends HoleGunTool {
     app.tally?.('shots');
     const muzzle = this.model.localToWorld(new THREE.Vector3(0, 0, -0.33));
     this.recoil = Math.min(1.1, this.recoil + 0.4);
-    app.particles.flash(muzzle, 0.06, [9, 7, 4]);
-    if (this.round % 3 === 0) app.particles.smoke(muzzle, 1, 0.1, 0.5, 0.3, 0.12);
-    app.fireAt(muzzle, 0.55);
+    app.gunfx.muzzle(muzzle, this.aim.clone().sub(muzzle).normalize(), 0.62, { smoke: this.round % 3 === 0 ? 1 : 0 });
+    app.kick(0.006);
     app.shake(0.004);
+    this.heat = Math.min(1, this.heat + 0.022);
+    this.burst++;
     // where it goes: from the eye through the cursor, scattering a little
     const o = this.ray.origin, d = this.ray.direction.clone();
     d.x += (Math.random() - 0.5) * 0.04;
@@ -132,6 +147,8 @@ export class AutoGunTool extends HoleGunTool {
     this._eject();
     const pan = app.audio?._panOf?.(end) ?? 0;
     if (!hit) {
+      // (into the floor: chewed up - sparks, dust, holes)
+      if (end.y < 0.01) app.gunfx.floorHit(end, d, 0.55);
       app.audio?.autoshot(0, pan);
       return;
     }
@@ -155,6 +172,22 @@ export class AutoGunTool extends HoleGunTool {
       app.glowPulse?.(end.x, end.y, end.z, 0.35);
     }
     app.audio?.autoshot(1, pan);
+  }
+
+  // its barrels' heat: up as it fires, cooling after - glowing red, then orange; smoking as they cool
+  _heat(dt) {
+    const firing = this.firing && this.spin > 0.85;
+    if (!firing) this.heat *= Math.exp(-dt / 3.2);
+    const h = this.heat, e = Math.pow(h, 1.6) * 1.8;
+    this.hotMat.emissive.setRGB(e, e * (0.18 + 0.3 * h), e * 0.04);
+    if (!firing && h > 0.3 && this.app.tool === this) {
+      this.wisp -= dt;
+      if (this.wisp <= 0) {
+        this.wisp = 0.05 + 0.12 * (1 - h);
+        const a = Math.random() * Math.PI * 2, tip = this.model.localToWorld(new THREE.Vector3(Math.cos(a) * 0.022, Math.sin(a) * 0.022, -0.3));
+        this.app.particles.smoke(tip, 1, 0.03, 0.62, 0.3, 0.05);
+      }
+    }
   }
 
   // a streak from the muzzle to where the round went

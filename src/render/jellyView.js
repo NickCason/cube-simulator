@@ -2358,6 +2358,15 @@ export class JellyView {
     this._useFeatures(want);
   }
 
+  // (a set about to be wanted - a gun picked up, its flash to light the jelly (64: a flame's) - compiled aside now:
+  // at the first shot, the jelly's shader made again froze the picture most of a second on a phone)
+  prewarm(bits, sb, camera) {
+    if (this._featKey === undefined || !this._variants) return;
+    const want = this._wantFeatures(sb) | bits;
+    if (this._featReady(want) || this._warming()) return;
+    this._warm(want, camera);
+  }
+
   // what's here: the cubes' looks, any coat, glow mode, a weld or a flame
   _wantFeatures(sb) {
     const f = this._featSeen || (this._featSeen = new Uint8Array(MAX_CUBES)), keys = this._cubeKeys();

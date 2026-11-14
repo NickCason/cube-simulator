@@ -16,6 +16,13 @@ export function noteFor(size) {
 
 const MASTER = 0.8;
 
+// Each gun's voice (see AudioEngine._shot): how loud and long its crack (the round's snap and the powder's flash), its
+// boom (the gas out of its muzzle, from how bright), its punch (a thump down through the sub-bass), its snap (the mids'
+// smack), its barrel's ring and its tail (the room's rumble after).
+const PISTOL = { crack: 0.85, crackDur: 0.012, boom: 0.8, boomDur: 0.17, boomF: 2700, punch: 0.85, punchF: 118, punchDur: 0.18, snap: 0.32, snapDur: 0.07, ring: 0.045, ringF: 4300, tail: 0.16, tailDur: 0.75 };
+const AUTO = { crack: 0.6, crackDur: 0.008, boom: 0.4, boomDur: 0.075, boomF: 2300, punch: 0.5, punchF: 104, punchDur: 0.085, snap: 0.2, snapDur: 0.04, ring: 0, ringF: 0, tail: 0.04, tailDur: 0.22 };
+const SHOTGUN = { crack: 1, crackDur: 0.02, boom: 1, boomDur: 0.34, boomF: 1900, punch: 1, punchF: 82, punchDur: 0.32, snap: 0.42, snapDur: 0.11, ring: 0.035, ringF: 3100, tail: 0.3, tailDur: 1.35 };
+
 export class AudioEngine {
   constructor() {
     this.ctx = null;
@@ -367,26 +374,105 @@ export class AudioEngine {
     this._tone(t + 0.06, 'sine', 180, 70, 0.15, 0.25 * amount);
   }
 
+  // The nail gun: air let go (a hiss), the driver slamming home (a solid thunk and its click), and back (a chk).
   nailgun() {
     if (!this._ok('nailgun', 0.04)) return;
-    const t = this.ctx.currentTime;
-    this._noise(t, 0.07, 'highpass', 1800, 900, 0.7, 0.4, 0.001);
-    this._tone(t, 'square', 3200, 1800, 0.012, 0.12, 0.0005);
-    this._tone(t, 'sine', 150, 60, 0.07, 0.5, 0.001);
-    this._noise(t + 0.01, 0.09, 'bandpass', 500, 300, 2, 0.18);
+    const t = this.ctx.currentTime, out = this._gunOut(0), v = () => 1 + (Math.random() - 0.5) * 0.1;
+    this._noise(t, 0.06, 'highpass', 3200 * v(), 1300, 0.7, 0.32, 0.001, out);
+    this._tone(t, 'sine', 175 * v(), 58, 0.075, 0.6, 0.0012, out);
+    this._noise(t, 0.014, 'bandpass', 2400 * v(), 1800, 5, 0.34, 0.0004, out);
+    this._tone(t, 'square', 3100 * v(), 1700, 0.01, 0.07, 0.0003, out);
+    this._clack(t + 0.058, 1900 * v(), 0.13, out);
   }
 
-  // The hole gun: a sharp crack with a low punch under it and a short tail;
-  // into jelly, a wet thwup on top (hit 0..1: how much it went through).
-  // full auto: one round - short and punchy (fourteen a second mustn't
-  // turn to mush), a smack if it hits jelly
+  // The guns' own bus: driven into a soft clip - a shot loud and gritty, its punch with the harmonics a phone's
+  // speaker can play, and the master's compressor not ducking the rest under it - into the room's echo more than
+  // the rest is, and a slapback off the far wall: an eighth of a second and again, darker each time.
+  _gunBus() {
+    if (this._gb) return this._gb;
+    const ctx = this.ctx, inp = ctx.createGain(), drive = ctx.createWaveShaper(), post = ctx.createGain();
+    const N = 2048, curve = new Float32Array(N), k = 2.4, tk = Math.tanh(k);
+    for (let i = 0; i < N; i++) curve[i] = Math.tanh(k * ((i / (N - 1)) * 2 - 1)) / tk;
+    drive.curve = curve;
+    drive.oversample = '2x';
+    inp.gain.value = 0.9;
+    post.gain.value = 0.82;
+    inp.connect(drive).connect(post).connect(this.master);
+    const wet = ctx.createGain();
+    wet.gain.value = 0.6;
+    post.connect(wet).connect(this.verb);
+    const dl = ctx.createDelay(1), lp = ctx.createBiquadFilter(), fb = ctx.createGain(), dg = ctx.createGain();
+    dl.delayTime.value = 0.125;
+    lp.type = 'lowpass';
+    lp.frequency.value = 1700;
+    fb.gain.value = 0.3;
+    dg.gain.value = 0.26;
+    post.connect(dl);
+    dl.connect(lp);
+    lp.connect(fb).connect(dl);
+    lp.connect(dg).connect(this.master);
+    return (this._gb = inp);
+  }
+
+  _gunOut(pan) {
+    const bus = this._gunBus();
+    if (!pan || !this.ctx.createStereoPanner) return bus;
+    const p = this.ctx.createStereoPanner();
+    p.pan.value = Math.max(-1, Math.min(1, pan));
+    p.connect(bus);
+    return p;
+  }
+
+  // A shot, built up in layers (k: the gun's voice - see PISTOL), each a little off (no two alike)
+  _shot(t, k, out) {
+    const v = () => 1 + (Math.random() - 0.5) * 0.12;
+    // the crack: torn air, and a click on its front
+    this._noise(t, k.crackDur * v(), 'highpass', 3300 * v(), 6800, 0.7, k.crack, 0.0002, out);
+    this._tone(t, 'square', 3700 * v(), 900, 0.004, 0.24 * k.crack, 0.0001, out);
+    // the boom: a dark burst, falling
+    this._noise(t + 0.001, k.boomDur * v(), 'lowpass', k.boomF * v(), 170, 0.8, k.boom, 0.0015, out);
+    // the punch: down through the sub-bass (the bus's clip makes it heard), an octave over it to carry it
+    this._tone(t, 'sine', k.punchF * v(), 31, k.punchDur, k.punch, 0.002, out);
+    this._tone(t, 'triangle', k.punchF * 1.9 * v(), 48, k.punchDur * 0.6, k.punch * 0.32, 0.002, out);
+    // the smack of the mids
+    this._noise(t, k.snapDur, 'bandpass', 1300 * v(), 560, 1.6, k.snap, 0.0008, out);
+    // the barrel's ring
+    if (k.ring > 0) this._tone(t + 0.002, 'sine', k.ringF * v(), k.ringF * 0.97, 0.13, k.ring, 0.002, out);
+    // and the room after
+    if (k.tail > 0) this._noise(t + 0.02, k.tailDur * v(), 'lowpass', 950, 110, 0.7, k.tail, 0.025, out);
+  }
+
+  // steel on steel: a slide, a bolt, a pump going home
+  _clack(t, f, g, out = this._gunOut(0)) {
+    this._noise(t, 0.02, 'bandpass', f, f * 0.82, 6, g, 0.0006, out);
+    this._noise(t, 0.005, 'highpass', 4200, 3600, 0.7, g * 0.7, 0.0002, out);
+    this._tone(t + 0.001, 'sine', f * 1.47, f * 1.43, 0.035, g * 0.18, 0.0008, out);
+  }
+
+  // into jelly: a wet smack, a deep thup under it, a squelch (hit 0..1; at: how far off the round lands, s)
+  _gelHit(t, hit, out) {
+    this._noise(t, 0.11, 'bandpass', 900, 250, 1.4, 0.44 * hit, 0.002, out);
+    this._tone(t, 'sine', 235, 72, 0.16, 0.5 * hit, 0.003, out);
+    this._noise(t + 0.008, 0.08, 'bandpass', 2300, 700, 3, 0.2 * hit, 0.003, out);
+  }
+
+  // full auto: one round - short and punchy (fourteen a second mustn't turn to mush), a smack if it hits jelly
   autoshot(hit = 0, pan = 0) {
     if (!this._ok('autoshot', 0.045)) return;
-    const t = this.ctx.currentTime, out = this._panned(pan);
-    this._noise(t, 0.028, 'highpass', 2200, 1200, 0.7, 0.5, 0.0004, out);
-    this._tone(t, 'sine', 140, 48, 0.07, 0.5, 0.001, out);
-    this._noise(t + 0.008, 0.07, 'bandpass', 900, 300, 1, 0.12, 0.004, out);
-    if (hit > 0) this._noise(t + 0.01, 0.05, 'bandpass', 1300, 420, 2.4, 0.22 * hit, 0.003, out);
+    const t = this.ctx.currentTime, out = this._gunOut(pan);
+    this._shot(t, AUTO, out);
+    if (hit > 0) this._gelHit(t + 0.006, 0.5 * hit, out);
+    this._burst = (this._burst || 0) + 1;
+  }
+
+  // ...and the burst over: its roll round the room after it, longer the longer it went on
+  autoTail() {
+    const n = this._burst || 0;
+    this._burst = 0;
+    if (!this.ctx || this.muted || n < 3) return;
+    const t = this.ctx.currentTime, out = this._gunOut(0), a = Math.min(1, n / 24);
+    this._noise(t, 0.6 + 0.9 * a, 'lowpass', 700, 90, 0.7, 0.22 * a + 0.06, 0.03, out);
+    this._tone(t, 'sine', 62, 38, 0.5 + 0.6 * a, 0.12 * a, 0.03, out);
   }
 
   // its barrels' motor: a whine that follows how fast they spin (0..1)
@@ -421,17 +507,75 @@ export class AudioEngine {
     }
   }
 
-  gunshot(hit = 0) {
+  // The hole gun: a big pistol's shot, its slide back and home (the case flung out with the first) - into the jelly,
+  // a wet smack on it (hit 0..1)
+  gunshot(hit = 0, pan = 0) {
     if (!this._ok('gunshot', 0.08)) return;
-    const t = this.ctx.currentTime;
-    this._noise(t, 0.045, 'highpass', 2600, 1400, 0.7, 0.75, 0.0005);
-    this._tone(t, 'square', 2400, 900, 0.01, 0.12, 0.0003);
-    this._tone(t, 'sine', 120, 42, 0.12, 0.7, 0.001);
-    this._noise(t + 0.02, 0.22, 'bandpass', 700, 260, 1.2, 0.16, 0.01);
+    const t = this.ctx.currentTime, out = this._gunOut(pan);
+    this._shot(t, PISTOL, out);
+    this._clack(t + 0.036, 3500, 0.22, out);
+    this._clack(t + 0.074, 2650, 0.27, out);
+    if (hit > 0) this._gelHit(t + 0.006, hit, out);
+  }
+
+  // The shotgun: a boom from the chest, a second wave wider and darker - and its buckshot into jelly
+  shotgun(hit = 0, pan = 0) {
+    if (!this._ok('shotgun', 0.2)) return;
+    const t = this.ctx.currentTime, out = this._gunOut(pan);
+    this._shot(t, SHOTGUN, out);
+    this._noise(t + 0.004, 0.55, 'lowpass', 900, 110, 0.7, 0.55, 0.004, out);
     if (hit > 0) {
-      this._tone(t + 0.012, 'sine', 210, 85, 0.13, 0.4 * hit, 0.003);
-      this._noise(t + 0.012, 0.09, 'bandpass', 1200, 380, 2.2, 0.32 * hit, 0.004);
+      this._gelHit(t + 0.008, hit, out);
+      for (let i = 0; i < 4; i++) this._noise(t + 0.008 + Math.random() * 0.03, 0.05, 'bandpass', 900 + Math.random() * 900, 400, 2.2, 0.16 * hit, 0.002, out);
     }
+  }
+
+  // ...and pumped: the fore-end hauled back (the case thrown out) - a ratchet up the rail and its stop - and shoved
+  // home - back down it, and the bolt locking (back: 0 out, 1 in)
+  pump(back) {
+    if (!this._ok(back ? 'pumpIn' : 'pumpOut', 0.1)) return;
+    const t = this.ctx.currentTime, out = this._gunOut(0);
+    if (!back) {
+      this._noise(t, 0.075, 'bandpass', 1500, 3300, 3, 0.26, 0.004, out);
+      this._clack(t + 0.07, 2900, 0.34, out);
+    } else {
+      this._noise(t, 0.06, 'bandpass', 3000, 1700, 3, 0.24, 0.004, out);
+      this._clack(t + 0.055, 2250, 0.38, out);
+      this._clack(t + 0.07, 4300, 0.14, out);
+    }
+  }
+
+  // A round off the floor: a ricochet's whine, away (pan: where)
+  ricochet(pan = 0) {
+    if (!this._ok('ricochet', 0.12)) return;
+    const t = this.ctx.currentTime, out = this._gunOut(pan), f = 2200 + Math.random() * 1400;
+    const o = this.ctx.createOscillator(), g = this.ctx.createGain(), lfo = this.ctx.createOscillator(), lg = this.ctx.createGain();
+    o.type = 'sine';
+    o.frequency.setValueAtTime(f, t);
+    o.frequency.exponentialRampToValueAtTime(f * 0.42, t + 0.38);
+    lfo.frequency.value = 38 + Math.random() * 20;
+    lg.gain.value = f * 0.025;
+    lfo.connect(lg).connect(o.frequency);
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(0.16, t + 0.012);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + 0.4);
+    o.connect(g).connect(out);
+    o.start(t);
+    lfo.start(t);
+    o.stop(t + 0.45);
+    lfo.stop(t + 0.45);
+    this._noise(t, 0.03, 'highpass', 5000, 3000, 0.8, 0.18, 0.0004, out);
+  }
+
+  // a shotgun's spent shell landing: plastic, its brass head ticking
+  shellTock(amount = 0.5, at = null) {
+    if (!this._ok('shelltock', 0.03)) return;
+    amount *= Math.min(1, this.impactLevel * 1.8);
+    if (amount < 0.02) return;
+    const t = this.ctx.currentTime, out = this._panned(this._panOf(at));
+    this._noise(t, 0.04, 'bandpass', 1050 + Math.random() * 300, 700, 4, 0.3 * amount, 0.0008, out);
+    this._tone(t, 'sine', 640, 380, 0.05, 0.16 * amount, 0.001, out);
+    this._tone(t, 'sine', 3300, 3250, 0.06, 0.05 * amount, 0.0006, out);
   }
 
   nailHit(amount = 1) {

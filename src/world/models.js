@@ -348,6 +348,73 @@ export function makeAutoGun(M) {
   return shadowed(g);
 }
 
+// Pump shotgun: its barrel along -Z (the muzzle at z -0.45, y 0.018), the magazine tube under it, the fore-end on
+// that (the group named 'pump': it slides back +Z to work the action), the receiver, a wooden stock behind.
+export function makeShotgun(M) {
+  const g = new THREE.Group();
+  const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.012, 0.012, 0.42, 18), M.darkSteel);
+  barrel.rotation.x = Math.PI / 2;
+  barrel.position.set(0, 0.018, -0.235);
+  g.add(barrel);
+  const bore = new THREE.Mesh(new THREE.CylinderGeometry(0.0085, 0.0085, 0.004, 14), M.rubber);
+  bore.rotation.x = Math.PI / 2;
+  bore.position.set(0, 0.018, -0.447);
+  g.add(bore);
+  const bead = new THREE.Mesh(new THREE.SphereGeometry(0.0035, 10, 8), M.brass);
+  bead.position.set(0, 0.032, -0.43);
+  g.add(bead);
+  const tube = new THREE.Mesh(new THREE.CylinderGeometry(0.0095, 0.0095, 0.33, 14), M.darkSteel);
+  tube.rotation.x = Math.PI / 2;
+  tube.position.set(0, -0.007, -0.19);
+  g.add(tube);
+  const cap = new THREE.Mesh(new THREE.CylinderGeometry(0.0105, 0.0105, 0.012, 14), M.steel);
+  cap.rotation.x = Math.PI / 2;
+  cap.position.set(0, -0.007, -0.36);
+  g.add(cap);
+  // (the fore-end: ribbed, round the tube - what the pump slides)
+  const pump = new THREE.Group();
+  pump.name = 'pump';
+  const fe = new THREE.Mesh(new THREE.CylinderGeometry(0.019, 0.017, 0.12, 18), M.rubber);
+  fe.rotation.x = Math.PI / 2;
+  pump.add(fe);
+  for (let i = 0; i < 6; i++) {
+    const rib = new THREE.Mesh(new THREE.TorusGeometry(0.0188, 0.0022, 6, 18), M.rubber);
+    rib.position.z = -0.045 + i * 0.018;
+    pump.add(rib);
+  }
+  pump.position.set(0, -0.005, -0.17);
+  g.add(pump);
+  const recv = new THREE.Mesh(new THREE.BoxGeometry(0.046, 0.06, 0.17), M.darkSteel);
+  recv.position.set(0, 0.006, 0.05);
+  g.add(recv);
+  const port = new THREE.Mesh(new THREE.BoxGeometry(0.004, 0.022, 0.05), M.rubber);
+  port.position.set(0.024, 0.016, 0.03);
+  g.add(port);
+  const rail = new THREE.Mesh(new THREE.BoxGeometry(0.014, 0.006, 0.15), M.steel);
+  rail.position.set(0, 0.038, 0.05);
+  g.add(rail);
+  const guard = new THREE.Mesh(new THREE.TorusGeometry(0.026, 0.005, 8, 20, Math.PI), M.darkSteel);
+  guard.rotation.set(0, Math.PI / 2, Math.PI);
+  guard.position.set(0, -0.026, 0.1);
+  g.add(guard);
+  const trig = new THREE.Mesh(new THREE.BoxGeometry(0.004, 0.02, 0.006), M.steel);
+  trig.position.set(0, -0.032, 0.1);
+  g.add(trig);
+  const stock = new THREE.Mesh(new THREE.BoxGeometry(0.042, 0.07, 0.24), M.wood);
+  stock.position.set(0, -0.03, 0.25);
+  stock.rotation.x = 0.16;
+  g.add(stock);
+  const wrist = new THREE.Mesh(new THREE.BoxGeometry(0.038, 0.05, 0.08), M.wood);
+  wrist.position.set(0, -0.012, 0.15);
+  wrist.rotation.x = 0.28;
+  g.add(wrist);
+  const pad = new THREE.Mesh(new THREE.BoxGeometry(0.046, 0.08, 0.018), M.rubber);
+  pad.position.set(0, -0.05, 0.372);
+  pad.rotation.x = 0.16;
+  g.add(pad);
+  return shadowed(g);
+}
+
 // Horseshoe magnet: poles pointing -Y at origin.
 export function makeMagnet(M) {
   const g = new THREE.Group();
