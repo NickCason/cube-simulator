@@ -1707,22 +1707,25 @@ export const LIGHT_VIEW_GLSL = /* glsl */ `
 // crosses, from where it enters to where it leaves. The detail no longer
 // depends on the size of the mesh's triangles.
 // ...and the liquid in a cube full of it, as the key light sees it: the nearest of its surface (world position,
-// relative to uOrigin, and 1 where there's some) and its normal there, turned to the light - only what's in its
-// cube (see Fluid: aIn; out of it, it casts a plain shadow of its own)
+// relative to uOrigin, and 1 where there's some), its normal there, turned to the light, and its colour there - only
+// what's in its cube (see Fluid: aIn; out of it, it casts a plain shadow of its own)
 export function createLiquidViewMaterial() {
   return new THREE.ShaderMaterial({
     side: THREE.DoubleSide,
+    vertexColors: true,
     uniforms: { uOrigin: { value: new THREE.Vector3() }, uLightDir: { value: new THREE.Vector3(0, 1, 0) } },
     vertexShader: /* glsl */ `
       attribute float aIn;
       varying vec3 vW;
       varying vec3 vN;
       varying float vIn;
+      varying vec3 vCol;
       void main() {
         vec4 wp = modelMatrix * vec4(position, 1.0);
         vW = wp.xyz;
         vN = mat3(modelMatrix) * normal;
         vIn = aIn;
+        vCol = color;
         gl_Position = projectionMatrix * viewMatrix * wp;
       }`,
     fragmentShader: /* glsl */ `
@@ -1731,17 +1734,24 @@ export function createLiquidViewMaterial() {
       varying vec3 vW;
       varying vec3 vN;
       varying float vIn;
+      varying vec3 vCol;
       layout(location = 1) out highp vec4 oNrm;
+      layout(location = 2) out highp vec4 oCol;
       void main() {
         if (vIn < 0.5) discard;
         vec3 n = normalize(vN);
         if (dot(n, uLightDir) < 0.0) n = -n;
         gl_FragColor = vec4(vW - uOrigin, 1.0);
         oNrm = vec4(n, 1.0);
+        oCol = vec4(vCol, 1.0);
       }`,
   });
 }
 
+// (a liquid of its own colour in a cube: how much of its colour its caustic light takes, a metre of the way through
+// it - c^(0.7 per m): head on through a 1 m cube full of it, about as much as the liquid's colour seen through the
+// cube, front and back)
+const LIQ_K = 0.7;
 export function createCausticMaterial(layerUniforms) {
   return new THREE.ShaderMaterial({
     side: THREE.DoubleSide,
@@ -1764,6 +1774,7 @@ export function createCausticMaterial(layerUniforms) {
       tExitN: { value: null },
       tLiq: { value: null },
       tLiqN: { value: null },
+      tLiqC: { value: null },
       uLiqOn: { value: 0 },
       uGradTex: { value: null },
       uFreeTex: { value: null },
@@ -1784,6 +1795,7 @@ export function createCausticMaterial(layerUniforms) {
       uniform sampler2D tExitN;
       uniform sampler2D tLiq;
       uniform sampler2D tLiqN;
+      uniform sampler2D tLiqC;
       uniform float uLiqOn;
       ${CUBE_GLSL}
       uniform vec3 uOrigin;
@@ -1802,6 +1814,7 @@ export function createCausticMaterial(layerUniforms) {
       varying float vValid;
       varying vec3 vSig;
       varying float vPath;
+      varying vec3 vLiqT;
       varying float vNdL;
       varying float vTemp;
       varying float vThrow;
@@ -1869,6 +1882,7 @@ export function createCausticMaterial(layerUniforms) {
           vValid = 0.0;
           vSig = vec3(0.0);
           vPath = 0.0;
+          vLiqT = vec3(1.0);
           vNdL = 1.0;
           vTemp = 0.0;
           vThrow = 0.0;
@@ -1906,7 +1920,9 @@ export function createCausticMaterial(layerUniforms) {
           vec4 lq = texelFetch(uCubeTex, ivec2(35, int(kA)), 0);
           vec3 P1 = P, N1 = N;
           float wf = 0.0, span = X.w > 0.5 ? max(dot(X.xyz - E.xyz, Ld), 0.01) : 0.05;
-          bool straight = false;
+          bool straight = false, own = false;
+          vec3 lc = vec3(1.0);
+          vLiqT = vec3(1.0);
           if (lq.x > 0.5) {
             // (its walls' share of the way through: see Spill._hollow)
             wf = lq.y <= 0.5 ? 0.05 + 0.08 * lq.y : 0.09 + 0.18 * (lq.y - 0.5);
@@ -1921,6 +1937,11 @@ export function createCausticMaterial(layerUniforms) {
                   if (texelFetch(tLiq, q, 0).w > 0.5) Nl += texelFetch(tLiqN, q, 0).xyz * (3.0 - 0.5 * float(abs(dx) + abs(dy)));
                 }
               N1 = dot(Nl, Nl) > 1e-12 ? normalize(Nl) : vec3(0.0, 1.0, 0.0);
+              // (a liquid of its own colour - a colour picked, a rainbow: its colour where the light goes into it)
+              if (lq.w > 0.5) {
+                own = true;
+                lc = max(texelFetch(tLiqC, ij, 0).rgb, vec3(0.015));
+              }
             } else straight = true;
           }
           vec3 r = refract(Ld, N1, 1.0 / ior);
@@ -1950,6 +1971,13 @@ export function createCausticMaterial(layerUniforms) {
             // (its colour deepens with the way through the jelly - only that;
             // a cube full of liquid's, from the liquid, and its top wall)
             vPath = length(Q - P1) + wf * span;
+            // (a liquid of its own colour: the jelly's only its two walls; the rest's the liquid's, taken away by it as
+            // a filter does - the two multiplied, not mixed: red jelly, blue water, a dim blue-violet, darker the deeper
+            // either; where it misses the liquid - the air over it - the walls' colour alone)
+            if (own) {
+              vLiqT = exp(log(lc) * (max(length(Q - P1) - wf * span, 0.0) * ${LIQ_K.toFixed(3)}));
+              vPath = 2.0 * wf * span;
+            }
             // (and how far it falls from the jelly to the floor: the further,
             // the softer it lands - see floor.js)
             vThrow = length(F - Q);
@@ -1966,6 +1994,10 @@ export function createCausticMaterial(layerUniforms) {
             float t = max(P1.y, 0.0) / -min(r.y, -0.08);
             F = P1 + r * t;
             vPath = t + wf * span;
+            if (own) {
+              vLiqT = exp(log(lc) * (max(t - wf * span, 0.0) * ${LIQ_K.toFixed(3)}));
+              vPath = 2.0 * wf * span;
+            }
             // (bounced round inside, it comes out low down: half the way)
             vThrow = 0.5 * t;
             tOut = 0.85;
@@ -2013,6 +2045,7 @@ export function createCausticMaterial(layerUniforms) {
       varying float vValid;
       varying vec3 vSig;
       varying float vPath;
+      varying vec3 vLiqT;
       varying float vNdL;
       varying float vTemp;
       varying float vThrow;
@@ -2032,7 +2065,7 @@ export function createCausticMaterial(layerUniforms) {
         float F0 = pow((ior - 1.0) / (ior + 1.0), 2.0);
         float Ft = 1.0 - (F0 + (1.0 - F0) * pow(clamp(1.0 - vNdL, 0.0, 1.0), 5.0));
         vec3 sig = vSig;
-        vec3 T = exp(-sig * vPath) * exp(-scatter * vPath * 0.7);
+        vec3 T = exp(-sig * vPath) * exp(-scatter * vPath * 0.7) * vLiqT;
         // frosted jelly scatters light: no sharp caustics
         T *= 1.0 - 0.9 * smoothstep(0.05, 0.6, -vTemp);
         vec3 c = T * ratio * Ft * vValid;

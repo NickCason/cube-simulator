@@ -527,7 +527,7 @@ export class App {
       // (its liquid as thick, as clinging, as it's set now - the liquid already in it too)
       if (sb.cHollow[cb.slot] && Math.abs(sb.cVisc[cb.slot] - wasVisc) > 1e-6) this.fluid?.setVisc(cb.slot, sb.cVisc[cb.slot]);
       if (sb.cHollow[cb.slot] && Math.abs(sb.cTens[cb.slot] - wasTens) > 1e-6) this.fluid?.setTension(cb.slot, sb.cTens[cb.slot]);
-      this.jelly.setCubeLook(cb.slot, resolveFlavor(cb.style), { ...ct, ...cs, surface: cb.style.surface, trim: cb.style.trim, bevelRatio: (EDGES[cb.style.edges] || EDGES[DEFAULT_STYLE.edges]).bevel }, sb.cSize[cb.slot]);
+      this.jelly.setCubeLook(cb.slot, resolveFlavor(cb.style), { ...ct, ...cs, surface: cb.style.surface, trim: cb.style.trim, liqColor: cb.style.liqColor || '', bevelRatio: (EDGES[cb.style.edges] || EDGES[DEFAULT_STYLE.edges]).bevel }, sb.cSize[cb.slot]);
       // (its own shape - faces dished or bulged, scalloped edges: built
       // again in place if that's changed and it's whole; else at its next
       // re-cube)

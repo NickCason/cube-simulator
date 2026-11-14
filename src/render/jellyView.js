@@ -33,6 +33,7 @@ import { SURFACES, surfaceBakeGLSL, surfaceOf, surfaceFit, surfaceSites } from '
 
 const FLOOR_SPAN = 6.4;
 const CAUS_GAIN = 1.5; // (how bright the caustic light lands)
+const LIQ_TINT = 0.7; // (a liquid of its own colour's tint on its cube's shadow, a metre through it - as its caustics': see jellyMaterials LIQ_K)
 // (how milky jelly of that opacity looks: see setStyle)
 // a row of the cube-look texture: 7 texels of looks, 10 + 10 of layers, the
 // colour of its light, a freeform gradient's depth
@@ -566,10 +567,12 @@ export class JellyView {
     this.causticMat.uniforms.tExitN.value = this.lightView[2].rt.textures[2];
     // (and the liquid in a cube full of it, as the light sees it: where the
     // light's bent going into it - see createLiquidViewMaterial)
-    this.liqView = { rt: new THREE.WebGLRenderTarget(lvRes, lvRes, { ...lvOpts, count: 2 }), mat: createLiquidViewMaterial() };
+    // (and its colour there: a liquid of its own colour's light is that colour - see createCausticMaterial)
+    this.liqView = { rt: new THREE.WebGLRenderTarget(lvRes, lvRes, { ...lvOpts, count: 3 }), mat: createLiquidViewMaterial() };
     this.liquid = null; // (the Fluid: App sets it)
     this.causticMat.uniforms.tLiq.value = this.liqView.rt.textures[0];
     this.causticMat.uniforms.tLiqN.value = this.liqView.rt.textures[1];
+    this.causticMat.uniforms.tLiqC.value = this.liqView.rt.textures[2];
     // (on a desktop, the caustics drawn a colour at a time, each bent its own
     // amount: their edges split into rainbows)
     this.disperse = !coarse;
@@ -867,8 +870,10 @@ export class JellyView {
     };
     put(0, avgAbs.x, avgAbs.y, avgAbs.z, 9 * o * o + (many ? 1.6 * (1 - o) : 0));
     put(1, sc.r, sc.g, sc.b, hazeMinOf(o));
-    // full of liquid (1/0), its skin's thickness (0 ultrathin .. 1 thick), how thick the liquid (see SoftBody._liquidTets)
-    put(35, m.liquid > 0.5 ? 1 : 0, m.liqSkin ?? 0.5, m.liqVisc ?? 0.15, 0);
+    // full of liquid (1/0), its skin's thickness (0 ultrathin .. 1 thick), how thick the liquid (see SoftBody._liquidTets),
+    // and whether that's a colour of its own (a colour picked, or a rainbow: its caustics take it - see
+    // createCausticMaterial)
+    put(35, m.liquid > 0.5 ? 1 : 0, m.liqSkin ?? 0.5, m.liqVisc ?? 0.15, m.liqColor ? 1 : 0);
     put(2, m.glow, m.rough, m.ior, (0.018 * Math.max(0, m.ior - 1)) / 0.36);
     put(3, m.sugar || 0, m.milk || 0, m.irid || 0, m.metal || 0);
     put(4, m.opal || 0, rubik ? -1 : flavor.layers ? flavor.layers.length : 0, -size / 2, size);
@@ -887,6 +892,20 @@ export class JellyView {
     tint.multiplyScalar(1 / abs.length);
     const cloud = Math.max(m.milk || 0, hazeMinOf(o));
     if (cloud) tint.lerp(new THREE.Color(1, 1, 1), 0.35 * cloud).multiplyScalar(1 - 0.35 * cloud);
+    // (full of a liquid of its own colour: what's come through that too - as its caustics take it (LIQ_TINT a metre),
+    // across 0.85 of the cube - and over the air above it, not: by how full it is. Red jelly, blue water - a red
+    // shadow, as if the water weren't there)
+    if (m.liquid > 0.5 && m.liqColor) {
+      const lc = new THREE.Color(0, 0, 0), e = LIQ_TINT * 0.85 * size, f = Math.min(1, Math.max(0, m.liqFill ?? 1));
+      if (m.liqColor === 'rainbow') {
+        const h = new THREE.Color();
+        for (let i = 0; i < 8; i++) h.setHSL((0.75 * i) / 7, 1, 0.5), lc.r += Math.pow(Math.max(h.r, 0.015), e) / 8, lc.g += Math.pow(Math.max(h.g, 0.015), e) / 8, lc.b += Math.pow(Math.max(h.b, 0.015), e) / 8;
+      } else {
+        lc.set(m.liqColor);
+        lc.setRGB(Math.pow(Math.max(lc.r, 0.015), e), Math.pow(Math.max(lc.g, 0.015), e), Math.pow(Math.max(lc.b, 0.015), e));
+      }
+      tint.r *= 1 - f + f * lc.r; tint.g *= 1 - f + f * lc.g; tint.b *= 1 - f + f * lc.b;
+    }
     put(27, tint.r, tint.g, tint.b, 9 * o * o + (m.milk || 0) * 3);
     // (how much light gets through it at all, for its shadow and caustics:
     // none through metal - a chrome cube's shadow was pink - and through
