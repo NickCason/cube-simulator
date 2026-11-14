@@ -15,7 +15,7 @@
 
 import * as THREE from 'three';
 import { REST_STEP, MAX_CUBES, polarRot } from '../sim/softbody.js';
-import { eyeFrame, onSurface } from '../eyes.js';
+import { eyeFrame } from '../eyes.js';
 import { zitSpots } from '../acne.js';
 import { LATE_LAYER } from './eyes.js';
 
@@ -67,6 +67,26 @@ function onBox(x, y, z, b, out) {
   return out;
 }
 
+// (the cube's skin as made - side 1, from its middle: its edges rounded to b, its faces dished (bow < 0) or bulged
+// by bow, as sim/mesh.js shapeSDF has them - how far out of it x, y, z is)
+const bell = (t) => (t >= 1 ? 0 : (1 - t * t) * (1 - t * t));
+function skinSDF(x, y, z, b, bow) {
+  const h = 0.5 - b, X = Math.abs(x), Y = Math.abs(y), Z = Math.abs(z);
+  const B = bow ? Math.max(-0.6 * h, bow) / 2 : 0, cx = B ? bell(X / h) : 0, cy = B ? bell(Y / h) : 0, cz = B ? bell(Z / h) : 0;
+  const qx = X - h - B * (cy + cz), qy = Y - h - B * (cx + cz), qz = Z - h - B * (cx + cy);
+  return Math.hypot(Math.max(qx, 0), Math.max(qy, 0), Math.max(qz, 0)) + Math.min(Math.max(qx, qy, qz), 0) - b;
+}
+// (...onto it: the rounded box's point, then along its facing onto the dish or bulge - out.n that facing, near enough)
+function onSkin(x, y, z, b, bow, out) {
+  onBox(x, y, z, b, out);
+  for (let i = 0; bow && i < 2; i++) {
+    const d = skinSDF(out[0], out[1], out[2], b, bow);
+    out[0] -= out.n[0] * d; out[1] -= out.n[1] * d; out[2] -= out.n[2] * d;
+  }
+  return out;
+}
+const skinAt = (p, b, bow) => onSkin(p[0], p[1], p[2], b, bow, Object.assign([0, 0, 0], { n: [0, 0, 0] }));
+
 // (its mound: a disc out to RHO of its radii - its rings closer in its middle, its head - each point of it put on
 // the cube by MOUND_VERT)
 function moundGeo() {
@@ -98,7 +118,15 @@ attribute vec3 aHead;
 varying vec3 vHead;
 varying vec4 vFx;
 varying float vRho;
-float zitProf(float r) { return exp(-pow(r / ${g4(MW)}, ${g4(MP)})); }`;
+float zitProf(float r) { return exp(-pow(r / ${g4(MW)}, ${g4(MP)})); }
+float zitBell(float t) { return t >= 1.0 ? 0.0 : (1.0 - t * t) * (1.0 - t * t); }
+// (the cube's skin as made, its faces dished or bulged by bow: see skinSDF)
+float zitSkin(vec3 p, float b, float bow) {
+  float h = 0.5 - b, B = max(-0.6 * h, bow) * 0.5;
+  vec3 A = abs(p), c = vec3(zitBell(A.x / h), zitBell(A.y / h), zitBell(A.z / h));
+  vec3 q = A - h - B * vec3(c.y + c.z, c.x + c.z, c.x + c.y);
+  return length(max(q, 0.0)) + min(max(q.x, max(q.y, q.z)), 0.0) - b;
+}`;
 // Each point of its mound - (x, y) on its disc, in its radii - on the cube as made (side 1, from its middle): walked
 // out from its middle over the rounded skin, a fifth of the way at a time, each step on along the skin and turned as
 // it turns (round an edge or a corner, it follows it round - over a sharp one too), then lifted off it by the mound's
@@ -116,6 +144,7 @@ for (int i = 0; i < 5; i++) {
   vec3 T = zS + zDir * st, K = clamp(T, vec3(-zHc), vec3(zHc)), d = T - K;
   float dl = length(d);
   vec3 N2 = dl > 1e-7 ? d / dl : zN, S2 = K + N2 * zB, ax = cross(zN, N2);
+  if (aFx.w != 0.0) S2 -= N2 * zitSkin(S2, zB, aFx.w);
   zLeft -= max(length(S2 - zS), st * 0.25);
   float c = dot(zN, N2), s2 = dot(ax, ax);
   zDir = zDir * c + cross(ax, zDir) + ax * (dot(ax, zDir) * (s2 > 1e-10 ? (1.0 - c) / s2 : 0.5));
@@ -148,9 +177,10 @@ diffuseColor.rgb = mix(diffuseColor.rgb, mix(zBody, vHead, 0.35), zRp * 0.6);
 diffuseColor.rgb = mix(diffuseColor.rgb, vHead, zHd);
 diffuseColor.rgb = mix(diffuseColor.rgb, zBody * vec3(0.4, 0.22, 0.2), vFx.x * (1.0 - smoothstep(0.2, 0.8, vRho)));
 diffuseColor.a = mix(vFx.z, 1.0, zHd) * (1.0 - smoothstep(0.8, 1.6, vRho));`;
-// (drawn premultiplied: its gloss kept on out over its foot, past where its colour's gone - see SHEEN)
+// (drawn premultiplied: its gloss kept on out over its foot, past where its colour's gone - see SHEEN - less as it's
+// seen edge on: there it shone white, a film stood up round it on an edge)
 const MOUND_OUT = `
-float zSh = ${g4(SHEEN)} * (1.0 - smoothstep(1.2, ${g4(RHO)}, vRho));
+float zSh = ${g4(SHEEN)} * (1.0 - smoothstep(1.2, ${g4(RHO - 0.2)}, vRho)) * clamp(dot(geometryNormal, geometryViewDir) * 1.6, 0.0, 1.0);
 gl_FragColor = vec4(totalDiffuse * diffuseColor.a + totalSpecular * max(diffuseColor.a, zSh), diffuseColor.a);`;
 
 export class Zits {
@@ -203,7 +233,8 @@ export class Zits {
     this._fA = new Float64Array(9);
     this._fR = new Float64Array(9);
     this._loc = { tet: -1, b0: 0, b1: 0, b2: 0, b3: 0 };
-    this._tch = { k: -1, s: 1, bk: 0, out: 0, l: [0, 0, 0] };
+    this._e = [[0, 0, 0], [0, 0, 0], [0, 0, 0]];
+    this._tch = { k: -1, s: 1, bk: 0, bow: 0, out: 0, l: [0, 0, 0] };
     this._sp = Object.assign([0, 0, 0], { n: [0, 0, 0] });
     app.anchorProviders.push(() => this.live.flatMap((L) => L.anchors));
     // (re-cubed: all back, unpopped, the pus swept up)
@@ -229,12 +260,12 @@ export class Zits {
     for (const cb of cubes) {
       const a = cb.style.acne;
       if (!a) continue;
-      const k = cb.slot, s = sb.cSize[k] || 1, b = Math.min(0.45, (sb.cBevel[k] || 0) / s);
+      const k = cb.slot, s = sb.cSize[k] || 1, b = Math.min(0.45, (sb.cBevel[k] || 0) / s), bow = (sb.cBow?.[k] || 0) / s;
       const avoid = (cb.style.eyes || []).map((e) => [e.x, e.y, e.z, e.r]);
       const spots = zitSpots(a, b, avoid);
       spots.forEach((z, i) => {
         const key = `${k}:${a.seed}:${i}`, was = old.get(key);
-        const L = this._hold(sb, k, z, s, b);
+        const L = this._hold(sb, k, z, s, b, bow);
         Object.assign(L, { key, cb, i, red: new THREE.Color(a.red), head: new THREE.Color(a.head), pus: new THREE.Color(a.pus), blend: !!a.blend });
         L.body = this._bodyOf(L);
         if (was) (L.popped = was.popped), (L.popT = was.popT), (L.charge = was.charge), (L.ok = was.ok), L.pos.copy(was.pos), L.n.copy(was.n);
@@ -251,28 +282,37 @@ export class Zits {
     return new THREE.Color(hex ?? L.red).offsetHSL(0, 0.04, -0.05);
   }
 
-  // (one zit's three holds in the jelly: its middle, up it, across it - as an eye's - and where it is on the cube as
-  // made, for its mound to be laid over the skin there: see MOUND_VERT)
-  _hold(sb, k, z, s, bev) {
-    const n = [0, 0, 0], p = [z.x, z.y, z.z];
-    // (which way out it faces there: out of the rounded cube's inner box)
-    const h = 0.5 - bev, q = p.map((v) => Math.min(h, Math.max(-h, v)));
-    let l = Math.hypot(p[0] - q[0], p[1] - q[1], p[2] - q[2]);
-    if (l > 1e-6) for (let i = 0; i < 3; i++) n[i] = (p[i] - q[i]) / l;
-    else n[1] = 1;
+  // (one zit's five holds in the jelly - its middle, and either side of it across and up, each on the skin as made
+  // (round an edge, along its curve) and as far under it - and where it is on the cube as made, for its mound to be
+  // laid over the skin there: see MOUND_VERT. Its frame from the holds either side of it: the curve cancels out. (Two
+  // arms straight out from the middle, as an eye's, stood off a rounded edge's skin - held deeper, further in - and
+  // tipped the whole zit up off it: its foot 6-8 cm off the jelly, its body 3)
+  _hold(sb, k, z, s, bev, bow) {
+    const c = skinAt([z.x, z.y, z.z], bev, bow), p = [c[0], c[1], c[2]], n = c.n;
     const { up, right } = eyeFrame(n), d = Math.max(0.02, z.r * 0.55);
-    const at = (o) => {
+    const at = (q, nq) => {
       for (const sink of SINKS) {
-        const P = p.map((v, i) => (v - n[i] * sink + o[i]) * s);
+        const P = q.map((v, i) => (v - nq[i] * sink) * s);
         const r = sb.locateRest(P[0] + k * REST_STEP, P[1], P[2]);
-        if (r) return { tet: r.tet, b: r.bary, lost: false, sink: sink * s };
+        if (r) return [{ tet: r.tet, b: r.bary, lost: false, sink: sink * s }, P];
       }
-      return { tet: -1, b: [0, 0, 0, 0], lost: true, sink: 0 };
+      return [{ tet: -1, b: [0, 0, 0, 0], lost: true, sink: 0 }, q.map((v) => v * s)];
     };
+    const arm = (o, f) => {
+      const sp = skinAt(p.map((v, i) => v + o[i] * f), bev, bow);
+      return at(sp, sp.n);
+    };
+    const H = [at(p, n), arm(right, d), arm(right, -d), arm(up, d), arm(up, -d)];
+    // (its frame as made, from those: across, up, out - and how far apart each pair is, for its stretch)
+    const U = new THREE.Vector3().fromArray(H[1][1]).sub(new THREE.Vector3().fromArray(H[2][1]));
+    const V = new THREE.Vector3().fromArray(H[3][1]).sub(new THREE.Vector3().fromArray(H[4][1]));
+    const armU = U.length(), armV = V.length();
+    U.normalize();
+    V.addScaledVector(U, -U.dot(V)).normalize();
     return {
-      k, anchors: [at([0, 0, 0]), at(up.map((v) => v * d)), at(right.map((v) => v * d))], arm: d * s, R: z.r * s,
+      k, anchors: H.map((h) => h[0]), armU, armV, R: z.r * s,
       pos: new THREE.Vector3(), u: new THREE.Vector3(), v: new THREE.Vector3(), n: new THREE.Vector3(), su: 1, sv: 1,
-      rc: p, rb: bev, rr: z.r, ru: right, rv: up,
+      rc: p, rb: bev, rr: z.r, ru: U.toArray(), rv: V.toArray(), bow,
       ok: false, popped: false, popT: -1, charge: 0, swell: 0, base: 0, calm: 1.5, key: '', cb: null, i: 0, red: null, head: null, pus: null, body: null, blend: false,
     };
   }
@@ -280,23 +320,23 @@ export class Zits {
   // (where it is this frame, which way it faces, how squashed: from its holds - false, its jelly's gone or cut
   // through under it)
   _place(sb, L) {
-    const [a0, a1, a2] = L.anchors, P = [0, 0, 0], A = [0, 0, 0], B = [0, 0, 0];
-    if (a0.lost || a1.lost || a2.lost || a0.tet < 0 || a1.tet < 0 || a2.tet < 0 || a0.tet >= sb.nT || a1.tet >= sb.nT || a2.tet >= sb.nT) return false;
-    const tp = sb.tPiece;
-    if (tp && (tp[a0.tet] !== tp[a1.tet] || tp[a0.tet] !== tp[a2.tet])) return false;
-    sb.embedPoint(a0.tet, a0.b, P);
-    sb.embedPoint(a1.tet, a1.b, A);
-    sb.embedPoint(a2.tet, a2.b, B);
-    _v.set(A[0] - P[0], A[1] - P[1], A[2] - P[2]);
-    _u.set(B[0] - P[0], B[1] - P[1], B[2] - P[2]);
+    const A = L.anchors, tp = sb.tPiece, P = this._e[0], Q = this._e[1], R = this._e[2];
+    for (const a of A) if (a.lost || a.tet < 0 || a.tet >= sb.nT || (tp && tp[a.tet] !== tp[A[0].tet])) return false;
+    sb.embedPoint(A[0].tet, A[0].b, P);
+    sb.embedPoint(A[1].tet, A[1].b, Q);
+    sb.embedPoint(A[2].tet, A[2].b, R);
+    _u.set(Q[0] - R[0], Q[1] - R[1], Q[2] - R[2]);
+    sb.embedPoint(A[3].tet, A[3].b, Q);
+    sb.embedPoint(A[4].tet, A[4].b, R);
+    _v.set(Q[0] - R[0], Q[1] - R[1], Q[2] - R[2]);
     const lu = _u.length(), lv = _v.length();
     if (!(lu > 1e-6 && lv > 1e-6)) return false;
-    L.su = lu / L.arm;
-    L.sv = lv / L.arm;
+    L.su = lu / L.armU;
+    L.sv = lv / L.armV;
     L.u.copy(_u).multiplyScalar(1 / lu);
     L.v.copy(_v).addScaledVector(L.u, -L.u.dot(_v)).normalize();
     L.n.crossVectors(L.u, L.v);
-    L.pos.set(P[0], P[1], P[2]).addScaledVector(L.n, a0.sink + LIFT * (sb.cSize[L.k] || 1));
+    L.pos.set(P[0], P[1], P[2]).addScaledVector(L.n, A[0].sink + LIFT * (sb.cSize[L.k] || 1));
     return true;
   }
 
@@ -497,15 +537,14 @@ export class Zits {
     for (const cb of app.cubes) {
       const k = cb.slot;
       if (!this._frOK[k]) continue;
-      const f = k * 15, s = sb.cSize[k] || 1, bk = Math.min(0.45, (sb.cBevel[k] || 0) / s), h = 0.5 - bk;
+      const f = k * 15, s = sb.cSize[k] || 1, bk = Math.min(0.45, (sb.cBevel[k] || 0) / s), bow = (sb.cBow?.[k] || 0) / s;
       const dx = b.p.x - F[f], dy = b.p.y - F[f + 1], dz = b.p.z - F[f + 2];
       const lx = (F[f + 6] * dx + F[f + 9] * dy + F[f + 12] * dz + F[f + 3] - k * REST_STEP) / s;
       const ly = (F[f + 7] * dx + F[f + 10] * dy + F[f + 13] * dz + F[f + 4]) / s;
       const lz = (F[f + 8] * dx + F[f + 11] * dy + F[f + 14] * dz + F[f + 5]) / s;
-      const qx = Math.abs(lx) - h, qy = Math.abs(ly) - h, qz = Math.abs(lz) - h;
-      const out = (Math.hypot(Math.max(qx, 0), Math.max(qy, 0), Math.max(qz, 0)) + Math.min(Math.max(qx, qy, qz), 0) - bk) * s;
+      const out = skinSDF(lx, ly, lz, bk, bow) * s;
       if (out > b.r * 0.5) continue;
-      T.k = k; T.s = s; T.bk = bk; T.out = out;
+      T.k = k; T.s = s; T.bk = bk; T.bow = bow; T.out = out;
       T.l[0] = lx; T.l[1] = ly; T.l[2] = lz;
       return T;
     }
@@ -516,8 +555,8 @@ export class Zits {
   _land(b) {
     const c = this._touch(b);
     if (!c) return false;
-    const sp = onSurface(c.l, c.bk);
-    if (!this._holdOn(b, c.k, sp.p, sp.n, c.s)) return false;
+    const sp = onSkin(c.l[0], c.l[1], c.l[2], c.bk, c.bow, this._sp);
+    if (!this._holdOn(b, c.k, sp, sp.n, c.s)) return false;
     b.flat = Math.min(1, b.v.length() / 3 + 0.3);
     b.v.set(0, 0, 0);
     b.st = 3;
@@ -531,7 +570,7 @@ export class Zits {
   _slide(b) {
     const c = this._touch(b);
     if (!c) return;
-    const F = this._fr, f = c.k * 15, n = onSurface(c.l, c.bk).n, lie = b.r * 0.45 - c.out;
+    const F = this._fr, f = c.k * 15, n = onBox(c.l[0], c.l[1], c.l[2], c.bk, this._sp).n, lie = b.r * 0.45 - c.out;
     const nx = F[f + 6] * n[0] + F[f + 7] * n[1] + F[f + 8] * n[2], ny = F[f + 9] * n[0] + F[f + 10] * n[1] + F[f + 11] * n[2], nz = F[f + 12] * n[0] + F[f + 13] * n[1] + F[f + 14] * n[2];
     if (lie > 0) (b.p.x += nx * lie), (b.p.y += ny * lie), (b.p.z += nz * lie);
     // (its way: none into the skin, a little lost along it)
@@ -574,7 +613,7 @@ export class Zits {
       const tx = gx - b.qx * gn, ty = gy - b.qy * gn, tz = gz - b.qz * gn, tl = Math.hypot(tx, ty, tz);
       if (tl > 0.2) {
         const step = (CREEP * tl * b.ct) / s, P = this._sp;
-        onBox(b.rx + tx * step, b.ry + ty * step, b.rz + tz * step, bk, P);
+        onSkin(b.rx + tx * step, b.ry + ty * step, b.rz + tz * step, bk, (sb.cBow?.[k] || 0) / s, P);
         if (!this._holdOn(b, k, P, P.n, s)) return false;
       }
       b.ct = 0;
@@ -738,7 +777,7 @@ export class Zits {
       A.aC.setXYZW(i, L.rc[0], L.rc[1], L.rc[2], L.rb);
       A.aRU.setXYZW(i, L.ru[0], L.ru[1], L.ru[2], L.rr);
       A.aRV.setXYZW(i, L.rv[0], L.rv[1], L.rv[2], hgt);
-      A.aFx.setXYZW(i, gone, sw, L.blend ? BLEND_A : BODY_A, 0);
+      A.aFx.setXYZW(i, gone, sw, L.blend ? BLEND_A : BODY_A, L.bow);
       // (squeezed, its head comes up whiter)
       _c.copy(L.head).lerp(_w, 0.35 * L.swell);
       A.aHead.setXYZ(i, _c.r, _c.g, _c.b);
