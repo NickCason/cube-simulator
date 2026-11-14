@@ -152,6 +152,8 @@ export class AutoGunTool extends HoleGunTool {
       app.audio?.autoshot(0, pan);
       return;
     }
+    // (a zit where it hits: burst)
+    app.zits?.shot(o, d, hit.t + 0.12, 0.025);
     // every few rounds one bores right through - as often as this device
     // can take it (the boring at most ~15% of the time); between, a smack
     // and a spit

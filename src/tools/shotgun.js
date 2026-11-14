@@ -119,6 +119,8 @@ export class ShotgunTool extends HoleGunTool {
       const p = o.clone().addScaledVector(q, t);
       if (floor++ < 4) app.gunfx.floorHit(p, q, 0.7);
     }
+    // (a zit a pellet strikes: burst)
+    for (const h of hits) app.zits?.shot(o, h.d, o.distanceTo(h.p) + 0.12, 0.02);
     const pan = app.audio?._panOf?.(hits[0]?.p ?? o) ?? 0;
     if (!hits.length || sb.nT > 30000) {
       app.audio?.shotgun(0, pan);

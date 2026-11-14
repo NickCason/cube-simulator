@@ -141,3 +141,20 @@ test("a cube full of liquid's own colour survives the round trip; none, its jell
   // (a rainbow)
   assert.equal(decodeCube(encodeCube({ ...full, liqColor: 'rainbow' })).liqColor, 'rainbow');
 });
+
+test('a cube code keeps its acne: how many, how big, where (its seed), its colours - and none, none', async () => {
+  const { zitSpots, copyAcne } = await import('../src/acne.js');
+  const acne = { n: 24, size: 2, seed: 4321, red: '#B8121E', head: '#f6d34a', pus: '#ecca4c' };
+  const c = decodeCube(encodeCube({ ...full, acne }));
+  assert.deepEqual(c.acne, { n: 24, size: 2, seed: 4321, red: '#b8121e', head: '#f6d34a', pus: '#ecca4c' });
+  assert.equal(decodeCube(encodeCube(full)).acne, undefined);
+  // (a broken one's left out)
+  assert.equal(decodeCube(encodeCube(full) + '~z12').acne, undefined);
+  // (where its zits come up: the same every time from its seed, as many as it has, none on its bottom or on another)
+  const a = zitSpots(acne), b = zitSpots(copyAcne(c.acne));
+  assert.equal(a.length, 24);
+  assert.deepEqual(a, b);
+  for (const z of a) assert.ok(z.y > -0.45, 'not on its bottom');
+  for (let i = 0; i < a.length; i++)
+    for (let j = i + 1; j < a.length; j++) assert.ok(Math.hypot(a[i].x - a[j].x, a[i].y - a[j].y, a[i].z - a[j].z) >= (a[i].r + a[j].r) * 1.3, 'apart');
+});

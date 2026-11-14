@@ -27,6 +27,8 @@ import { GelGunTool } from './tools/gelgun.js';
 import { FlourTool } from './tools/flour.js';
 import { EyesTool } from './tools/eyes.js';
 import { Eyes, LATE_LAYER } from './world/eyes.js';
+import { Zits } from './world/zits.js';
+import { copyAcne } from './acne.js';
 import { copyEyes, EYE_FACES } from './eyes.js';
 import { SURFACE, SURFACES } from './surfaces.js';
 import { AcidTool } from './tools/acid.js';
@@ -227,6 +229,7 @@ export class App {
     this.bubbles = new Bubbles(this);
     this.flour = new Flour(this); // (on the floor, and on the jelly: see FlourTool)
     this.eyes = new Eyes(this); // (googly: see EyesTool, eyes.js)
+    this.zits = new Zits(this); // (its acne, to pop: see acne.js, world/zits.js)
     this.glitter = new Glitter(this);
     this.portraits = new Portraits(this); // (a cube's picture, taken properly: see portrait.js)
     this.cubiplication = new Cubiplication(this); // (fed jelly, a cube cubiplies - see tools/feed.js)
@@ -243,6 +246,8 @@ export class App {
       this.audio.nailHit(1);
       this.markDamaged();
       if (hp) this.glowPulse(hp.x, hp.y, hp.z, 0.7);
+      // (a nail into a zit: popped)
+      if (hp) this.zits?.hitAt(hp, 0.015);
     };
 
     this.clock = { last: performance.now(), t: 0 };
@@ -378,6 +383,7 @@ export class App {
     this.scene.add(bomb);
     undo.push(() => this.scene.remove(bomb));
     undo.push(this.gunfx.warmShow());
+    undo.push(this.zits.warmShow());
     for (const o of [this.nails.mesh, this.droplets.mesh]) {
       if (o.count !== 0) continue;
       const vis = o.visible;
@@ -430,6 +436,7 @@ export class App {
     }
     const st = { ...DEFAULT_STYLE, ...saved };
     st.eyes = copyEyes(saved.eyes);
+    st.acne = copyAcne(saved.acne);
     st.surface = SURFACE[saved.surface] ? saved.surface : 'none';
     st.liqColor = liqColourOf(saved.liqColor);
     st.layers = { ...DEFAULT_STYLE.layers, ...(saved.layers || {}) };
@@ -850,6 +857,16 @@ export class App {
   // Its liquid's colour (full of liquid): '#rrggbb', 'rainbow' (in bands, bottom to top: see Spill), or '' - its
   // jelly's own, each drop the colour it was poured from. Filled afresh with it, as for its glitter or bubbles (see
   // applyStyle: its liquid's look)
+  // Its acne (see acne.js): how many and how big, their colours - null, none. A new lot comes up (its seed kept,
+  // or a fresh one): unpopped.
+  setAcne(a) {
+    const c = copyAcne(a);
+    if (c && !a.seed) c.seed = 1 + Math.floor(Math.random() * 65534);
+    this.style.acne = c;
+    this.zits.reset();
+    this.applyStyle();
+  }
+
   setLiquidColor(c) {
     const v = liqColourOf(c);
     if ((this.style.liqColor || '') === v) return;
@@ -1716,6 +1733,7 @@ export class App {
       this.flour.update(sdt);
       this.strands.update(sdt);
       this.eyes.update(sdt);
+      this.zits.update(sdt);
       this.glitter.tick(this.clock.t);
       // (a snow globe's bubbles move in its water - the flakes' step just made it this frame's)
       this.bubbles.tick(this.clock.t);
@@ -2300,7 +2318,7 @@ export class App {
     while (used.has(slot)) slot++;
     const flavors = ['cherry', 'lime', 'blue', 'grape', 'orange', 'lemon', 'watermelon', 'cola'];
     const style = c
-      ? { flavor: c.flavor, layers: copyLayers(c.layers), texture: c.texture, edges: EDGES[c.edges] ? c.edges : DEFAULT_STYLE.edges, glitter: c.glitter, glitterMix: c.glitter === 'custom' ? copyGlitterMix(c.glitterMix) : null, rubik: Number.isFinite(c.rubik) ? c.rubik : 1, ...(c.rubikState ? { rubikState: c.rubikState } : {}), trim: TRIM[c.trim] ? c.trim : 'none', eyes: copyEyes(c.eyes), surface: SURFACE[c.surface] ? c.surface : 'none' }
+      ? { flavor: c.flavor, layers: copyLayers(c.layers), texture: c.texture, edges: EDGES[c.edges] ? c.edges : DEFAULT_STYLE.edges, glitter: c.glitter, glitterMix: c.glitter === 'custom' ? copyGlitterMix(c.glitterMix) : null, rubik: Number.isFinite(c.rubik) ? c.rubik : 1, ...(c.rubikState ? { rubikState: c.rubikState } : {}), trim: TRIM[c.trim] ? c.trim : 'none', eyes: copyEyes(c.eyes), acne: copyAcne(c.acne), surface: SURFACE[c.surface] ? c.surface : 'none' }
       : { flavor: flavors[Math.floor(Math.random() * flavors.length)], layers: copyLayers(DEFAULT_STYLE.layers), texture: 'jello', edges: DEFAULT_STYLE.edges, glitter: 'off', eyes: Math.random() < 0.12 ? copyEyes(EYE_FACES.pair) : [], surface: Math.random() < 0.2 ? SURFACES[1 + Math.floor(Math.random() * (SURFACES.length - 1))].id : 'none' };
     // (its own material sliders; the world's as everyone's)
     const tune = {};
@@ -2574,7 +2592,7 @@ export class App {
     const more = [];
     for (const [j, c] of sc.cubes.entries()) {
       if (j === keepSel || 1 + more.length >= MAX_CUBES || !c || !c.style || !TEXTURES[c.style.texture]) continue;
-      const style = { ...DEFAULT_STYLE, ...c.style, layers: copyLayers({ ...DEFAULT_STYLE.layers, ...(c.style.layers || {}) }), eyes: copyEyes(c.style.eyes), surface: SURFACE[c.style.surface] ? c.style.surface : 'none' };
+      const style = { ...DEFAULT_STYLE, ...c.style, layers: copyLayers({ ...DEFAULT_STYLE.layers, ...(c.style.layers || {}) }), eyes: copyEyes(c.style.eyes), acne: copyAcne(c.style.acne), surface: SURFACE[c.style.surface] ? c.style.surface : 'none' };
       style.glitterMix = style.glitterMix || style.glitter === 'custom' ? copyGlitterMix(style.glitterMix) : null;
       if (!EDGES[style.edges]) style.edges = DEFAULT_STYLE.edges;
       const tune = {};
@@ -2616,6 +2634,7 @@ export class App {
     s.trim = TRIM[c.trim] ? c.trim : 'none';
     // (its googly eyes come with it - or none)
     s.eyes = copyEyes(c.eyes);
+    s.acne = copyAcne(c.acne);
     s.surface = SURFACE[c.surface] ? c.surface : 'none';
     s.liqColor = liqColourOf(c.liqColor);
     const tune = { ...c.tune };

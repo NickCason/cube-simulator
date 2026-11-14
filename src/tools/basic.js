@@ -929,6 +929,8 @@ export class HoleGunTool extends NailGunTool {
     // (at least ~3/4 of a cell across: the cut's inside and outside are told at
     // the mesh's vertices, and a thinner tunnel can slip between them all)
     const A = at(tA), B = at(tB), r = Math.max(0.045 * size * Math.pow(power, 0.35) * (light ? 0.75 : 1) * (app.st?.holeSize ?? 1), 0.75 * sb.hCell);
+    // (a zit on its way in or out: burst)
+    app.zits?.shot(o, d, tB, r);
     // the channel: a ragged tunnel, its plug crushed out - all that's inside
     // it, gone in the same rebuild as the cut (a round was two of them, the
     // second only to find the plug as a piece of its own: half of every shot's

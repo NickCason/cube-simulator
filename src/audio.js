@@ -545,6 +545,33 @@ export class AudioEngine {
     }
   }
 
+  // A zit popped (how: squeeze, shot, lost; size: its radius, a share of its cube's side): a tight wet pop - a bubble's
+  // pitch snapping down - and, squeezed, the squelch of it coming out; shot, a juicy splat
+  zitPop(how = 'squeeze', pan = 0, size = 0.05) {
+    if (!this._ok('zitpop', 0.03)) return;
+    const t = this.ctx.currentTime, out = this._panned(pan), big = Math.min(1.6, Math.max(0.5, size / 0.05)), f = (1500 + Math.random() * 500) / Math.sqrt(big);
+    this._tone(t, 'sine', f, f * 0.32, 0.035, 0.3, 0.0008, out);
+    this._noise(t, 0.03, 'bandpass', 2600, 1200, 3, 0.22, 0.0006, out);
+    if (how === 'squeeze') {
+      // (the squelch, coming out a blob at a time)
+      for (let i = 0; i < 4; i++) this._noise(t + 0.04 + i * 0.065 + Math.random() * 0.02, 0.07, 'bandpass', 700 + Math.random() * 500, 320, 2.6, 0.13 * big, 0.006, out);
+      this._tone(t + 0.03, 'sine', 260, 120, 0.22, 0.12 * big, 0.01, out);
+    } else if (how === 'shot') {
+      this._noise(t + 0.004, 0.12, 'bandpass', 1100, 300, 1.4, 0.32 * big, 0.002, out);
+      this._tone(t + 0.004, 'sine', 300, 90, 0.12, 0.22 * big, 0.003, out);
+    } else this._noise(t + 0.02, 0.15, 'bandpass', 600, 260, 2, 0.1 * big, 0.01, out);
+  }
+
+  // pus landing: a soft wet splat (at: where)
+  pusSplat(amount = 0.5, at = null) {
+    if (!this._ok('pussplat', 0.05)) return;
+    amount *= Math.min(1, this.impactLevel * 1.8);
+    if (amount < 0.02) return;
+    const t = this.ctx.currentTime, out = this._panned(this._panOf(at));
+    this._noise(t, 0.06, 'bandpass', 900 + Math.random() * 400, 380, 2.2, 0.14 * amount, 0.002, out);
+    this._tone(t, 'sine', 190, 90, 0.06, 0.08 * amount, 0.003, out);
+  }
+
   // A round off the floor: a ricochet's whine, away (pan: where)
   ricochet(pan = 0) {
     if (!this._ok('ricochet', 0.12)) return;

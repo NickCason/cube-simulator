@@ -31,6 +31,7 @@
 // open forever. Never change what a letter or a slider code means: add new ones.
 
 import { copyEyes, encodeEyes, decodeEyes, eyesWord } from './eyes.js';
+import { copyAcne, encodeAcne, decodeAcne } from './acne.js';
 import { SURFACE, surfaceWord } from './surfaces.js';
 import { SETTINGS, resolveSettings } from './settings.js';
 import { FLAVORS, TEXTURES, EDGES, TRIM, GLITTERS, MIN_LAYERS, MAX_LAYERS, MAX_REPEAT, DEFAULT_STYLE, GRAD_SHAPE_INDEX, copyLayers, GLITTER_SHAPES, GLITTER_SIZE, copyGlitterMix, glitterMain, glitterMixWords } from './styles.js';
@@ -133,6 +134,7 @@ export function captureCube(app, name = '') {
     tear: app.tune.tear !== false,
     theme: app.theme,
     eyes: copyEyes(s.eyes),
+    ...(copyAcne(s.acne) ? { acne: copyAcne(s.acne) } : {}),
     surface: SURFACE[s.surface] ? s.surface : 'none',
     ...(/^#[0-9a-f]{6}$/i.test(s.liqColor || '') ? { liqColor: s.liqColor.toLowerCase() } : s.liqColor === 'rainbow' ? { liqColor: 'rainbow' } : {}),
   };
@@ -164,6 +166,8 @@ export function encodeCube(c) {
   if (c.tear === false) f.push('w0');
   // (its googly eyes: see eyes.js)
   if (c.eyes && c.eyes.length) f.push('y' + encodeEyes(c.eyes));
+  // (its acne: field z - see acne.js)
+  if (copyAcne(c.acne)) f.push('z' + encodeAcne(c.acne));
   // (its surface map: see surfaces.js)
   if (c.surface && c.surface !== 'none' && SURFACE[c.surface]) f.push('s' + c.surface);
   // (its edges' trim: see styles.js TRIMS)
@@ -244,6 +248,7 @@ export function decodeCube(text) {
     else if (k === 'k' && /^[0-5]{54}$/.test(v)) c.rubikState = v;
     else if (k === 'k') c.rubik = Math.round(clamp(parseInt(v, 10), 0, 65535, 1));
     else if (k === 'y') c.eyes = decodeEyes(v);
+    else if (k === 'z' && decodeAcne(v)) c.acne = decodeAcne(v);
     else if (k === 's') c.surface = SURFACE[v] ? v : 'none';
     else if (k === 'x') c.trim = TRIM[v] ? v : 'none';
     else if (k === 'a' && /^[0-9a-f]{6}$/i.test(v)) c.liqColor = '#' + v.toLowerCase();

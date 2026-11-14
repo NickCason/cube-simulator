@@ -441,6 +441,7 @@ export const DEFAULT_STYLE = {
   eyes: [], // (googly eyes: see eyes.js - always a new array, never this one)
   surface: 'none', // (its surface map: see surfaces.js)
   liqColor: '', // (full of liquid, its liquid's colour - '#rrggbb'; '': its jelly's, each drop the colour it was poured from - see Spill)
+  acne: null, // (its zits - how many, how big, where, their colours: see acne.js - or null, none)
 };
 
 export function flavorById(id) {

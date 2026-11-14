@@ -733,6 +733,48 @@ html.dark .palette .gdie {
   padding: 0 11px;
 }
 
+/* (acne: how much, and its size, look and colours under that - each row the panel's width, no wider (or it widens
+   the lot), scrolling sideways as the glitter's row does when it doesn't fit; each colour its own dot) */
+.palette .seg.acneamt,
+.palette .acne-more .seg {
+  width: 0;
+  min-width: 100%;
+  box-sizing: border-box;
+  overflow-x: auto;
+  scrollbar-width: none;
+  overscroll-behavior-x: contain;
+}
+
+.palette .acne-more .seg + .seg {
+  margin-top: 8px;
+}
+
+.palette .seg.acneamt::-webkit-scrollbar,
+.palette .acne-more .seg::-webkit-scrollbar {
+  display: none;
+}
+
+.palette .seg.acneamt .opt,
+.palette .acne-more .seg .opt {
+  min-width: max-content;
+  padding: 0 11px;
+}
+
+.palette .acnecols .opt.pick {
+  position: relative;
+  overflow: hidden;
+  cursor: pointer;
+}
+
+.palette .acnecols .opt.pick input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  cursor: pointer;
+}
+
 /* (a liquid's colour row: under Filling, a little apart from it; its own colour picked on a dot - a rainbow till then) */
 .palette .seg.liqcol {
   margin-top: 8px;

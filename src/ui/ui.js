@@ -10,6 +10,7 @@ import { FreeEditor } from './freeedit.js';
 import { CubipliedCard } from './cubiplied.js';
 import { POWDERS } from '../world/powders.js';
 import { EYE_STYLES } from '../eyes.js';
+import { ACNE_AMOUNTS, ACNE_SIZES, ACNE_LOOKS, copyAcne } from '../acne.js';
 import { SURFACES, surfaceSwatch } from '../surfaces.js';
 import { buildLine } from './buildline.js';
 import { Exhibit } from './dropbar.js';
@@ -260,6 +261,13 @@ export class UI {
         <div class="sec"><span class="lbl">Edges</span><div class="seg edges"></div></div>
         <div class="sec"><span class="lbl">Trim <em>size and depth in Settings</em></span><div class="mats trims" role="group" aria-label="Trim"></div></div>
         <div class="sec"><span class="lbl">Surface <em>depth and scale in Settings</em></span><div class="mats surfs" role="group" aria-label="Surface"></div></div>
+        <div class="sec acne-sec"><span class="lbl">Acne <em>squeeze, shoot or cut them to pop</em></span><div class="seg acneamt" role="group" aria-label="How much acne"></div>
+          <div class="acne-more" hidden>
+            <div class="seg acnesize" role="group" aria-label="How big the zits are"></div>
+            <div class="seg acnelook" role="group" aria-label="The zits' look"></div>
+            <div class="seg acnecols" role="group" aria-label="The zits' colours"></div>
+          </div>
+        </div>
       </div>
       <div class="palette tune" hidden>
         <div class="tune-scroll"></div>
@@ -527,6 +535,70 @@ export class UI {
 
     // its surface map: a tile of each (drawn when the panel first opens - see
     // _paintSurfaces)
+    // its acne (see acne.js): how much - the one it has, picked again, a new crop (unpopped) - how big, their look,
+    // their colours one by one
+    {
+      const cur = () => copyAcne(app.style.acne), sec = this.paletteEl.querySelector('.acne-sec');
+      this.acneMore = sec.querySelector('.acne-more');
+      const amt = sec.querySelector('.acneamt'), size = sec.querySelector('.acnesize'), look = sec.querySelector('.acnelook'), cols = sec.querySelector('.acnecols');
+      for (const A of ACNE_AMOUNTS) {
+        const b = document.createElement('button');
+        b.className = 'opt';
+        b.dataset.acne = A.id;
+        b.textContent = A.name;
+        b.addEventListener('click', () => {
+          app.audio.ui();
+          const c = cur();
+          if (!A.n) {
+            app.setAcne(null);
+            this.hint('No acne', 1400);
+            return;
+          }
+          const again = c && c.n === A.n, L = ACNE_LOOKS[0];
+          app.setAcne({ n: A.n, size: c ? c.size : 1, seed: again || !c ? 0 : c.seed, red: c ? c.red : L.red, head: c ? c.head : L.head, pus: c ? c.pus : L.pus });
+          this.hint(again ? 'A fresh crop' : `${A.name} · squeeze one (hold a finger on it), shoot it or cut it to pop it`, 2600);
+        });
+        amt.appendChild(b);
+      }
+      for (const [i, S] of ACNE_SIZES.entries()) {
+        const b = document.createElement('button');
+        b.className = 'opt';
+        b.dataset.acnesize = String(i);
+        b.textContent = S.name;
+        b.addEventListener('click', () => {
+          app.audio.ui();
+          const c = cur();
+          if (c) app.setAcne({ ...c, size: i });
+        });
+        size.appendChild(b);
+      }
+      for (const L of ACNE_LOOKS) {
+        const b = document.createElement('button');
+        b.className = 'opt';
+        b.dataset.acnelook = L.id;
+        b.innerHTML = `<i class="gdot" style="background:radial-gradient(circle at 50% 42%, ${L.head} 0 30%, ${L.red} 46%)"></i>${L.name}`;
+        b.addEventListener('click', () => {
+          app.audio.ui();
+          const c = cur();
+          if (c) app.setAcne({ ...c, red: L.red, head: L.head, pus: L.pus });
+        });
+        look.appendChild(b);
+      }
+      this.acneCols = {};
+      for (const [key, name] of [['red', 'Skin'], ['head', 'Head'], ['pus', 'Pus']]) {
+        const pick = document.createElement('label');
+        pick.className = 'opt pick';
+        pick.innerHTML = `<i class="gdot"></i>${name}<input type="color" aria-label="The zits' ${name.toLowerCase()} colour">`;
+        const input = pick.querySelector('input');
+        input.addEventListener('change', () => {
+          const c = cur();
+          if (c) app.setAcne({ ...c, [key]: input.value });
+        });
+        cols.appendChild(pick);
+        this.acneCols[key] = pick;
+      }
+    }
+
     this.surfsEl = this.paletteEl.querySelector('.surfs');
     for (const sf of SURFACES) {
       const b = document.createElement('button');
@@ -1049,6 +1121,25 @@ export class UI {
     for (const b of this.paletteEl.querySelectorAll('.opt[data-edges]')) b.classList.toggle('active', b.dataset.edges === style.edges);
     for (const b of this.trimsEl.children) b.classList.toggle('active', b.dataset.trim === (style.trim || 'none'));
     for (const b of this.surfsEl.children) b.classList.toggle('active', b.dataset.surf === (style.surface || 'none'));
+    // (its acne: how much, how big, which look - and its colours on their dots)
+    {
+      const a = copyAcne(style.acne), amtId = a ? (ACNE_AMOUNTS.find((A) => A.n === a.n) || ACNE_AMOUNTS[2]).id : 'none';
+      for (const b of this.paletteEl.querySelectorAll('.opt[data-acne]')) b.classList.toggle('active', b.dataset.acne === amtId);
+      if (this.acneMore) this.acneMore.hidden = !a;
+      if (a) {
+        for (const b of this.paletteEl.querySelectorAll('.opt[data-acnesize]')) b.classList.toggle('active', +b.dataset.acnesize === a.size);
+        for (const b of this.paletteEl.querySelectorAll('.opt[data-acnelook]')) {
+          const L = ACNE_LOOKS.find((q) => q.id === b.dataset.acnelook);
+          b.classList.toggle('active', !!L && L.red === a.red && L.head === a.head && L.pus === a.pus);
+        }
+        for (const key of ['red', 'head', 'pus']) {
+          const P = this.acneCols?.[key];
+          if (!P) continue;
+          P.firstChild.style.background = a[key];
+          P.querySelector('input').value = a[key];
+        }
+      }
+    }
     this._surfHex = hex;
     if (this._surfsPainted) this._tintSurfaces();
     for (const b of this.paletteEl.querySelectorAll('.opt[data-glit]')) b.classList.toggle('active', b.dataset.glit === style.glitter);
