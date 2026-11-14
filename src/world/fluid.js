@@ -45,7 +45,7 @@ const GAIN = 0.8; // (m/s) the most the solver speeds a particle up a substep
 // (how much of the way off a cube full of liquid's shell a drop's pushed each substep, to its own width - see
 // _radius: all of it at once, every drop against a wall chattered on it, and a cube's liquid never came to rest)
 const RADIUS_K = 0.35;
-const UNBEND_AT = 0.08; // (m) a cube bent this far off its best fit, somewhere, or more: its liquid's surface taken back into it as made the long way (see _unbend)
+const UNBEND_AT = +(globalThis.__unbendAt ?? 0.08); // (m) a cube bent this far off its best fit, somewhere, or more: its liquid's surface taken back into it as made the long way (see _unbend)
 const BEND_PAD = 0.06; // (m) the most a soft cube's wall's off its best fit, near enough: what's that much further in looked at too (see _snapBox)
 const DG = 7; // (each cube full of liquid's bend from its best fit: on a grid this many points a side over it as made - see _frames, _bend)
 const MV = 10; // (a cube cut into: how its jelly's moved since last frame, on a grid this many points a side over where it was - see _moveGrid)
@@ -3309,10 +3309,13 @@ export class Fluid {
       for (let c = 0; c < 9; c++) F[c] = R[c];
       return;
     }
-    for (let it = 0; it < 3; it++) {
+    // (each step's bend and its change looked up once: the last's change is the stretch there - near enough, a step
+    // under a millimetre off. Looked up again after the last step, and three steps always, a ringing super ball's
+    // liquid took a third more of its time)
+    for (let it = 0; ; it++) {
       this._bendJ(k, rx, ry, rz);
       const fx = rx + R[0] * B[0] + R[3] * B[1] + R[6] * B[2] - r0x, fy = ry + R[1] * B[0] + R[4] * B[1] + R[7] * B[2] - r0y, fz = rz + R[2] * B[0] + R[5] * B[1] + R[8] * B[2] - r0z;
-      if (fx * fx + fy * fy + fz * fz < 1e-6) break;
+      if (it === 2 || fx * fx + fy * fy + fz * fz < 1e-6) break;
       const m00 = 1 + R[0] * J[0] + R[3] * J[3] + R[6] * J[6], m01 = R[0] * J[1] + R[3] * J[4] + R[6] * J[7], m02 = R[0] * J[2] + R[3] * J[5] + R[6] * J[8];
       const m10 = R[1] * J[0] + R[4] * J[3] + R[7] * J[6], m11 = 1 + R[1] * J[1] + R[4] * J[4] + R[7] * J[7], m12 = R[1] * J[2] + R[4] * J[5] + R[7] * J[8];
       const m20 = R[2] * J[0] + R[5] * J[3] + R[8] * J[6], m21 = R[2] * J[1] + R[5] * J[4] + R[8] * J[7], m22 = 1 + R[2] * J[2] + R[5] * J[5] + R[8] * J[8];
@@ -3326,7 +3329,6 @@ export class Fluid {
       if (dl > cap) (dx *= cap / dl), (dy *= cap / dl), (dz *= cap / dl);
       rx -= dx; ry -= dy; rz -= dz;
     }
-    this._bendJ(k, rx, ry, rz);
     U[0] = rx; U[1] = ry; U[2] = rz;
     for (let c = 0; c < 9; c++) F[c] = R[c] + J[c];
   }

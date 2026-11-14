@@ -1081,12 +1081,16 @@ export class App {
 
   // (m/s: the fastest any hollow cube full of liquid's shell is moving against the rest of it - its vertices
   // against their mean - as of the last step)
+  // (Not a sealed one drawn full - see Fluid._fillFull: its liquid's drawn as its hollow is, and any of its drops out
+  // of that are put back in every part regardless - see Fluid._contain. A rubber super ball of lead, full, rang so
+  // hard bouncing - its walls 3 to 14 m/s against the rest of it - that it took six parts a frame for as long as it
+  // bounced, 10 s and more: 6 frames a second on a phone)
   _shellSpeed() {
-    const sb = this.sb, v = sb.v, vc = sb.vCube, al = sb.alive;
+    const sb = this.sb, v = sb.v, vc = sb.vCube, al = sb.alive, FU = this.fluid?._full;
     let best = 0;
     for (const cb of this.cubes) {
       const k = cb.slot;
-      if (!sb.cHollow[k]) continue;
+      if (!sb.cHollow[k] || (FU && FU[k] && sb.cav[k]?.sealed)) continue;
       let mx = 0, my = 0, mz = 0, n = 0;
       for (let i = 0; i < sb.nV; i++) {
         if (vc[i] !== k || !al[i]) continue;

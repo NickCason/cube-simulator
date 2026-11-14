@@ -16,7 +16,8 @@ node tools/kit/run.mjs <scenario> [flags]
   --engine webkit               Safari's engine (JSC) - the app crashes its renderer here, headless: not usable yet
   --set __fluidIter=2           params named __x are the app's test switches, set as globals before its code
                                 loads: __fluidIter, __fluidStep, __fillN, __fillRigid (fluid.js, spill.js: the
-                                fill's lattice taken back to rest by the turn alone, as before), __fluidEps, __splatR
+                                fill's lattice taken back to rest by the turn alone, as before), __unbendAt (fluid.js: how bent a cube is
+                                before its liquid's surface is taken back the long way - 99: never), __fluidEps, __splatR
   --out file.jsonl              (default /tmp/kit-runs/<scenario>-<time>.jsonl)   --quiet (no table)
 ```
 
@@ -34,7 +35,7 @@ when done (`> scenario build params seed N: ...`, for Monitor), then a table of 
 | `look` | pictures: views `+z/-x/app` x skips `all/liquid/jelly`, tiled | cube views=+z skips=all cut=none place=diner skin fill radius phi |
 | `perf` | "go wild" on a liquid+glitter cube: each frame and its parts timed | cube=aqua fill=1 glitter=holo fps=60 |
 | `yank` | shot through (the shot exits its bottom), left to dribble, yanked up by its top: drops through its bottom face | cube=blueGold gun=holegun wait=60 gu=0.5 gv=0.2 rise=320 over=4 hold=30 pics=0 |
-| `rectest` | his ?stats Rec test's workload: his cube wobbled as it does it, each frame's parts timed (prof=1: Chrome's profiler, top functions) | cube=blueGold secs=8 fps=30 prof=0 top=25 |
+| `rectest` | his ?stats Rec test's workload: his cube wobbled as it does it, each frame's parts timed (prof=1: Chrome's profiler, top functions; wobble=0: left be) | cube=blueGold secs=8 fps=30 prof=0 top=25 wobble=1 |
 | `intro` | the first drop as he sees it: page loaded afresh with the splash at a phone's speed, the app's own loop - reveal, splash leaving, when the liquid's in, the drop's frames and their parts | cube=blueGold cpu=4 secs=3 prof=0 |
 | `drop` | Drop, the exhibition mode, through its UI: up on the hook, a tap, the fall - hook time, hung height, peak/hit speed, how distended falling, its liquid out, camera on it, pictures (lift, hang, fall, low, hit, after). Any Settings key given (mu, damping, weight, bounce, grip, goo, liqVisc, liqSkin, liqFill ...) is set on it first; trace=1: every frame to a JSON file (shape, speed, its drops in its hollow / walls, the hollow's volume, time scale, rebound) and how high it bounced, its liquid against its skin after | cube=plain height=15 pics=0 trace=0 after=30 |
 | `slit` | slit from the top, kept in one piece: held open (drains) or dragged round (stays in): drops out of its box | cube=plainLiquid skin=0.5 depth=0.5 hold=open\|drag\|none pull=1.5 steps=20 frames=90 r=80 |
@@ -49,7 +50,9 @@ node tools/kit/run.mjs look --set cube=aqua,views=+z/-z/+x/-x,skips=all/jelly,cu
 ```
 
 Cubes by name (`cubes.mjs`): `plain`, `plainLiquid`, `plainSharp`, `aqua`, `fluorescent` (empty, as shared),
-`fluorescentFilled`, `blueGold` (soft, blue, gold glitter, full) - or any share code. In a code `lk` is the liquid's skin, `lf` its fill; `sk` is NOT skin.
+`fluorescentFilled`, `blueGold` (soft, blue, gold glitter, full), `foamingCrystal` (crystal, rubber-firm lead super
+ball, full, honeycomb + crimped trim) - or any share code. NB a cube with a surface or trim (the jelly's SURF set) loaded
+afresh with `?splash` (the intro scenario) hangs this headless GPU (Mesa) for minutes - his phone's fine with it. In a code `lk` is the liquid's skin, `lf` its fill; `sk` is NOT skin.
 
 ## Builds
 

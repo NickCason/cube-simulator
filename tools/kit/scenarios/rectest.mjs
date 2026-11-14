@@ -3,7 +3,8 @@
 // woken - `secs` long, stepped as a phone runs (fps), each frame and its parts timed (ms; --cpu 4 for about his
 // phone). prof=1: Chrome's profiler over it too - the top functions by their own time.
 import { table } from './_common.mjs';
-export const meta = { name: 'rectest', params: { cube: 'blueGold', secs: 8, fps: 30, settle: 90, prof: 0, top: 25 } };
+// (wobble=0: left be - its idle frames, as it settles and sleeps)
+export const meta = { name: 'rectest', params: { cube: 'blueGold', secs: 8, fps: 30, settle: 90, prof: 0, top: 25, wobble: 1 } };
 export async function run(k, p) {
   k.dt = 1 / p.fps;
   await k.load(p.cube, {}, { settle: p.settle });
@@ -11,16 +12,16 @@ export async function run(k, p) {
   const go = async () => {
     await k.app(() => window.__kit.perfStart());
     for (let f = 0; f < n; f += 15)
-      await k.app((a, [f, m, dt]) => {
+      await k.app((a, [f, m, dt, wob]) => {
         for (let j = 0; j < m; j++) {
-          if ((f + j) % 15 === 0) {
+          if (wob && (f + j) % 15 === 0) {
             const sb = a.sb, t = a.clock.t;
             for (let i = 0; i < sb.nV; i++) sb.v[i * 3 + 1] += 0.15 * Math.sin(sb.x[i * 3] * 6 + t * 7);
             sb.wakeAll();
           }
           a.frame(dt);
         }
-      }, [f, Math.min(15, n - f), k.dt]);
+      }, [f, Math.min(15, n - f), k.dt, p.wobble]);
     return await k.app(() => window.__kit.perfStop());
   };
   let r, prof = null;
