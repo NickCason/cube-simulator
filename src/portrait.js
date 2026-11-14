@@ -158,7 +158,7 @@ export class Portraits {
     const size = st.size, A = app.constructor;
     const sb = new SoftBody({ size, bevel: EDGES[style.edges].bevel * size, res: A.resAt(size, A.cellFor([size])) });
     sb.loadCube(0, 0, 0, 0);
-    const flavor = resolveFlavor(style), m = { ...tex, ...st, surface: style.surface, bevelRatio: EDGES[style.edges].bevel };
+    const flavor = resolveFlavor(style), m = { ...tex, ...st, surface: style.surface, trim: style.trim, liqColor: style.liqColor || '', bevelRatio: EDGES[style.edges].bevel };
     J.setCubeLook(0, flavor, m, size);
     // (its surface map baked now, not when a slider's been let go)
     J.restoreSurface(0, J.surfaceOfSlot(0));

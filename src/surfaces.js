@@ -558,6 +558,7 @@ export function surfaceBakeGLSL(only = -1) {
   uniform float uHS, uB, uL, uSp;
   uniform int uTrim; // (its edges' trim: styles.js TRIMS - 0 none)
   uniform float uTrimN, uTrimW, uSfScale, uTrimScale; // (its repeats an edge, its band's width; the surface's and the trim's depths as shares of the map's)
+  uniform float uTrimBand; // (1: it has a trim - drawn into the map or its own shape - and its surface stops short of the trim's band)
   uniform vec2 uNN;
   uniform highp sampler2D uSites;
   uniform highp sampler2D uGrid;
@@ -749,6 +750,15 @@ export function surfaceBakeGLSL(only = -1) {
     // crimped: a pie crust's flutes, across it
     float pc = p / 2.0, fl = 0.5 + 0.5 * cos(6.2831853 * x / pc);
     return 1.0 - 0.55 * (1.0 - fl) * (1.0 - smoothstep(0.55 * w, w, e));
+  }
+  // How much of (u, v) of face f is its edges' trim's, not its surface's: all of it in the trim's band, none a third
+  // past it - a pattern runs up to its trim and stops, as a mould's does. (Over it, the deeper of the two: a honeycomb's
+  // walls cut right across a crimp's flutes, and the crimp on a honeycomb cube looked like more honeycomb; a scalloped
+  // edge's ripple drowned in hexagons)
+  float sfTrimBand(vec2 uv) {
+    if (uTrimBand < 0.5) return 0.0;
+    float e = 0.5 * uL - max(abs(uv.x), abs(uv.y));
+    return 1.0 - smoothstep(uTrimW, 1.35 * uTrimW, e);
   }
   // its height at (u, v) of face f
   float sfBake(int k, int f, vec2 uv) {

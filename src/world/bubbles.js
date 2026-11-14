@@ -659,12 +659,16 @@ export class Bubbles {
             b.cOK = true;
           }
           // (slowly while it's near - but the further its drop's gone, the faster after it: sloshed, it was left
-          // behind out of its liquid, 12 cm)
+          // behind out of its liquid, 12 cm. Not in a sealed cube drawn full - its liquid settled, 4 s after it was
+          // poured, its drops spreading through it: no air in it to be left in, and its drops jostle on round it for as
+          // long as its jelly's awake - chased, its bubbles toured it with them at a quarter of a metre a second,
+          // bunched up, after a gentle toss)
           const dx = x[o] - FR[f], dy = x[o + 1] - FR[f + 1], dz = x[o + 2] - FR[f + 2];
           const tx = FR[f + 3] + FR[f + 6] * dx + FR[f + 9] * dy + FR[f + 12] * dz + b.u[0] * 0.4 * D - c[0];
           const ty = FR[f + 4] + FR[f + 7] * dx + FR[f + 10] * dy + FR[f + 13] * dz + b.u[1] * 0.4 * D - c[1];
           const tz = FR[f + 5] + FR[f + 8] * dx + FR[f + 11] * dy + FR[f + 14] * dz + b.u[2] * 0.4 * D - c[2];
-          const lag2 = (tx * tx + ty * ty + tz * tz) / (0.03 * 0.03), kc = Math.min(1, dt * 1.5 * (1 + lag2));
+          const full = fl._full[hk] && fl.age[p] > 4 && this.app.sb.cav[hk]?.sealed;
+          const lag2 = (tx * tx + ty * ty + tz * tz) / (0.03 * 0.03), kc = full ? Math.min(1, dt * 0.6) : Math.min(1, dt * 1.5 * (1 + lag2));
           c[0] += tx * kc; c[1] += ty * kc; c[2] += tz * kc;
           const rx = c[0] - FR[f + 3], ry = c[1] - FR[f + 4], rz = c[2] - FR[f + 5];
           w[0] = FR[f] + FR[f + 6] * rx + FR[f + 7] * ry + FR[f + 8] * rz;

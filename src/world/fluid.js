@@ -60,6 +60,10 @@ const YIELD_V = 0.6, YIELD_K = 4.0;
 // (1/s: how fast a whole cube's own liquid stills while the cube's still - gently at first, a slosh dying away,
 // then hard, over STILL_RAMP s: see _stillMark)
 const STILL_K0 = 3, STILL_K1 = 30, STILL_RAMP = 1.2;
+// A sealed cube drawn full: its liquid's way against the cube's own (as it moves and turns, a whole) let go at
+// FULL_K a second - full, with nowhere to slosh, it goes with its cube. (Sloshing freely, it swirled round inside for
+// seconds after a gentle toss, half a metre a second - its bubbles, carried by it, zooming about and bunching)
+const FULL_K = 5;
 // (s: all of it a whole cube's own, each cube still this long - it sleeps: see _stillMark. Behind the splash,
 // once its code's warm: sooner - till it slept, the splash's own warm-up went slower, and it stayed up longer)
 const STILL_SLEEP = 1.5, STILL_SLEEP_HELD = 0.6;
@@ -131,6 +135,9 @@ export class Fluid {
     this._stillAll = 0;
     // (each a whole cube's own: that cube's speed - its speed limits are against it: see _refMark)
     this._refV = new Float32Array(N * 3);
+    // (each a sealed cube drawn full's own: 1 + that cube; and each such cube's middle, speed and turn - see _fullMark)
+    this._fullOf = new Uint8Array(N);
+    this._fullU = new Float64Array(MAX_CUBES * 9);
     this._gw = new Float64Array(3);
     this._colTop = new Float32Array(COL_HASH);
     // (and how much of it each carries, in particles' worth - more than one, a spill bigger than the pool has
@@ -873,6 +880,7 @@ export class Fluid {
       this._pressures();
       this._stillMark(phys);
       this._refMark();
+      this._fullMark();
       this._advance(phys);
       this._contain();
       const v = this.v;
@@ -1449,6 +1457,7 @@ export class Fluid {
     this._jellyCells();
     this._stillMark(dt);
     this._refMark();
+    this._fullMark();
     this._advance(dt);
   }
 
@@ -2016,6 +2025,25 @@ export class Fluid {
     }
   }
 
+  // (which drops are a sealed cube drawn full's - see FULL_K - and that cube's middle, speed and turn: its biggest
+  // piece's, a whole)
+  _fullMark() {
+    const sb = this.app.sb, own = this.own, n = this.n, FO = this._fullOf, U = this._fullU, FU = this._full;
+    FO.fill(0, 0, n);
+    for (let k = 0; k < MAX_CUBES; k++) {
+      const id = sb.cHid[k];
+      if (!id || !FU[k] || !this.frameOK[k] || !sb.cav[k]?.sealed) continue;
+      let best = null;
+      for (const pc of sb.pieces) if (pc && pc.cube === k && (!best || pc.verts.length > best.verts.length)) best = pc;
+      if (!best || !best.vel || !best.omega) continue;
+      const u = k * 9;
+      U[u] = best.com[0]; U[u + 1] = best.com[1]; U[u + 2] = best.com[2];
+      U[u + 3] = best.vel[0]; U[u + 4] = best.vel[1]; U[u + 5] = best.vel[2];
+      U[u + 6] = best.omega[0]; U[u + 7] = best.omega[1]; U[u + 8] = best.omega[2];
+      for (let i = 0; i < n; i++) if (own[i] === id) FO[i] = k + 1;
+    }
+  }
+
   _stirred() {
     // (held up behind the splash the jelly isn't moving, but nor does it ever go to sleep: its liquid, poured
     // in there, was woken every frame and worked out for nothing - at a phone's speed the splash's own warm-up
@@ -2281,6 +2309,7 @@ export class Fluid {
       SW[i] = sw;
     }
     const damp = Math.exp(-1.2 * h), fr = 1 - Math.min(1, 6 * h), slush = Math.exp(-14 * h), settle = Math.exp(-5 * h), ST = this._still, temp = this.temp, VI = this.visc, TK = this.thick;
+    const FO = this._fullOf, FU = this._fullU, fk = Math.exp(-FULL_K * h);
     for (let o = 0; o < n * 3; o += 3) {
       // (cold enough to set: slush - it hardly flows; thick stuff - glue - drags too)
       const i = o / 3, vi = VI[i], tk = TK[i] > 0 ? Math.exp(-TK[i] * h) : 1;
@@ -2302,6 +2331,12 @@ export class Fluid {
       }
       this._rested[i] = rest;
       v[o] = (v[o] + rx) * dm; v[o + 1] = (v[o + 1] + ry) * (temp[i] < SET_T ? damp * tk : dm); v[o + 2] = (v[o + 2] + rz) * dm;
+      // (a sealed cube drawn full's: going with its cube - see FULL_K)
+      if (FO[i]) {
+        const u = (FO[i] - 1) * 9, ex = q[o] - FU[u], ey = q[o + 1] - FU[u + 1], ez = q[o + 2] - FU[u + 2];
+        const ux = FU[u + 3] + FU[u + 7] * ez - FU[u + 8] * ey, uy = FU[u + 4] + FU[u + 8] * ex - FU[u + 6] * ez, uz = FU[u + 5] + FU[u + 6] * ey - FU[u + 7] * ex;
+        v[o] = ux + (v[o] - ux) * fk; v[o + 1] = uy + (v[o + 1] - uy) * fk; v[o + 2] = uz + (v[o + 2] - uz) * fk;
+      }
       // (floor friction: thick stuff drags)
       if (q[o + 1] <= R_P * 1.05) {
         v[o] *= fr;

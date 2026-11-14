@@ -14,6 +14,8 @@ node tools/kit/run.mjs <scenario> [flags]
   --grid k=a:b,k2=c:d           every combination (':' between alternatives - '|' would be a shell pipe)
   --cpu 4                       Chrome's CPU throttle (4 ~ a phone)     --dpr 2 (pictures)    --theme dark
   --engine webkit               Safari's engine (JSC) - the app crashes its renderer here, headless: not usable yet
+  KIT_GL=swiftshader (env)      Chrome's own software GPU, not Mesa's: Mesa hangs for minutes drawing a surface map's
+                                honeycomb jelly shader (and a SURF cube loaded afresh); SwiftShader draws it in seconds
   --set __fluidIter=2           params named __x are the app's test switches, set as globals before its code
                                 loads: __fluidIter, __fluidStep, __fillN, __fillRigid (fluid.js, spill.js: the
                                 fill's lattice taken back to rest by the turn alone, as before), __unbendAt (fluid.js: how bent a cube is
@@ -51,8 +53,8 @@ node tools/kit/run.mjs look --set cube=aqua,views=+z/-z/+x/-x,skips=all/jelly,cu
 
 Cubes by name (`cubes.mjs`): `plain`, `plainLiquid`, `plainSharp`, `aqua`, `fluorescent` (empty, as shared),
 `fluorescentFilled`, `blueGold` (soft, blue, gold glitter, full), `foamingCrystal` (crystal, rubber-firm lead super
-ball, full, honeycomb + crimped trim) - or any share code. NB a cube with a surface or trim (the jelly's SURF set) loaded
-afresh with `?splash` (the intro scenario) hangs this headless GPU (Mesa) for minutes - his phone's fine with it. In a code `lk` is the liquid's skin, `lf` its fill; `sk` is NOT skin.
+ball, full, honeycomb + crimped trim) - or any share code. NB a cube with a surface or trim (the jelly's SURF set) can
+hang Mesa for minutes (loaded afresh with `?splash`, or a honeycomb drawn): use KIT_GL=swiftshader for those. In a code `lk` is the liquid's skin, `lf` its fill; `sk` is NOT skin.
 
 ## Builds
 

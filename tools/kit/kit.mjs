@@ -19,7 +19,9 @@ import { CUBES } from './cubes.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const PROBES = readFileSync(join(HERE, 'probes.js'), 'utf8');
-const ARGS = ['--use-angle=gl-egl', '--ignore-gpu-blocklist', '--enable-gpu'];
+// (KIT_GL=swiftshader: Chrome's own software GPU in place of Mesa's - which hangs for minutes on a surface map's
+// honeycomb jelly shader; slower, but draws it)
+const ARGS = process.env.KIT_GL === 'swiftshader' ? ['--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist'] : ['--use-angle=gl-egl', '--ignore-gpu-blocklist', '--enable-gpu'];
 
 // One browser for a whole run (pages are cheap, launches aren't) - an engine each: Chrome's V8, or WebKit's JSC
 // (Safari's, his iPhone's: no CPU throttle there, no profiler - those are Chrome's)
