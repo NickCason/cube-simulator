@@ -142,12 +142,16 @@ test("a cube full of liquid's own colour survives the round trip; none, its jell
   assert.equal(decodeCube(encodeCube({ ...full, liqColor: 'rainbow' })).liqColor, 'rainbow');
 });
 
-test('a cube code keeps its acne: how many, how big, where (its seed), its colours - and none, none', async () => {
+test('a cube code keeps its acne: how many, how big, where (its seed), its colours, blended or not - and none, none', async () => {
   const { zitSpots, copyAcne } = await import('../src/acne.js');
   const acne = { n: 24, size: 2, seed: 4321, red: '#B8121E', head: '#f6d34a', pus: '#ecca4c' };
   const c = decodeCube(encodeCube({ ...full, acne }));
-  assert.deepEqual(c.acne, { n: 24, size: 2, seed: 4321, red: '#b8121e', head: '#f6d34a', pus: '#ecca4c' });
+  assert.deepEqual(c.acne, { n: 24, size: 2, seed: 4321, red: '#b8121e', head: '#f6d34a', pus: '#ecca4c', blend: false });
   assert.equal(decodeCube(encodeCube(full)).acne, undefined);
+  // (blended - their bodies the cube's own colour: kept, its size as it was)
+  assert.deepEqual(decodeCube(encodeCube({ ...full, acne: { ...acne, size: 3, blend: true } })).acne, { n: 24, size: 3, seed: 4321, red: '#b8121e', head: '#f6d34a', pus: '#ecca4c', blend: true });
+  // (a code from before there was blending: not blended)
+  assert.equal(decodeCube('1~flime~z1802004db8121ef6d34aecca4c').acne.blend, false);
   // (a broken one's left out)
   assert.equal(decodeCube(encodeCube(full) + '~z12').acne, undefined);
   // (where its zits come up: the same every time from its seed, as many as it has, none on its bottom or on another)

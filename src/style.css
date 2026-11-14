@@ -766,6 +766,10 @@ html.dark .palette .gdie {
   cursor: pointer;
 }
 
+.palette .acnecols .opt.pick.off {
+  opacity: 0.4;
+}
+
 .palette .acnecols .opt.pick input {
   position: absolute;
   inset: 0;

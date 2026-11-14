@@ -1,5 +1,6 @@
 // Acne, as a cube's own (style.acne - in its code, field z): how many zits and how big, where they come up (a seed),
-// and their colours - the angry skin round each (red), its head (head) and what's in it (pus). Where each one is: laid
+// and their colours - the angry skin round each (red), its head (head) and what's in it (pus) - or their bodies the
+// cube's own colour where each comes up, a rainbow's band there (blend), only their heads and pus their own. Where each one is: laid
 // out from the seed over its top and sides (not its bottom - sat on, they'd pop), each its own size round the size
 // asked, none on another (see zitSpots). They're popped by squeezing, shooting, cutting... (see world/zits.js); a
 // re-cube brings them back.
@@ -46,20 +47,23 @@ export function copyAcne(a) {
     red: HEX.test(a.red) ? a.red.toLowerCase() : L.red,
     head: HEX.test(a.head) ? a.head.toLowerCase() : L.head,
     pus: HEX.test(a.pus) ? a.pus.toLowerCase() : L.pus,
+    blend: !!a.blend,
   };
 }
 
-// In a code: its count and size (two hex digits each), its seed (four), its three colours (six each)
+// In a code: its count and size (two hex digits each - its size's top bit, blended), its seed (four), its three
+// colours (six each)
 const h2 = (v) => v.toString(16).padStart(2, '0');
 export function encodeAcne(a) {
   const c = copyAcne(a);
   if (!c) return '';
-  return h2(c.n) + h2(c.size) + c.seed.toString(16).padStart(4, '0') + c.red.slice(1) + c.head.slice(1) + c.pus.slice(1);
+  return h2(c.n) + h2(c.size | (c.blend ? 0x80 : 0)) + c.seed.toString(16).padStart(4, '0') + c.red.slice(1) + c.head.slice(1) + c.pus.slice(1);
 }
 export function decodeAcne(v) {
   const s = String(v || '');
   if (!/^[0-9a-f]{26}$/i.test(s)) return null;
-  return copyAcne({ n: parseInt(s.slice(0, 2), 16), size: parseInt(s.slice(2, 4), 16), seed: parseInt(s.slice(4, 8), 16), red: '#' + s.slice(8, 14), head: '#' + s.slice(14, 20), pus: '#' + s.slice(20, 26) });
+  const sz = parseInt(s.slice(2, 4), 16);
+  return copyAcne({ n: parseInt(s.slice(0, 2), 16), size: sz & 0x7f, blend: sz >= 0x80, seed: parseInt(s.slice(4, 8), 16), red: '#' + s.slice(8, 14), head: '#' + s.slice(14, 20), pus: '#' + s.slice(20, 26) });
 }
 
 // Where its zits come up (a cube of side 1, its edges rounded to b): [{ x, y, z, r }] - rest shape, from its middle,

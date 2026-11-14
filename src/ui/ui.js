@@ -555,7 +555,7 @@ export class UI {
             return;
           }
           const again = c && c.n === A.n, L = ACNE_LOOKS[0];
-          app.setAcne({ n: A.n, size: c ? c.size : 1, seed: again || !c ? 0 : c.seed, red: c ? c.red : L.red, head: c ? c.head : L.head, pus: c ? c.pus : L.pus });
+          app.setAcne({ n: A.n, size: c ? c.size : 1, seed: again || !c ? 0 : c.seed, red: c ? c.red : L.red, head: c ? c.head : L.head, pus: c ? c.pus : L.pus, blend: !!c?.blend });
           this.hint(again ? 'A fresh crop' : `${A.name} · squeeze one (hold a finger on it), shoot it or cut it to pop it`, 2600);
         });
         amt.appendChild(b);
@@ -584,6 +584,20 @@ export class UI {
         });
         look.appendChild(b);
       }
+      // (Blend: their bodies the cube's own colour where each comes up - a rainbow's bands - their skin colour unused)
+      const blend = document.createElement('button');
+      blend.className = 'opt';
+      blend.dataset.acneblend = '1';
+      blend.innerHTML = '<i class="gdot" style="background:conic-gradient(#ff5a5a, #ffd34a, #5ad46a, #4ab4ff, #b06aff, #ff5a5a)"></i>Blend';
+      blend.setAttribute('aria-label', "The zits' bodies the cube's own colour");
+      blend.addEventListener('click', () => {
+        app.audio.ui();
+        const c = cur();
+        if (!c) return;
+        app.setAcne({ ...c, blend: !c.blend });
+        this.hint(c.blend ? 'Their skin colour again' : "Blended: each one the cube's own colour where it comes up", 2000);
+      });
+      cols.appendChild(blend);
       this.acneCols = {};
       for (const [key, name] of [['red', 'Skin'], ['head', 'Head'], ['pus', 'Pus']]) {
         const pick = document.createElement('label');
@@ -1138,6 +1152,8 @@ export class UI {
           P.firstChild.style.background = a[key];
           P.querySelector('input').value = a[key];
         }
+        for (const b of this.paletteEl.querySelectorAll('.opt[data-acneblend]')) b.classList.toggle('active', a.blend);
+        this.acneCols?.red?.classList.toggle('off', a.blend);
       }
     }
     this._surfHex = hex;

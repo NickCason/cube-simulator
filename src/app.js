@@ -597,6 +597,7 @@ export class App {
     this.flavor = f;
     this.color = flavorMainHex(f);
     for (const fn of this.onColor || []) fn(this.color, f);
+    this.zits?.restyled(); // (blended zits: the cube's colours again)
     this.ui?.setStyle(this.style, f);
     this.ui?.setSettings?.(st, tex);
     try {

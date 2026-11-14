@@ -283,7 +283,7 @@ export class MalletTool {
       app.audio.thud(0.8 + 0.2 * lv);
       app.glowPulse?.(p.x, p.y, p.z, 0.9 + 0.5 * lv);
       // (the zits under its head: burst)
-      app.zits?.hitAt(p, 0.1, d);
+      app.zits?.hitAt(p, 0.1, d, true);
       if (hits > 1) app.audio.ring(RES_NOTES[Math.min(hits, RES_NOTES.length) - 1], lv);
       app.markDamaged();
       if (hits === 3) app.ui?.hint('Resonance building - keep the beat', 1400);
