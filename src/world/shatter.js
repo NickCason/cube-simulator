@@ -190,8 +190,10 @@ export class Shatter {
         f.inRegion = ice;
         cracks.push(f);
       }
-      // a second, wider shell further out - more often, the harder
-      if (Math.random() < Math.min(1, 0.45 + 0.15 * e)) {
+      // hit as hard as a fall from the sky it bursts (below) - cracks all through it - else a second, wider shell
+      // further out, more often the harder
+      const burst = e >= 3 ? Math.min(3, Math.floor(e - 1.5)) : 0;
+      if (!burst && Math.random() < Math.min(1, 0.45 + 0.15 * e)) {
         const r = R(0.5, 0.75) * size;
         const c = p.clone().addScaledVector(d, R(0.05, 0.2) * size - r * 0.35).addScaledVector(u, R(-0.1, 0.1) * size).addScaledVector(v, R(-0.1, 0.1) * size);
         const f = sphereField(c.x, c.y, c.z, r);
@@ -201,15 +203,20 @@ export class Shatter {
       // long splits right through, off to the side of the hit
       const splits = Math.min(3, Math.floor((e - 1) * 0.6) + (Math.random() < 0.4 ? 1 : 0));
       for (let k = 0; k < splits; k++) plane(tilted(Math.random() * Math.PI * 2, 0.25), p.clone().addScaledVector(u, R(0.15, 0.32) * size * (Math.random() < 0.5 ? -1 : 1)));
-      // hit as hard as a fall from the sky: it bursts - cracks all through it, every way
-      const burst = e >= 3 ? Math.min(5, Math.floor(e - 1.5)) : 0;
+      // (the burst: cracks all through it, every way - five of them on top of the rest, a glass cube off 45 m was 154
+      // pieces, a frame half a second)
       for (let k = 0; k < burst; k++) {
         const n = new THREE.Vector3(R(-1, 1), R(-1, 1), R(-1, 1)).normalize();
         plane(n, new THREE.Vector3(R(bb[0], bb[3]), R(bb[1], bb[4]), R(bb[2], bb[5])));
       }
     }
-    // (the star breaks this frame, the rest the next - a burst's in three)
-    const batches = cracks.length - first > 4 ? [first, first + Math.ceil((cracks.length - first) / 2), cracks.length] : [first, cracks.length];
+    // (three cracks this frame - the star's first - and two a frame after: a burst's eleven cuts in three frames made
+    // each 0.4-0.55 s - a phone's twice that)
+    const batches = [];
+    for (let n = Math.min(first, 3); ; n = Math.min(cracks.length, n + 2)) {
+      batches.push(n);
+      if (n >= cracks.length) break;
+    }
     const glassy = B.glassy;
     this.cur = { cracks, batches, verts: pc.verts.slice(), p, d, n: 0, chip: B.chip, glassy, e, size, kind: job.kind };
     sb.selfQuietUntil = sb.time + 0.5;
