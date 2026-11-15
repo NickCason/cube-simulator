@@ -1775,9 +1775,15 @@ export class SoftBody {
     // (a piece just made: its middle, speed and box as it is - all nought till its first step's end otherwise, see
     // _dampPieces. A collider's jelly torn apart at 60 m/s looked still to the look for contacts: each point swept a
     // 60th of a second at its speed, a metre, every one against everything - a 4.9 s frame)
+    this.measurePieces(carried);
+  }
+
+  // Each piece's middle, speed and box as its points are now - but those carried (skip[pc.id]) - outside a step: just
+  // made (see _buildPieces), or put back where they were (see world/replay.js)
+  measurePieces(skip = null) {
     const x = this.x, v = this.v, m = this.m;
     for (const pc of this.pieces) {
-      if (carried[pc.id]) continue;
+      if (skip && skip[pc.id]) continue;
       const vs = pc.verts;
       let M = 0, cx = 0, cy = 0, cz = 0, vx = 0, vy = 0, vz = 0, x0 = Infinity, y0 = Infinity, z0 = Infinity, x1 = -Infinity, y1 = -Infinity, z1 = -Infinity;
       for (let k = 0; k < vs.length; k++) {

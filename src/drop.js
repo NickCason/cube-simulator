@@ -4,11 +4,15 @@
 // critical speed as hard as its weight - squashing and spreading it (SoftBody.setWind).
 
 import { DropFx } from './world/dropfx.js';
+import { Replay } from './world/replay.js';
 
 const STORE = 'cube-sim-drop-h';
 export const DROP_MIN = 3, DROP_MAX = 45; // (m: the height its bottom is taken up to - the sky dome's 48 m round the eye)
 const LIFT_V = 12; // (m/s: the hook at its fastest)
 const VT = 22; // (m/s: its critical speed - the air on its leading face as hard as its weight)
+// (bullet time: a tenth of a second off the floor at the speed it's coming, time down to BULLET - at once - till
+// BULLET_FOR s after it touches, then back up to speed. Slowed to a third, it was over before it could be seen)
+const BULLET = 0.1, BULLET_FOR = 0.25;
 
 export class DropMode {
   constructor(app) {
@@ -44,6 +48,10 @@ export class DropMode {
     this._slowed = false;
     this.fovKick = 0; // (0..1: the view widened with its speed - see App._updateCamera)
     this._tack = -1; // (a sticky one's tack, put by while it's on the hook - see start; -1 none)
+    // (its fall and landing kept a frame at a time - gone back over after with the bar's slider, the view turned
+    // round it as it goes: see world/replay.js - and the sim time it first touched)
+    this.replay = new Replay(app);
+    this.hitT = 0;
   }
 
   setHeight(h) {
@@ -64,6 +72,8 @@ export class DropMode {
 
   exit() {
     if (!this.on) return;
+    this.replay.stopShow();
+    this.replay.stop();
     this._release();
     this._restick();
     this.fx.stop();
@@ -92,6 +102,8 @@ export class DropMode {
   // Up: hooked by the middle of its top, and taken up till its bottom's at the height
   start() {
     if (!this.on || (this.phase && this.phase !== 'land')) return;
+    this.replay.stopShow();
+    this.replay.stop();
     const app = this.app, sb = app.sb;
     this.slot = app.cube?.slot ?? 0;
     sb.setWind(this.slot, 0);
@@ -137,6 +149,7 @@ export class DropMode {
     this.app.sb.wakeAll();
     this.phase = 'fall';
     this.t = 0;
+    this.replay.start();
     this._changed();
   }
 
@@ -160,6 +173,8 @@ export class DropMode {
   update(dt) {
     if (!this.on || !this.phase) return;
     this.t += dt;
+    // (the frame the last step made: kept - all its fall and landing)
+    if (this.phase === 'fall') this.replay.record();
     const sb = this.app.sb, P = this._piece();
     // (re-cubed, swapped, gone from under it: back to the start)
     if (!P || (this.grab && !sb.grabs.includes(this.grab))) {
@@ -192,17 +207,18 @@ export class DropMode {
     if (kick > 0) this.app.shake(0.006 * kick);
     if (this.phase === 'fall') {
       this.peak = Math.max(this.peak, this.speed);
-      // (a breath before it hits, fast: time slowed - the landing in slow motion, then back up to speed)
-      if (this.landT < 0 && !this._slowed && this.speed > 12 && this.alt < this.speed * 0.09) this._slow(true);
+      // (a breath before it hits: bullet time - see BULLET)
+      if (this.landT < 0 && !this._slowed && this.speed > 4 && this.alt < this.speed * 0.1) this._slow(true);
       // (down: as it first touches - then still a while, or 3 s on)
       if (this.landT < 0 && pc.bbox[1] < 0.03) {
         this.landT = this.t;
+        this.hitT = sb.time;
         this.hitV = this.peak;
         this.fx.impact(this, pc, this.hitV);
         // (down: the air off it - its bounce, as it's made; left on, a rubber one's leap was braked to a fifth of it)
         this.app.sb.setWind(this.slot, 0);
       }
-      if (this._slowed && this.landT >= 0 && this.t - this.landT > 0.3) this._slow(false);
+      if (this._slowed && this.landT >= 0 && this.t - this.landT > BULLET_FOR) this._slow(false);
       if (this.landT >= 0) {
         const v2 = pc.vel[0] * pc.vel[0] + pc.vel[1] * pc.vel[1] + pc.vel[2] * pc.vel[2];
         this.calmT = v2 < 0.16 ? this.calmT + dt : 0;
@@ -213,6 +229,7 @@ export class DropMode {
           this.shards = sb.pieces.filter((q) => q && q.cube === this.slot && q.volume > 0.004 * s * s * s).length;
           this.phase = 'land';
           this.t = 0;
+          this.replay.stop();
           this._changed();
         }
       }
@@ -221,8 +238,16 @@ export class DropMode {
   }
 
   // (the camera on it - where it is now, the frame's step taken: read before it, a cube falling at 16 m/s sat half a
-  // metre low in the picture - till a moment after it's down. See App._updateCamera)
+  // metre low in the picture - till a moment after it's down. See App._updateCamera. Gone back over, on it as it was
+  // then - played on, a frame a frame)
   track() {
+    if (this.on && this.replay.showing) {
+      this.replay.tick();
+      let M = 0, x = 0, y = 0, z = 0;
+      for (const q of this.app.sb.pieces) if (q && q.cube === this.slot) (M += q.volume), (x += q.com[0] * q.volume), (y += q.com[1] * q.volume), (z += q.com[2] * q.volume);
+      if (M > 0) (this.frameX = x / M), (this.frameY = y / M), (this.frameZ = z / M);
+      return;
+    }
     const pc = this.on && this.phase ? this._piece()?.pc : null;
     this.fx.update(this, pc);
     if (!this.on || !this.phase || (this.phase === 'land' && this.t > 0.8)) {
@@ -257,17 +282,48 @@ export class DropMode {
     }
   }
 
-  // (time slowed - or as it was)
+  // (time slowed to bullet time, at once - or as it was)
   _slow(on) {
     const app = this.app;
     if (on && !this._slowed) {
       this._slowWas = app.slowGoal;
-      app.slowGoal = Math.min(app.slowGoal ?? 1, 0.3);
+      app.slowGoal = Math.min(app.slowGoal ?? 1, BULLET);
+      app.timeScale = Math.min(app.timeScale, BULLET);
       this._slowed = true;
     } else if (!on && this._slowed) {
       app.slowGoal = this._slowWas ?? 1;
       this._slowed = false;
     }
+  }
+
+  // Gone back over: frame u of the way through it (0..1) on show, played on - or stopped there
+  scrub(u) {
+    const R = this.replay, n = R.length;
+    if (!this.on || this.phase !== 'land' || n < 2) return;
+    const f = Math.max(0, Math.min(1, u)) * (n - 1), i = Math.floor(f);
+    R.playing = false;
+    R.show(i, f - i);
+  }
+
+  play() {
+    const R = this.replay;
+    if (!this.on || this.phase !== 'land' || R.length < 2) return;
+    if (R.playing) return void (R.playing = false);
+    if (!R.showing || R.i >= R.length - 1) R.show(0);
+    R.playing = true;
+  }
+
+  // (back to it as it is, going on)
+  live() {
+    this.replay.stopShow();
+  }
+
+  // (where it's at, gone back over: 0..1, and the time off the moment it hit, s)
+  get replayAt() {
+    const R = this.replay, n = R.length;
+    if (n < 2) return { u: 1, dt: 0 };
+    const i = R.showing ? R.i + R.u : n - 1, F = R.frames[Math.min(n - 1, Math.round(i))];
+    return { u: i / (n - 1), dt: F ? F.t - this.hitT : 0 };
   }
 
   _changed() {

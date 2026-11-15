@@ -5174,6 +5174,33 @@ html.dark .gs-all {
   z-index: 20;
 }
 
+/* (Drop's replay: play, a slider through its fall, how long off the hit) */
+.drop-bar .db-rp {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 10px;
+  font: 600 13px/1 var(--font);
+  min-width: 0;
+}
+
+.drop-bar .db-rp-go {
+  width: 30px;
+  height: 30px;
+  border-radius: 9px;
+  background: rgba(0, 0, 0, 0.06);
+  color: var(--ink);
+  font-size: 12px;
+  line-height: 1;
+}
+
+.drop-bar .db-rp b {
+  font-weight: 700;
+  min-width: 4.4em;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
 /* (its speed and angle's tracks lined up: their names and readings as wide as the widest) */
 .collide-bar .db-h > span {
   min-width: 3.6em;
@@ -5203,9 +5230,10 @@ html.dark .gs-all {
   overflow-y: auto;
 }
 
-/* (the Press's two settings, one over the other - and the Collider's) */
+/* (the Press's two settings, one over the other - and the Collider's, and Drop's height over its replay) */
 .press-bar .ps-sets,
-.collide-bar .ps-sets {
+.collide-bar .ps-sets,
+.drop-bar .db-sets {
   flex: 1 1 auto;
   display: grid;
   gap: 6px;

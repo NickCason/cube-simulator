@@ -42,13 +42,34 @@ export class Exhibit {
     bar.className = 'drop-bar';
     bar.hidden = true;
     bar.innerHTML = `<button class="db-exit" aria-label="Back to the lab" title="Back to the lab">&times;</button>
-      <label class="db-h"><span>Height</span><input type="range" min="${DROP_MIN}" max="${DROP_MAX}" step="1" aria-label="How high it's taken"><b></b></label>
+      <div class="db-sets">
+        <label class="db-h"><span>Height</span><input type="range" min="${DROP_MIN}" max="${DROP_MAX}" step="1" aria-label="How high it's taken"><b></b></label>
+        <div class="db-rp" hidden><button class="db-rp-go" aria-label="Play it back">&#9654;</button><input type="range" min="0" max="1000" step="1" aria-label="Go back over it - drag, and turn the view round it"><b></b></div>
+      </div>
       <div class="db-read" aria-live="polite" hidden></div>
       <button class="db-go">Drop</button>`;
     root.appendChild(bar);
     this.hIn = bar.querySelector('.db-h input');
     this.hOut = bar.querySelector('.db-h b');
     this.hRow = bar.querySelector('.db-h');
+    this.dSets = bar.querySelector('.db-sets');
+    // (its fall gone back over: play, a slider through it, how long off the hit - see DropMode.scrub)
+    this.rp = { row: bar.querySelector('.db-rp'), go: bar.querySelector('.db-rp-go'), at: bar.querySelector('.db-rp input'), out: bar.querySelector('.db-rp b') };
+    this.rp.at.addEventListener('input', () => {
+      app.drop.scrub(+this.rp.at.value / 1000);
+      this._replaySync();
+    });
+    this.rp.go.addEventListener('click', () => {
+      app.audio.ui();
+      app.drop.play();
+      this._replaySync();
+      cancelAnimationFrame(this._rpRaf);
+      const tick = () => {
+        this._replaySync();
+        if (app.drop.replay.playing) this._rpRaf = requestAnimationFrame(tick);
+      };
+      tick();
+    });
     this.read = bar.querySelector('.db-read');
     this.go = bar.querySelector('.db-go');
     btn.addEventListener('click', (e) => {
@@ -381,13 +402,25 @@ export class Exhibit {
     this.hIn.style.setProperty('--p', `${((this.app.drop.height - DROP_MIN) / (DROP_MAX - DROP_MIN)) * 100}%`);
   }
 
-  // (as it goes: the big button's word, the height or the fall's numbers)
+  // (gone back over: the slider where it's at, play or pause, how long off the hit)
+  _replaySync() {
+    const D = this.app.drop, R = D.replay, at = D.replayAt;
+    this.rp.at.value = String(Math.round(at.u * 1000));
+    this.rp.at.style.setProperty('--p', `${at.u * 100}%`);
+    this.rp.out.textContent = `${at.dt >= 0 ? '+' : '−'}${Math.abs(at.dt).toFixed(2)} s`;
+    this.rp.go.innerHTML = R.playing ? '&#10074;&#10074;' : '&#9654;';
+    this.rp.go.setAttribute('aria-label', R.playing ? 'Pause' : 'Play it back');
+  }
+
+  // (as it goes: the big button's word, the height or the fall's numbers - landed, its replay)
   _sync(phase) {
     const D = this.app.drop, busy = phase === 'lift' || phase === 'hang' || phase === 'fall';
     this.go.textContent = !phase ? 'Drop' : phase === 'land' ? 'Again' : phase === 'fall' ? 'Falling' : 'Let go';
     this.go.disabled = phase === 'fall';
     this.go.classList.toggle('let', phase === 'lift' || phase === 'hang');
-    this.hRow.hidden = busy;
+    this.dSets.hidden = busy;
+    this.rp.row.hidden = phase !== 'land' || D.replay.length < 2;
+    if (!this.rp.row.hidden) this._replaySync();
     this.read.hidden = !busy;
     if (phase === 'hang') this.ui.hint('Tap anywhere to let it go', 2200);
     if (phase === 'land') this.ui.hint(D.shards > 1 ? `Shattered at ${D.hitV.toFixed(0)} m/s · ${D.shards} pieces · from ${D.height} m` : `Hit the ground at ${D.hitV.toFixed(0)} m/s · from ${D.height} m`, 3200);

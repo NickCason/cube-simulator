@@ -98,7 +98,9 @@ export class Shatter {
           else sp = Math.max(sp, Math.hypot(vl[j], vl[j + 1], vl[j + 2]));
         }
       }
-      sp = Math.min(sp, e.dv);
+      // (no more than the knock it took - over a frame of time as it goes: slowed to a tenth, a frame's knock is a tenth
+      // of the hit, and a glass cube dropped 3 m in bullet time landed whole)
+      sp = Math.min(sp, e.dv / Math.max(0.05, this.app.timeScale || 1));
       const s = sb.cSize[pc.cube] || sb.p.size, stands = B.stands * Math.min(4, Math.cbrt((s * s * s) / Math.max(pc.volume, 1e-9)));
       if (sp < stands) continue;
       // (its way in: from where it was hit to its middle)
