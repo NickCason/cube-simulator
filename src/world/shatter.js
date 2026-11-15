@@ -21,6 +21,12 @@ const FROZEN_AT = -0.4; // (a piece's mean temperature: this or colder, frozen)
 // (pieces in the room: this many, nothing more breaks - two glass cubes met at 430 km/h, 41 shards; those flung out
 // broke again on the room's edge, 161 of them, 22,000 tets, a second and more a frame)
 const MAX_PIECES = 60;
+// (knocked by another piece: it's only hit as hard as that is. One of jelly gives - a glass cube's stopped over the
+// time the jelly takes to squash, not at once - and in the real world glass goes through jelly whole at hundreds of
+// km/h. As firm as FIRM or more - tofu, rubber - it counts, what it stands up by how far short of glass's firmness it
+// is, squared; anything brittle - glass, ice, candy, sugar, frozen jelly - as hard as the floor. Judged by the speed
+// they met at alone, a glass cube fired into a jelly one shattered on it)
+const FIRM = 600, GLASS_MU = 1000;
 
 const R = (lo, hi) => lo + Math.random() * (hi - lo);
 
@@ -85,6 +91,15 @@ export class Shatter {
       if (!pc || !this._breakable(pc)) continue;
       const B = this.brittleOf(pc);
       if (!B) continue;
+      let firm = 1;
+      if (e.kind === 'piece') {
+        const q = sb.pieces[e.partner];
+        if (q && !this.brittleOf(q)) {
+          const cb = this.app.cubes.find((c) => c.slot === q.cube), tex = cb && TEXTURES[cb.style.texture], mu = tex ? resolveSettings(cb.tune, tex).mu : 0;
+          if (!(mu >= FIRM)) continue;
+          firm = (GLASS_MU / Math.min(GLASS_MU, mu)) ** 2;
+        }
+      }
       // (the hardest it came in over its last three frames: the knock's reported a frame or two on, bounced)
       const vl = VL.get(pc);
       let sp = 0.5 * e.dv;
@@ -101,7 +116,7 @@ export class Shatter {
       // (no more than the knock it took - over a frame of time as it goes: slowed to a tenth, a frame's knock is a tenth
       // of the hit, and a glass cube dropped 3 m in bullet time landed whole)
       sp = Math.min(sp, e.dv / Math.max(0.05, this.app.timeScale || 1));
-      const s = sb.cSize[pc.cube] || sb.p.size, stands = B.stands * Math.min(4, Math.cbrt((s * s * s) / Math.max(pc.volume, 1e-9)));
+      const s = sb.cSize[pc.cube] || sb.p.size, stands = B.stands * firm * Math.min(4, Math.cbrt((s * s * s) / Math.max(pc.volume, 1e-9)));
       if (sp < stands) continue;
       // (its way in: from where it was hit to its middle)
       const p = new THREE.Vector3(e.x, e.y, e.z), d = new THREE.Vector3(pc.com[0] - e.x, pc.com[1] - e.y, pc.com[2] - e.z);
