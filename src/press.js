@@ -30,8 +30,16 @@ const BURST_AT = 0.85, BURST_GAP = 0.45;
 // it was a ball a third its width with 1% of its volume. Slid out over the floor and under the plate as it goes - its
 // grip on both SLIP of what it was; sprung back up to a cube over BACK_T s once the plate's off it)
 const YIELD = 0.3, FLAT_MIN = 0.04, SLIP = 0.05, BACK_T = 1.2;
+// (the plate off it: held to the squash as it eases back - thicker, the rim drawn back in - RISE of its height a
+// second at most, no faster than the plate lifts; let go at LET_GO of its height, to spring the rest of the way. Let go
+// at once, its rim fell flat into a disc - and back up at once, it was squeezed out sideways from under the plate)
+const RISE = 1.6, LET_GO = 0.92;
 // (a cube full of liquid yielded this flat: it bursts, a water balloon)
 const LIQ_BURST = 0.4;
+// (squeezed out past the plate's edge, nothing on it: risen up beside it - as much of it as went out - to RIM of its
+// height, once half a cube of it's out; up the plate's side over RIM_UP of a cube. Held to the gap out there too, a
+// pancake 4 cm thin went on round the plate over the floor, nothing pressing it)
+const RIM = 0.42, RIM_UP = 0.06;
 
 export class PressMode {
   constructor(app) {
@@ -76,6 +84,8 @@ export class PressMode {
     this._popped = false; // (full of liquid, burst already this press)
     this._R = null; // (its turn, as made to as it lies - see _upRest)
     this._grindT = -9; // (when shards under it were last ground to grit - see _grind)
+    this.reach = 0; // (how far out from the plate's middle it's squeezed, squared off - see _targets)
+    this._gt = new Float64Array(17); // (the rim's volume up its side, out from the plate's edge - see _targets)
     this.onChange = null; // (its bar: see ui/dropbar.js)
   }
 
@@ -207,11 +217,11 @@ export class PressMode {
     const pressing = this.phase === 'down' || this.phase === 'hold';
     if (pressing && f < 1 && !P.lock) P.lock = this._lock();
     const L = P.lock;
-    if (L) {
+    if (L && pressing) {
       // (as high as the gap, as wide as keeps all of it)
       L.g = Math.max(FLAT_MIN, this.y / L.H);
       L.L = 1 / Math.sqrt(L.g);
-      L.b = pressing ? Math.min(1, (1 - f) / 0.15) : 0;
+      L.b = Math.min(1, (1 - f) / 0.15);
     }
   }
 
@@ -249,7 +259,76 @@ export class PressMode {
     if (!M || !(hi > lo)) return null;
     cx /= M; cy /= M; cz /= M;
     const mid = cx * n[0] + cy * n[1] + cz * n[2], C = [cx + (lo - mid) * n[0], cy + (lo - mid) * n[1], cz + (lo - mid) * n[2]];
-    return { k, b: 0, C, u, n, w, c: [pc.com[0], 0, pc.com[2]], U, W, L: 1, g: 1, H: hi - lo };
+    return { k, b: 0, C, u, n, w, c: [pc.com[0], 0, pc.com[2]], U, W, L: 1, g: 1, H: hi - lo, tgt: null, inner: null, nV: 0 };
+  }
+
+  // (where each point of it goes, squashed - see SoftBody._solveBounds. First evenly, as a slick press squashes it, as
+  // thick as the gap and as wide as keeps all of it; then what that puts past the plate's edge - out from under it,
+  // nothing on it - risen up beside it: along each line out from the plate's middle, as much jelly as was out there
+  // in the gap's thickness, in RIM's. Squared off, as the plate is: a line out to its side gets a strip of rim as long
+  // as it is far)
+  _targets() {
+    const sb = this.app.sb, L = sb.press?.lock;
+    if (!L || !(L.b > 0)) return;
+    const n = sb.nV, X = sb.X, vc = sb.vCube, alive = sb.alive, s = this.s;
+    if (!L.tgt || L.tgt.length < n * 3) {
+      L.tgt = new Float64Array(sb.vCap * 3);
+      L.inner = new Uint8Array(sb.vCap);
+    }
+    const T = L.tgt, I = L.inner, P = this.model.userData.half, px = this.cx, pz = this.cz, H = L.H, gy = L.g * H;
+    // (evenly: across, from its rest across; up, the share of the way up it it was - kept in y for now)
+    let rmax = 0;
+    for (let i = 0; i < n; i++) {
+      if (vc[i] !== L.k || !alive[i]) continue;
+      const o = i * 3, dx = X[o] - L.C[0], dy = X[o + 1] - L.C[1], dz = X[o + 2] - L.C[2];
+      const a = (dx * L.u[0] + dy * L.u[1] + dz * L.u[2]) * L.L, c = (dx * L.w[0] + dy * L.w[1] + dz * L.w[2]) * L.L;
+      const qx = L.c[0] + a * L.U[0] + c * L.W[0], qz = L.c[2] + a * L.U[2] + c * L.W[2];
+      T[o] = qx;
+      T[o + 1] = Math.min(1, Math.max(0, (dx * L.n[0] + dy * L.n[1] + dz * L.n[2]) / H));
+      T[o + 2] = qz;
+      rmax = Math.max(rmax, Math.abs(qx - px), Math.abs(qz - pz));
+    }
+    // (the rim: as high as RIM of it, once half a cube's out - less till then; up the plate's side over d)
+    const ht = Math.max(gy, gy + (RIM * H - gy) * Math.min(1, Math.max(0, (rmax - P) / (0.5 * s)))), d = RIM_UP * s, NT = this._gt.length - 1, G = this._gt;
+    const hAt = (u) => gy + (ht - gy) * u * u * (3 - 2 * u);
+    // (its volume out to each step up the side, a line's worth: the height x 2r dr)
+    G[0] = 0;
+    for (let j = 1; j <= NT; j++) {
+      const r0 = P + (d * (j - 1)) / NT, r1 = P + (d * j) / NT;
+      G[j] = G[j - 1] + (hAt((j - 1) / NT) * r0 + hAt(j / NT) * r1) * (d / NT);
+    }
+    const Gd = G[NT], Pd = P + d;
+    let reach = 0;
+    for (let i = 0; i < n; i++) {
+      if (vc[i] !== L.k || !alive[i]) continue;
+      const o = i * 3, ex = T[o] - px, ez = T[o + 2] - pz, r = Math.max(Math.abs(ex), Math.abs(ez)), t = T[o + 1];
+      if (r <= P) {
+        T[o + 1] = t * gy;
+        I[i] = 1;
+        reach = Math.max(reach, r);
+        continue;
+      }
+      I[i] = 0;
+      // (as much out to it, in the rim, as was out to it in the gap)
+      const V = gy * (r * r - P * P);
+      let rp, hp;
+      if (V >= Gd) {
+        rp = Math.sqrt(Pd * Pd + (V - Gd) / ht);
+        hp = ht;
+      } else {
+        let j = 0;
+        while (j < NT - 1 && G[j + 1] <= V) j++;
+        const f = G[j + 1] > G[j] ? (V - G[j]) / (G[j + 1] - G[j]) : 0, u = (j + f) / NT;
+        rp = P + d * u;
+        hp = hAt(u);
+      }
+      T[o] = px + (ex * rp) / r;
+      T[o + 1] = t * hp;
+      T[o + 2] = pz + (ez * rp) / r;
+      reach = Math.max(reach, rp);
+    }
+    L.nV = n;
+    this.reach = reach;
   }
 
   // (back as made: its shape, its grip)
@@ -301,7 +380,6 @@ export class PressMode {
   release() {
     if (this.phase !== 'down' && this.phase !== 'hold') return;
     this.phase = 'up';
-    if (this.app.sb.press?.lock) this.app.sb.press.lock.b = 0;
     this.t = 0;
     this.app.audio?.loop('press', false);
     this.app.audio?.whoosh(0.35);
@@ -315,7 +393,8 @@ export class PressMode {
     this.t += dt;
     // (its push this frame: the plate's hold on what's under it, over its substeps)
     if (P) {
-      this.force = P._n ? P._f / P._n : 0;
+      // (none lifting off it - the squash still held as it eases back pushed against the hold, not the plate)
+      this.force = P._n && (this.phase === 'down' || this.phase === 'hold') ? P._f / P._n : 0;
       P._f = P._n = 0;
       this.peak = Math.max(this.peak, this.force);
     }
@@ -327,7 +406,9 @@ export class PressMode {
       if (pc && pc.asleep && pc.bbox[4] > this.y - 0.15 * s && pc.bbox[3] > P.x0 && pc.bbox[0] < P.x1 && pc.bbox[5] > P.z0 && pc.bbox[2] < P.z1) sb.wake(i);
     }
     if (this.phase === 'down') {
-      if (this.force > STALL * this.weight) {
+      // (stalled - not on jelly that's given way, see _lock: a cube full of liquid, burst, its liquid squeezed in it,
+      // stalled the plate at 7%)
+      if (this.force > STALL * this.weight && !sb.press?.lock) {
         this.stalled = true;
         this.phase = 'hold';
         this.t = 0;
@@ -360,11 +441,16 @@ export class PressMode {
           if (pc && pc.cube === this.slot && pc.volume > 0.2 * s * s * s) this._burst(pc, i);
         });
       }
+    } else if (sb.press?.lock) {
+      // (the plate off it: eased back up under it as it rises - see RISE - then let go)
+      const L = sb.press.lock, up = this.phase === 'up' ? (this.y - 0.02 * s) / L.H : 1;
+      L.g = Math.max(L.g, Math.min(up, L.g + dt * RISE));
+      L.L = 1 / Math.sqrt(L.g);
+      if (L.g >= LET_GO) this._unflat();
+      else this._setFlat(Math.min(1, L.g / (1 - YIELD)));
     } else if (this.flat < 1) {
-      // (the plate off it: back up under it as it rises, no higher - sprung back at once, it was squeezed out sideways
-      // from under it and came back a cube beside the press - then the rest of the way)
-      const cap = this.phase === 'up' ? Math.max(this.flat, Math.min(1, (this.y - 0.03 * s) / this.h0)) : 1;
-      const f = Math.min(cap, this.flat + dt / BACK_T);
+      // (no squash held - not given way enough for one: back as made, over BACK_T)
+      const f = this.flat + dt / BACK_T;
       if (f >= 1) this._unflat();
       else this._setFlat(f);
     }
@@ -382,6 +468,7 @@ export class PressMode {
     }
     // (shards under it thicker than the gap: ground to grit)
     if (this.phase === 'down' && app.shatter && this.t - this._grindT > 0.2) this._grind();
+    this._targets();
     this._plate();
     // (the gap over the cube's height - for the gauge)
     this.squash = Math.min(1, this.y / Math.max(1e-6, s));
@@ -400,7 +487,7 @@ export class PressMode {
       if (ep > 0) {
         // (back far enough for it as wide as it'll go - a phone upright, narrow)
         const vf = THREE.MathUtils.degToRad(app._fovBase || app.camera.fov), hf = 2 * Math.atan(Math.tan(vf / 2) * (app.camera.aspect || 1));
-        const W = Math.max(2 * this.model.userData.half, s / Math.sqrt(Math.max(FLAT_MIN, (this.depth * s) / this.h0))), rp = (0.6 * W) / Math.tan(hf / 2);
+        const W = 2 * Math.max(this.model.userData.half, this.reach) + 0.4 * s, rp = (0.6 * W) / Math.tan(hf / 2);
         g.radius += (Math.max(this._fit.rc, rp) - g.radius) * ep;
         g.phi += (0.62 - g.phi) * ep;
       }

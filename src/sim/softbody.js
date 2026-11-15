@@ -2905,7 +2905,8 @@ export class SoftBody {
     const R = this.p.arenaRadius, R2 = R * R, box = this.p.box;
     const top = this.p.ceiling;
     const n = this.nV;
-    const aw = this._awake, vp = this.vPiece, I = this._imp, PR = this.press, LK = PR && PR.lock && PR.lock.b > 0 ? PR.lock : null, vc = this.vCube, X = this.X;
+    const aw = this._awake, vp = this.vPiece, I = this._imp, PR = this.press, vc = this.vCube;
+    const LK = PR && PR.lock && PR.lock.b > 0 && PR.lock.tgt && PR.lock.nV === this.nV ? PR.lock : null;
     if (PR) PR._n++;
     // (sticky: each vertex that's touched the floor held to it - see STICK_A - by its piece's tack; and that hold
     // added to its weight's for its grip on it, see _updateVelocities: stuck, it doesn't slide either)
@@ -2936,19 +2937,16 @@ export class SoftBody {
           if (SK[i] < 0.05) SK[i] = 0;
         }
       } else if (y > top) x[o + 1] = top;
-      // (squashed flat under a press's plate - see PressMode: held to it as a slick press squashes it, evenly - each
-      // point as far up it as it was up the cube as made, and out as far as keeps all of it: a pancake. Left to the
-      // tets, a 4 cm pancake's 3 mm layers inverted at every nudge from the floor or the plate, it lost its volume, and
-      // folded up into a ball. LK: { k, b, C (its rest bottom's middle), u n w (its rest axes, n up), c (that bottom
-      // now), U W (where u and w lie now, level), L (as wide), g (as high) })
+      // (squashed under a press's plate - see PressMode._targets: each point held where the squash puts it - under the
+      // plate, a layer as thick as the gap; out past its edge, risen up beside it. Left to the tets, a 4 cm pancake's
+      // 3 mm layers inverted at every nudge from the floor or the plate, it lost its volume, and folded up into a ball.
+      // LK: { k, b, tgt (where each point goes), inner (under the plate), nV })
       if (LK && vc[i] === LK.k) {
-        const dx = X[o] - LK.C[0], dy = X[o + 1] - LK.C[1], dz = X[o + 2] - LK.C[2];
-        const a = (dx * LK.u[0] + dy * LK.u[1] + dz * LK.u[2]) * LK.L, c = (dx * LK.w[0] + dy * LK.w[1] + dz * LK.w[2]) * LK.L;
-        const up = Math.max(0, (dx * LK.n[0] + dy * LK.n[1] + dz * LK.n[2]) * LK.g), ey = up - x[o + 1];
-        x[o] += LK.b * (LK.c[0] + a * LK.U[0] + c * LK.W[0] - x[o]);
+        const T = LK.tgt, ey = T[o + 1] - x[o + 1];
+        x[o] += LK.b * (T[o] - x[o]);
         x[o + 1] += LK.b * ey;
-        x[o + 2] += LK.b * (LK.c[2] + a * LK.U[2] + c * LK.W[2] - x[o + 2]);
-        if (ey < 0 && up > 0.5 * PR.y) PR._f += (-ey * LK.b * m[i]) / (h * h);
+        x[o + 2] += LK.b * (T[o + 2] - x[o + 2]);
+        if (ey < 0 && LK.inner[i] && T[o + 1] > 0.5 * PR.y) PR._f += (-ey * LK.b * m[i]) / (h * h);
       }
       // (a press's plate over it - see PressMode - a slab PR.th thick: what's under it, up against it, pushed down to
       // it and gripped as the floor grips - and how hard, for its gauge; what's come down on it from above, on its top;
