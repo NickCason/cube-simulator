@@ -1,17 +1,17 @@
 // Zits on the jelly (a cube's acne: see acne.js) - each a mound of its skin drawn up tight round an angry bump (its
 // red - or, blended, the cube's own colour where it comes up), a head at its top (whitehead, yellow, green, black),
-// its foot easing out into the jelly round it with no edge to it. Held on at three points in the jelly like the
-// googly eyes (see world/eyes.js): it rides the wobble, tips and squashes with the skin under it - and on a rounded
-// edge or corner it bends round it as the cube does (see MOUND_VERT). Popped:
+// its foot easing out into the jelly round it with no edge to it. Held on at five points in the jelly (see _hold): it
+// rides the wobble, tips and squashes with the skin under it - and on a rounded edge or corner it bends round it as
+// the cube does (see MOUND_VERT). Popped:
 // - squeezed: a finger held on it (a hand's grab there - SQUEEZE s, it swelling and whitening as it goes), or the
 //   jelly round it squashed (two fingers pinching it, the mallet, a cube landing on it): its pus comes out as a worm,
 //   squirming out of it a blob at a time, sagging, then dropping off
 // - shot (the guns: see shot) - its pus bursts out in a spatter
 // - cut through, or its jelly gone (melted, eaten, bored out): it oozes a little, and is gone
-// ...and it's left a dark crater. A cube full of liquid squeezed (or struck) at one squirts some of its liquid out
-// after the pus (see _squirt). The pus: thick, its own colour, creamy - blobs that fly slow (a gloopy drag); on a
-// cube they stick, creep down its sides and drip off its bottom (see _land, _stuck); on the floor they splat flat -
-// and lie there a while. A re-cube brings the zits all back, unpopped; the pus is swept up.
+// ...and it's left a dark crater. The pus: thick, its own colour, creamy - blobs that fly slow (a gloopy drag); on a
+// cube they stick, creep down its sides and drip off its bottom (see _land, _stuck); on the floor they splat flat; in
+// liquid out on the floor (a cube's, spilled - molten jelly) they float, carried along by it, and it's held back by
+// them (see _wet) - and lie there a while. A re-cube brings the zits all back, unpopped; the pus is swept up.
 
 import * as THREE from 'three';
 import { REST_STEP, MAX_CUBES, polarRot } from '../sim/softbody.js';
@@ -38,7 +38,12 @@ const SHEEN = 0.7; // (its gloss out over its foot, where its colour's faded: th
 // faces down this much
 const CREEP = 0.045, DRIP_Y = -0.45;
 const PUS_SINKS = [0.006, 0.02, 0.05]; // (how far under the skin pus on it is held: shares of the side)
-const SQUIRT_EVERY = 0.07; // (s: a cube full of liquid squeezed at a zit - a drop of its liquid out of it each)
+// Pus in liquid: afloat on its surface as the fluid draws it (its drops splatted SPLAT_R of their spacing wide, its
+// surface where they add up to SPLAT_ISO - see Fluid._remesh), going its way (/s: thick, it lags it a little), the
+// liquid by it held back (/s, for pus a drop's size: less, smaller)
+const SPLAT_R = 2.1, SPLAT_ISO = 1.0, CARRY = 5, HOLD_BACK = 3;
+const LG = 4096; // (the liquid's drops, in cells a drop wide, hashed into so many: see _liqGrid)
+const lgHash = (i, j, k) => (Math.imul(i, 73856093) ^ Math.imul(j, 19349663) ^ Math.imul(k, 83492791)) & (LG - 1);
 
 const _m = new THREE.Matrix4(), _q = new THREE.Quaternion(), _s = new THREE.Vector3(), _p = new THREE.Vector3();
 const _u = new THREE.Vector3(), _v = new THREE.Vector3(), _c = new THREE.Color(), _w = new THREE.Color(1, 1, 0.94);
@@ -236,6 +241,11 @@ export class Zits {
     this._e = [[0, 0, 0], [0, 0, 0], [0, 0, 0]];
     this._tch = { k: -1, s: 1, bk: 0, bow: 0, out: 0, l: [0, 0, 0] };
     this._sp = Object.assign([0, 0, 0], { n: [0, 0, 0] });
+    this._lg = { head: null, next: new Int32Array(0), seen: new Int32Array(0), inv: 0, R: 0 };
+    this._near = [];
+    this._hold2 = [];
+    this._q = 0;
+    this._fc = 0;
     app.anchorProviders.push(() => this.live.flatMap((L) => L.anchors));
     // (re-cubed: all back, unpopped, the pus swept up)
     app.onHealEnd.push(() => this.reset());
@@ -396,9 +406,12 @@ export class Zits {
     }
     if (t > 0) {
       // (pus in the air or on a cube: where the cubes are now, for it to land on and lie on)
-      if (this.blobs.some((b) => b.st !== 1)) this._fits();
-      this._worms(t, sb);
-      this._blobs(t);
+      if (this.blobs.some((b) => b.st === 0 || b.st === 2 || b.st === 3)) this._fits();
+      // (and the liquid out on the floor, for it to land in and float on)
+      const G = this.blobs.length ? this._liqGrid() : null;
+      this._fc++;
+      this._worms(t, sb, G);
+      this._blobs(t, G);
     }
     this._draw();
   }
@@ -418,25 +431,22 @@ export class Zits {
     return n;
   }
 
-  // ...a hit at p (a nail, a mallet's blow): the zits within r of it - struck (squirt: a blow, a cube full of liquid's
-  // squirted out of it too)
-  hitAt(p, r = 0.03, d = null, squirt = false) {
-    for (const L of this.live) if (L.ok && !L.popped && L.pos.distanceTo(p) < r + L.R) this._pop(L, 'shot', d, squirt);
+  // ...a hit at p (a nail, a mallet's blow): the zits within r of it - burst
+  hitAt(p, r = 0.03, d = null) {
+    for (const L of this.live) if (L.ok && !L.popped && L.pos.distanceTo(p) < r + L.R) this._pop(L, 'shot', d);
   }
 
   // Popped: its pus out - a worm squeezed out, a spatter shot out, an ooze cut - and its crater left
-  _pop(L, how, d = null, squirt = false) {
+  _pop(L, how, d = null) {
     L.popped = true;
     L.charge = 0;
     L.popT = performance.now();
     const app = this.app, n = L.n.clone(), p = L.pos.clone().addScaledVector(n, L.R * 0.45);
     app.audio?.zitPop?.(how, app.audio?._panOf?.(p) ?? 0, L.R / (app.sb.cSize[L.k] || 1));
     const col = L.pus, br = L.R * 0.3;
-    // (a cube full of liquid's: so many drops of it to come out after the pus - more, the bigger it was)
-    const wet = Math.max(1, Math.min(6, Math.round((L.R / (app.fluid?.D || 0.065)) * 4)));
     if (how === 'squeeze') {
       // (out as a worm, a blob at a time - more of it the bigger it was)
-      this.worms.push({ L, links: [], left: Math.round(5 + L.R * 220), every: 0.028, t: 0, hold: rnd(0.5, 0.9), on: true, r: br, col, squirt: wet, sq: 0 });
+      this.worms.push({ L, links: [], left: Math.round(5 + L.R * 220), every: 0.028, t: 0, hold: rnd(0.5, 0.9), on: true, r: br, col });
       // (a little spurt first)
       for (let k = 0; k < 3; k++) this._blob(p, n.clone().multiplyScalar(rnd(1.2, 2.2)).add(new THREE.Vector3(rnd(-0.4, 0.4), rnd(0, 0.5), rnd(-0.4, 0.4))), br * rnd(0.5, 0.8), col, L.k);
     } else if (how === 'shot') {
@@ -447,39 +457,16 @@ export class Zits {
         if (d) v.addScaledVector(d, rnd(0.5, 3));
         this._blob(p, v, br * rnd(0.35, 0.9), col, L.k);
       }
-      if (squirt) for (let k = 0; k < wet && this._squirt(L, 2, 3.4); k++);
     } else {
       for (let k = 0; k < 4; k++) this._blob(p, n.clone().multiplyScalar(rnd(0.3, 0.8)), br * rnd(0.5, 0.9), col, L.k);
     }
-  }
-
-  // A cube full of liquid squeezed at a zit, popped: a drop of its liquid - the one nearest the zit, in its hollow
-  // under it - out through it, squirting, the pus's colour in it a little. (None near enough - its liquid lower
-  // down, the zit over it in the air - none.) True: one came out.
-  _squirt(L, v0, v1) {
-    const app = this.app, fl = app.fluid, sb = app.sb, id = sb.cHid?.[L.k];
-    if (!fl || !fl.n || !id) return false;
-    const s = sb.cSize[L.k] || 1, reach = 0.3 * s + fl.D, x = fl.x, own = fl.own, px = L.pos.x, py = L.pos.y, pz = L.pos.z;
-    let best = -1, bd = reach * reach;
-    for (let i = 0; i < fl.n; i++) {
-      if (own[i] !== id) continue;
-      const dx = x[i * 3] - px, dy = x[i * 3 + 1] - py, dz = x[i * 3 + 2] - pz, d2 = dx * dx + dy * dy + dz * dz;
-      if (d2 < bd) (bd = d2), (best = i);
-    }
-    if (best < 0) return false;
-    const o = best * 3, mass = fl.mass[best], visc = fl.visc[best], thick = fl.thick[best];
-    _c.setRGB(fl.col[o], fl.col[o + 1], fl.col[o + 2]).lerp(L.pus, 0.3);
-    fl.removeWhere((i) => i === best);
-    const n = L.n, out = _p.copy(L.pos).addScaledVector(n, fl.D * 0.6 + 0.01), sp = rnd(v0, v1);
-    fl.add(out.x, out.y, out.z, fl.vol * mass, n.x * sp + rnd(-0.3, 0.3), n.y * sp + rnd(0, 0.6), n.z * sp + rnd(-0.3, 0.3), _c.r, _c.g, _c.b, 0.01, 0, visc, thick, mass);
-    return true;
   }
 
   // (a blob of pus, flying)
   _blob(p, v, r, col, k) {
     if (this.blobs.length >= BLOBS) {
       // (the oldest lying somewhere makes room)
-      let j = this.blobs.findIndex((b) => b.st === 1 || b.st === 3);
+      let j = this.blobs.findIndex((b) => b.st === 1 || b.st === 3 || b.st === 4);
       if (j < 0) j = 0;
       this.blobs.splice(j, 1);
     }
@@ -638,8 +625,8 @@ export class Zits {
 
   // The worms: squirming out of their zits a blob at a time (each new one at its root, the rest pushed out ahead of
   // it), sagging; then let go of, falling, and lying where they land - the floor, a cube - each link a blob of pus
-  // held to the next (a chain: see _blobs). A cube full of liquid: its liquid squirting out with it, a drop at a time
-  _worms(t, sb) {
+  // held to the next (a chain: see _blobs) - into liquid on the floor, afloat on it
+  _worms(t, sb, G) {
     const g = sb.p.gravity;
     for (let w = this.worms.length - 1; w >= 0; w--) {
       const W = this.worms[w], L = W.L;
@@ -659,13 +646,6 @@ export class Zits {
       } else if (W.on) {
         W.hold -= t;
         if (W.hold <= 0) W.on = false;
-      }
-      if (W.on && W.squirt > 0) {
-        W.sq += t;
-        while (W.sq >= SQUIRT_EVERY && W.squirt > 0) {
-          W.sq -= SQUIRT_EVERY;
-          W.squirt = this._squirt(L, 1.4, 2.4) ? W.squirt - 1 : 0;
-        }
       }
       // (the chain: each link falls, slowed, and is held its length from the next - the first held at the zit)
       for (const b of W.links) {
@@ -716,7 +696,8 @@ export class Zits {
           b.p.y = b.r * 0.45;
           b.st = 1;
           b.t = 0;
-        } else if (W.on) this._slide(b);
+        } else if (G && this._wet(b, t, G)) (b.st = 4), (b.t = 0), (b.flat = 0.25);
+        else if (W.on) this._slide(b);
         else if (this._land(b)) b.flat = 0.25;
       }
       // (all down - or a while gone: the rest let go as they are, to fall)
@@ -732,7 +713,7 @@ export class Zits {
 
   // the blobs flying: slowed by their own gloopiness, landing - on a cube, held on there; on the floor, a splat - and
   // lying a while, then gone
-  _blobs(t) {
+  _blobs(t, G) {
     const g = this.app.sb.p.gravity, drag = Math.exp(-PUS_DRAG * t);
     for (let i = this.blobs.length - 1; i >= 0; i--) {
       const b = this.blobs[i];
@@ -741,7 +722,14 @@ export class Zits {
         b.v.y += g * t;
         b.v.multiplyScalar(drag);
         b.p.addScaledVector(b.v, t);
-        if (b.p.y < b.r * 0.45) {
+        // (into liquid, coming down: afloat on it - slowed hard, it's thick going in)
+        if (G && b.v.y < 0.5 && this._wet(b, t, G)) {
+          b.st = 4;
+          b.t = 0;
+          b.flat = 0.3;
+          b.v.multiplyScalar(0.25);
+          if (Math.random() < 0.2) this.app.audio?.pusSplat?.(0.3, b.p);
+        } else if (b.p.y < b.r * 0.45) {
           b.p.y = b.r * 0.45;
           b.st = 1;
           b.t = 0;
@@ -754,8 +742,117 @@ export class Zits {
         if (!this._stuck(b, t)) (b.st = 0), (b.on = -1), b.v.set(0, 0, 0);
         else if (b.st === 3 && b.p.y < b.r * 0.45) (b.p.y = b.r * 0.45), (b.st = 1), (b.on = -1);
         if (b.t > FLOOR_LIFE) this.blobs.splice(i, 1);
-      } else if (b.st === 1 && b.t > FLOOR_LIFE) this.blobs.splice(i, 1);
+      } else if (b.st === 4) {
+        // (afloat - the liquid run off from under it, gone: down to the floor)
+        if (!G || !this._wet(b, t, G)) {
+          if (b.p.y > b.r * 0.45 + 0.004) (b.st = 0), (b.v.y = 0);
+          else (b.st = 1), (b.p.y = b.r * 0.45);
+        }
+        if (b.t > FLOOR_LIFE) this.blobs.splice(i, 1);
+      } else if (b.st === 1) {
+        // (lying on the floor - liquid come up round it: lifted, afloat. A look every few frames: there's a lot of it)
+        if (G && ((i + this._fc) & 3) === 0 && this._wet(b, t, G)) b.st = 4;
+        if (b.t > FLOOR_LIFE) this.blobs.splice(i, 1);
+      }
     }
+  }
+
+  // (the liquid's drops - a cube's spilled, molten jelly - out in the room, in columns a drop wide: for the pus to
+  // find what of it's near. Null: none)
+  _liqGrid() {
+    const fl = this.app.fluid;
+    if (!fl || !fl.n) return null;
+    const n = fl.n, G = this._lg, x = fl.x, dIn = fl.dIn;
+    if (!G.head) G.head = new Int32Array(LG);
+    if (G.next.length < n) (G.next = new Int32Array(Math.max(n, fl.max || 1024))), (G.seen = new Int32Array(G.next.length));
+    G.inv = 1 / Math.max(0.02, fl.D);
+    G.R = SPLAT_R * fl.D;
+    G.head.fill(-1);
+    let any = false;
+    for (let i = 0; i < n; i++) {
+      // (not what's in a cube's hollow - drawn inside it, its surface the cube's own)
+      if (dIn && dIn[i] > 0 && dIn[i] < 255) continue;
+      const h = lgHash(Math.floor(x[i * 3] * G.inv), 0, Math.floor(x[i * 3 + 2] * G.inv));
+      G.next[i] = G.head[h];
+      G.head[h] = i;
+      any = true;
+    }
+    return any ? G : null;
+  }
+
+  // Pus at b.p in liquid? Afloat on it, then - on its surface over where it is, as it's drawn (where its drops'
+  // splats add up to the level the fluid draws: see Fluid._remesh), going its way (lagging it a little) - and the
+  // liquid by it held back, going the pus's way: true. (By its drops' middles - its surface guessed at a drop's width
+  // over them - it sank out of sight in a deep puddle, its surface two drops' widths up, and hung over a thin one)
+  _wet(b, t, G) {
+    const fl = this.app.fluid, x = fl.x, v = fl.v, R = G.R, R2 = R * R, near = this._near, seen = G.seen, q = ++this._q;
+    const ci = Math.floor(b.p.x * G.inv), ck = Math.floor(b.p.z * G.inv), rc = Math.ceil(R * G.inv);
+    let yTop = -Infinity;
+    near.length = 0;
+    for (let di = -rc; di <= rc; di++)
+      for (let dk = -rc; dk <= rc; dk++)
+        for (let i = G.head[lgHash(ci + di, 0, ck + dk)]; i >= 0; i = G.next[i]) {
+          if (seen[i] === q) continue;
+          seen[i] = q;
+          const dx = x[i * 3] - b.p.x, dz = x[i * 3 + 2] - b.p.z;
+          if (dx * dx + dz * dz >= R2) continue;
+          near.push(i);
+          yTop = Math.max(yTop, x[i * 3 + 1]);
+        }
+    if (!near.length || b.p.y > yTop + R) return false;
+    // (the field over it, at height y)
+    const field = (y) => {
+      let f = 0;
+      for (const i of near) {
+        const dx = x[i * 3] - b.p.x, dy = x[i * 3 + 1] - y, dz = x[i * 3 + 2] - b.p.z, d2 = dx * dx + dy * dy + dz * dz;
+        if (d2 < R2) {
+          const u = 1 - d2 / R2;
+          f += u * u * u;
+        }
+      }
+      return f;
+    };
+    // (its surface: down from over the highest of them to where the field's that much - then halved in on it)
+    const step = R / 6;
+    let hi = yTop + R, lo = hi;
+    while (lo > 0 && field(lo) < SPLAT_ISO) (hi = lo), (lo -= step);
+    if (lo <= 0) return false;
+    for (let k = 0; k < 5; k++) {
+      const m = (lo + hi) / 2;
+      if (field(m) >= SPLAT_ISO) lo = m;
+      else hi = m;
+    }
+    const top = lo;
+    if (b.p.y > top + b.r * 0.6) return false;
+    // (afloat: on its surface, a little of it out of it - and its way along the floor, by the drops round it)
+    b.p.y += (Math.max(top + b.r * 0.1, b.r * 0.45) - b.p.y) * Math.min(1, t * 12);
+    let w = 0, vx = 0, vz = 0;
+    const r2 = (fl.D + b.r) * (fl.D + b.r), hold = this._hold2;
+    hold.length = 0;
+    for (const i of near) {
+      const dx = x[i * 3] - b.p.x, dy = x[i * 3 + 1] - b.p.y, dz = x[i * 3 + 2] - b.p.z, d2 = dx * dx + dy * dy + dz * dz;
+      if (d2 >= R2) continue;
+      const u = 1 - d2 / R2, wt = u * u * u;
+      w += wt;
+      vx += v[i * 3] * wt;
+      vz += v[i * 3 + 2] * wt;
+      if (d2 < r2) hold.push(i);
+    }
+    if (w > 0) {
+      const k = Math.min(1, t * CARRY);
+      b.v.x += (vx / w - b.v.x) * k;
+      b.v.z += (vz / w - b.v.z) * k;
+    }
+    b.v.y = 0;
+    b.p.x += b.v.x * t;
+    b.p.z += b.v.z * t;
+    // (the liquid by it held back, more the bigger it is against a drop)
+    const hb = Math.min(1, t * HOLD_BACK * Math.min(1, (2 * b.r) / fl.D));
+    for (const i of hold) {
+      v[i * 3] += (b.v.x - v[i * 3]) * hb;
+      v[i * 3 + 2] += (b.v.z - v[i * 3 + 2]) * hb;
+    }
+    return true;
   }
 
   _draw() {
@@ -803,7 +900,7 @@ export class Zits {
       const P = front ? this.front : this.back, i = front ? B.front : B.back;
       if (i >= BLOBS) continue;
       // (lying: flattened out on the floor or a cube's skin, more the harder it landed - and shrinking away at the end)
-      const lying = b.st === 1 || b.st === 3;
+      const lying = b.st === 1 || b.st === 3 || b.st === 4;
       const fade = lying ? Math.min(1, Math.max(0, (FLOOR_LIFE - b.t) / 1.5)) : 1;
       let fl = lying ? 0.3 + 0.25 * (1 - b.flat) : 1, wide = lying ? 1.25 + 0.45 * b.flat : b.sq, stretch = 1;
       _q.set(0, 0, 0, 1);

@@ -555,7 +555,7 @@ export class UI {
             return;
           }
           const again = c && c.n === A.n, L = ACNE_LOOKS[0];
-          app.setAcne({ n: A.n, size: c ? c.size : 1, seed: again || !c ? 0 : c.seed, red: c ? c.red : L.red, head: c ? c.head : L.head, pus: c ? c.pus : L.pus, blend: !!c?.blend });
+          app.setAcne({ n: A.n, size: c ? c.size : 1, seed: again || !c ? 0 : c.seed, red: c ? c.red : L.red, head: c ? c.head : L.head, pus: c ? c.pus : L.pus, blend: c ? c.blend : true });
           this.hint(again ? 'A fresh crop' : `${A.name} · squeeze one (hold a finger on it), shoot it or cut it to pop it`, 2600);
         });
         amt.appendChild(b);

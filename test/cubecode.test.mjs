@@ -146,10 +146,10 @@ test('a cube code keeps its acne: how many, how big, where (its seed), its colou
   const { zitSpots, copyAcne } = await import('../src/acne.js');
   const acne = { n: 24, size: 2, seed: 4321, red: '#B8121E', head: '#f6d34a', pus: '#ecca4c' };
   const c = decodeCube(encodeCube({ ...full, acne }));
-  assert.deepEqual(c.acne, { n: 24, size: 2, seed: 4321, red: '#b8121e', head: '#f6d34a', pus: '#ecca4c', blend: false });
+  // (blended - their bodies the cube's own colour - unless it's said they aren't)
+  assert.deepEqual(c.acne, { n: 24, size: 2, seed: 4321, red: '#b8121e', head: '#f6d34a', pus: '#ecca4c', blend: true });
   assert.equal(decodeCube(encodeCube(full)).acne, undefined);
-  // (blended - their bodies the cube's own colour: kept, its size as it was)
-  assert.deepEqual(decodeCube(encodeCube({ ...full, acne: { ...acne, size: 3, blend: true } })).acne, { n: 24, size: 3, seed: 4321, red: '#b8121e', head: '#f6d34a', pus: '#ecca4c', blend: true });
+  assert.deepEqual(decodeCube(encodeCube({ ...full, acne: { ...acne, size: 3, blend: false } })).acne, { n: 24, size: 3, seed: 4321, red: '#b8121e', head: '#f6d34a', pus: '#ecca4c', blend: false });
   // (a code from before there was blending: not blended)
   assert.equal(decodeCube('1~flime~z1802004db8121ef6d34aecca4c').acne.blend, false);
   // (a broken one's left out)

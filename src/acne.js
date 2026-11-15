@@ -1,6 +1,7 @@
 // Acne, as a cube's own (style.acne - in its code, field z): how many zits and how big, where they come up (a seed),
-// and their colours - the angry skin round each (red), its head (head) and what's in it (pus) - or their bodies the
-// cube's own colour where each comes up, a rainbow's band there (blend), only their heads and pus their own. Where each one is: laid
+// and their colours - the angry skin round each (red), its head (head) and what's in it (pus) - or, as they come
+// (blend), their bodies the cube's own colour where each comes up, a rainbow's band there, only their heads and pus
+// their own. Where each one is: laid
 // out from the seed over its top and sides (not its bottom - sat on, they'd pop), each its own size round the size
 // asked, none on another (see zitSpots). They're popped by squeezing, shooting, cutting... (see world/zits.js); a
 // re-cube brings them back.
@@ -47,7 +48,7 @@ export function copyAcne(a) {
     red: HEX.test(a.red) ? a.red.toLowerCase() : L.red,
     head: HEX.test(a.head) ? a.head.toLowerCase() : L.head,
     pus: HEX.test(a.pus) ? a.pus.toLowerCase() : L.pus,
-    blend: !!a.blend,
+    blend: a.blend === undefined ? true : !!a.blend, // (blended, unless it's said it isn't)
   };
 }
 
