@@ -640,7 +640,8 @@ export function makeBoard(M, B, slots, s) {
     l2.font = '800 54px system-ui, sans-serif';
     l2.textAlign = 'center';
     l2.textBaseline = 'middle';
-    l2.fillText(S.label, 128, 66, 236);
+    // (clear of the slot's walls each side, in front of it: seven slots across, RAINBOW lost its R behind one)
+    l2.fillText(S.label, 128, 66, 192);
     const lt = new THREE.CanvasTexture(lc);
     lt.colorSpace = THREE.SRGBColorSpace;
     const w = S.x1 - S.x0 - 0.12 * s, h = Math.min(0.9 * s, w * 0.5);

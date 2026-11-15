@@ -278,7 +278,15 @@ export class Exhibit {
     go.disabled = phase === 'fall';
     this.pk.sets.hidden = !!phase;
     this.pk.read.hidden = !phase;
-    if (phase) this.pk.read.textContent = K.won.length ? K.won.map((w) => w.prize.label).join(' · ') : 'Down it goes';
+    // (what's been won, the same ones counted: eight cubes' prizes in a row ran to three lines, the bar over the board)
+    if (phase) {
+      const c = new Map();
+      for (const w of K.won) {
+        const L = w.prize.label + (w.more ? '+' : '');
+        c.set(L, (c.get(L) || 0) + 1);
+      }
+      this.pk.read.textContent = c.size ? [...c].map(([L, n]) => (n > 1 ? `${L} ×${n}` : L)).join(' · ') : 'Down it goes';
+    }
   }
 
   enterCollider() {

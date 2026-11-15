@@ -11,6 +11,8 @@ import { EYE_FACES, copyEyes } from './eyes.js';
 import { copyAcne } from './acne.js';
 import { captureCube } from './cubecode.js';
 import { separateClusters } from './sim/cutting.js';
+import { TEXTURES } from './styles.js';
+import { resolveSettings } from './settings.js';
 
 const STORE = 'cube-sim-cublinko';
 export const PLINKO_ROWS = [6, 16];
@@ -20,16 +22,111 @@ const COLS = 7;
 const MISSING = 0.07; // (a peg's chance of not being there, each round)
 const JITTER = 0.16; // (how far off its place each peg is, a share of the spacing)
 
-// The prizes: what landing in its slot does to a cube
+const GOLD = '#e8b923';
+// (one of its looks turned up: k times what it is now - as its kind has it, if it's not been set - to max at most;
+// false if it was there already)
+function up(cb, key, k, max) {
+  const now = resolveSettings(cb.tune, TEXTURES[cb.style.texture] || {})[key] ?? 0, v = Math.min(max, Math.max(now * k, now + 0.25 * max));
+  if (v <= now + 1e-6) return false;
+  cb.tune[key] = v;
+  return true;
+}
+// (more googly eyes - two at a time, anywhere but its bottom; at most 12)
+function moreEyes(cb) {
+  const eyes = copyEyes(cb.style.eyes);
+  for (let j = 0; j < 2 && eyes.length < 12; j++) {
+    const f = Math.floor(Math.random() * 5), a = (Math.random() - 0.5) * 0.64, b = (Math.random() - 0.5) * 0.64;
+    const at = [[a, b, 0.5], [a, b, -0.5], [0.5, b, a], [-0.5, b, a], [a, 0.5, b]][f];
+    eyes.push({ x: at[0], y: at[1], z: at[2], r: 0.05 + Math.random() * 0.06, s: 0, p: 0 });
+  }
+  const more = eyes.length > cb.style.eyes.length;
+  cb.style.eyes = eyes;
+  return more;
+}
+
+// The prizes: what landing in its slot does to a cube - and, landed on with it already (has), more of it (more: says
+// what, or nothing if it's as much as it gets)
 export const PRIZES = [
-  { id: 'gold', label: 'GOLD', color: '#e8b923', ink: '#3a2600', text: 'Gold!', give: (M, cb) => Object.assign(cb.style, { texture: 'chrome', flavor: '#e8b923' }) },
-  { id: 'ice', label: 'FREEZE', color: '#7fd6ff', ink: '#0b3550', text: 'Frozen solid - an ice cube', give: (M, cb) => (cb.style.texture = 'ice') },
-  { id: 'eyes', label: 'EYES', color: '#ffffff', ink: '#111111', text: 'Googly eyes!', give: (M, cb) => (cb.style.eyes = copyEyes(EYE_FACES.pair)) },
+  {
+    id: 'gold', label: 'GOLD', color: GOLD, ink: '#3a2600', text: 'Gold!',
+    has: (cb) => cb.style.texture === 'chrome' && cb.style.flavor === GOLD,
+    give: (M, cb) => Object.assign(cb.style, { texture: 'chrome', flavor: GOLD }),
+    more: (M, cb) => ((cb.style.glitter = 'gold'), up(cb, 'glitterAmount', 1.8, 9000) | up(cb, 'glitterSparkle', 1.5, 3) ? '24-carat gold!' : ''),
+  },
+  {
+    id: 'ice', label: 'FREEZE', color: '#7fd6ff', ink: '#0b3550', text: 'Frozen solid - an ice cube',
+    has: (cb) => cb.style.texture === 'ice',
+    give: (M, cb) => (cb.style.texture = 'ice'),
+    more: (M, cb, k) => (M._chill(k), 'Deep freeze - frosted over'),
+  },
+  {
+    id: 'eyes', label: 'EYES', color: '#ffffff', ink: '#111111', text: 'Googly eyes!',
+    has: (cb) => cb.style.eyes?.length > 0,
+    give: (M, cb) => (cb.style.eyes = copyEyes(EYE_FACES.pair)),
+    more: (M, cb) => (moreEyes(cb) ? `More eyes - ${cb.style.eyes.length} now` : ''),
+  },
   { id: 'double', label: 'x2', color: '#64d65a', ink: '#0d3b0a', text: 'Two of it!', give: (M, cb) => M._double(cb) },
-  { id: 'glitter', label: 'GLITTER', color: '#ff7ce8', ink: '#4a0040', text: 'Glittered', give: (M, cb) => (cb.style.glitter = 'holo') },
-  { id: 'acne', label: 'ACNE', color: '#d8323c', ink: '#ffffff', text: 'A breakout!', give: (M, cb) => (cb.style.acne = copyAcne({ n: 24, size: 2, seed: 1 + Math.floor(Math.random() * 65534), red: '#d8323c', head: '#fff6dc', pus: '#f4e8b8' })) },
+  {
+    id: 'glitter', label: 'GLITTER', color: '#ff7ce8', ink: '#4a0040', text: 'Glittered',
+    has: (cb) => cb.style.glitter && cb.style.glitter !== 'off',
+    give: (M, cb) => (cb.style.glitter = 'holo'),
+    more: (M, cb) => (up(cb, 'glitterAmount', 1.8, 9000) | up(cb, 'glitterSize', 1.3, 2.8) | up(cb, 'glitterSparkle', 1.4, 3) ? 'Even more glitter!' : ''),
+  },
+  {
+    id: 'acne', label: 'ACNE', color: '#d8323c', ink: '#ffffff', text: 'A breakout!',
+    has: (cb) => !!cb.style.acne,
+    give: (M, cb) => (cb.style.acne = copyAcne({ n: 24, size: 2, seed: 1 + Math.floor(Math.random() * 65534), red: '#d8323c', head: '#fff6dc', pus: '#f4e8b8' })),
+    more: (M, cb) => {
+      const a = cb.style.acne;
+      if (a.n >= 40 && a.size >= 3) return '';
+      cb.style.acne = copyAcne({ ...a, n: Math.min(40, a.n + 12), size: Math.min(3, a.size + 1), seed: 1 + Math.floor(Math.random() * 65534), red: '#b8121e', head: '#f6d34a', pus: '#ecca4c' });
+      return 'A worse breakout!';
+    },
+  },
   { id: 'bust', label: 'BUST', color: '#202024', ink: '#ff5a3c', text: 'Bust!', give: (M, cb, k) => M._bust(k) },
-  { id: 'jackpot', label: 'JACKPOT', color: '#ffd23f', ink: '#5a1a8f', text: 'JACKPOT!', give: (M, cb) => Object.assign(cb.style, { flavor: 'rainbow', glitter: 'holo', eyes: copyEyes(EYE_FACES.pair) }) },
+  {
+    id: 'glow', label: 'GLOW', color: '#c6ff4a', ink: '#203400', text: 'Glowing',
+    has: (cb) => resolveSettings(cb.tune, TEXTURES[cb.style.texture] || {}).glow >= 0.9,
+    give: (M, cb) => (cb.tune.glow = 1),
+    more: (M, cb) => (up(cb, 'opal', 2, 1) ? 'Radiant - on fire with it' : ''),
+  },
+  {
+    id: 'ghost', label: 'GHOST', color: '#e8f0ff', ink: '#4a5a7a', text: 'See-through',
+    has: (cb) => resolveSettings(cb.tune, TEXTURES[cb.style.texture] || {}).opacity <= 0.1,
+    give: (M, cb) => ((cb.tune.opacity = 0.04), (cb.tune.depth = 0.3)),
+    more: (M, cb) => (cb.tune.ior > 1.02 || cb.tune.ior === undefined ? ((cb.tune.ior = 1), (cb.tune.depth = 0.16), 'All but invisible') : ''),
+  },
+  {
+    id: 'rainbow', label: 'RAINBOW', color: '#ff5fa2', ink: '#ffffff', text: 'A rainbow!',
+    has: (cb) => cb.style.flavor === 'rainbow',
+    give: (M, cb) => (cb.style.flavor = 'rainbow'),
+    more: (M, cb) => (up(cb, 'irid', 2, 1) ? 'A shimmering rainbow!' : ''),
+  },
+  {
+    id: 'glass', label: 'GLASS', color: '#bfe9ff', ink: '#14425a', text: 'Turned to glass - careful',
+    has: (cb) => cb.style.texture === 'glass',
+    give: (M, cb) => (cb.style.texture = 'glass'),
+    more: (M, cb) => (up(cb, 'ior', 1.2, 1.75) ? ((cb.style.glitter = 'cubic'), 'Diamond!') : ''),
+  },
+  {
+    id: 'bubbles', label: 'BUBBLES', color: '#7fe7ff', ink: '#0a3a4a', text: 'Bubbly',
+    has: (cb) => resolveSettings(cb.tune, TEXTURES[cb.style.texture] || {}).bubbles >= 100,
+    give: (M, cb) => ((cb.tune.bubbles = 120), (cb.tune.bubbleSize = 1.4)),
+    more: (M, cb) => (up(cb, 'bubbles', 1.6, 240) | up(cb, 'bubbleSize', 1.4, 3.5) ? 'Fizzing!' : ''),
+  },
+  {
+    id: 'slime', label: 'SLIME', color: '#5bd34a', ink: '#103a0a', text: 'Turned to slime',
+    has: (cb) => cb.style.texture === 'slime',
+    give: (M, cb) => (cb.style.texture = 'slime'),
+    more: (M, cb) => (up(cb, 'goo', 1.5, 1) | up(cb, 'glow', 1.3, 1) ? 'Extra slimy' : ''),
+  },
+  { id: 'mystery', label: '?', color: '#7a4dff', ink: '#ffffff', text: 'A mystery', give: () => {} },
+  {
+    id: 'jackpot', label: 'JACKPOT', color: '#ffd23f', ink: '#5a1a8f', text: 'JACKPOT!',
+    has: (cb) => cb.style.flavor === 'rainbow' && cb.style.glitter !== 'off' && cb.style.eyes?.length > 0,
+    give: (M, cb) => Object.assign(cb.style, { flavor: 'rainbow', glitter: 'holo', eyes: copyEyes(EYE_FACES.pair) }),
+    more: (M, cb) => (up(cb, 'glitterAmount', 2, 9000) | up(cb, 'irid', 2, 1) | up(cb, 'glow', 1.4, 1) | moreEyes(cb) ? 'MEGA JACKPOT!' : ''),
+  },
 ];
 
 export class CublinkoMode {
@@ -54,6 +151,8 @@ export class CublinkoMode {
     this.frameY = null;
     this.frameZ = 0;
     this._was = null; // (the room as it was: its reach, ceiling - and the view)
+    this._cover = [0, 0]; // (the screen's share under its bar, and under its buttons at the top - see _frame)
+    this._coverN = 0;
     this.onChange = null; // (its bar: see ui/dropbar.js)
   }
 
@@ -131,8 +230,8 @@ export class CublinkoMode {
         at[i * 2] = (Math.random() - 0.5) * JITTER * dx;
         at[i * 2 + 1] = (Math.random() - 0.5) * JITTER * dy;
       }
-    // (its slots: 5 to 7, the prizes dealt out - the jackpot not always there, never twice)
-    const K = 5 + Math.floor(Math.random() * 3), deck = PRIZES.filter((p) => p.id !== 'jackpot').sort(() => Math.random() - 0.5);
+    // (its slots: 5 to 7, the prizes dealt out - the jackpot not always there, never twice; no x2 with the room full)
+    const K = 5 + Math.floor(Math.random() * 3), deck = PRIZES.filter((p) => p.id !== 'jackpot' && !(p.id === 'double' && app.cubes.length >= 8)).sort(() => Math.random() - 0.5);
     const picks = deck.slice(0, K);
     if (Math.random() < 0.65) picks[Math.floor(Math.random() * K)] = PRIZES.find((p) => p.id === 'jackpot');
     this.slots = picks.map((p, i) => ({ x0: xl + (i * Wb) / K, x1: xl + ((i + 1) * Wb) / K, prize: p, label: p.label, color: p.color, ink: p.ink }));
@@ -182,11 +281,20 @@ export class CublinkoMode {
   _frame(lo, hi, dt) {
     const app = this.app, s = this.s, B = this.B, cam = app.camera, vf = THREE.MathUtils.degToRad(app._fovBase || cam.fov);
     const tv = Math.tan(vf / 2), th = tv * (cam.aspect || 1), top = B.pegs.top + 2.8 * s;
+    // (what the screen shows of it: between the buttons at its top and the bar at its bottom - framed on the whole
+    // screen, eight cubes landing landed behind the bar, their slots under it)
+    if (!(this._coverN-- > 0)) {
+      this._coverN = 30;
+      const H = innerHeight || 1, bar = document.querySelector('.plinko-bar'), r = bar && !bar.hidden ? bar.getBoundingClientRect() : null;
+      this._cover = [r ? Math.min(0.4, Math.max(0, (H - r.top) / H)) : 0, Math.min(0.2, 60 / H)];
+    }
+    const [cb, ct] = this._cover, use = 1 - cb - ct;
     // (back far enough for its width - or, more falling far apart, for them all; never further than for all of it)
-    const wide = (0.5 * (B.xr - B.xl + 1.2 * s)) / th, all = (0.5 * (top + 1.5 * s)) / tv;
-    const R = Math.max(4, Math.min(Math.max(wide, (0.5 * (hi - lo + 4 * s)) / tv), Math.max(wide, all)));
-    const half = R * tv, low = half - 0.5 * s, high = top - half + 0.3 * s;
-    const want = high < low ? 0.5 * top : Math.min(high, Math.max(low, 0.5 * (lo + hi)));
+    const wide = (0.5 * (B.xr - B.xl + 1.2 * s)) / th, all = (0.5 * (top + 1.5 * s)) / (tv * use);
+    const R = Math.max(4, Math.min(Math.max(wide, (0.5 * (hi - lo + 4 * s)) / (tv * use)), Math.max(wide, all)));
+    // (the middle of what's seen: off the screen's by the difference in what's covered)
+    const half = R * tv, off = half * (cb - ct), low = half * (1 - 2 * cb) - 0.4 * s, high = top + 0.3 * s - half * (1 - 2 * ct);
+    const want = high < low ? 0.5 * top - off : Math.min(high, Math.max(low, 0.5 * (lo + hi) - off));
     this.frameY += (want - this.frameY) * (1 - Math.exp(-dt * 3));
     this.frameX = 0.5 * (B.xl + B.xr);
     this.frameZ = 0;
@@ -272,15 +380,31 @@ export class CublinkoMode {
   _land(cb, pc, T) {
     const app = this.app, S = this.slots.find((q) => pc.com[0] >= q.x0 && pc.com[0] < q.x1) || this.slots[this.slots.length - 1];
     T.landed = true;
-    T.prize = S.prize;
-    this.won.push({ name: cb.name || 'It', prize: S.prize });
-    S.prize.give(this, cb, cb.slot);
+    // (a mystery: any of the others but itself and the jackpot, said once it's won)
+    let P = S.prize, pre = '';
+    if (P.id === 'mystery') {
+      const pool = PRIZES.filter((q) => q.id !== 'mystery' && q.id !== 'jackpot' && !(q.id === 'double' && app.cubes.length >= 8));
+      P = pool[Math.floor(Math.random() * pool.length)];
+      pre = 'Mystery: ';
+    }
+    T.prize = P;
+    // (landed on what it has already: more of it)
+    const again = !!(P.has?.(cb) && P.more), said = again ? P.more(this, cb, cb.slot) : '';
+    if (!again) P.give(this, cb, cb.slot);
+    const text = pre + (again ? said || `As ${P.label.toLowerCase()} as it gets` : P.text);
+    this.won.push({ name: cb.name || 'It', prize: P, more: again && !!said });
     app.applyStyle();
-    app.audio?.fanfare?.(S.prize.id === 'jackpot' ? 3 : 1);
-    const p = new THREE.Vector3(pc.com[0], pc.com[1] + 0.6 * this.s, pc.com[2]), cc = new THREE.Color(S.prize.color);
-    for (let k = 0; k < (S.prize.id === 'jackpot' ? 120 : 40); k++) app.particles?.glitter(p, 1, [cc.r, cc.g, cc.b], 2.2);
-    app.ui?.hint(`${cb.name || 'It'}: ${S.prize.text}`, 2600);
+    app.audio?.fanfare?.(P.id === 'jackpot' ? 3 : again ? 2 : 1);
+    const p = new THREE.Vector3(pc.com[0], pc.com[1] + 0.6 * this.s, pc.com[2]), cc = new THREE.Color(P.color);
+    for (let k = 0; k < (P.id === 'jackpot' ? 120 : again ? 80 : 40); k++) app.particles?.glitter(p, 1, [cc.r, cc.g, cc.b], 2.2);
+    app.ui?.hint(`${cb.name || 'It'}: ${text}`, 2600);
     this._changed();
+  }
+
+  // (deep freeze: its jelly gone icy cold - frost over its skin - see SoftBody.temp)
+  _chill(k) {
+    const sb = this.app.sb;
+    for (let i = 0; i < sb.nV; i++) if (sb.vCube[i] === k) sb.temp[i] = Math.min(sb.temp[i], -1);
   }
 
   // (x2: another of it, dropped in on top of it - into its slot, not a spot on the room's floor in another one)
