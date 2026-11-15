@@ -1433,7 +1433,8 @@ export class App {
     // keep the arena inside what the default view can see
     const halfV = Math.tan((this.camera.fov * Math.PI) / 360) * this.orbitGoal.radius;
     const halfW = halfV * (w / h);
-    this._viewArena = Math.max(1.15, Math.min(2.3, halfW * 0.92 - 0.35));
+    // (not while a mode holds the room: its view's further back - the lab's room came back out of one too big)
+    if (!this.roomHold) this._viewArena = Math.max(1.15, Math.min(2.3, halfW * 0.92 - 0.35));
     // (a mode's room kept: resized - a slow frame's lower resolution, a phone's bar sliding - it was the view's again
     // mid-mode, 1.2 m: Cublinko's cubes yanked in off an 11 m board through its pegs, landed ones thrown back up; a
     // pressed pancake crushed into a ball; the collider's debris)
@@ -2328,7 +2329,8 @@ export class App {
 
   // Another cube (c: a decoded CubeR cube, or none for a plain jelly in a
   // random flavour), dropped in from above on a clear spot. Its slot, or -1.
-  addCube(c = null, { drop = true } = {}) {
+  // (at: [x, y, z] - where its bottom's middle goes, not a clear spot on the floor)
+  addCube(c = null, { drop = true, at = null } = {}) {
     if (this.cubes.length >= MAX_CUBES) {
       this.ui?.hint('That is a full house: eight cubes', 1800);
       return -1;
@@ -2354,8 +2356,8 @@ export class App {
     // (its own size; fewer cells a cube as they multiply; a bigger room)
     this._resolution([size]);
     this._arena(this.cubes.length + 1);
-    const [x, z, top] = this._clearSpot({ size });
-    const y = drop ? Math.max(this.swapper._dropHeight(size), top + 0.3) : top;
+    const [x, z, top] = at ? [at[0], at[2], at[1]] : this._clearSpot({ size });
+    const y = at ? at[1] : drop ? Math.max(this.swapper._dropHeight(size), top + 0.3) : top;
     // (a plain one gets a name of its own, made out of what it is - and so
     // does the one already here, if it hasn't one)
     const taken = () => this.cubes.map((x) => x.name || '');

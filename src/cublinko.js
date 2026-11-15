@@ -10,6 +10,7 @@ import { makeBoard } from './world/models.js';
 import { EYE_FACES, copyEyes } from './eyes.js';
 import { copyAcne } from './acne.js';
 import { captureCube } from './cubecode.js';
+import { separateClusters } from './sim/cutting.js';
 
 const STORE = 'cube-sim-cublinko';
 export const PLINKO_ROWS = [4, 14];
@@ -71,6 +72,8 @@ export class CublinkoMode {
     sb.endGrab();
     this._was = { arena: sb.p.arenaRadius, ceiling: sb.p.ceiling, view: { theta: g.theta, phi: g.phi, radius: g.radius } };
     this._layout();
+    // (a bust's flash lights the jelly: that set of its shader compiled now, not as one lands - see JellyView.prewarm)
+    app.jelly?.prewarm?.(64, sb, app.camera);
     this._changed();
   }
 
@@ -113,7 +116,9 @@ export class CublinkoMode {
   _layout() {
     const app = this.app, sb = app.sb;
     const s = (this.s = Math.max(...app.cubes.map((cb) => app.sizeOf(cb)), 0.3));
-    const dx = 2.25 * s, dy = 1.85 * s, W = COLS * dx, xl = -W / 2, xr = W / 2, ht = 1.3 * s, r = 0.14 * s;
+    // (its sides a little out past the pegs' rows: the unshifted rows' end pegs were 0.99 of a cube off the wall - a
+    // cube came down between one and the wall, wedged there, and never fell)
+    const dx = 2.25 * s, dy = 1.85 * s, W = COLS * dx, pad = 0.35 * s, xl = -W / 2 - pad, xr = W / 2 + pad, Wb = xr - xl, ht = 1.3 * s, r = 0.14 * s;
     const rows = this.rows, cols = COLS, top = ht + 1.6 * s + (rows - 1) * dy;
     const at = new Float32Array(rows * cols * 2), on = new Uint8Array(rows * cols);
     for (let q = 0; q < rows; q++)
@@ -128,10 +133,10 @@ export class CublinkoMode {
     const K = 5 + Math.floor(Math.random() * 3), deck = PRIZES.filter((p) => p.id !== 'jackpot').sort(() => Math.random() - 0.5);
     const picks = deck.slice(0, K);
     if (Math.random() < 0.65) picks[Math.floor(Math.random() * K)] = PRIZES.find((p) => p.id === 'jackpot');
-    this.slots = picks.map((p, i) => ({ x0: xl + (i * W) / K, x1: xl + ((i + 1) * W) / K, prize: p, label: p.label, color: p.color, ink: p.ink }));
+    this.slots = picks.map((p, i) => ({ x0: xl + (i * Wb) / K, x1: xl + ((i + 1) * Wb) / K, prize: p, label: p.label, color: p.color, ink: p.ink }));
     const divs = [];
-    for (let i = 1; i < K; i++) divs.push([xl + (i * W) / K, 0.07 * s, ht]);
-    this.B = { zb: -0.68 * s, zf: 0.68 * s, xl, xr, mu: 0.12, pegs: { top, dy, dx, x0: xl + 0.5 * dx, rows, cols, r, at, on }, divs };
+    for (let i = 1; i < K; i++) divs.push([xl + (i * Wb) / K, 0.07 * s, ht]);
+    this.B = { zb: -0.68 * s, zf: 0.68 * s, xl, xr, mu: 0.12, pegs: { top, dy, dx, x0: -W / 2 + 0.5 * dx, rows, cols, r, at, on }, divs };
     sb.board = this.B;
     sb.p.arenaRadius = Math.max(this._was?.arena ?? 2.35, W);
     sb.p.ceiling = Math.max(this._was?.ceiling ?? 4.2, top + 4 * s);
@@ -220,14 +225,23 @@ export class CublinkoMode {
         T.still = v < 0.35 ? T.still + dt : 0;
         if (!T.landed) {
           left++;
+          // (on top of a slot's wall - it lands in neither: its nearest wall, and if it's on it)
+          const ht = B.divs[0]?.[2] ?? 1.3 * s;
+          let near = Infinity, wx = 0;
+          for (const [dx] of B.divs) if (Math.abs(pc.com[0] - dx) < near) (near = Math.abs(pc.com[0] - dx)), (wx = dx);
+          const onWall = pc.com[1] > 0.8 * ht && near < 0.45 * s;
           // (down in a slot, and still: its prize)
-          if (pc.com[1] < B.divs[0]?.[2] + 0.9 * s && T.still > 0.5) this._land(cb, pc, T);
-          // (caught on a peg, balanced: nudged off it)
-          else if (pc.com[1] > (B.divs[0]?.[2] ?? 1) + s && T.still > 1.2) {
-            const kick = (Math.random() < 0.5 ? -1 : 1) * 1.6;
-            for (let i = 0; i < sb.nV; i++) if (sb.vCube[i] === cb.slot) (sb.v[i * 3] += kick), (sb.v[i * 3 + 1] += 1);
+          if (pc.com[1] < ht + 0.9 * s && !onWall && T.still > 0.5) this._land(cb, pc, T);
+          // (caught on a peg, or on a wall's top, balanced: nudged off it - off a wall, into the slot it's more over)
+          else if (pc.com[1] > 0.8 * ht && T.still > (onWall ? 0.4 : 1.2)) {
+            // (harder each time it's still stuck; by a side, toward the middle)
+            const edge = Math.min(pc.com[0] - B.xl, B.xr - pc.com[0]) < 1.3 * s;
+            const way = onWall && Math.abs(pc.com[0] - wx) > 0.02 * s ? Math.sign(pc.com[0] - wx) : edge ? -Math.sign(pc.com[0]) : Math.random() < 0.5 ? -1 : 1;
+            const kick = way * Math.min(4, (onWall ? 1.2 : 1.6) + 0.8 * T.stuck), up = Math.min(4, (onWall ? 0.6 : 1) + 0.7 * T.stuck);
+            for (let i = 0; i < sb.nV; i++) if (sb.vCube[i] === cb.slot) (sb.v[i * 3] += kick), (sb.v[i * 3 + 1] += up);
             sb.wake(pi);
             T.still = 0;
+            T.stuck++;
           }
         }
         mx += pc.com[0];
@@ -264,34 +278,60 @@ export class CublinkoMode {
     this._changed();
   }
 
-  // (x2: another of it, dropped in beside it)
+  // (x2: another of it, dropped in on top of it - into its slot, not a spot on the room's floor in another one)
   _double(cb) {
-    const app = this.app;
+    const app = this.app, sb = app.sb, s = this.s;
     if (app.cubes.length >= 8) return;
     const sel = app.cubes.findIndex((c) => c === cb);
     if (sel >= 0) app.selectCube?.(cb.slot);
+    let pc = null;
+    for (const q of sb.pieces) if (q && q.cube === cb.slot && (!pc || q.verts.length > pc.verts.length)) pc = q;
     const c = captureCube(app, cb.name || '');
-    const slot = app.addCube(c, { drop: true });
-    if (slot >= 0) app.sb.cGrav[slot] = 1;
+    // (set down on it, not dropped: an ice cube's copy dropped on it from a cube's height broke it)
+    const slot = app.addCube(c, { drop: !pc, at: pc ? [pc.com[0], pc.bbox[4] + 0.15 * s, 0] : null });
+    if (slot >= 0) sb.cGrav[slot] = 1;
   }
 
-  // (bust: blown up where it is - a cherry bomb's blast on its top, and torn apart: a bomb's crater alone, in its
-  // middle, broke nothing)
+  // (bust: blown up where it is - a bomb's bang on its top, and torn apart round a few points in it, along its tets' own
+  // faces, all at once; its own bits flung out, the cubes round it left be. A bomb's crater and then four plane cuts
+  // through it took 0.6 s - more with others in the room - and the bomb's blast threw its neighbours back up the board)
   _bust(k) {
-    const app = this.app, sb = app.sb, big = () => {
-      let pi = -1;
-      sb.pieces.forEach((q, i) => {
-        if (q && q.cube === k && (pi < 0 || q.verts.length > sb.pieces[pi].verts.length)) pi = i;
-      });
-      return pi;
-    };
-    let pi = big();
-    if (pi < 0) return;
-    const pc = sb.pieces[pi];
-    app.tools.bomb?.explode?.({ pos: new THREE.Vector3(pc.com[0], pc.bbox[4], pc.com[2]), model: new THREE.Object3D() });
-    if (sb.topoStale) sb.rebuild();
-    pi = big();
-    if (pi >= 0) app.shatter?.burst(pi, 4, 6);
+    const app = this.app, sb = app.sb, s = this.s;
+    let pc = null;
+    for (const q of sb.pieces) if (q && q.cube === k && (!pc || q.verts.length > pc.verts.length)) pc = q;
+    if (!pc) return;
+    const b = pc.bbox.slice(), c = pc.com.slice(), top = new THREE.Vector3(c[0], b[4], c[2]);
+    app.particles?.flash(top, 1.6);
+    app.particles?.flash(top, 0.6, [20, 16, 10]);
+    app.particles?.sparks(top, 50, 5);
+    app.particles?.smoke(top, 18, 0.9, 0.22, 0.6, 0.5);
+    app.audio?.boom(1);
+    app.tally?.('booms');
+    app.shake(0.05);
+    app.flash = 0.6;
+    app.fireAt(top.clone().add(new THREE.Vector3(0, 0.15, 0)), 9);
+    // (its tets each to the nearest of six points through it)
+    const seeds = [], x = sb.x, T = sb.T, lab = new Int32Array(sb.nT).fill(-1);
+    for (let j = 0; j < 6; j++) seeds.push([0, 1, 2].map((a) => b[a] + (0.15 + 0.7 * Math.random()) * (b[a + 3] - b[a])));
+    for (const t of pc.tets) {
+      const o = t * 4, i0 = T[o] * 3, i1 = T[o + 1] * 3, i2 = T[o + 2] * 3, i3 = T[o + 3] * 3;
+      const px = (x[i0] + x[i1] + x[i2] + x[i3]) / 4, py = (x[i0 + 1] + x[i1 + 1] + x[i2 + 1] + x[i3 + 1]) / 4, pz = (x[i0 + 2] + x[i1 + 2] + x[i2 + 2] + x[i3 + 2]) / 4;
+      let best = 0, bd = Infinity;
+      for (let j = 0; j < seeds.length; j++) {
+        const q = seeds[j], d = (px - q[0]) ** 2 + (py - q[1]) ** 2 + (pz - q[2]) ** 2;
+        if (d < bd) (bd = d), (best = j);
+      }
+      lab[t] = best;
+    }
+    separateClusters(sb, lab, app.allAnchors());
+    app.onTopologyChanged();
+    app.markDamaged();
+    sb.radialImpulse(c[0], c[1], c[2], 2.5 * s, 6, 1.5, 0, k);
+    const col = app.flavorColorAtRest?.(0, 0, 0, k) ?? '#ff4fa3';
+    for (let j = 0; j < 22; j++) {
+      const th = Math.random() * Math.PI * 2, v = new THREE.Vector3(Math.cos(th) * (1 + Math.random() * 3), 1 + Math.random() * 3, (Math.random() - 0.5) * 0.6);
+      app.droplets?.spawn(new THREE.Vector3(c[0], c[1], c[2]), v, 0.01 + Math.random() * 0.02, col);
+    }
   }
 
   _changed() {

@@ -1078,7 +1078,8 @@ export class BombTool {
     }
     app.onTopologyChanged();
     const bp = app.st?.bombPower ?? 1;
-    sb.radialImpulse(p.x, p.y, p.z, 1.7 * Math.sqrt(bp), 10 * bp, 2.5 * bp);
+    // (b.only: one cube's own blast - see Cublinko's bust - the cubes round it left be)
+    sb.radialImpulse(p.x, p.y, p.z, 1.7 * Math.sqrt(bp), 10 * bp, 2.5 * bp, 0, b.only ?? -1);
     app.markDamaged();
   }
 }

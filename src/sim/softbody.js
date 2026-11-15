@@ -3012,8 +3012,7 @@ export class SoftBody {
   // B: { zb, zf, xl, xr, mu, pegs: { top, dy, dx, x0, rows, cols, r, at: Float32Array(rows*cols*2), on: Uint8Array },
   // divs: [[x, half-width, height], ...] }
   _solveBoard(h) {
-    const B = this.board, { x, px, w } = this, aw = this._awake, vp = this.vPiece, n = this.nV;
-    const G = B.pegs, R = G.r, mu = B.mu;
+    const B = this.board, { x, px, w } = this, aw = this._awake, vp = this.vPiece, n = this.nV, mu = B.mu, out = this._bpOut || (this._bpOut = new Float64Array(4));
     for (let i = 0; i < n; i++) {
       if (w[i] === 0 || !aw[vp[i]]) continue;
       const o = i * 3;
@@ -3022,34 +3021,11 @@ export class SoftBody {
       else if (Z > B.zf) (Z = B.zf), (hit = 1), (nz = -1);
       if (X < B.xl) (X = B.xl), (hit = 1), (nx = 1);
       else if (X > B.xr) (X = B.xr), (hit = 1), (nx = -1);
-      // (the pegs round it: three rows, three columns each)
-      const r0 = Math.round((G.top - Y) / G.dy);
-      for (let r = r0 - 1; r <= r0 + 1; r++) {
-        if (r < 0 || r >= G.rows) continue;
-        const sh = (r & 1) * 0.5, c0 = Math.round((X - G.x0) / G.dx - sh);
-        for (let c = c0 - 1; c <= c0 + 1; c++) {
-          if (c < 0 || c >= G.cols) continue;
-          const q = r * G.cols + c;
-          if (!G.on[q]) continue;
-          const cx = G.x0 + (c + sh) * G.dx + G.at[q * 2], cy = G.top - r * G.dy + G.at[q * 2 + 1];
-          const dx = X - cx, dy = Y - cy, d2 = dx * dx + dy * dy;
-          if (d2 >= R * R) continue;
-          const d = Math.sqrt(d2) || 1e-6, k = R / d;
-          X = cx + dx * k;
-          Y = cy + dy * k;
-          hit = 1;
-          nx = dx / d;
-          ny = dy / d;
-          nz = 0;
-        }
-      }
-      // (the walls between the slots: out the near side - or up, over its top)
-      for (const [dxc, hw, ht] of B.divs) {
-        const ex = X - dxc;
-        if (Y > ht || ex <= -hw || ex >= hw) continue;
-        const side = hw - Math.abs(ex), up = ht - Y;
-        if (up < side) (Y = ht), (nx = 0), (ny = 1);
-        else (X = dxc + (ex < 0 ? -hw : hw)), (nx = ex < 0 ? -1 : 1), (ny = 0);
+      if (this._boardPush(X, Y, px[o], px[o + 1], out)) {
+        X = out[0];
+        Y = out[1];
+        nx = out[2];
+        ny = out[3];
         nz = 0;
         hit = 1;
       }
@@ -3061,6 +3037,83 @@ export class SoftBody {
       Z -= (mz - mn * nz) * mu;
       x[o] = X; x[o + 1] = Y; x[o + 2] = Z;
     }
+    // (and the middle of each face of its skin: a peg or a slot's wall can't slip in between its points - stretched
+    // round a peg as it fell, a cube's face let it through, and it hung on it impaled; landed across a wall, the wall
+    // came up through it)
+    const F = this.sTri, sT = this.sTet, tp = this.tPiece;
+    if (!F) return;
+    for (let f = 0; f < this.nF; f++) {
+      if (!aw[tp[sT[f]]]) continue;
+      const a = F[f * 3] * 3, b = F[f * 3 + 1] * 3, c = F[f * 3 + 2] * 3;
+      const X = (x[a] + x[b] + x[c]) / 3, Y = (x[a + 1] + x[b + 1] + x[c + 1]) / 3;
+      if (!this._boardPush(X, Y, (px[a] + px[b] + px[c]) / 3, (px[a + 1] + px[b + 1] + px[c + 1]) / 3, out)) continue;
+      const dx = out[0] - X, dy = out[1] - Y;
+      x[a] += dx; x[a + 1] += dy;
+      x[b] += dx; x[b + 1] += dy;
+      x[c] += dx; x[c + 1] += dy;
+    }
+  }
+
+  // (a point at X, Y - Q (qx, qy) where it was at the substep's start - in a peg or a slot's wall: out of it to out[0],
+  // out[1], its way out out[2], out[3]; false if it's in neither. Out the way it came in: through a thin wall in one
+  // substep, or past a peg's middle, a point pushed out the nearest way went on through it. A wall's top is round:
+  // a cube landing across it slides off one side or the other - it stood balanced on it, or sank down round it)
+  _boardPush(X, Y, qx, qy, out) {
+    const B = this.board, G = B.pegs, R = G.r;
+    let hit = false, nx = 0, ny = 0;
+    // (the pegs round it: three rows, three columns each)
+    const r0 = Math.round((G.top - Y) / G.dy);
+    for (let r = r0 - 1; r <= r0 + 1; r++) {
+      if (r < 0 || r >= G.rows) continue;
+      const sh = (r & 1) * 0.5, c0 = Math.round((X - G.x0) / G.dx - sh);
+      for (let c = c0 - 1; c <= c0 + 1; c++) {
+        if (c < 0 || c >= G.cols) continue;
+        const q = r * G.cols + c;
+        if (!G.on[q]) continue;
+        const cx = G.x0 + (c + sh) * G.dx + G.at[q * 2], cy = G.top - r * G.dy + G.at[q * 2 + 1];
+        let dx = X - cx, dy = Y - cy;
+        if (dx * dx + dy * dy >= R * R) continue;
+        // (out toward where it came from, if that was outside - else straight out)
+        const ex = qx - cx, ey = qy - cy;
+        if (ex * ex + ey * ey > 0.25 * R * R) (dx = ex), (dy = ey);
+        const d = Math.sqrt(dx * dx + dy * dy) || 1e-6;
+        nx = dx / d;
+        ny = dy / d;
+        X = cx + nx * R;
+        Y = cy + ny * R;
+        hit = true;
+      }
+    }
+    // (the walls between the slots: up to ht, its top rounded - a half round hw across)
+    for (const [dxc, hw, ht] of B.divs) {
+      const ex = X - dxc;
+      if (ex <= -hw || ex >= hw || Y >= ht + hw) continue;
+      const cy = Y - ht;
+      if (cy > 0 && ex * ex + cy * cy >= hw * hw) continue;
+      const fx = qx - dxc, fy = qy - ht;
+      if (fy > 0 || (cy > 0 && Math.abs(fx) < hw)) {
+        // (from above: onto its round top, out toward where it was)
+        let dx = fx, dy = Math.max(fy, 0.2 * hw);
+        if (fx * fx + fy * fy < 0.25 * hw * hw) (dx = ex), (dy = Math.max(cy, 0.2 * hw));
+        const d = Math.sqrt(dx * dx + dy * dy) || 1e-6;
+        nx = dx / d;
+        ny = dy / d;
+        X = dxc + nx * hw;
+        Y = ht + ny * hw;
+      } else {
+        // (from the side: back out that side)
+        nx = fx < 0 ? -1 : 1;
+        ny = 0;
+        X = dxc + nx * hw;
+      }
+      hit = true;
+    }
+    if (!hit) return false;
+    out[0] = X;
+    out[1] = Y;
+    out[2] = nx;
+    out[3] = ny;
+    return true;
   }
 
   _updateVelocities(h) {
@@ -5340,8 +5393,9 @@ export class SoftBody {
   // A blast out from p (strongest at the centre, gone at radius) plus a
   // lift. rigid (0..1): how much each piece flies off as a whole instead of
   // being stretched by the blast's spread over it.
-  radialImpulse(px, py, pz, radius, strength, up = 0, rigid = 0) {
-    const { x, v, w } = this;
+  // (only: a cube's slot - that cube's jelly alone flung, a blast that's its own; -1 all of it round there)
+  radialImpulse(px, py, pz, radius, strength, up = 0, rigid = 0, only = -1) {
+    const { x, v, w } = this, vc = this.vCube;
     this._hashDirty = true;
     // the chunks of a blast skip self-contact while they fly: tumbling and
     // torn about, every self probe would sweep through a lot of its own body
@@ -5349,7 +5403,7 @@ export class SoftBody {
     this.selfQuietUntil = Math.max(this.selfQuietUntil, this.time + 0.5);
     const dv = rigid > 0 ? new Float64Array(this.nV * 3) : null;
     for (let i = 0; i < this.nV; i++) {
-      if (w[i] === 0) continue;
+      if (w[i] === 0 || (only >= 0 && vc[i] !== only)) continue;
       const o = i * 3;
       const ex = x[o] - px, ey = x[o + 1] - py, ez = x[o + 2] - pz;
       const d = Math.hypot(ex, ey, ez);

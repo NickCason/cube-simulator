@@ -9,7 +9,6 @@
 
 import * as THREE from 'three';
 import { cutBody, sphereField, planeField, removeSmallPieces } from '../sim/cutting.js';
-import { ragged } from '../tools/basic.js';
 import { TEXTURES, resolveFlavor, flavorMainHex } from '../styles.js';
 import { resolveSettings } from '../settings.js';
 
@@ -280,45 +279,6 @@ export class Shatter {
     } else sb.radialImpulse(p.x, p.y, p.z, 2.4 * Math.max(0.6, S.size), Math.min(11, 2.2 * S.e), 1.1 * Math.min(2.2, S.e), 1);
     const next = this.queue.shift();
     if (next) this._start(next);
-  }
-
-  // A soft piece burst - not brittle, torn: n ragged planes through its middle, every way, and its pieces thrown out
-  // (fling: m/s at its middle). Its cube's pieces cut, nothing else's. False: no such piece
-  burst(piece, n = 3, fling = 5) {
-    const app = this.app, sb = app.sb;
-    // (the body as it is now first: a bomb's crater just carved, its pieces were the old ones - nothing cut)
-    if (sb.topoStale) sb.rebuild();
-    const pc = sb.pieces[piece];
-    if (!pc || !pc.verts.length) return false;
-    // (where it is, by its own points: a piece just made - a crater carved - has no box or middle yet till the next
-    // step, all zero, and every plane missed it)
-    const b = [Infinity, Infinity, Infinity, -Infinity, -Infinity, -Infinity], c = [0, 0, 0], x = sb.x, k = pc.cube;
-    for (const i of pc.verts)
-      for (let q = 0; q < 3; q++) {
-        const v = x[i * 3 + q];
-        c[q] += v;
-        if (v < b[q]) b[q] = v;
-        if (v > b[q + 3]) b[q + 3] = v;
-      }
-    for (let q = 0; q < 3; q++) c[q] /= pc.verts.length;
-    const m = 0.03, s = Math.max(b[3] - b[0], b[4] - b[1], b[5] - b[2]);
-    const inIt = (x, y, z) => x > b[0] - m && x < b[3] + m && y > b[1] - m && y < b[4] + m && z > b[2] - m && z < b[5] + m;
-    const anchors = app.allAnchors();
-    for (let j = 0; j < n; j++) {
-      const N = new THREE.Vector3(R(-1, 1), R(-1, 1), R(-1, 1)).normalize();
-      const f = ragged(planeField(N.x, N.y, N.z, N.x * c[0] + N.y * c[1] + N.z * c[2] + R(-0.06, 0.06) * s, inIt), 0.04 * s);
-      f.inRegion = inIt;
-      const ps = [];
-      sb.pieces.forEach((q, i) => {
-        if (q && q.cube === k) ps.push(i);
-      });
-      cutBody(sb, f, { separate: 0.01, anchors, pieces: ps, light: true });
-    }
-    sb.rebuild();
-    app.onTopologyChanged();
-    app.markDamaged();
-    sb.radialImpulse(c[0], c[1], c[2], 2.5 * s, fling, 1.5);
-    return true;
   }
 
   update() {
