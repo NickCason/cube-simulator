@@ -205,6 +205,9 @@ export class SoftBody {
     this._allocT(16384);
     this.grabs = []; // hands holding the jelly (two fingers: two) - see startGrab
     this.embeds = [];
+    // (each point's look, drawn - a cube's slot - where it isn't its own cube's: a dividing cube's two halves, each
+    // turning into its own child - see Cubiplication._twoLooks. null: each point its cube's)
+    this.vLook = null;
     this.pushers = []; // moving flat faces pressing into the jelly (mallet head)
     this.attract = null;
     this.gravityScale = 1;

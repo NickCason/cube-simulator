@@ -11,7 +11,8 @@
 
 import * as THREE from 'three';
 import { REST_STEP, MAX_CUBES } from './sim/softbody.js';
-import { resolveFlavor, flavorMainHex, copyGlitterMix } from './styles.js';
+import { resolveFlavor, flavorMainHex, copyGlitterMix, TEXTURES, EDGES, DEFAULT_STYLE } from './styles.js';
+import { resolveSettings } from './settings.js';
 import { nameCube } from './namegen.js';
 import { mutate, topTier, TIER } from './genetics.js';
 import { linOf, newId, recordBirth } from './family.js';
@@ -64,7 +65,9 @@ export class Cubiplication {
         G[j * 3 + 1] = sb.X[i * 3 + 1];
         G[j * 3 + 2] = sb.X[i * 3 + 2];
       });
-      this.m = { slot, R, idx, G, V: 1, g: 1, gW: 1, size0: sb.cSize[slot], bevel0: sb.cBevel[slot], h0: sb.cH[slot], topo: sb.topoVersion, feeding: false, dividing: false, u: 0, uW: -1, axis: 0, sing: 0 };
+      this.m = { slot, R, idx, G, V: 1, g: 1, gW: 1, size0: sb.cSize[slot], bevel0: sb.cBevel[slot], h0: sb.cH[slot], topo: sb.topoVersion, feeding: false, dividing: false, u: 0, uW: -1, axis: 0, sing: 0, kids: null, pl: null, parent: null, mother: null, kB: -1, lookP: null, looks: null, eyeLinks: null };
+      // (what it'll divide into, worked out as it's first fed: see _decide)
+      this._decide(this.m);
     }
     this.m.feeding = true;
     return true;
@@ -101,13 +104,15 @@ export class Cubiplication {
     const m = this.m, app = this.app, sb = app.sb;
     if (this.fx.length) this._sparkle(dt);
     if (!m) return;
-    // (cut, rebuilt or swapped meanwhile: what it was given, kept, as it is)
+    // (cut, rebuilt or swapped meanwhile: what it was given, kept, as it is - drawn as one again)
     if (sb.topoVersion !== m.topo || app.healer.active || app.swapper.active) {
       this.m = null;
+      if (sb.vLook) (sb.vLook = null), (app.jelly.topoVersion = -1), app.applyStyle();
       return;
     }
     m.g += (Math.cbrt(m.V) - m.g) * Math.min(1, dt * 5);
-    if (!m.dividing && m.V >= SPLIT_AT - 1e-9 && m.size0 * Math.cbrt(SPLIT_AT / 2) >= MIN_CHILD && app.cubes.length < MAX_CUBES) this._beginDivide();
+    // (dividing once it's grown to all it's been fed - its size then is what its eyes are put on: see _beginDivide)
+    if (!m.dividing && m.V >= SPLIT_AT - 1e-9 && Math.abs(m.g - Math.cbrt(m.V)) < 0.004 && m.size0 * Math.cbrt(SPLIT_AT / 2) >= MIN_CHILD && app.cubes.length < MAX_CUBES) this._beginDivide();
     if (m.dividing) {
       m.u = Math.min(1, m.u + dt / DIVIDE_T);
       // (it strains, singing higher as the neck draws out)
@@ -118,11 +123,12 @@ export class Cubiplication {
       }
       for (const i of m.idx) sb.glow[i] = Math.max(sb.glow[i], 0.25 + 0.5 * m.u * m.u);
     }
-    // the rest shape (only when it changes)
+    // the rest shape (only when it changes) - and, in two, each half's look on its way to its child's
     if (Math.abs(m.g - m.gW) > 2e-5 || m.u !== m.uW) {
       m.gW = m.g;
       m.uW = m.u;
       this._shape();
+      if (m.kB >= 0) this._looks(smooth(m.u));
     }
     if (m.dividing && m.u >= 1) this._split();
     else if (!m.dividing && !m.feeding && Math.abs(m.g - Math.cbrt(m.V)) < 1e-3) this._commit();
@@ -133,6 +139,11 @@ export class Cubiplication {
   _beginDivide() {
     const m = this.m, app = this.app, sb = app.sb;
     m.dividing = true;
+    // (its size as it's grown: what its eyes are held on by, and its drawn skin's fit - see _twoLooks, _eyesOn. As
+    // made, its eyes went on 7 cm under its grown skin, drawn faint through it)
+    sb.cSize[m.slot] = m.size0 * m.g;
+    sb.cBevel[m.slot] = m.bevel0 * m.g;
+    sb.cH[m.slot] = m.h0 * m.g;
     m.u = 0;
     m.sing = 0;
     // (each rest axis's direction now: from where its two ends are)
@@ -156,8 +167,120 @@ export class Cubiplication {
       }
     }
     m.axis = best;
+    this._twoLooks(m);
+    this._eyesOn(m);
     app.audio?.squish(0.9, 0.8);
     app.ui?.hint('Cubiplying…', 1600);
+  }
+
+  // Its two children, worked out as it's first fed - not as the neck snaps - so each half can turn into its own as it
+  // divides: the parent's look and feel each drifted and mutated - wilder the further down its family it is - and
+  // named anew (the second as the first's twin, for what mutated in them)
+  _decide(m) {
+    const app = this.app, cb = app.cubes.find((c) => c.slot === m.slot);
+    if (!cb) return;
+    // (a cube with no name yet gets one now: it's going in the family tree)
+    if (!cb.name) cb.name = nameCube({ ...cb.style, tune: cb.tune }, { taken: app.cubes.map((x) => x.name || ''), ...app.nameCtx(), gen: cb.lin?.gen | 0 });
+    const pl = { ...linOf(cb) }, rnd = Math.random;
+    const kid = () => {
+      const style = JSON.parse(JSON.stringify(cb.style)), tune = { ...cb.tune };
+      const changes = mutate(style, tune, { rnd, gen: pl.gen, boost: this.boost ?? app.st?.mutation ?? 1 });
+      return { style, tune, changes, name: '' };
+    };
+    const A = kid(), B = kid(), taken = app.cubes.map((x) => x.name || ''), ctx = { ...app.nameCtx(), gen: pl.gen + 1, parentName: cb.name };
+    A.name = nameCube({ ...A.style, tune: A.tune }, { taken, ...ctx, changes: A.changes, pairing: true });
+    B.name = nameCube({ ...B.style, tune: B.tune }, { taken: [...taken, A.name], ...ctx, changes: B.changes, twin: A.name });
+    m.kids = [A, B];
+    m.pl = pl;
+    m.parent = this._as(cb);
+    m.mother = { style: JSON.parse(JSON.stringify(cb.style)), tune: { ...cb.tune } };
+  }
+
+  // (a cube as its code has it)
+  _as(x) {
+    return { name: x.name, flavor: x.style.flavor, layers: x.style.layers, texture: x.style.texture, edges: x.style.edges, glitter: x.style.glitter || 'off', ...(x.style.glitter === 'custom' ? { glitterMix: copyGlitterMix(x.style.glitterMix) } : {}), rubik: x.style.rubik, ...(x.style.rubikState ? { rubikState: x.style.rubikState } : {}), trim: x.style.trim || 'none', tune: { ...x.tune }, tear: x.tune.tear !== false, theme: this.app.theme, eyes: x.style.eyes || [], surface: x.style.surface || 'none' };
+  }
+
+  // Drawn as two from here: its half past its middle along the axis with a look of its own - another cube's slot,
+  // free, next to its own: its points' look is blended across the neck's tets, and a slot further off had the looks
+  // of the ones between in a band there - and each half's turned into its child's as it divides (see _looks), till
+  // the neck snaps. (One look till then, the two children came out of nowhere at the snap, all their differences at
+  // once.) Not a cube full of liquid: its hollow's drawn by its own cube's
+  _twoLooks(m) {
+    const app = this.app, sb = app.sb, k = m.slot, a = m.axis;
+    if (!m.kids || sb.cHollow[k]) return;
+    const used = new Set(app.cubes.map((c) => c.slot)), kB = [k + 1, k - 1].find((q) => q >= 0 && q < MAX_CUBES && !used.has(q));
+    if (kB === undefined) return;
+    const L = sb.vCube.slice();
+    m.idx.forEach((i, j) => {
+      if (m.G[j * 3 + a] > 0) L[i] = kB;
+    });
+    // (its shape as its own cube's, for the drawn skin's fit to it - see JellyView.syncTopology)
+    for (const A of [sb.cSize, sb.cBevel, sb.cH, sb.cBow, sb.cLobeA, sb.cLobeP, sb.cTrimK]) A[kB] = A[k];
+    sb.cHollow[kB] = 0;
+    sb.vLook = L;
+    m.kB = kB;
+    app.jelly.topoVersion = -1;
+  }
+
+  // Its eyes as its children's will be, from here: each half wearing its child's, where they'll be on it once it's
+  // divided - an eye of the parent's already about there kept on, sliding over to it; another, popping on. (The
+  // parent's own eyes rode the stretch into the neck and were drawn half sunk in it; and the children came out with
+  // all their eyes at once, at the snap.) Each child's face toward its twin is the parent's middle - inside it - so
+  // its eyes pop on at the snap
+  _eyesOn(m) {
+    const app = this.app, cb = app.cubes.find((c) => c.slot === m.slot);
+    if (!cb || !m.kids) return;
+    const a = m.axis, mine = (cb.style.eyes || []).slice(), used = new Set(), out = [], links = [[], []], now = performance.now();
+    m.kids.forEach((K, h) => {
+      const sg = h ? 1 : -1;
+      (K.style.eyes || []).forEach((e, n) => {
+        const p = [e.x, e.y, e.z];
+        if (p[a] * sg < -0.45) return;
+        // (its half of the parent: along the axis, half as far, out its side; across it, as it is)
+        const q = p.slice();
+        q[a] = (p[a] + sg * 0.5) / 2;
+        let best = null, bd = 0.12 * 0.12;
+        for (const o of mine) {
+          if (used.has(o)) continue;
+          const d = (o.x - q[0]) ** 2 + (o.y - q[1]) ** 2 + (o.z - q[2]) ** 2;
+          if (d < bd) (bd = d), (best = o);
+        }
+        const o = best || {};
+        if (best) used.add(best);
+        else app.eyes?.born?.set(o, now);
+        Object.assign(o, { x: q[0], y: q[1], z: q[2], r: e.r, s: e.s, p: e.p });
+        out.push(o);
+        links[h][n] = o;
+      });
+    });
+    m.eyeLinks = links;
+    cb.style.eyes = out;
+  }
+
+  // (a cube's look as App.applyStyle gives it: its flavour, and all it's set to)
+  _lookOf(style, tune) {
+    const ct = TEXTURES[style.texture] || TEXTURES[DEFAULT_STYLE.texture], cs = resolveSettings(tune, ct);
+    return { f: resolveFlavor(style), o: { ...ct, ...cs, surface: style.surface, trim: style.trim, liqColor: style.liqColor || '', bevelRatio: (EDGES[style.edges] || EDGES[DEFAULT_STYLE.edges]).bevel } };
+  }
+
+  // Each half's look on its way from its parent's to its child's, w of the way: its colour, clarity, glow, gloss,
+  // shine - all that blends, blended; what can't (its surface, its trim, a layered flavour) turned half way
+  _looks(w) {
+    const m = this.m, app = this.app, sb = app.sb;
+    if (!(m?.kB >= 0) || !m.kids) return;
+    const P = m.lookP || (m.lookP = this._lookOf(m.mother.style, m.mother.tune));
+    m.looks ||= m.kids.map((K) => this._lookOf(K.style, K.tune));
+    const mix = (a, b) => {
+      const o = { ...(w < 0.5 ? a : b) };
+      for (const key in a) if (typeof a[key] === 'number' && typeof b[key] === 'number') o[key] = a[key] + (b[key] - a[key]) * w;
+      return o;
+    };
+    const flav = (fa, fb) => (fa.hex && fb.hex && !fa.layers && !fb.layers && fa.id !== 'rubik' && fb.id !== 'rubik' ? { ...(w < 0.5 ? fa : fb), hex: '#' + new THREE.Color(fa.hex).lerp(new THREE.Color(fb.hex), w).getHexString() } : w < 0.5 ? fa : fb);
+    m.looks.forEach((L, j) => {
+      const k = j ? m.kB : m.slot;
+      app.jelly.setCubeLook(k, flav(P.f, L.f), mix(P.o, L.o), sb.cSize[k]);
+    });
   }
 
   // The rest shape now: grown by g; dividing (u), drawn out into two cubes,
@@ -168,7 +291,9 @@ export class Cubiplication {
     const c = m.size0 * g * Math.cbrt(0.5), hc = c / 2; // (a child's side)
     const gap = c * 0.42 * smooth(Math.min(1, m.u * 1.15));
     const pinch = 0.86 * smooth(Math.min(1, Math.max(0, (m.u - 0.15) / 0.75)));
-    const neckW = 0.35 * h0;
+    // (the neck pinched in near the middle only - in a third of each half either side, the eyes on its sides went in
+    // with it, drawn half sunk)
+    const neckW = 0.2 * h0;
     for (let j = 0; j < m.idx.length; j++) {
       const i = m.idx[j];
       const p0 = G[j * 3], p1 = G[j * 3 + 1], p2 = G[j * 3 + 2];
@@ -221,8 +346,10 @@ export class Cubiplication {
   _split() {
     const m = this.m, app = this.app, sb = app.sb, slot = m.slot;
     this.m = null;
+    sb.vLook = null;
     const cb = app.cubes.find((c) => c.slot === slot);
     if (!cb) return;
+    if (!m.kids) this._decide(m);
     // the two halves: where they are, how they move, how they're turned
     const side = [0, 0].map(() => ({ c: new THREE.Vector3(), v: new THREE.Vector3(), M: 0, verts: [] }));
     m.idx.forEach((i, j) => {
@@ -242,33 +369,30 @@ export class Cubiplication {
     const mid = side[0].c.clone().add(side[1].c).multiplyScalar(0.5);
     // (each half's turn: its rest shape, a cube by now, fitted to where it is)
     for (const S of side) S.yaw = app.healer._yawOf({ verts: S.verts });
-    // the twins: the parent's look and feel, each drifted and mutated -
-    // wilder the further down its family it is - named anew
+    // the twins, as worked out when it was first fed (see _decide), at their size now
     const c = Math.min(MAX_SIZE, m.size0 * m.g * Math.cbrt(0.5));
-    const rnd = Math.random, as = (x) => ({ name: x.name, flavor: x.style.flavor, layers: x.style.layers, texture: x.style.texture, edges: x.style.edges, glitter: x.style.glitter || 'off', ...(x.style.glitter === 'custom' ? { glitterMix: copyGlitterMix(x.style.glitterMix) } : {}), rubik: x.style.rubik, ...(x.style.rubikState ? { rubikState: x.style.rubikState } : {}), trim: x.style.trim || 'none', tune: { ...x.tune }, tear: x.tune.tear !== false, theme: app.theme, eyes: x.style.eyes || [], surface: x.style.surface || 'none' });
-    // (a cube with no name yet gets one now: it's going in the family tree)
-    if (!cb.name) cb.name = nameCube({ ...cb.style, tune: cb.tune }, { taken: app.cubes.map((x) => x.name || ''), ...app.nameCtx(), gen: cb.lin?.gen | 0 });
-    const pl = { ...linOf(cb) }, parent = as(cb);
-    const kid = (base) => {
-      const style = JSON.parse(JSON.stringify(base.style)), tune = { ...base.tune, size: c };
-      const changes = mutate(style, tune, { rnd, gen: pl.gen, boost: app.st?.mutation ?? 1 });
-      return { style, tune, changes };
-    };
-    const A = kid(cb), B = kid(cb);
+    const as = (x) => this._as(x), pl = m.pl, parent = m.parent, [A, B] = m.kids;
+    A.tune.size = B.tune.size = c;
+    // (their eyes: those each half wore, kept on - where they are on it now - and its face toward its twin's, popping on)
+    const now = performance.now();
+    m.kids.forEach((K, h) => {
+      const L = m.eyeLinks?.[h] || [];
+      K.style.eyes = (K.style.eyes || []).map((e, n) => {
+        if (L[n]) return Object.assign(L[n], { x: e.x, y: e.y, z: e.z, r: e.r, s: e.s, p: e.p });
+        const f = { ...e };
+        app.eyes?.born?.set(f, now + 140);
+        return f;
+      });
+    });
+    // (the second where its half's look was drawn - else the first slot free)
     const used = new Set(app.cubes.map((x) => x.slot));
-    let slotB = 0;
+    let slotB = m.kB >= 0 && !used.has(m.kB) ? m.kB : 0;
     while (used.has(slotB)) slotB++;
-    const taken = () => app.cubes.map((x) => x.name || '');
     cb.style = A.style;
     cb.tune = A.tune;
-    // (named for what they are, and as their parent's children - the
-    // second as the first's twin, the pair of them now and then a pair of
-    // names - and for what mutated in them)
-    const ctx = { ...app.nameCtx(), gen: pl.gen + 1, parentName: parent.name };
-    cb.name = nameCube({ ...A.style, tune: A.tune }, { taken: taken(), ...ctx, changes: A.changes, pairing: true });
+    cb.name = A.name;
     cb.lin = { id: newId(), parent: pl.id, gen: pl.gen + 1 };
-    const cbB = { slot: slotB, style: B.style, tune: B.tune, name: '', lin: { id: newId(), parent: pl.id, gen: pl.gen + 1 } };
-    cbB.name = nameCube({ ...B.style, tune: B.tune }, { taken: [...taken(), cb.name], ...ctx, changes: B.changes, twin: cb.name });
+    const cbB = { slot: slotB, style: B.style, tune: B.tune, name: B.name, lin: { id: newId(), parent: pl.id, gen: pl.gen + 1 } };
     if (app.cube === cb) {
       app.style = cb.style;
       app.tune = cb.tune;

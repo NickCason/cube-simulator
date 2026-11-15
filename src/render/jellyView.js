@@ -1260,7 +1260,9 @@ export class JellyView {
     });
     const hollowed = hollows.some(Boolean);
     const cube = new Float32Array(maxN);
-    for (let r = 0; r < nB; r++) cube[r] = sb.vCube[rSim[r]];
+    // (each point's look: its cube's - or, a cube dividing, its half's: see SoftBody.vLook)
+    const LK = sb.vLook && sb.vLook.length >= sb.nV ? sb.vLook : sb.vCube;
+    for (let r = 0; r < nB; r++) cube[r] = LK[rSim[r]];
     for (let m = 0, k = nB; m < L1.mids.length; m += 3, k++) cube[k] = cube[L1.mids[m]];
     this.disp1 = new Float32Array(L1.mids.length / 3);
     this.disp31 = new Float32Array(L1.mids.length);
