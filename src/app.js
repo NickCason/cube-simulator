@@ -30,6 +30,8 @@ import { Eyes, LATE_LAYER } from './world/eyes.js';
 import { Zits } from './world/zits.js';
 import { Shatter } from './world/shatter.js';
 import { PressMode } from './press.js';
+import { ColliderMode } from './collider.js';
+import { CublinkoMode } from './cublinko.js';
 import { copyAcne } from './acne.js';
 import { copyEyes, EYE_FACES } from './eyes.js';
 import { SURFACE, SURFACES } from './surfaces.js';
@@ -217,6 +219,8 @@ export class App {
     this.swapper = new Swapper(this); // (putting on a saved cube, with ceremony)
     this.drop = new DropMode(this); // (an exhibition mode: the cube taken up into the sky and let fall)
     this.press = new PressMode(this); // (an exhibition mode: the cube under a hydraulic press)
+    this.collider = new ColliderMode(this); // (an exhibition mode: two cubes fired at each other)
+    this.cublinko = new CublinkoMode(this); // (an exhibition mode: Plinko with the cubes)
     this.onHealStart = [];
     this.onHealEnd = [];
     this.onColor = [];
@@ -1369,7 +1373,8 @@ export class App {
     } else if (c.view && c.view.enabled) c.clearViewOffset();
     // (several cubes - a stack - the view rises and backs off to keep them in)
     let fy = 0.44, fr = 1;
-    if (this.cubes.length > 1) {
+    // (not in an exhibition mode: each frames its own - the Collider's room made wide sent the view out 2.6 times)
+    if (this.cubes.length > 1 && !this.press?.on && !this.collider?.on && !this.cublinko?.on) {
       let top = 0;
       for (const pc of this.sb.pieces) top = Math.max(top, pc.bbox[4]);
       top = Math.min(top, this.sb.p.ceiling);
@@ -1388,7 +1393,7 @@ export class App {
       this.camera.updateProjectionMatrix();
     }
     // (or the Press, on its plate - see press.js)
-    const FM = D.on && D.frameY !== null ? D : this.press.on && this.press.frameY !== null ? this.press : null, follow = !!FM;
+    const FM = D.on && D.frameY !== null ? D : this.press.on && this.press.frameY !== null ? this.press : this.collider.on && this.collider.frameY !== null ? this.collider : this.cublinko.on && this.cublinko.frameY !== null ? this.cublinko : null, follow = !!FM;
     if (follow) fy = FM.frameY + 0.1;
     const kx = follow ? 1 - Math.exp(-dt * 6) : kf;
     this.orbit.target.x += ((follow ? FM.frameX : 0) - this.orbit.target.x) * kx;
@@ -1559,8 +1564,8 @@ export class App {
         return;
       }
       if (pointers.size > 2) return;
-      // (in Drop, the Press: no tools - a drag looks round; in Drop a tap lets it go)
-      if (this.drop.on || this.press.on) {
+      // (in Drop, the Press, the Collider: no tools - a drag looks round; in Drop a tap lets it go)
+      if (this.drop.on || this.press.on || this.collider.on || this.cublinko.on) {
         mode = 'orbit';
         last = { x: e.clientX, y: e.clientY };
         this._dropTap = { x: e.clientX, y: e.clientY, t: performance.now() };
@@ -1686,6 +1691,8 @@ export class App {
       this.swapper.update(sdt);
       this.drop.update(sdt);
       this.press.update(sdt);
+      this.collider.update(dt);
+      this.cublinko.update(sdt);
       this.tilt.update(dt);
       this._edgeMorphTick(dt);
       this._selRing(dt);
@@ -1761,7 +1768,9 @@ export class App {
     // spread their light thin and wild, and their passes cost the most just
     // then - and come back after; and a lot of bits are seen through each
     // other only two deep, the rest of the refraction layers' passes saved)
-    const swarm = this.healer.active && this.sb.pieces.length > 6;
+    // (many pieces - a shattered glass cube's shards, a collider's - only two deep too: seen through each other five
+    // deep, forty shards took a phone's whole frame drawing them)
+    const swarm = (this.healer.active && this.sb.pieces.length > 6) || this.sb.pieces.length > 14;
     const causGoal = this.healer.active ? 0 : 1, cl = this.jelly.causticLevel;
     const cn = cl + (causGoal - cl) * Math.min(1, dt * (causGoal < cl ? 6 : 2.5));
     this.jelly.causticLevel = Math.abs(causGoal - cn) < 1e-3 ? causGoal : cn;

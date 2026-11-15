@@ -5174,6 +5174,26 @@ html.dark .gs-all {
   z-index: 20;
 }
 
+/* (the Collider's: what it's fired at, a button under its speed) */
+.collide-bar .co-vs {
+  justify-self: start;
+  padding: 4px 10px;
+  border-radius: 9px;
+  background: rgba(0, 0, 0, 0.05);
+  color: var(--ink);
+  font: 600 12px/1.2 var(--font);
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.co-pop {
+  bottom: 96px;
+  max-height: 55vh;
+  overflow-y: auto;
+}
+
 /* (the Press's two settings, one over the other) */
 .press-bar .ps-sets {
   flex: 1 1 auto;

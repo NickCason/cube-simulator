@@ -112,6 +112,9 @@ export class DropMode {
     this.yTop = this.height + (top - bot) + 0.25 * size;
     this.fx.scatter(pc.com[0], pc.com[2], this.yTop);
     this.dur = Math.max(1.2, (1.5 * (this.yTop - this.y0)) / LIFT_V);
+    // (the view tipped down past it as it goes up - the floor, its shadow, far below it. Looked at level, all there was
+    // up there was the sky: a phone's screen of grey round it, a laptop's wider screen nothing but)
+    this._view(true, 0.85, 5);
     this.phase = 'lift';
     this.t = 0;
     this.landT = -1;
@@ -237,14 +240,14 @@ export class DropMode {
     }
   }
 
-  // (falling: the view tipped over to look down past it - 66 degrees - at the floor coming up, its shadow on it under
-  // it - and back once it's down)
-  _view(on) {
+  // (going up, hanging: the view tipped down past it at the floor far below; falling, further over - 66 degrees - at
+  // the floor coming up, its shadow on it under it - and back once it's down)
+  _view(on, phi = 1.15, radius = 5.5) {
     const g = this.app.orbitGoal;
-    if (on && !this._goal) {
-      this._goal = { phi: g.phi, radius: g.radius };
-      g.phi = Math.max(g.phi, 1.15);
-      g.radius = Math.max(g.radius, 5.5);
+    if (on) {
+      if (!this._goal) this._goal = { phi: g.phi, radius: g.radius };
+      g.phi = Math.max(g.phi, phi);
+      g.radius = Math.max(g.radius, radius);
     } else if (!on && this._goal) {
       g.phi = this._goal.phi;
       g.radius = this._goal.radius;

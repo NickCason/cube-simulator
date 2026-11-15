@@ -579,3 +579,78 @@ export function makePress(M, s, top) {
   g.userData.s = s;
   return shadowed(g);
 }
+
+// A Cublinko board (see cublinko.js), as its spec has it (B: the board SoftBody.board keeps - its walls, pegs and
+// slot walls - and slots: [{ x0, x1, label, color, ink }]): the backboard, a deep blue going violet up it; the pegs,
+// chrome rods out of it with round heads; its sides; the walls between its slots, and each slot's prize on the
+// board behind it. Its pegs' instances in peg order (row by row) - those not there drawn nowhere.
+export function makeBoard(M, B, slots, s) {
+  const g = new THREE.Group(), P = B.pegs, top = P.top + 2.8 * s, W = B.xr - B.xl, thick = B.zf - B.zb;
+  const c = document.createElement('canvas');
+  c.width = 64;
+  c.height = 512;
+  const x2 = c.getContext('2d'), gr = x2.createLinearGradient(0, 0, 0, 512);
+  gr.addColorStop(0, '#4b2a8f');
+  gr.addColorStop(0.55, '#21408f');
+  gr.addColorStop(1, '#0f2b5e');
+  x2.fillStyle = gr;
+  x2.fillRect(0, 0, 64, 512);
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  // (lit from within a little, as a game board is - lit by the room alone, it was black)
+  const back = new THREE.Mesh(new THREE.BoxGeometry(W + 0.5 * s, top, 0.12 * s), new THREE.MeshStandardMaterial({ map: tex, emissive: 0xffffff, emissiveMap: tex, emissiveIntensity: 0.55, roughness: 0.5, metalness: 0.05, envMap: M.steel.envMap, envMapIntensity: 0.4 }));
+  back.position.set((B.xl + B.xr) / 2, top / 2, B.zb - 0.06 * s);
+  back.receiveShadow = true;
+  g.add(back);
+  // (the pegs: rods out of the back, a round head on each)
+  const rod = new THREE.CylinderGeometry(P.r * 0.82, P.r * 0.82, thick + 0.06 * s, 18);
+  rod.rotateX(Math.PI / 2);
+  const head = new THREE.CylinderGeometry(P.r * 1.2, P.r * 1.2, 0.05 * s, 22);
+  head.rotateX(Math.PI / 2);
+  const n = P.rows * P.cols, rods = new THREE.InstancedMesh(rod, M.steel, n), heads = new THREE.InstancedMesh(head, M.steel, n);
+  const m = new THREE.Matrix4(), hidden = new THREE.Matrix4().makeScale(0, 0, 0);
+  for (let r = 0; r < P.rows; r++)
+    for (let k = 0; k < P.cols; k++) {
+      const q = r * P.cols + k, x = P.x0 + (k + (r & 1) * 0.5) * P.dx + P.at[q * 2], y = P.top - r * P.dy + P.at[q * 2 + 1];
+      rods.setMatrixAt(q, P.on[q] ? m.makeTranslation(x, y, (B.zb + B.zf) / 2) : hidden);
+      heads.setMatrixAt(q, P.on[q] ? m.makeTranslation(x, y, B.zf + 0.03 * s) : hidden);
+    }
+  g.add(rods, heads);
+  // (its sides, and a rail over its top)
+  const frame = new THREE.MeshStandardMaterial({ color: 0xf2f2ef, roughness: 0.35, metalness: 0.1, envMap: M.steel.envMap, envMapIntensity: 0.8 });
+  for (const x of [B.xl - 0.08 * s, B.xr + 0.08 * s]) {
+    const side = new THREE.Mesh(new THREE.BoxGeometry(0.16 * s, top, thick + 0.2 * s), frame);
+    side.position.set(x, top / 2, (B.zb + B.zf) / 2);
+    g.add(side);
+  }
+  // (the slots: their walls, and each one's prize on the board behind it, its own colour)
+  for (const [x, hw, ht] of B.divs) {
+    const d = new THREE.Mesh(new THREE.BoxGeometry(2 * hw, ht, thick + 0.1 * s), frame);
+    d.position.set(x, ht / 2, (B.zb + B.zf) / 2);
+    g.add(d);
+  }
+  for (const S of slots) {
+    const lc = document.createElement('canvas');
+    lc.width = 256;
+    lc.height = 128;
+    const l2 = lc.getContext('2d');
+    l2.fillStyle = S.color;
+    l2.fillRect(0, 0, 256, 128);
+    l2.fillStyle = S.ink || '#ffffff';
+    l2.font = '800 54px system-ui, sans-serif';
+    l2.textAlign = 'center';
+    l2.textBaseline = 'middle';
+    l2.fillText(S.label, 128, 66, 236);
+    const lt = new THREE.CanvasTexture(lc);
+    lt.colorSpace = THREE.SRGBColorSpace;
+    const w = S.x1 - S.x0 - 0.12 * s, h = Math.min(0.9 * s, w * 0.5);
+    const label = new THREE.Mesh(new THREE.PlaneGeometry(w, h), new THREE.MeshStandardMaterial({ map: lt, roughness: 0.6, emissive: 0xffffff, emissiveMap: lt, emissiveIntensity: 0.6 }));
+    label.position.set((S.x0 + S.x1) / 2, B.divs[0]?.[2] ? B.divs[0][2] * 0.55 : 0.6 * s, B.zb + 0.005 * s);
+    g.add(label);
+  }
+  g.traverse((o) => {
+    if (o.isMesh) o.castShadow = true;
+  });
+  back.castShadow = false;
+  return g;
+}

@@ -226,6 +226,7 @@ export class SoftBody {
     this.hCell = this.p.size / this.p.res;
     this.impacts = []; // impacts this frame, one per piece: {x, y, z, dv, piece, kind, mass, partner} (for audio)
     this.press = null; // (a press's plate: { y, x0, x1, z0, z1, grip, _f, _n } - see _solveBounds, PressMode)
+    this.board = null; // (a Cublinko board: its walls, pegs, slot dividers - see _solveBoard, Cublinko)
     this._ct = asFloat({ t: -1, f: -1, b0: 0, b1: 0, b2: 0, b3: 0, nx: 0, ny: 0, nz: 0, depth: 0 }, ['b0', 'b1', 'b2', 'b3', 'nx', 'ny', 'nz', 'depth']);
     // Every field this object will ever carry is created here, so its shape
     // never changes later: Safari's JIT throws its optimised code away (and
@@ -2179,7 +2180,20 @@ export class SoftBody {
       const age = this._hashAge + dt, segs = this._hashSegs(dt, aw);
       if (segs > 1 || this._hashDirty || age > this._hashSpan * 1.0001 || this.grabs.length || this.pushers.length || this.attract || this._hashTopo !== this.topoVersion) {
         segN = Math.ceil(nS / segs);
-        this._hashSpan = segs > 1 ? segN * h : Math.max(dt, 1 / 60);
+        // (slow motion: a frame's worth of candidates is 1/60 s of motion - every probe's box swept as far as the
+        // fastest goes in that. A collider's glass shards at 30 m/s: half a metre, every probe against every shard
+        // round it, 20-48 s for one frame. So no longer than the fastest takes to cross a cell - this frame at least)
+        let span = Math.max(dt, 1 / 60);
+        if (segs <= 1 && span > dt) {
+          let vmax = 0;
+          for (let a = 0; a < this.pieces.length; a++) {
+            if (!aw[a]) continue;
+            const v = this.pieces[a].vel, sp = Math.sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
+            if (sp > vmax) vmax = sp;
+          }
+          if (vmax > 0) span = Math.max(dt, Math.min(span, (1.2 * this.hCell) / (2 * vmax)));
+        }
+        this._hashSpan = segs > 1 ? segN * h : span;
         this._hashAge = segs > 1 ? segN * h : dt;
         this._hashTopo = this.topoVersion;
         this._hashDirty = false;
@@ -2220,6 +2234,7 @@ export class SoftBody {
       if (multi && this._anyContact) this._solvePieceCollisions(h);
       if (lap) lap(6);
       this._solveBounds(h);
+      if (this.board) this._solveBoard(h);
       if (lap) lap(7);
       this._updateVelocities(h);
       if (lap) lap(8);
@@ -2897,6 +2912,64 @@ export class SoftBody {
         const q = vp[i] * 12 + 4, J = (r - R) * m[i];
         I[q] += J; I[q + 1] += J * x[o]; I[q + 2] += J * x[o + 1]; I[q + 3] += J * x[o + 2];
       }
+    }
+  }
+
+  // A Cublinko board (see cublinko.js): its back and front (z), its sides (x), the pegs between them - rods along z
+  // in staggered rows, each a little off its place, some missing - and the walls between its slots at the bottom.
+  // What's in one is pushed out of it, and slowed along it as it touches (mu: the rest of its way across it kept).
+  // Each point looks only at the pegs round where it is: their rows and columns from its height and across.
+  // B: { zb, zf, xl, xr, mu, pegs: { top, dy, dx, x0, rows, cols, r, at: Float32Array(rows*cols*2), on: Uint8Array },
+  // divs: [[x, half-width, height], ...] }
+  _solveBoard(h) {
+    const B = this.board, { x, px, w } = this, aw = this._awake, vp = this.vPiece, n = this.nV;
+    const G = B.pegs, R = G.r, mu = B.mu;
+    for (let i = 0; i < n; i++) {
+      if (w[i] === 0 || !aw[vp[i]]) continue;
+      const o = i * 3;
+      let X = x[o], Y = x[o + 1], Z = x[o + 2], hit = 0, nx = 0, ny = 0, nz = 0;
+      if (Z < B.zb) (Z = B.zb), (hit = 1), (nz = 1);
+      else if (Z > B.zf) (Z = B.zf), (hit = 1), (nz = -1);
+      if (X < B.xl) (X = B.xl), (hit = 1), (nx = 1);
+      else if (X > B.xr) (X = B.xr), (hit = 1), (nx = -1);
+      // (the pegs round it: three rows, three columns each)
+      const r0 = Math.round((G.top - Y) / G.dy);
+      for (let r = r0 - 1; r <= r0 + 1; r++) {
+        if (r < 0 || r >= G.rows) continue;
+        const sh = (r & 1) * 0.5, c0 = Math.round((X - G.x0) / G.dx - sh);
+        for (let c = c0 - 1; c <= c0 + 1; c++) {
+          if (c < 0 || c >= G.cols) continue;
+          const q = r * G.cols + c;
+          if (!G.on[q]) continue;
+          const cx = G.x0 + (c + sh) * G.dx + G.at[q * 2], cy = G.top - r * G.dy + G.at[q * 2 + 1];
+          const dx = X - cx, dy = Y - cy, d2 = dx * dx + dy * dy;
+          if (d2 >= R * R) continue;
+          const d = Math.sqrt(d2) || 1e-6, k = R / d;
+          X = cx + dx * k;
+          Y = cy + dy * k;
+          hit = 1;
+          nx = dx / d;
+          ny = dy / d;
+          nz = 0;
+        }
+      }
+      // (the walls between the slots: out the near side - or up, over its top)
+      for (const [dxc, hw, ht] of B.divs) {
+        const ex = X - dxc;
+        if (Y > ht || ex <= -hw || ex >= hw) continue;
+        const side = hw - Math.abs(ex), up = ht - Y;
+        if (up < side) (Y = ht), (nx = 0), (ny = 1);
+        else (X = dxc + (ex < 0 ? -hw : hw)), (nx = ex < 0 ? -1 : 1), (ny = 0);
+        nz = 0;
+        hit = 1;
+      }
+      if (!hit) continue;
+      // (slowed along what it touches: its way across it this substep cut by mu)
+      const mx = X - px[o], my = Y - px[o + 1], mz = Z - px[o + 2], mn = mx * nx + my * ny + mz * nz;
+      X -= (mx - mn * nx) * mu;
+      Y -= (my - mn * ny) * mu;
+      Z -= (mz - mn * nz) * mu;
+      x[o] = X; x[o + 1] = Y; x[o + 2] = Z;
     }
   }
 
