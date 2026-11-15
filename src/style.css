@@ -5174,6 +5174,15 @@ html.dark .gs-all {
   z-index: 20;
 }
 
+/* (its speed and angle's tracks lined up: their names and readings as wide as the widest) */
+.collide-bar .db-h > span {
+  min-width: 3.6em;
+}
+
+.collide-bar .db-h b {
+  min-width: 4.6em;
+}
+
 /* (the Collider's: what it's fired at, a button under its speed) */
 .collide-bar .co-vs {
   justify-self: start;
@@ -5194,8 +5203,9 @@ html.dark .gs-all {
   overflow-y: auto;
 }
 
-/* (the Press's two settings, one over the other) */
-.press-bar .ps-sets {
+/* (the Press's two settings, one over the other - and the Collider's) */
+.press-bar .ps-sets,
+.collide-bar .ps-sets {
   flex: 1 1 auto;
   display: grid;
   gap: 6px;

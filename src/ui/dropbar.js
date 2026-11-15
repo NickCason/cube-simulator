@@ -3,7 +3,7 @@
 // speed as it goes, back to the lab (see drop.js).
 import { DROP_MIN, DROP_MAX } from '../drop.js';
 import { PRESS_SPEED, PRESS_DEPTH } from '../press.js';
-import { COLLIDE_SPEED } from '../collider.js';
+import { COLLIDE_SPEED, COLLIDE_ANGLE } from '../collider.js';
 import { PLINKO_ROWS } from '../cublinko.js';
 import { decodeCube } from '../cubecode.js';
 
@@ -128,6 +128,7 @@ export class Exhibit {
     cbar.innerHTML = `<button class="db-exit" aria-label="Back to the lab" title="Back to the lab">&times;</button>
       <div class="ps-sets">
         <label class="db-h co-speed"><span>Speed</span><input type="range" min="${COLLIDE_SPEED[0]}" max="${COLLIDE_SPEED[1]}" step="1" aria-label="How fast each is fired"><b></b></label>
+        <label class="db-h co-angle"><span>Angle</span><input type="range" min="${COLLIDE_ANGLE[0]}" max="${COLLIDE_ANGLE[1]}" step="5" aria-label="The other's way in: head on, or into its side"><b></b></label>
         <button class="co-vs" aria-haspopup="true">vs <b></b></button>
       </div>
       <div class="db-read" aria-live="polite" hidden></div>
@@ -137,7 +138,7 @@ export class Exhibit {
     vsPop.className = 'exhibit-pop co-pop';
     vsPop.hidden = true;
     root.appendChild(vsPop);
-    this.co = { sets: cbar.querySelector('.ps-sets'), sp: cbar.querySelector('.co-speed input'), spOut: cbar.querySelector('.co-speed b'), vs: cbar.querySelector('.co-vs'), vsOut: cbar.querySelector('.co-vs b'), read: cbar.querySelector('.db-read'), go: cbar.querySelector('.db-go') };
+    this.co = { sets: cbar.querySelector('.ps-sets'), sp: cbar.querySelector('.co-speed input'), spOut: cbar.querySelector('.co-speed b'), an: cbar.querySelector('.co-angle input'), anOut: cbar.querySelector('.co-angle b'), vs: cbar.querySelector('.co-vs'), vsOut: cbar.querySelector('.co-vs b'), read: cbar.querySelector('.db-read'), go: cbar.querySelector('.db-go') };
     pop.querySelector('[data-mode="collider"]').addEventListener('click', () => {
       app.audio.ui();
       this.enterCollider();
@@ -148,6 +149,10 @@ export class Exhibit {
     });
     this.co.sp.addEventListener('input', () => {
       app.collider.setSpeed(+this.co.sp.value);
+      this._colliderSets();
+    });
+    this.co.an.addEventListener('input', () => {
+      app.collider.setAngle(+this.co.an.value);
       this._colliderSets();
     });
     this.co.go.addEventListener('click', () => {
@@ -267,6 +272,7 @@ export class Exhibit {
     document.documentElement.classList.add('drop-on');
     this.cbar.hidden = false;
     this.co.sp.value = String(this.app.collider.speed);
+    this.co.an.value = String(this.app.collider.angle);
     this._colliderSets();
     this.ui.hint('Collider · how fast, against what - then Fire', 2400);
   }
@@ -282,6 +288,8 @@ export class Exhibit {
     const C = this.app.collider;
     this.co.spOut.textContent = `${Math.round(C.speed * 3.6)} km/h`;
     this.co.sp.style.setProperty('--p', `${((C.speed - COLLIDE_SPEED[0]) / (COLLIDE_SPEED[1] - COLLIDE_SPEED[0])) * 100}%`);
+    this.co.anOut.textContent = C.angle ? `${C.angle}°` : 'head on';
+    this.co.an.style.setProperty('--p', `${((C.angle - COLLIDE_ANGLE[0]) / (COLLIDE_ANGLE[1] - COLLIDE_ANGLE[0])) * 100}%`);
     const b = this.app.cubes.find((c) => c.slot === C.b);
     this.co.vsOut.textContent = C.bCode ? decodeCube(C.bCode)?.name || 'a cube' : C.added ? 'a copy' : b?.name || 'the other';
   }
@@ -292,7 +300,7 @@ export class Exhibit {
     go.disabled = phase === 'fly' || phase === 'meet';
     this.co.sets.hidden = !!phase;
     this.co.read.hidden = !phase;
-    if (phase) this.co.read.textContent = phase === 'fly' ? `${Math.round(C.speed * 7.2)} km/h closing` : `${Math.round(C.closing * 3.6)} km/h · ${C.energy < 1 ? (C.energy * 1000).toFixed(0) + ' kJ' : C.energy.toFixed(1) + ' MJ'}`;
+    if (phase) this.co.read.textContent = phase === 'fly' ? `${Math.round(C.closingAt * 3.6)} km/h closing` : `${Math.round(C.closing * 3.6)} km/h · ${C.energy < 1 ? (C.energy * 1000).toFixed(0) + ' kJ' : C.energy.toFixed(1) + ' MJ'}`;
     if (phase === 'meet') this.ui.hint(`Met at ${Math.round(C.closing * 3.6)} km/h`, 2200);
   }
 

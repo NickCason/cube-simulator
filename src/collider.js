@@ -13,6 +13,7 @@ import { resolveSettings } from './settings.js';
 
 const STORE = 'cube-sim-collider';
 export const COLLIDE_SPEED = [8, 60]; // (m/s: each cube's, as it's fired)
+export const COLLIDE_ANGLE = [0, 90]; // (degrees: the other's way in, off head on - 90, into its side)
 const SPEED_CAP = 70; // (m/s: the jelly's fastest - SoftBody.p.maxSpeed - raised for it: 45 as it is)
 const FLY_SLOW = 0.2; // (time as they fly at each other)
 // (and as they meet, for MEET_FOR s of it, then back up: slowed to MEET_SLOW - more, closing faster than MEET_V m/s,
@@ -37,9 +38,11 @@ export class ColliderMode {
     this.t = 0; // (s, real, in the phase)
     this.st = 0; // (s, the sim's, since they met)
     this.speed = 25;
+    this.angle = 0;
     try {
-      const v = +JSON.parse(localStorage.getItem(STORE) || '{}').speed;
-      if (v >= COLLIDE_SPEED[0] && v <= COLLIDE_SPEED[1]) this.speed = v;
+      const o = JSON.parse(localStorage.getItem(STORE) || '{}');
+      if (o.speed >= COLLIDE_SPEED[0] && o.speed <= COLLIDE_SPEED[1]) this.speed = o.speed;
+      if (o.angle >= COLLIDE_ANGLE[0] && o.angle <= COLLIDE_ANGLE[1]) this.angle = o.angle;
     } catch (e) {}
     this.a = -1; // (their slots: the cube on show, the other)
     this.b = -1;
@@ -55,6 +58,8 @@ export class ColliderMode {
     this.frameY = null;
     this.frameZ = 0;
     this._was = null; // (the room as it was: its reach, ceiling, top speed - and the view)
+    this.hit = [0, 0, 0]; // (where they met, and the line between them then - A to B)
+    this.line = [1, 0, 0];
     this.ruptured = false; // (torn apart yet, as they meet)
     this.meetFor = MEET_FOR; // (s, the sim's: as long as they meet - and till they rupture - at the speed they met)
     this.stRupture = ST_RUPTURE;
@@ -64,9 +69,26 @@ export class ColliderMode {
 
   setSpeed(v) {
     this.speed = Math.min(COLLIDE_SPEED[1], Math.max(COLLIDE_SPEED[0], Math.round(v)));
+    this._store();
+  }
+
+  // (the other's way in: set, and it's moved round to come from there)
+  setAngle(a) {
+    this.angle = Math.min(COLLIDE_ANGLE[1], Math.max(COLLIDE_ANGLE[0], Math.round(a)));
+    this._store();
+    if (this.on && !this.phase) this.place();
+  }
+
+  _store() {
     try {
-      localStorage.setItem(STORE, JSON.stringify({ speed: this.speed }));
+      localStorage.setItem(STORE, JSON.stringify({ speed: this.speed, angle: this.angle }));
     } catch (e) {}
+  }
+
+  // (how fast they close, each fired at v: head on twice it, into its side v x root 2)
+  get closingAt() {
+    const th = THREE.MathUtils.degToRad(this.angle);
+    return this.speed * Math.sqrt(2 + 2 * Math.cos(th));
   }
 
   enter() {
@@ -167,9 +189,11 @@ export class ColliderMode {
     app.roomHold = { arena: sb.p.arenaRadius, ceiling: sb.p.ceiling };
     sb.p.maxSpeed = SPEED_CAP;
     app.nails?.clearAll?.();
-    for (const [k, cube, x, yaw] of [[this.a, ca, -this.L, 0], [this.b, cb, this.L, Math.PI]]) {
+    // (the other out along its way in, turned to face down it)
+    const th = THREE.MathUtils.degToRad(this.angle);
+    for (const [k, cube, x, z, yaw] of [[this.a, ca, -this.L, 0, 0], [this.b, cb, this.L * Math.cos(th), this.L * Math.sin(th), Math.PI - th]]) {
       sb.removeCube(k);
-      sb.addCube(k, x, this.h - 0.5 * app.sizeOf(cube), 0, yaw, app.bevelOf(cube), app.sizeOf(cube), app.resOf(cube));
+      sb.addCube(k, x, this.h - 0.5 * app.sizeOf(cube), z, yaw, app.bevelOf(cube), app.sizeOf(cube), app.resOf(cube));
       sb.cGrav[k] = 0;
     }
     sb.rebuild();
@@ -196,13 +220,13 @@ export class ColliderMode {
   // Fire: both at each other, head on
   fire() {
     if (!this.on || this.phase) return;
-    const app = this.app, sb = app.sb, v = this.speed;
+    const app = this.app, sb = app.sb, v = this.speed, th = THREE.MathUtils.degToRad(this.angle), bx = -v * Math.cos(th), bz = -v * Math.sin(th);
     for (let i = 0; i < sb.nV; i++) {
       const k = sb.vCube[i];
       if (k !== this.a && k !== this.b) continue;
-      sb.v[i * 3] = k === this.a ? v : -v;
+      sb.v[i * 3] = k === this.a ? v : bx;
       sb.v[i * 3 + 1] = 0;
-      sb.v[i * 3 + 2] = 0;
+      sb.v[i * 3 + 2] = k === this.a ? 0 : bz;
     }
     sb.wakeAll();
     this.phase = 'fly';
@@ -213,16 +237,37 @@ export class ColliderMode {
     this._changed();
   }
 
-  // (their nearest faces: the gap between them along x, now)
-  _gap() {
-    const sb = this.app.sb;
-    let ax = -Infinity, bx = Infinity;
-    for (const pc of sb.pieces) {
+  // (each one's biggest piece)
+  _mains() {
+    let A = null, B = null;
+    for (const pc of this.app.sb.pieces) {
       if (!pc) continue;
-      if (pc.cube === this.a) ax = Math.max(ax, pc.bbox[3]);
-      else if (pc.cube === this.b) bx = Math.min(bx, pc.bbox[0]);
+      if (pc.cube === this.a && (!A || pc.verts.length > A.verts.length)) A = pc;
+      else if (pc.cube === this.b && (!B || pc.verts.length > B.verts.length)) B = pc;
     }
-    return bx - ax;
+    return [A, B];
+  }
+
+  // (the gap between them along the line between their middles, now - and that line, and the middle of the gap)
+  _gap() {
+    const sb = this.app.sb, x = sb.x, vc = sb.vCube, [A, B] = this._mains();
+    if (!A || !B) return Infinity;
+    let ux = B.com[0] - A.com[0], uy = B.com[1] - A.com[1], uz = B.com[2] - A.com[2];
+    const l = Math.hypot(ux, uy, uz) || 1;
+    ux /= l; uy /= l; uz /= l;
+    let ma = -Infinity, mb = Infinity;
+    for (let i = 0; i < sb.nV; i++) {
+      const k = vc[i];
+      if ((k !== this.a && k !== this.b) || !sb.alive[i]) continue;
+      const d = x[i * 3] * ux + x[i * 3 + 1] * uy + x[i * 3 + 2] * uz;
+      if (k === this.a) ma = Math.max(ma, d);
+      else mb = Math.min(mb, d);
+    }
+    this.line = [ux, uy, uz];
+    // (the gap's middle, on the line through A's middle)
+    const a0 = A.com[0] * ux + A.com[1] * uy + A.com[2] * uz, m = 0.5 * (ma + mb) - a0;
+    this.hit = [A.com[0] + ux * m, A.com[1] + uy * m, A.com[2] + uz * m];
+    return mb - ma;
   }
 
   update(dt) {
@@ -262,49 +307,59 @@ export class ColliderMode {
     }
   }
 
-  // (each - jelly, not brittle - torn apart at the height of it: into wedges round the line they met on, their edges
-  // ragged, more of them the harder - and harder still, its middle on its own; out they fly in a ring, its spatter with
-  // them. Torn along its tets' own faces, all at once: cut a plane at a time - ten planes, each through all of it - a
-  // frame froze 2.4 s, and the tets those cuts made, twice as many, slowed every frame after)
+  // (each - jelly, not brittle - torn apart at the height of it: round points scattered through it, most of them pulled
+  // toward where it was hit - small bits there, big chunks behind - every one its own size, their edges wavy; more
+  // of them the harder. Out they fly in a ring, its spatter with them. Torn along its tets' own faces, all at once: cut
+  // a plane at a time - ten planes, each through all of it - a frame froze 2.4 s. As wedges round the line they met on
+  // it came apart the same every time, nine even slices)
   _rupture() {
     this.ruptured = true;
     const app = this.app, sb = app.sb;
-    const lab = new Int32Array(sb.nT).fill(-1), x = sb.x, T = sb.T, TAU = 2 * Math.PI, at = { [this.a]: this._tearsAt(this.a), [this.b]: this._tearsAt(this.b) };
+    const lab = new Int32Array(sb.nT).fill(-1), x = sb.x, T = sb.T, TAU = 2 * Math.PI, at = { [this.a]: this._tearsAt(this.a), [this.b]: this._tearsAt(this.b) }, H = this.hit;
     const torn = new Set();
     let L = 0;
     sb.pieces.forEach((pc) => {
       if (!pc || (pc.cube !== this.a && pc.cube !== this.b) || this.closing < at[pc.cube]) return;
       const cb = app.cubes.find((c) => c.slot === pc.cube), s = cb ? app.sizeOf(cb) : 1;
       if (pc.volume < 0.06 * s * s * s || app.shatter?.brittleOf(pc)) return;
-      const over = this.closing - at[pc.cube], n = Math.min(7, Math.max(3, Math.round(3 + over / 16))), core = over > 1.5 * RUPTURE_V;
-      // (its edges wavy: two waves through it, any which way, a third of its side long)
-      const c = pc.com, a0 = Math.random() * TAU, w = [];
-      for (let j = 0; j < 2; j++) w.push([(Math.random() - 0.5) * 18 / s, (Math.random() - 0.5) * 18 / s, (Math.random() - 0.5) * 18 / s, Math.random() * TAU]);
-      const amp = 0.45 / n * Math.PI, r2 = (0.24 * s) ** 2;
-      for (const t of pc.tets) {
-        const o = t * 4, a = T[o] * 3, b = T[o + 1] * 3, d = T[o + 2] * 3, e = T[o + 3] * 3;
-        const px = (x[a] + x[b] + x[d] + x[e]) / 4, py = (x[a + 1] + x[b + 1] + x[d + 1] + x[e + 1]) / 4, pz = (x[a + 2] + x[b + 2] + x[d + 2] + x[e + 2]) / 4;
-        const dy = py - c[1], dz = pz - c[2];
-        let th = Math.atan2(dz, dy) - a0;
-        for (const q of w) th += amp * Math.sin(q[0] * px + q[1] * py + q[2] * pz + q[3]);
-        th = ((th % TAU) + TAU) % TAU;
-        lab[t] = L + (core && dy * dy + dz * dz < r2 ? n : Math.floor(th / (TAU / n)) % n);
+      const over = this.closing - at[pc.cube], n = Math.min(12, Math.max(5, Math.round(5 + over / 8)));
+      const b = pc.bbox, seeds = [];
+      for (let j = 0; j < n; j++) {
+        const q = [0, 1, 2].map((a) => b[a] + (0.08 + 0.84 * Math.random()) * (b[a + 3] - b[a]));
+        if (j < 0.6 * n) {
+          const k = 0.3 + 0.55 * Math.random();
+          for (let a = 0; a < 3; a++) q[a] += (H[a] - q[a]) * k;
+        }
+        // (and its own wave through it: the edge between it and the next wavy, not flat)
+        q.push((Math.random() - 0.5) * 14 / s, (Math.random() - 0.5) * 14 / s, (Math.random() - 0.5) * 14 / s, Math.random() * TAU);
+        seeds.push(q);
       }
-      L += n + 1;
+      for (const t of pc.tets) {
+        const o = t * 4, a = T[o] * 3, bb = T[o + 1] * 3, d = T[o + 2] * 3, e = T[o + 3] * 3;
+        const px = (x[a] + x[bb] + x[d] + x[e]) / 4, py = (x[a + 1] + x[bb + 1] + x[d + 1] + x[e + 1]) / 4, pz = (x[a + 2] + x[bb + 2] + x[d + 2] + x[e + 2]) / 4;
+        let best = 0, bd = Infinity;
+        for (let j = 0; j < n; j++) {
+          const q = seeds[j], dd = Math.sqrt((px - q[0]) ** 2 + (py - q[1]) ** 2 + (pz - q[2]) ** 2) * (1 + 0.3 * Math.sin(q[3] * px + q[4] * py + q[5] * pz + q[6]));
+          if (dd < bd) (bd = dd), (best = j);
+        }
+        lab[t] = L + best;
+      }
+      L += n;
       torn.add(pc.cube);
     });
     if (!L) return;
     separateClusters(sb, lab, app.allAnchors());
     app.onTopologyChanged();
     app.markDamaged();
-    // (out from where they met, in a ring round the line of it)
-    const p = new THREE.Vector3(this.frameX, this.h, this.frameZ);
+    // (out from where they met, in a ring round the line they met on)
+    const p = new THREE.Vector3(H[0], H[1], H[2]), u = new THREE.Vector3(...this.line);
+    const e1 = new THREE.Vector3().crossVectors(u, Math.abs(u.y) < 0.9 ? new THREE.Vector3(0, 1, 0) : new THREE.Vector3(1, 0, 0)).normalize(), e2 = new THREE.Vector3().crossVectors(u, e1);
     sb.radialImpulse(p.x, p.y, p.z, 3 * this.L, Math.min(9, 0.12 * this.closing), 0, 0);
     for (const k of torn) {
       const col = app.flavorColorAtRest?.(k * 10, 0, 0, k) ?? '#ff4fa3';
       for (let j = 0; j < 26; j++) {
-        const th = Math.random() * Math.PI * 2, sp = (0.15 + Math.random() * 0.25) * this.closing;
-        app.droplets?.spawn(p.clone().add(new THREE.Vector3((Math.random() - 0.5) * 0.3, Math.cos(th) * 0.3, Math.sin(th) * 0.3)), new THREE.Vector3((Math.random() - 0.5) * 2, Math.cos(th) * sp, Math.sin(th) * sp), 0.01 + Math.random() * 0.02, col);
+        const th = Math.random() * TAU, sp = (0.15 + Math.random() * 0.25) * this.closing, r = e1.clone().multiplyScalar(Math.cos(th)).addScaledVector(e2, Math.sin(th));
+        app.droplets?.spawn(p.clone().addScaledVector(r, 0.3).addScaledVector(u, (Math.random() - 0.5) * 0.3), r.multiplyScalar(sp).addScaledVector(u, (Math.random() - 0.5) * 2), 0.01 + Math.random() * 0.02, col);
       }
     }
     app.audio?.splat(1);
@@ -319,16 +374,11 @@ export class ColliderMode {
     return RUPTURE_V * Math.max(0.3, (S.mu ?? JELLY_MU) / JELLY_MU) * (S.tough ?? 1);
   }
 
-  // (how fast they're closing now, m/s: the biggest piece of each)
+  // (how fast they're closing now, m/s: the biggest piece of each, along the line between them)
   _closingNow() {
-    const sb = this.app.sb;
-    let va = 0, vb = 0, na = 0, nb = 0;
-    for (const pc of sb.pieces) {
-      if (!pc) continue;
-      if (pc.cube === this.a && pc.verts.length > na) (va = pc.vel[0]), (na = pc.verts.length);
-      else if (pc.cube === this.b && pc.verts.length > nb) (vb = pc.vel[0]), (nb = pc.verts.length);
-    }
-    return Math.max(0, va - vb);
+    const [A, B] = this._mains(), u = this.line;
+    if (!A || !B) return 0;
+    return Math.max(0, (A.vel[0] - B.vel[0]) * u[0] + (A.vel[1] - B.vel[1]) * u[1] + (A.vel[2] - B.vel[2]) * u[2]);
   }
 
   _meet() {
@@ -350,7 +400,7 @@ export class ColliderMode {
     const ma = m(this.a), mb = m(this.b), mu = (ma * mb) / Math.max(1e-6, ma + mb);
     this.energy = (0.5 * mu * this.closing * this.closing) / 1e6;
     // (the hit: a flash, a bang, the view shaken, sparks of it out from where they met)
-    const p = new THREE.Vector3(0, this.h, 0);
+    const p = new THREE.Vector3(...this.hit);
     app.flash = Math.max(app.flash || 0, 0.35);
     app.shake(0.06);
     app.kick?.(0.05);
