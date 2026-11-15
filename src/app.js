@@ -29,6 +29,7 @@ import { EyesTool } from './tools/eyes.js';
 import { Eyes, LATE_LAYER } from './world/eyes.js';
 import { Zits } from './world/zits.js';
 import { Shatter } from './world/shatter.js';
+import { PressMode } from './press.js';
 import { copyAcne } from './acne.js';
 import { copyEyes, EYE_FACES } from './eyes.js';
 import { SURFACE, SURFACES } from './surfaces.js';
@@ -215,6 +216,7 @@ export class App {
     this.healer = new Healer(this);
     this.swapper = new Swapper(this); // (putting on a saved cube, with ceremony)
     this.drop = new DropMode(this); // (an exhibition mode: the cube taken up into the sky and let fall)
+    this.press = new PressMode(this); // (an exhibition mode: the cube under a hydraulic press)
     this.onHealStart = [];
     this.onHealEnd = [];
     this.onColor = [];
@@ -1385,11 +1387,12 @@ export class App {
       this.camera.fov = fov;
       this.camera.updateProjectionMatrix();
     }
-    const follow = D.on && D.frameY !== null;
-    if (follow) fy = D.frameY + 0.1;
+    // (or the Press, on its plate - see press.js)
+    const FM = D.on && D.frameY !== null ? D : this.press.on && this.press.frameY !== null ? this.press : null, follow = !!FM;
+    if (follow) fy = FM.frameY + 0.1;
     const kx = follow ? 1 - Math.exp(-dt * 6) : kf;
-    this.orbit.target.x += ((follow ? D.frameX : 0) - this.orbit.target.x) * kx;
-    this.orbit.target.z += ((follow ? D.frameZ : 0) - this.orbit.target.z) * kx;
+    this.orbit.target.x += ((follow ? FM.frameX : 0) - this.orbit.target.x) * kx;
+    this.orbit.target.z += ((follow ? FM.frameZ : 0) - this.orbit.target.z) * kx;
     if (Math.abs(this.orbit.target.x) < 1e-4 && !follow) this.orbit.target.x = 0;
     if (Math.abs(this.orbit.target.z) < 1e-4 && !follow) this.orbit.target.z = 0;
     this._frameY = follow ? fy : (this._frameY ?? 0.44) + (fy - (this._frameY ?? 0.44)) * kf;
@@ -1556,8 +1559,8 @@ export class App {
         return;
       }
       if (pointers.size > 2) return;
-      // (in Drop: no tools - a drag looks round, a tap lets it go)
-      if (this.drop.on) {
+      // (in Drop, the Press: no tools - a drag looks round; in Drop a tap lets it go)
+      if (this.drop.on || this.press.on) {
         mode = 'orbit';
         last = { x: e.clientX, y: e.clientY };
         this._dropTap = { x: e.clientX, y: e.clientY, t: performance.now() };
@@ -1682,6 +1685,7 @@ export class App {
       this.healer.update(sdt);
       this.swapper.update(sdt);
       this.drop.update(sdt);
+      this.press.update(sdt);
       this.tilt.update(dt);
       this._edgeMorphTick(dt);
       this._selRing(dt);

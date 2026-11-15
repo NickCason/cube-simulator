@@ -510,3 +510,72 @@ export function makeSieve(M) {
   g.userData.radius = R;
   return g;
 }
+
+// Hydraulic press, built round a cube of side s: its base flush with the floor, two columns, a crosshead across
+// their tops with the cylinder hanging under it, the ram coming out of that down to the plate. Origin on the floor
+// under the plate's middle; the plate's bottom at y 0 as made - the mode moves 'plate' and stretches 'rod' (their
+// names) - hung from y top (the cylinder's foot). Its plate's half-width: 'half' on the group.
+export function makePress(M, s, top) {
+  const g = new THREE.Group(), half = 1.35 * s;
+  const paint = new THREE.MeshStandardMaterial({ color: 0x31506f, metalness: 0.35, roughness: 0.42, envMap: M.steel.envMap });
+  // (the plate's edges striped yellow and black, as a press's are)
+  const c = document.createElement('canvas');
+  c.width = 128;
+  c.height = 16;
+  const x2 = c.getContext('2d');
+  x2.fillStyle = '#f2b705';
+  x2.fillRect(0, 0, 128, 16);
+  x2.fillStyle = '#1b1b1d';
+  for (let i = -2; i < 16; i++) {
+    x2.beginPath();
+    x2.moveTo(i * 16, 16);
+    x2.lineTo(i * 16 + 8, 16);
+    x2.lineTo(i * 16 + 16, 0);
+    x2.lineTo(i * 16 + 8, 0);
+    x2.fill();
+  }
+  const stripe = new THREE.CanvasTexture(c);
+  stripe.colorSpace = THREE.SRGBColorSpace;
+  stripe.wrapS = THREE.RepeatWrapping;
+  stripe.repeat.set(3, 1);
+  const edge = new THREE.MeshStandardMaterial({ map: stripe, metalness: 0.2, roughness: 0.5, envMap: M.steel.envMap });
+  const base = new THREE.Mesh(new THREE.BoxGeometry(2 * half + 0.9 * s, 0.08 * s, 2 * half + 0.3 * s), M.darkSteel);
+  base.position.y = -0.04 * s + 0.001;
+  base.receiveShadow = true;
+  g.add(base);
+  const colX = half + 0.38 * s, colH = top + 1.15 * s;
+  for (const sx of [-1, 1]) {
+    const col = new THREE.Mesh(new THREE.CylinderGeometry(0.13 * s, 0.13 * s, colH, 28), paint);
+    col.position.set(sx * colX, colH / 2, 0);
+    g.add(col);
+    const foot = new THREE.Mesh(new THREE.CylinderGeometry(0.2 * s, 0.24 * s, 0.12 * s, 28), M.darkSteel);
+    foot.position.set(sx * colX, 0.06 * s, 0);
+    g.add(foot);
+  }
+  const head = new THREE.Mesh(new THREE.BoxGeometry(2 * colX + 0.5 * s, 0.38 * s, 0.85 * s), paint);
+  head.position.y = top + 0.8 * s + 0.19 * s;
+  g.add(head);
+  const cyl = new THREE.Mesh(new THREE.CylinderGeometry(0.34 * s, 0.34 * s, 0.8 * s, 36), paint);
+  cyl.position.y = top + 0.4 * s;
+  g.add(cyl);
+  const collar = new THREE.Mesh(new THREE.CylinderGeometry(0.38 * s, 0.38 * s, 0.07 * s, 36), M.darkSteel);
+  collar.position.y = top + 0.035 * s;
+  g.add(collar);
+  // (the ram: a unit-long rod, stretched down from the cylinder's foot to the plate)
+  const rod = new THREE.Mesh(new THREE.CylinderGeometry(0.17 * s, 0.17 * s, 1, 32), M.steel);
+  rod.name = 'rod';
+  g.add(rod);
+  const plate = new THREE.Group();
+  plate.name = 'plate';
+  const slab = new THREE.Mesh(new THREE.BoxGeometry(2 * half, 0.14 * s, 2 * half), [edge, edge, M.steel, M.darkSteel, edge, edge]);
+  slab.position.y = 0.07 * s;
+  plate.add(slab);
+  const boss = new THREE.Mesh(new THREE.CylinderGeometry(0.3 * s, 0.36 * s, 0.1 * s, 32), M.darkSteel);
+  boss.position.y = 0.19 * s;
+  plate.add(boss);
+  g.add(plate);
+  g.userData.half = half;
+  g.userData.top = top;
+  g.userData.s = s;
+  return shadowed(g);
+}

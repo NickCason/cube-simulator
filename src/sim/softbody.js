@@ -225,7 +225,7 @@ export class SoftBody {
     this.time = 0;
     this.hCell = this.p.size / this.p.res;
     this.impacts = []; // impacts this frame, one per piece: {x, y, z, dv, piece, kind, mass, partner} (for audio)
-    this.press = null; // (a press's plate: { y, x0, x1, z0, z1, _f, _n } - see _solveBounds, PressMode)
+    this.press = null; // (a press's plate: { y, x0, x1, z0, z1, grip, _f, _n } - see _solveBounds, PressMode)
     this._ct = asFloat({ t: -1, f: -1, b0: 0, b1: 0, b2: 0, b3: 0, nx: 0, ny: 0, nz: 0, depth: 0 }, ['b0', 'b1', 'b2', 'b3', 'nx', 'ny', 'nz', 'depth']);
     // Every field this object will ever carry is created here, so its shape
     // never changes later: Safari's JIT throws its optimised code away (and
@@ -2865,7 +2865,7 @@ export class SoftBody {
       if (PR && x[o + 1] > PR.y && x[o] > PR.x0 && x[o] < PR.x1 && x[o + 2] > PR.z0 && x[o + 2] < PR.z1) {
         const pen = x[o + 1] - PR.y;
         x[o + 1] = PR.y;
-        if (pen > fpen[i]) fpen[i] = pen;
+        if (PR.grip && pen > fpen[i]) fpen[i] = pen * PR.grip;
         PR._f += (pen * m[i]) / (h * h);
       }
       // (the glass room: square walls, half its width R out)

@@ -5174,6 +5174,14 @@ html.dark .gs-all {
   z-index: 20;
 }
 
+/* (the Press's two settings, one over the other) */
+.press-bar .ps-sets {
+  flex: 1 1 auto;
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
 .drop-bar[hidden],
 .drop-bar [hidden] {
   display: none !important;

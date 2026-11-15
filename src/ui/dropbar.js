@@ -2,9 +2,12 @@
 // far); in one, the dock gives way to that mode's own bar. Drop's: its height, Drop / Let go, the fall's height and
 // speed as it goes, back to the lab (see drop.js).
 import { DROP_MIN, DROP_MAX } from '../drop.js';
+import { PRESS_SPEED, PRESS_DEPTH } from '../press.js';
 
 const EXHIBIT_ICON = `<svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="3.5" width="17" height="17" rx="5"/><path d="M10 8.6v6.8l5.6-3.4Z" fill="currentColor"/></svg>`;
 const DROP_ICON = `<svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="8" y="2.5" width="8" height="8" rx="2.2"/><path d="M12 13v5M9.5 15.6 12 18.1l2.5-2.5M4 21.5h16"/></svg>`;
+
+const PRESS_ICON = `<svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 21.5V3.5M20 21.5V3.5M3 3.5h18M12 3.5v4.5"/><rect x="6.5" y="8" width="11" height="2.6" rx="0.8" fill="currentColor"/><rect x="8.5" y="15" width="7" height="6.5" rx="1.6"/></svg>`;
 
 export class Exhibit {
   constructor(ui, app, root) {
@@ -22,7 +25,8 @@ export class Exhibit {
     const pop = (this.pop = document.createElement('div'));
     pop.className = 'exhibit-pop';
     pop.hidden = true;
-    pop.innerHTML = `<div class="ex-title">Exhibit</div><button class="ex-mode" data-mode="drop">${DROP_ICON}<span><b>Drop</b><em>Up into the sky &middot; let it fall</em></span></button>`;
+    pop.innerHTML = `<div class="ex-title">Exhibit</div><button class="ex-mode" data-mode="drop">${DROP_ICON}<span><b>Drop</b><em>Up into the sky &middot; let it fall</em></span></button>
+      <button class="ex-mode" data-mode="press">${PRESS_ICON}<span><b>Press</b><em>A hydraulic press &middot; squash it flat</em></span></button>`;
     root.appendChild(pop);
     // Drop's bar
     const bar = (this.bar = document.createElement('div'));
@@ -70,9 +74,96 @@ export class Exhibit {
       else if (ph === 'lift' || ph === 'hang') app.drop.letGo();
     });
     app.drop.onChange = (phase) => this._sync(phase);
+    // the Press's bar: how fast, how far down - then Press, its gauge as it goes, Release
+    const pb = (this.pbar = document.createElement('div'));
+    pb.className = 'drop-bar press-bar';
+    pb.hidden = true;
+    pb.innerHTML = `<button class="db-exit" aria-label="Back to the lab" title="Back to the lab">&times;</button>
+      <div class="ps-sets">
+        <label class="db-h ps-speed"><span>Speed</span><input type="range" min="0" max="1" step="0.01" aria-label="How fast the plate comes down"><b></b></label>
+        <label class="db-h ps-depth"><span>Down to</span><input type="range" min="0" max="1" step="0.01" aria-label="How far down it goes"><b></b></label>
+      </div>
+      <div class="db-read" aria-live="polite" hidden></div>
+      <button class="db-go">Press</button>`;
+    root.appendChild(pb);
+    this.ps = { sets: pb.querySelector('.ps-sets'), sp: pb.querySelector('.ps-speed input'), spOut: pb.querySelector('.ps-speed b'), dp: pb.querySelector('.ps-depth input'), dpOut: pb.querySelector('.ps-depth b'), read: pb.querySelector('.db-read'), go: pb.querySelector('.db-go') };
+    pop.querySelector('[data-mode="press"]').addEventListener('click', () => {
+      app.audio.ui();
+      this.enterPress();
+    });
+    pb.querySelector('.db-exit').addEventListener('click', () => {
+      app.audio.ui();
+      this.exitPress();
+    });
+    // (speed on a log scale - slow presses are the good ones; depth as the gap left, a share of its height)
+    const [s0, s1] = PRESS_SPEED, [d0, d1] = PRESS_DEPTH;
+    this.ps.sp.addEventListener('input', () => {
+      app.press.set({ speed: s0 * Math.pow(s1 / s0, +this.ps.sp.value) });
+      this._pressSets();
+    });
+    this.ps.dp.addEventListener('input', () => {
+      app.press.set({ depth: d1 - (d1 - d0) * +this.ps.dp.value });
+      this._pressSets();
+    });
+    this.ps.go.addEventListener('click', () => {
+      app.audio.init();
+      const ph = app.press.phase;
+      if (!ph) app.press.start();
+      else if (ph === 'down' || ph === 'hold') app.press.release();
+    });
+    app.press.onChange = (phase) => this._syncPress(phase);
+  }
+
+  enterPress() {
+    this.pop.hidden = true;
+    this.btn.classList.remove('open');
+    this.ui.closePalette();
+    this.ui.closeTune?.();
+    if (this.app.drop.on) this.exitDrop();
+    this.app.press.enter();
+    document.documentElement.classList.add('drop-on');
+    this.pbar.hidden = false;
+    const P = this.app.press, [s0, s1] = PRESS_SPEED, [d0, d1] = PRESS_DEPTH;
+    this.ps.sp.value = String(Math.log(P.speed / s0) / Math.log(s1 / s0));
+    this.ps.dp.value = String((d1 - P.depth) / (d1 - d0));
+    this._pressSets();
+    this.ui.hint('Press · how fast, how flat - then Press', 2400);
+  }
+
+  exitPress() {
+    this.app.press.exit();
+    document.documentElement.classList.remove('drop-on');
+    this.pbar.hidden = true;
+  }
+
+  _pressSets() {
+    const P = this.app.press;
+    this.ps.spOut.textContent = P.speed < 0.1 ? `${Math.round(P.speed * 100)} cm/s` : `${P.speed.toFixed(2)} m/s`;
+    this.ps.dpOut.textContent = `${Math.round(P.depth * 100)}%`;
+    for (const i of [this.ps.sp, this.ps.dp]) i.style.setProperty('--p', `${+i.value * 100}%`);
+  }
+
+  // (as it goes: the big button's word, the settings or the gauge)
+  _syncPress(phase) {
+    const P = this.app.press, busy = phase === 'down' || phase === 'hold' || phase === 'up', go = this.ps.go;
+    go.textContent = !phase ? 'Press' : phase === 'up' ? 'Rising' : 'Release';
+    go.disabled = phase === 'up';
+    go.classList.toggle('let', phase === 'down' || phase === 'hold');
+    this.ps.sets.hidden = busy;
+    this.ps.read.hidden = !busy;
+    if (phase === 'hold') this.ui.hint(P.stalled ? `Stalled at ${P.peakTonnes.toFixed(0)} t - it won't go further` : `Down to ${Math.round(P.squash * 100)}% of its height · ${P.peakTonnes.toFixed(0)} t at most`, 3200);
+    cancelAnimationFrame(this._praf);
+    if (busy) {
+      const tick = () => {
+        this.ps.read.textContent = `${P.tonnes < 10 ? P.tonnes.toFixed(1) : P.tonnes.toFixed(0)} t · ${Math.round(P.squash * 100)}%`;
+        if (P.phase === 'down' || P.phase === 'hold' || P.phase === 'up') this._praf = requestAnimationFrame(tick);
+      };
+      tick();
+    }
   }
 
   enterDrop() {
+    if (this.app.press.on) this.exitPress();
     this.pop.hidden = true;
     this.btn.classList.remove('open');
     this.ui.closePalette();
