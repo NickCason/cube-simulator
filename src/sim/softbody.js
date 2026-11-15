@@ -1764,6 +1764,31 @@ export class SoftBody {
       }
     }
     this._bpNV = nV;
+    // (a piece just made: its middle, speed and box as it is - all nought till its first step's end otherwise, see
+    // _dampPieces. A collider's jelly torn apart at 60 m/s looked still to the look for contacts: each point swept a
+    // 60th of a second at its speed, a metre, every one against everything - a 4.9 s frame)
+    const x = this.x, v = this.v, m = this.m;
+    for (const pc of this.pieces) {
+      if (carried[pc.id]) continue;
+      const vs = pc.verts;
+      let M = 0, cx = 0, cy = 0, cz = 0, vx = 0, vy = 0, vz = 0, x0 = Infinity, y0 = Infinity, z0 = Infinity, x1 = -Infinity, y1 = -Infinity, z1 = -Infinity;
+      for (let k = 0; k < vs.length; k++) {
+        const o = vs[k] * 3, mi = m[vs[k]], px = x[o], py = x[o + 1], pz = x[o + 2];
+        M += mi;
+        cx += px * mi; cy += py * mi; cz += pz * mi;
+        vx += v[o] * mi; vy += v[o + 1] * mi; vz += v[o + 2] * mi;
+        if (px < x0) x0 = px;
+        if (px > x1) x1 = px;
+        if (py < y0) y0 = py;
+        if (py > y1) y1 = py;
+        if (pz < z0) z0 = pz;
+        if (pz > z1) z1 = pz;
+      }
+      if (!(M > 0)) continue;
+      pc.com[0] = cx / M; pc.com[1] = cy / M; pc.com[2] = cz / M;
+      pc.vel[0] = vx / M; pc.vel[1] = vy / M; pc.vel[2] = vz / M;
+      pc.bbox[0] = x0; pc.bbox[1] = y0; pc.bbox[2] = z0; pc.bbox[3] = x1; pc.bbox[4] = y1; pc.bbox[5] = z1;
+    }
   }
 
   _extractSurface() {
@@ -2183,15 +2208,17 @@ export class SoftBody {
         // (slow motion: a frame's worth of candidates is 1/60 s of motion - every probe's box swept as far as the
         // fastest goes in that. A collider's glass shards at 30 m/s: half a metre, every probe against every shard
         // round it, 20-48 s for one frame. So no longer than the fastest takes to cross a cell - this frame at least)
+        // (its points' own speeds, not their pieces': a piece torn apart and flung, its ends outrun its middle)
         let span = Math.max(dt, 1 / 60);
         if (segs <= 1 && span > dt) {
-          let vmax = 0;
-          for (let a = 0; a < this.pieces.length; a++) {
-            if (!aw[a]) continue;
-            const v = this.pieces[a].vel, sp = Math.sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
-            if (sp > vmax) vmax = sp;
+          const v = this.v, vp = this.vPiece;
+          let v2 = 0;
+          for (let i = 0; i < this.nV; i++) {
+            if (vp[i] < 0 || !aw[vp[i]]) continue;
+            const o = i * 3, q = v[o] * v[o] + v[o + 1] * v[o + 1] + v[o + 2] * v[o + 2];
+            if (q > v2) v2 = q;
           }
-          if (vmax > 0) span = Math.max(dt, Math.min(span, (1.2 * this.hCell) / (2 * vmax)));
+          if (v2 > 0) span = Math.max(dt, Math.min(span, (1.2 * this.hCell) / (2 * Math.sqrt(v2))));
         }
         this._hashSpan = segs > 1 ? segN * h : span;
         this._hashAge = segs > 1 ? segN * h : dt;

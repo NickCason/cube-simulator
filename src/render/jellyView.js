@@ -2360,6 +2360,19 @@ export class JellyView {
 
   // (a set about to be wanted - a gun picked up, its flash to light the jelly (64: a flame's) - compiled aside now:
   // at the first shot, the jelly's shader made again froze the picture most of a second on a phone)
+  // (the depth prepass's shader made now - first wanted when two pieces share a layer: a cube's first break, its
+  // compile in the middle of it - two seconds at a software renderer's speed, a frame or more anywhere)
+  warmDepth(camera, rt) {
+    if (!this.allMesh) return;
+    const r = this.renderer, vis = this.allMesh.visible;
+    this.allMesh.visible = true;
+    this.scene.overrideMaterial = this.depthMat;
+    r.setRenderTarget(rt);
+    r.render(this.scene, camera);
+    this.scene.overrideMaterial = null;
+    this.allMesh.visible = vis;
+  }
+
   prewarm(bits, sb, camera) {
     if (this._featKey === undefined || !this._variants) return;
     const want = this._wantFeatures(sb) | bits;

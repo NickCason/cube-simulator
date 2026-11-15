@@ -19,6 +19,9 @@ const STANDS = { glass: 5, candy: 6.5, ice: 6, sugar: 4 }, FROZEN_STANDS = 5.5;
 const MIN_SHARD = 0.05; // (a piece this share of its cube's volume or less: too small to break again)
 const AGAIN = 0.35; // (s: a piece just broken - or broken off - isn't broken again so soon)
 const FROZEN_AT = -0.4; // (a piece's mean temperature: this or colder, frozen)
+// (pieces in the room: this many, nothing more breaks - two glass cubes met at 430 km/h, 41 shards; those flung out
+// broke again on the room's edge, 161 of them, 22,000 tets, a second and more a frame)
+const MAX_PIECES = 60;
 
 const R = (lo, hi) => lo + Math.random() * (hi - lo);
 
@@ -78,6 +81,7 @@ export class Shatter {
   impacts(list) {
     const sb = this.app.sb, VL = this._vl;
     for (const e of list) {
+      if (sb.pieces.length >= MAX_PIECES) break;
       const pc = sb.pieces[e.piece];
       if (!pc || !this._breakable(pc)) continue;
       const B = this.brittleOf(pc);
@@ -117,7 +121,7 @@ export class Shatter {
   // mallet's is 1.6): breaks it. False, it doesn't (not brittle, too small, just broken)
   blow(piece, p, d, energy = 1, B = null, kind = 'blow') {
     const sb = this.app.sb, pc = sb.pieces[piece];
-    if (!pc || !this._breakable(pc)) return false;
+    if (!pc || !this._breakable(pc) || sb.pieces.length >= MAX_PIECES) return false;
     B = B || this.brittleOf(pc);
     if (!B) return false;
     this._broke(pc.verts);

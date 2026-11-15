@@ -413,6 +413,7 @@ export class App {
         r.render(this.scene, this.camera);
       }
       r.render(this.fxScene, this.camera);
+      this.jelly.warmDepth(this.camera, this.rtScene);
       r.setRenderTarget(null);
     } finally {
       for (const f of undo) f();

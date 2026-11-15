@@ -7,19 +7,27 @@
 
 import * as THREE from 'three';
 import { captureCube, decodeCube } from './cubecode.js';
-import { cutBody, planeField } from './sim/cutting.js';
-import { ragged } from './tools/basic.js';
+import { separateClusters } from './sim/cutting.js';
+import { TEXTURES } from './styles.js';
+import { resolveSettings } from './settings.js';
 
 const STORE = 'cube-sim-collider';
 export const COLLIDE_SPEED = [8, 60]; // (m/s: each cube's, as it's fired)
 const SPEED_CAP = 70; // (m/s: the jelly's fastest - SoftBody.p.maxSpeed - raised for it: 45 as it is)
-const FLY_SLOW = 0.2; // (time as they fly at each other - and as they meet, for MEET_FOR s of it, then back up)
-const MEET_SLOW = 0.04, MEET_FOR = 0.16;
+const FLY_SLOW = 0.2; // (time as they fly at each other)
+// (and as they meet, for MEET_FOR s of it, then back up: slowed to MEET_SLOW - more, closing faster than MEET_V m/s,
+// and for less of it, as long a show. That slow, a 60th of a second's 4 substeps have them a centimetre closer each at
+// most - their contacts hold. A fifth of time, 10 cm: at 60 m/s each they went 85 cm into each other, and the frame
+// after froze 25 s untangling them)
+const MEET_SLOW = 0.04, MEET_FOR = 0.16, MEET_V = 60;
 const CUT = 1.05; // (s, real: each camera's turn while they meet)
 // (met faster than this, m/s closing - and squashed into each other a moment, ST_RUPTURE s of it - jelly ruptures:
 // torn apart from where it was hit, more ways the harder. As it was, two jelly cubes met at 180 km/h, squashed to
-// a lens and sprang apart whole. Brittle ones shatter as they meet: see world/shatter.js)
-const RUPTURE_V = 11, ST_RUPTURE = 0.022;
+// a lens and sprang apart whole. Firmer stuff takes more, as firm as it is over jelly - and as tough: rubber five
+// times jelly's speed. Brittle ones shatter as they meet: see world/shatter.js)
+const RUPTURE_V = 11, ST_RUPTURE = 0.022, JELLY_MU = 170;
+// (time slowed to as they meet, closing at v m/s)
+const meetSlow = (v) => MEET_SLOW * Math.min(1, MEET_V / Math.max(1e-6, v));
 
 export class ColliderMode {
   constructor(app) {
@@ -48,6 +56,8 @@ export class ColliderMode {
     this.frameZ = 0;
     this._was = null; // (the room as it was: its reach, ceiling, top speed - and the view)
     this.ruptured = false; // (torn apart yet, as they meet)
+    this.meetFor = MEET_FOR; // (s, the sim's: as long as they meet - and till they rupture - at the speed they met)
+    this.stRupture = ST_RUPTURE;
     this._wide = 9; // (the view's distance, all of it)
     this.onChange = null; // (its bar: see ui/dropbar.js)
   }
@@ -149,7 +159,9 @@ export class ColliderMode {
     const sa = app.sizeOf(ca), sB = app.sizeOf(cb), s = Math.max(sa, sB);
     this.L = 1.6 * s + 1.4;
     this.h = Math.max(1.2, 0.9 * s + 0.6);
-    sb.p.arenaRadius = Math.max(this._was?.arena ?? 2.35, this.L + 3 * s);
+    // (the room's edge far off: what's thrown off them flies on and comes down - kept in close, two glass cubes'
+    // shards hit it at 60 m/s, broke again and flew back in)
+    sb.p.arenaRadius = Math.max(this._was?.arena ?? 2.35, this.L + 3 * s, 30);
     sb.p.ceiling = Math.max(sb.p.ceiling, this.h + 3 * s);
     sb.p.maxSpeed = SPEED_CAP;
     app.nails?.clearAll?.();
@@ -216,14 +228,19 @@ export class ColliderMode {
     const app = this.app, sb = app.sb;
     this.t += dt;
     if (this.phase === 'fly') {
+      // (time slowed as they near - each frame closing no more than a third of the gap left - so they meet already as
+      // slow as they'll be: looked for once a frame, at a fifth of time, a frame took them 40 cm at 60 m/s each - they
+      // met that far into each other. This frame's step is taken at the time it's at now: the next's at what's set)
+      const gap = this._gap(), cl = this._closingNow(), dF = cl * Math.max(dt, 1 / 40);
+      if (cl > 0) this._slow(Math.min(FLY_SLOW, Math.max(meetSlow(cl), (gap - dF * app.timeScale) / (3 * dF))));
       // (met: the moment - flash, bang, time all but stopped)
-      if (this._gap() < 0.02 || this.t > 4) this._meet();
+      if (gap < 0.02 || this.t > 4) this._meet();
     } else if (this.phase === 'meet') {
       this.st += dt * app.timeScale;
-      if (!this.ruptured && this.st > ST_RUPTURE) this._rupture();
+      if (!this.ruptured && this.st > this.stRupture) this._rupture();
       // (each camera in turn)
       if (this.t - this.camT > CUT && this.cam < 3) this._cut(this.cam + 1);
-      if (this.st > MEET_FOR) {
+      if (this.st > this.meetFor) {
         this.phase = 'after';
         this.t = 0;
         this._slow(1);
@@ -243,46 +260,45 @@ export class ColliderMode {
     }
   }
 
-  // (each - jelly, not brittle - torn apart at the height of it: ragged splits fanned out round the line they met
-  // on, through its middle, more of them the harder; its spatter thrown out in a ring)
+  // (each - jelly, not brittle - torn apart at the height of it: into wedges round the line they met on, their edges
+  // ragged, more of them the harder - and harder still, its middle on its own; out they fly in a ring, its spatter with
+  // them. Torn along its tets' own faces, all at once: cut a plane at a time - ten planes, each through all of it - a
+  // frame froze 2.4 s, and the tets those cuts made, twice as many, slowed every frame after)
   _rupture() {
     this.ruptured = true;
     const app = this.app, sb = app.sb;
-    if (this.closing < RUPTURE_V) return;
-    const n = Math.min(6, Math.max(2, Math.round(2 + (this.closing - RUPTURE_V) / 14))), anchors = app.allAnchors();
-    let any = false;
-    for (const k of [this.a, this.b]) {
-      let pi = -1;
-      sb.pieces.forEach((pc, i) => {
-        if (pc && pc.cube === k && (pi < 0 || pc.verts.length > sb.pieces[pi].verts.length)) pi = i;
-      });
-      const pc = sb.pieces[pi];
-      if (!pc || app.shatter?.brittleOf(pc)) continue;
-      const b = pc.bbox.slice(), m = 0.03, s = Math.max(b[3] - b[0], b[4] - b[1], b[5] - b[2]);
-      const inIt = (x, y, z) => x > b[0] - m && x < b[3] + m && y > b[1] - m && y < b[4] + m && z > b[2] - m && z < b[5] + m;
-      const c = pc.com.slice(), a0 = Math.random() * Math.PI;
-      for (let j = 0; j < n; j++) {
-        // (planes holding the line they met on - x - turned round it: wedges fanned out round it)
-        const th = a0 + (j + (Math.random() - 0.5) * 0.6) * (Math.PI / n), ny = Math.cos(th), nz = Math.sin(th), nx = (Math.random() - 0.5) * 0.5;
-        const l = Math.hypot(nx, ny, nz), N = [nx / l, ny / l, nz / l];
-        const f = ragged(planeField(N[0], N[1], N[2], N[0] * c[0] + N[1] * c[1] + N[2] * c[2] + (Math.random() - 0.5) * 0.08 * s, inIt), 0.04 * s);
-        f.inRegion = inIt;
-        const ps = [];
-        sb.pieces.forEach((q, i) => {
-          if (q && q.cube === k) ps.push(i);
-        });
-        cutBody(sb, f, { separate: 0.01, anchors, pieces: ps, light: true });
+    const lab = new Int32Array(sb.nT).fill(-1), x = sb.x, T = sb.T, TAU = 2 * Math.PI, at = { [this.a]: this._tearsAt(this.a), [this.b]: this._tearsAt(this.b) };
+    const torn = new Set();
+    let L = 0;
+    sb.pieces.forEach((pc) => {
+      if (!pc || (pc.cube !== this.a && pc.cube !== this.b) || this.closing < at[pc.cube]) return;
+      const cb = app.cubes.find((c) => c.slot === pc.cube), s = cb ? app.sizeOf(cb) : 1;
+      if (pc.volume < 0.06 * s * s * s || app.shatter?.brittleOf(pc)) return;
+      const over = this.closing - at[pc.cube], n = Math.min(7, Math.max(3, Math.round(3 + over / 16))), core = over > 1.5 * RUPTURE_V;
+      // (its edges wavy: two waves through it, any which way, a third of its side long)
+      const c = pc.com, a0 = Math.random() * TAU, w = [];
+      for (let j = 0; j < 2; j++) w.push([(Math.random() - 0.5) * 18 / s, (Math.random() - 0.5) * 18 / s, (Math.random() - 0.5) * 18 / s, Math.random() * TAU]);
+      const amp = 0.45 / n * Math.PI, r2 = (0.24 * s) ** 2;
+      for (const t of pc.tets) {
+        const o = t * 4, a = T[o] * 3, b = T[o + 1] * 3, d = T[o + 2] * 3, e = T[o + 3] * 3;
+        const px = (x[a] + x[b] + x[d] + x[e]) / 4, py = (x[a + 1] + x[b + 1] + x[d + 1] + x[e + 1]) / 4, pz = (x[a + 2] + x[b + 2] + x[d + 2] + x[e + 2]) / 4;
+        const dy = py - c[1], dz = pz - c[2];
+        let th = Math.atan2(dz, dy) - a0;
+        for (const q of w) th += amp * Math.sin(q[0] * px + q[1] * py + q[2] * pz + q[3]);
+        th = ((th % TAU) + TAU) % TAU;
+        lab[t] = L + (core && dy * dy + dz * dz < r2 ? n : Math.floor(th / (TAU / n)) % n);
       }
-      any = true;
-    }
-    if (!any) return;
-    sb.rebuild();
+      L += n + 1;
+      torn.add(pc.cube);
+    });
+    if (!L) return;
+    separateClusters(sb, lab, app.allAnchors());
     app.onTopologyChanged();
     app.markDamaged();
     // (out from where they met, in a ring round the line of it)
     const p = new THREE.Vector3(this.frameX, this.h, this.frameZ);
     sb.radialImpulse(p.x, p.y, p.z, 3 * this.L, Math.min(9, 0.12 * this.closing), 0, 0);
-    for (const k of [this.a, this.b]) {
+    for (const k of torn) {
       const col = app.flavorColorAtRest?.(k * 10, 0, 0, k) ?? '#ff4fa3';
       for (let j = 0; j < 26; j++) {
         const th = Math.random() * Math.PI * 2, sp = (0.15 + Math.random() * 0.25) * this.closing;
@@ -293,20 +309,38 @@ export class ColliderMode {
     app.hitStop?.(0.05);
   }
 
+  // (the closing speed, m/s, cube k tears at: jelly's, x how firm it is over jelly, x how tough)
+  _tearsAt(k) {
+    const cb = this.app.cubes.find((c) => c.slot === k), tex = cb && TEXTURES[cb.style.texture];
+    if (!tex) return RUPTURE_V;
+    const S = resolveSettings(cb.tune || {}, tex);
+    return RUPTURE_V * Math.max(0.3, (S.mu ?? JELLY_MU) / JELLY_MU) * (S.tough ?? 1);
+  }
+
+  // (how fast they're closing now, m/s: the biggest piece of each)
+  _closingNow() {
+    const sb = this.app.sb;
+    let va = 0, vb = 0, na = 0, nb = 0;
+    for (const pc of sb.pieces) {
+      if (!pc) continue;
+      if (pc.cube === this.a && pc.verts.length > na) (va = pc.vel[0]), (na = pc.verts.length);
+      else if (pc.cube === this.b && pc.verts.length > nb) (vb = pc.vel[0]), (nb = pc.verts.length);
+    }
+    return Math.max(0, va - vb);
+  }
+
   _meet() {
     const app = this.app, sb = app.sb;
     this.phase = 'meet';
     this.ruptured = false;
     this.t = 0;
     this.st = 0;
-    this._slow(MEET_SLOW);
     // (how fast they met, how hard: closing speed, the energy of it - a metre of jelly a tonne)
-    let va = 0, vb = 0;
-    for (const pc of sb.pieces) {
-      if (pc?.cube === this.a) va = pc.vel[0];
-      else if (pc?.cube === this.b) vb = pc.vel[0];
-    }
-    this.closing = Math.max(0, va - vb);
+    this.closing = this._closingNow();
+    this._slow(meetSlow(this.closing));
+    const fast = Math.min(1, MEET_V / Math.max(1e-6, this.closing));
+    this.meetFor = MEET_FOR * fast;
+    this.stRupture = ST_RUPTURE * fast;
     const m = (k) => {
       const cb = app.cubes.find((c) => c.slot === k), s = cb ? app.sizeOf(cb) : 1;
       return s * s * s * (sb.cDens[k] || 1) * 1000;
