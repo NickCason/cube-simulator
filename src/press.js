@@ -259,7 +259,7 @@ export class PressMode {
     if (!M || !(hi > lo)) return null;
     cx /= M; cy /= M; cz /= M;
     const mid = cx * n[0] + cy * n[1] + cz * n[2], C = [cx + (lo - mid) * n[0], cy + (lo - mid) * n[1], cz + (lo - mid) * n[2]];
-    return { k, b: 0, C, u, n, w, c: [pc.com[0], 0, pc.com[2]], U, W, L: 1, g: 1, H: hi - lo, tgt: null, inner: null, nV: 0 };
+    return { k, b: 0, C, u, n, w, c: [pc.com[0], 0, pc.com[2]], U, W, L: 1, g: 1, H: hi - lo, tgt: null, inner: null, hcol: null, nV: 0 };
   }
 
   // (where each point of it goes, squashed - see SoftBody._solveBounds. First evenly, as a slick press squashes it, as
@@ -289,7 +289,11 @@ export class PressMode {
       rmax = Math.max(rmax, Math.abs(qx - px), Math.abs(qz - pz));
     }
     // (the rim: as high as RIM of it, once half a cube's out - less till then; up the plate's side over d)
-    const ht = Math.max(gy, gy + (RIM * H - gy) * Math.min(1, Math.max(0, (rmax - P) / (0.5 * s)))), d = RIM_UP * s, NT = this._gt.length - 1, G = this._gt;
+    // (a cube full of liquid's skin bunched round it no higher than the plate: as high as jelly's, it held its liquid in
+    // over the plate like a tray)
+    let ht = Math.max(gy, gy + (RIM * H - gy) * Math.min(1, Math.max(0, (rmax - P) / (0.5 * s))));
+    if (sb.cLiq[L.k]) ht = Math.min(ht, gy + (sb.press.th || 0.14 * s));
+    const d = RIM_UP * s, NT = this._gt.length - 1, G = this._gt;
     const hAt = (u) => gy + (ht - gy) * u * u * (3 - 2 * u);
     // (its volume out to each step up the side, a line's worth: the height x 2r dr)
     G[0] = 0;
@@ -297,13 +301,14 @@ export class PressMode {
       const r0 = P + (d * (j - 1)) / NT, r1 = P + (d * j) / NT;
       G[j] = G[j - 1] + (hAt((j - 1) / NT) * r0 + hAt(j / NT) * r1) * (d / NT);
     }
-    const Gd = G[NT], Pd = P + d;
+    const Gd = G[NT], Pd = P + d, HC = L.hcol && L.hcol.length >= n ? L.hcol : (L.hcol = new Float64Array(sb.vCap));
     let reach = 0;
     for (let i = 0; i < n; i++) {
       if (vc[i] !== L.k || !alive[i]) continue;
       const o = i * 3, ex = T[o] - px, ez = T[o + 2] - pz, r = Math.max(Math.abs(ex), Math.abs(ez)), t = T[o + 1];
       if (r <= P) {
         T[o + 1] = t * gy;
+        HC[i] = gy;
         I[i] = 1;
         reach = Math.max(reach, r);
         continue;
@@ -325,8 +330,27 @@ export class PressMode {
       T[o] = px + (ex * rp) / r;
       T[o + 1] = t * hp;
       T[o + 2] = pz + (ez * rp) / r;
+      HC[i] = hp;
       reach = Math.max(reach, rp);
     }
+    // (the rim's first row - its points in a tet with one under the plate: no higher than inside the plate, so the
+    // faces from the layer under it out to them keep inside it. Risen at once, those faces sloped up out through the
+    // plate and showed over its top - a cube full of liquid's shell's most)
+    const vs = sb.vtStart, vl = sb.vtList, TT = sb.T, cap = gy + 0.45 * (sb.press.th || 0.14 * s);
+    if (vs && vl && vs.length > n)
+      for (let i = 0; i < n; i++) {
+        if (vc[i] !== L.k || !alive[i] || I[i] || !(HC[i] > cap)) continue;
+        let next = false;
+        for (let q = vs[i]; q < vs[i + 1] && !next; q++) {
+          const t4 = vl[q] * 4;
+          for (let j = 0; j < 4; j++)
+            if (I[TT[t4 + j]] && vc[TT[t4 + j]] === L.k) {
+              next = true;
+              break;
+            }
+        }
+        if (next) T[i * 3 + 1] *= cap / HC[i];
+      }
     L.nV = n;
     this.reach = reach;
   }

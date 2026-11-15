@@ -2528,12 +2528,15 @@ export class Fluid {
           q[o + 2] *= R / r;
         }
       }
-      // (a press's plate - see PressMode: off it. Under it, kept under - or, no room for a drop there, out its
-      // nearest side; come down on it, on its top)
+      // (a press's plate - see PressMode: off it. Come down on it from over it, on its top; under it, kept under -
+      // or, no room for a drop there, out its nearest side; in at its side, back out that side. Any drop beside it at
+      // its height was put on its top: squeezed out from under it and up between it and the jelly bunched round it,
+      // a burst cube's liquid pooled on the plate)
       const PR = sb.press;
       if (PR && q[o + 1] > PR.y - R_P && q[o + 1] < PR.y + PR.th + R_P && q[o] > PR.x0 - R_P && q[o] < PR.x1 + R_P && q[o + 2] > PR.z0 - R_P && q[o + 2] < PR.z1 + R_P) {
-        if (this.x[o + 1] >= PR.y + 0.5 * PR.th) q[o + 1] = PR.y + PR.th + R_P;
-        else if (PR.y - R_P >= R_P) q[o + 1] = PR.y - R_P;
+        const wx = this.x[o], wz = this.x[o + 2], under = wx > PR.x0 && wx < PR.x1 && wz > PR.z0 && wz < PR.z1;
+        if (this.x[o + 1] >= PR.y + PR.th) q[o + 1] = PR.y + PR.th + R_P;
+        else if (under && PR.y - R_P >= R_P) q[o + 1] = PR.y - R_P;
         else {
           const dl = q[o] - PR.x0, dr = PR.x1 - q[o], db = q[o + 2] - PR.z0, df = PR.z1 - q[o + 2], mn = Math.min(dl, dr, db, df);
           if (mn === dl) q[o] = PR.x0 - R_P;

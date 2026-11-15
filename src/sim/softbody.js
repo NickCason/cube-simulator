@@ -3867,6 +3867,9 @@ export class SoftBody {
       // halves fell open again, and round it went: the "twerk")
       // (nor one squashed by a landing, or by the air as it falls - see LAND_CALM)
       if (pc.asleep || pc.hinge || (GP && GP[k]) || pc.untangle > 0 || pc.verts.length < 30 || this.time - pc.touchT > 4) continue;
+      // (nor one a press holds squashed - see PressMode._targets: its rim's tets are inside out by design, and sprung
+      // back toward its shape as made it came up through the plate)
+      if (this.press?.lock && pc.cube === this.press.lock.k) continue;
       if (this.cWind[pc.cube] > 0 || this.time - pc.landAt < LAND_CALM) continue;
       // (a tangle three springings back haven't undone - a fold stuck fast -
       // is left be till the piece is next touched: trying for ever kept it
@@ -4040,7 +4043,7 @@ export class SoftBody {
     for (let k = 0; k < P.length; k++) {
       const pc = P[k];
       if (!(pc.untangle > 0)) continue;
-      if (this.grabs.length && this._grabbedP && this._grabbedP[k]) {
+      if ((this.grabs.length && this._grabbedP && this._grabbedP[k]) || (this.press?.lock && pc.cube === this.press.lock.k)) {
         pc.untangle = 0;
         continue;
       }
