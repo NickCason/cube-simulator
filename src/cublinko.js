@@ -13,8 +13,10 @@ import { captureCube } from './cubecode.js';
 import { separateClusters } from './sim/cutting.js';
 
 const STORE = 'cube-sim-cublinko';
-export const PLINKO_ROWS = [4, 14];
-const COLS = 5; // (pegs a row: the board this many gaps wide)
+export const PLINKO_ROWS = [6, 16];
+// (pegs a row: the board this many gaps wide - five, a cube in, 2.25 cubes apart: a few pegs, far between, little of
+// a Plinko board)
+const COLS = 7;
 const MISSING = 0.07; // (a peg's chance of not being there, each round)
 const JITTER = 0.16; // (how far off its place each peg is, a share of the spacing)
 
@@ -36,7 +38,7 @@ export class CublinkoMode {
     this.on = false;
     this.phase = ''; // '' ready, 'fall', 'done'
     this.t = 0;
-    this.rows = 8;
+    this.rows = 10;
     this.at = 0; // (-1..1: where along its top the cube's let go - one cube)
     try {
       const o = JSON.parse(localStorage.getItem(STORE) || '{}');
@@ -116,9 +118,9 @@ export class CublinkoMode {
   _layout() {
     const app = this.app, sb = app.sb;
     const s = (this.s = Math.max(...app.cubes.map((cb) => app.sizeOf(cb)), 0.3));
-    // (its sides a little out past the pegs' rows: the unshifted rows' end pegs were 0.99 of a cube off the wall - a
-    // cube came down between one and the wall, wedged there, and never fell)
-    const dx = 2.25 * s, dy = 1.85 * s, W = COLS * dx, pad = 0.35 * s, xl = -W / 2 - pad, xr = W / 2 + pad, Wb = xr - xl, ht = 1.3 * s, r = 0.14 * s;
+    // (pegs 1.65 cubes apart - the gaps between them 1.4 cubes, any way - rows 1.5 apart; its sides out past the end
+    // pegs enough for a cube, 1.3: 0.99 of a cube off the wall, one came down between, wedged there, and never fell)
+    const dx = 1.65 * s, dy = 1.5 * s, W = COLS * dx, pad = 0.6 * s, xl = -W / 2 - pad, xr = W / 2 + pad, Wb = xr - xl, ht = 1.3 * s, r = 0.14 * s;
     const rows = this.rows, cols = COLS, top = ht + 1.6 * s + (rows - 1) * dy;
     const at = new Float32Array(rows * cols * 2), on = new Uint8Array(rows * cols);
     for (let q = 0; q < rows; q++)
@@ -170,16 +172,25 @@ export class CublinkoMode {
     const g = app.orbitGoal;
     g.theta = 0;
     g.phi = 0.05;
-    g.radius = this._radius(6 * s);
-    this.frameX = 0;
     this.frameY = B.pegs.top;
-    this.frameZ = 0;
+    this._frame(B.pegs.top, B.pegs.top + s, 10);
   }
 
-  // (how far back to see this much of it, high - a phone upright, as much wide)
-  _radius(h) {
-    const app = this.app, vf = THREE.MathUtils.degToRad(app._fovBase || app.camera.fov);
-    return Math.max(4, (0.5 * h) / Math.tan(vf / 2));
+  // (the view: the whole board across, from in front - a phone held upright, its width - up and down with the cubes
+  // still falling, all of them in, eased and kept on the board; none falling, on its slots. Panned after a cube across
+  // the board as well, six cubes high, every peg it hit swung the view about)
+  _frame(lo, hi, dt) {
+    const app = this.app, s = this.s, B = this.B, cam = app.camera, vf = THREE.MathUtils.degToRad(app._fovBase || cam.fov);
+    const tv = Math.tan(vf / 2), th = tv * (cam.aspect || 1), top = B.pegs.top + 2.8 * s;
+    // (back far enough for its width - or, more falling far apart, for them all; never further than for all of it)
+    const wide = (0.5 * (B.xr - B.xl + 1.2 * s)) / th, all = (0.5 * (top + 1.5 * s)) / tv;
+    const R = Math.max(4, Math.min(Math.max(wide, (0.5 * (hi - lo + 4 * s)) / tv), Math.max(wide, all)));
+    const half = R * tv, low = half - 0.5 * s, high = top - half + 0.3 * s;
+    const want = high < low ? 0.5 * top : Math.min(high, Math.max(low, 0.5 * (lo + hi)));
+    this.frameY += (want - this.frameY) * (1 - Math.exp(-dt * 3));
+    this.frameX = 0.5 * (B.xl + B.xr);
+    this.frameZ = 0;
+    app.orbitGoal.radius = R;
   }
 
   // Drop: let go
@@ -212,7 +223,7 @@ export class CublinkoMode {
     const app = this.app, sb = app.sb, s = this.s, B = this.B;
     this.t += dt;
     if (this.phase === 'fall') {
-      let left = 0, mx = 0, my = 0, xl = Infinity, xr = -Infinity, yl = Infinity, yh = -Infinity, n = 0;
+      let left = 0, yl = Infinity, yh = -Infinity;
       for (const cb of app.cubes) {
         const T = this.trk.get(cb.slot);
         if (!T) continue;
@@ -225,6 +236,8 @@ export class CublinkoMode {
         T.still = v < 0.35 ? T.still + dt : 0;
         if (!T.landed) {
           left++;
+          yl = Math.min(yl, pc.com[1]);
+          yh = Math.max(yh, pc.com[1]);
           // (on top of a slot's wall - it lands in neither: its nearest wall, and if it's on it)
           const ht = B.divs[0]?.[2] ?? 1.3 * s;
           let near = Infinity, wx = 0;
@@ -244,23 +257,15 @@ export class CublinkoMode {
             T.stuck++;
           }
         }
-        mx += pc.com[0];
-        my += pc.com[1];
-        xl = Math.min(xl, pc.com[0]); xr = Math.max(xr, pc.com[0]);
-        yl = Math.min(yl, pc.com[1]); yh = Math.max(yh, pc.com[1]);
-        n++;
       }
-      // (the camera on it - or on all of them, back far enough for them all)
-      if (n) {
-        this.frameX = mx / n;
-        this.frameY = Math.max(1.2 * s, my / n);
-        app.orbitGoal.radius = this._radius(Math.max(6 * s, 1.4 * (yh - yl) + 3 * s, (1.4 * (xr - xl) + 3 * s) / Math.max(0.5, app.camera.aspect || 1)));
-      }
+      // (the camera on those still falling - none, the slots)
+      if (left) this._frame(yl, yh, dt);
+      else this._frame(0, 0, dt);
       if (!left || this.t > 30) {
         this.phase = 'done';
         this._changed();
       }
-    }
+    } else if (this.phase === 'done') this._frame(0, 0, dt);
   }
 
   // (in slot ... : what's there done to it)
