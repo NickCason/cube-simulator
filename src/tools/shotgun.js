@@ -126,7 +126,7 @@ export class ShotgunTool extends HoleGunTool {
       app.audio?.shotgun(0, pan);
       return;
     }
-    // frozen where the middle of it struck: it shatters (as the hole gun's round does)
+    // frozen where the middle of it struck, or brittle: it shatters (as the hole gun's round does)
     const first = hits[0];
     let cold = 0, n = 0;
     for (let i = 0; i < sb.nV; i++) {
@@ -134,8 +134,7 @@ export class ShotgunTool extends HoleGunTool {
       const dx = sb.x[i * 3] - first.p.x, dy = sb.x[i * 3 + 1] - first.p.y, dz = sb.x[i * 3 + 2] - first.p.z;
       if (dx * dx + dy * dy + dz * dz < 0.09) (cold += sb.temp[i]), n++;
     }
-    if (n && cold / n < -0.4 && app.tools.mallet?.shatter) {
-      app.tools.mallet.shatter({ tg: { point: first.p, hit: { piece: first.piece } }, d: d.clone() });
+    if (((n && cold / n < -0.4) || app.shatter.brittleOf(sb.pieces[first.piece])?.frozen === false) && app.shatter.blow(first.piece, first.p, d, 2.2 * power)) {
       app.audio?.shotgun(0.6, pan);
       return;
     }

@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { cutBody, sphereField, planeField, removeTets, removeSmallPieces } from '../sim/cutting.js';
 import { makeMallet, makeTorch, makeSpray, makeBaller, makeBomb, makeSyringe, makeMagnet, orient } from '../world/models.js';
 import { fitRotation } from '../heal.js';
-import { TEXTURES, resolveFlavor, flavorMainHex } from '../styles.js';
+import { TEXTURES } from '../styles.js';
 
 const V = (a) => new THREE.Vector3(a[0], a[1], a[2]);
 const _a = new THREE.Vector3();
@@ -152,7 +152,6 @@ export class MalletTool {
     this.anim = null;
     this.res = null; // resonance streak: { piece, topo, hits, last, T }
     this.tear = null; // a burst under way: { seams left, c, half }
-    this.shards = null; // a shatter under way: { cracks, verts, p, d, n done }
   }
 
   // The jelly's beat (s): its natural wobble period - stiffer, lighter or
@@ -202,7 +201,6 @@ export class MalletTool {
 
   update(dt) {
     if (this.tear) this._tear();
-    if (this.shards) this._crack();
     this._resonance();
     // (its meter: while a streak's going and the mallet's in hand)
     const r = this.res, app = this.app;
@@ -246,12 +244,8 @@ export class MalletTool {
       // hard candy) as they are: the one hit's stuff, with several cubes
       const hp = sb.pieces[a.tg.hit.piece];
       const cb = (hp && app.cubes.find((c) => c.slot === hp.cube)) || app.cube;
-      const tex = TEXTURES[cb.style.texture];
-      const brittle = !!tex?.brittle;
-      if (brittle || avgTemp(sb, p, 0.3) < -0.4) {
-        this.shatter(a, brittle ? { tex, chip: tex.chip === 'flavor' ? flavorMainHex(resolveFlavor(cb.style)) : tex.chip } : null);
-        return;
-      }
+      const brittle = !!TEXTURES[cb.style.texture]?.brittle;
+      if ((brittle || avgTemp(sb, p, 0.3) < -0.4) && this.shatter(a)) return;
       const piece = a.tg.hit.piece;
       // on the beat? (the swing is in real time, like the hand that clicks)
       const now = app.clock.t, T = this.beat();
@@ -444,143 +438,10 @@ export class MalletTool {
     this.tear = null;
   }
 
-  // Frozen jelly breaks like ice: cracks run out from the blow - a star of
-  // radial ones round its line at uneven angles, each a little tilted; a
-  // shallow, shell-curved crater of crushed shards round the hit; often a
-  // wider shell further out, now and then a long split through the lot.
-  // Every break is clean (flat, or curved like a shell) and only the frozen
-  // part breaks. They open one a frame through the hit-stop, so they're seen
-  // to run, then the shards fly. (It used to break along the mesh's own
-  // tets round nine random points - the same jagged staircase every time.)
-  // (brittle: { tex, chip } - a brittle thing, as it is, not frozen jelly)
-  shatter(a, brittle = null) {
-    const app = this.app;
-    const sb = app.sb;
-    const p = a.tg.point.clone();
-    const piece = a.tg.hit.piece;
-    const pc = sb.pieces[piece];
-    if (!pc) return;
-    const d = a.d.clone().normalize();
-    // a frame round the blow
-    const u = new THREE.Vector3().crossVectors(d, Math.abs(d.y) < 0.9 ? new THREE.Vector3(0, 1, 0) : new THREE.Vector3(1, 0, 0)).normalize();
-    const v = new THREE.Vector3().crossVectors(d, u);
-    const bb = pc.bbox.slice();
-    const size = Math.max(bb[3] - bb[0], bb[4] - bb[1], bb[5] - bb[2]);
-    // where it's frozen: a coarse grid of the piece's mean temperature
-    const cs = Math.max(0.05, size / 14), gx = Math.ceil((bb[3] - bb[0]) / cs) + 1, gy = Math.ceil((bb[4] - bb[1]) / cs) + 1, gz = Math.ceil((bb[5] - bb[2]) / cs) + 1;
-    const tSum = new Float32Array(gx * gy * gz), tN = new Uint16Array(gx * gy * gz);
-    let all = 0;
-    const cell = (x, y, z) => {
-      const i = Math.floor((x - bb[0]) / cs), j = Math.floor((y - bb[1]) / cs), k = Math.floor((z - bb[2]) / cs);
-      return i < 0 || j < 0 || k < 0 || i >= gx || j >= gy || k >= gz ? -1 : (k * gy + j) * gx + i;
-    };
-    for (const i of pc.verts) {
-      const c = cell(sb.x[i * 3], sb.x[i * 3 + 1], sb.x[i * 3 + 2]);
-      if (c < 0) continue;
-      tSum[c] += sb.temp[i];
-      tN[c]++;
-      all += sb.temp[i];
-    }
-    const allCold = brittle || all / Math.max(1, pc.verts.length) < -0.4;
-    const m = 0.04;
-    const ice = (x, y, z) => {
-      if (x < bb[0] - m || x > bb[3] + m || y < bb[1] - m || y > bb[4] + m || z < bb[2] - m || z > bb[5] + m) return false;
-      if (brittle) return true;
-      const c = cell(x, y, z);
-      return c >= 0 && tN[c] ? tSum[c] / tN[c] < -0.25 : allCold;
-    };
-    const R = (lo, hi) => lo + Math.random() * (hi - lo);
-    const cracks = [];
-    // radial: a star of 2-3 breaks through the hit along the blow, at uneven
-    // angles and each tilted a little off it (4-6 wedges)
-    const N = Math.random() < 0.5 ? 2 : 3;
-    const a0 = Math.random() * Math.PI;
-    for (let k = 0; k < N; k++) {
-      const th = a0 + (k + R(-0.28, 0.28)) * (Math.PI / N);
-      const n = u.clone().multiplyScalar(Math.cos(th)).addScaledVector(v, Math.sin(th)).addScaledVector(d, R(-0.3, 0.3)).normalize();
-      cracks.push(planeField(n.x, n.y, n.z, n.dot(p) + R(-0.02, 0.02) * size, ice));
-    }
-    // the crater: a shallow shell-shaped cap round the hit, its middle a
-    // little off the hit (crushed into small shards by the star)
-    {
-      const r = R(0.3, 0.48) * size, dep = R(0.13, 0.22) * size;
-      const c = p.clone().addScaledVector(d, dep - r).addScaledVector(u, R(-0.05, 0.05) * size).addScaledVector(v, R(-0.05, 0.05) * size);
-      const f = sphereField(c.x, c.y, c.z, r);
-      f.inRegion = ice;
-      cracks.push(f);
-    }
-    // often a second, wider shell: the wedges break across further out
-    if (Math.random() < 0.7) {
-      const r = R(0.5, 0.75) * size;
-      const c = p.clone().addScaledVector(d, R(0.05, 0.2) * size - r * 0.35).addScaledVector(u, R(-0.1, 0.1) * size).addScaledVector(v, R(-0.1, 0.1) * size);
-      const f = sphereField(c.x, c.y, c.z, r);
-      f.inRegion = ice;
-      cracks.push(f);
-    }
-    // now and then a long split right through, off to one side of the hit
-    if (Math.random() < 0.4) {
-      const th = Math.random() * Math.PI * 2;
-      const n = u.clone().multiplyScalar(Math.cos(th)).addScaledVector(v, Math.sin(th)).addScaledVector(d, R(-0.25, 0.25)).normalize();
-      cracks.push(planeField(n.x, n.y, n.z, n.dot(p) + R(0.15, 0.32) * size * (Math.random() < 0.5 ? -1 : 1), ice));
-    }
-    // (the shards are the pieces holding the frozen piece's vertices; the
-    // star breaks the first frame, the rest the next)
-    const chip = (brittle && brittle.chip) || '#dcefff', glassy = !!brittle?.tex.glassy;
-    this.shards = { cracks, batches: [N, cracks.length], verts: pc.verts.slice(), p, d, n: 0, chip, glassy };
-    sb.selfQuietUntil = sb.time + 0.5;
-    app.hitStop(glassy ? 0.13 : 0.1);
-    if (glassy) app.audio.shatterGlass(1);
-    else app.audio.crack(1);
-    app.audio.thud(0.6);
-    // (a burst of glints in its own colour - glass and candy throw more)
-    const cc = new THREE.Color(chip), gc = [0.55 + cc.r * 0.45, 0.55 + cc.g * 0.45, 0.55 + cc.b * 0.45];
-    for (let k = 0; k < (glassy ? 70 : 40); k++) app.particles.glitter(p, 1, gc, glassy ? 1.9 : 1.4);
-    if (glassy) app.flash = Math.max(app.flash || 0, 0.12);
-    app.particles.mist(p, new THREE.Vector3(0, 0.6, 0), 8);
-    app.markDamaged();
-    this._crack();
-  }
-
-  // One step of a shatter: the next batch of cracks (one rebuild for the
-  // lot - see rebuildLight), and after the last the chips and the fling.
-  _crack() {
-    const S = this.shards, app = this.app, sb = app.sb;
-    if (app.healer.active) {
-      this.shards = null;
-      return;
-    }
-    if (S.batches.length) {
-      const end = S.batches.shift(), anchors = app.allAnchors();
-      for (; S.n < end; S.n++) {
-        const pieces = [];
-        for (const i of S.verts) {
-          const k = sb.vPiece[i];
-          if (k >= 0 && !pieces.includes(k)) pieces.push(k);
-        }
-        cutBody(sb, S.cracks[S.n], { separate: 0.02, anchors, pieces, light: S.n < end - 1 });
-      }
-      // (a light rebuild left last: the next cut found nothing to break)
-      if (sb.topoStale) sb.rebuild();
-      app.onTopologyChanged();
-      if (!S.batches.length) {
-        if (S.glassy) app.audio.shatterGlass(0.5, 0.18, 'glass2');
-        else app.audio.crack(0.45);
-      }
-      return;
-    }
-    this.shards = null;
-    const p = S.p, d = S.d;
-    // wafer-thin crumbs become little ice chips instead of slivers
-    const crumbs = removeSmallPieces(sb, 0.006 * sb.p.size ** 3, app.allAnchors());
-    for (let k = 0; k < crumbs.length; k += 4) {
-      const c = new THREE.Vector3(crumbs[k], crumbs[k + 1], crumbs[k + 2]);
-      const v = c.clone().sub(p).normalize().multiplyScalar(2 + Math.random() * 2);
-      v.y += 2;
-      app.droplets.spawn(c, v, 0.012 + Math.cbrt(crumbs[k + 3]) * 0.35, S.chip, { frozen: true });
-    }
-    if (crumbs.length) app.onTopologyChanged();
-    sb.radialImpulse(p.x, p.y, p.z, 1.4, 3.2, 1.5);
-    sb.impulse(p.x, p.y, p.z, d.x, d.y, d.z, 0.6, 3.0);
+  // Frozen jelly - and brittle things, as they are - broken by the blow (see world/shatter.js): a mallet's is a hard
+  // one. False: it didn't (a crumb of it, just broken)
+  shatter(a) {
+    return this.app.shatter.blow(a.tg.hit.piece, a.tg.point, a.d, 1.6);
   }
 }
 

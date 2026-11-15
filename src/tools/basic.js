@@ -909,8 +909,8 @@ export class HoleGunTool extends NailGunTool {
         n++;
       }
     }
-    if (n && cold / n < -0.4 && app.tools.mallet?.shatter) {
-      app.tools.mallet.shatter({ tg: { point: entry, hit: { piece: segs[0][2] } }, d: d.clone() });
+    // (or brittle - glass, candy, ice, sugar: shot, it shatters - see world/shatter.js)
+    if (((n && cold / n < -0.4) || app.shatter.brittleOf(sb.pieces[segs[0][2]])?.frozen === false) && app.shatter.blow(segs[0][2], entry, d, 1.4 * power)) {
       if (!light) app.audio?.gunshot(0.5);
       return true;
     }

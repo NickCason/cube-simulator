@@ -15,6 +15,7 @@ const RECORD = [
   ['shots', 'Shots'],
   ['booms', 'Booms'],
   ['smashed', 'Smashed'],
+  ['shattered', 'Shattered'],
   ['melted', 'Melted'],
   ['frozen', 'Frozen'],
   ['acid', 'Acid baths'],

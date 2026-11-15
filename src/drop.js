@@ -34,6 +34,7 @@ export class DropMode {
     this.hitV = 0;
     this.landT = -1;
     this.calmT = 0;
+    this.shards = 0; // (landed broken: into so many pieces - 1, whole)
     this.alt = 0; // (its bottom's height, now)
     this.onChange = null; // (the bar: see ui/dropbar.js)
     // (the fall made plain: its shadow, the air streaking past, the wind, its landing - see world/dropfx.js)
@@ -114,6 +115,7 @@ export class DropMode {
     this.phase = 'lift';
     this.t = 0;
     this.landT = -1;
+    this.shards = 0;
     this.peak = this.hitV = 0;
     sb.wakeAll();
     this._changed();
@@ -201,6 +203,9 @@ export class DropMode {
         this.calmT = v2 < 0.16 ? this.calmT + dt : 0;
         if (this.calmT > 0.6 || this.t - this.landT > 3) {
           sb.setWind(this.slot, 0);
+          // (broken - brittle, frozen: into how many pieces worth the name - see world/shatter.js)
+          const s = sb.cSize[this.slot] || 1;
+          this.shards = sb.pieces.filter((q) => q && q.cube === this.slot && q.volume > 0.004 * s * s * s).length;
           this.phase = 'land';
           this.t = 0;
           this._changed();
@@ -224,6 +229,12 @@ export class DropMode {
     this.frameY = pc.com[1];
     this.frameX = pc.com[0];
     this.frameZ = pc.com[2];
+    // (down and broken - see world/shatter.js: on all of it, where its shards are, not the biggest one)
+    if (this.landT >= 0) {
+      let M = 0, x = 0, y = 0, z = 0;
+      for (const q of this.app.sb.pieces) if (q && q.cube === this.slot) (M += q.volume), (x += q.com[0] * q.volume), (y += q.com[1] * q.volume), (z += q.com[2] * q.volume);
+      if (M > 0 && M > pc.volume * 1.05) (this.frameX = x / M), (this.frameY = y / M), (this.frameZ = z / M);
+    }
   }
 
   // (falling: the view tipped over to look down past it - 66 degrees - at the floor coming up, its shadow on it under

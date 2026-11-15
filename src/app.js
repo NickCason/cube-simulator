@@ -28,6 +28,7 @@ import { FlourTool } from './tools/flour.js';
 import { EyesTool } from './tools/eyes.js';
 import { Eyes, LATE_LAYER } from './world/eyes.js';
 import { Zits } from './world/zits.js';
+import { Shatter } from './world/shatter.js';
 import { copyAcne } from './acne.js';
 import { copyEyes, EYE_FACES } from './eyes.js';
 import { SURFACE, SURFACES } from './surfaces.js';
@@ -218,6 +219,7 @@ export class App {
     this.onHealEnd = [];
     this.onColor = [];
     this.droplets = new Droplets(this);
+    this.shatter = new Shatter(this); // (brittle and frozen things broken - by blows, shots and hard knocks: see world/shatter.js)
     this.fluid = new Fluid(this); // (molten jelly: see TorchTool, FreezeTool)
     this.jelly.liquid = this.fluid;
     this.spill = new Spill(this); // (a cube full of liquid, cut open, running out into it)
@@ -1742,6 +1744,9 @@ export class App {
       for (const k in this.tools) if (this.tools[k] !== this.tool && this.tools[k].background) this.tools[k].update(sdt, dt);
       this.particles.update(sdt);
       this.gunfx.update(sdt);
+      // (a break under way: its next cracks - and what this frame's hard knocks break)
+      this.shatter.update();
+      this.shatter.impacts(this.healer.active ? [] : this.sb.impacts);
       this._impactSounds();
       this._wobbleSounds();
       this._impactGlow();

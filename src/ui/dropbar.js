@@ -105,7 +105,7 @@ export class Exhibit {
     this.hRow.hidden = busy;
     this.read.hidden = !busy;
     if (phase === 'hang') this.ui.hint('Tap anywhere to let it go', 2200);
-    if (phase === 'land') this.ui.hint(`Hit the ground at ${D.hitV.toFixed(0)} m/s · from ${D.height} m`, 3200);
+    if (phase === 'land') this.ui.hint(D.shards > 1 ? `Shattered at ${D.hitV.toFixed(0)} m/s · ${D.shards} pieces · from ${D.height} m` : `Hit the ground at ${D.hitV.toFixed(0)} m/s · from ${D.height} m`, 3200);
     cancelAnimationFrame(this._raf);
     if (busy) {
       const tick = () => {
