@@ -74,6 +74,7 @@ export class DropMode {
     this.on = false;
     this.phase = '';
     this.frameY = null;
+    this.app.roomHold = null;
     this.app._arena(); // (its ceiling back as the room has it)
     this._changed();
   }
@@ -99,6 +100,7 @@ export class DropMode {
     const { pc, i } = P, size = sb.cSize[this.slot], top = pc.bbox[4], bot = pc.bbox[1];
     // (out of the room's reach above: its ceiling over the hook - see SoftBody._solveBounds)
     sb.p.ceiling = Math.max(sb.p.ceiling, this.height + 3 * size + 2);
+    app.roomHold = { ceiling: sb.p.ceiling };
     // (by all its top - a hold centred over it, reaching its edges: by its middle alone, a soft heavy one hung by a
     // neck, a bungee five times its height, and let go it sprang back to a cube in the air)
     this.grab = sb.startGrab({ point: [pc.com[0], top + 0.25 * size, pc.com[2]], piece: i }, pc.com[0], top + 0.25 * size, pc.com[2], 0.55 * size);

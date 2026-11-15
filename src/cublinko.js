@@ -89,6 +89,7 @@ export class CublinkoMode {
       Object.assign(app.orbitGoal, this._was.view);
       this._was = null;
     }
+    app.roomHold = null;
     app._arena();
     const spots = app.stackLayout?.() || [];
     for (const cb of app.cubes) {
@@ -134,6 +135,7 @@ export class CublinkoMode {
     sb.board = this.B;
     sb.p.arenaRadius = Math.max(this._was?.arena ?? 2.35, W);
     sb.p.ceiling = Math.max(this._was?.ceiling ?? 4.2, top + 4 * s);
+    app.roomHold = { arena: sb.p.arenaRadius, ceiling: sb.p.ceiling };
     if (this.model) app.scene.remove(this.model);
     this.model = makeBoard(app.M, this.B, this.slots, s);
     app.scene.add(this.model);

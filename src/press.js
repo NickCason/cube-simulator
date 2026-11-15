@@ -7,7 +7,8 @@
 
 import * as THREE from 'three';
 import { makePress } from './world/models.js';
-import { cutBody, planeField } from './sim/cutting.js';
+import { polarRot } from './sim/softbody.js';
+import { cutBody, planeField, removeTets } from './sim/cutting.js';
 import { ragged } from './tools/basic.js';
 
 const STORE = 'cube-sim-press';
@@ -23,6 +24,14 @@ const PLATE_GRIP = +(globalThis.__plateGrip ?? 0.1);
 // were crushed through themselves, a cube flattened to a tenth of its height keeping a twentieth of its volume - it
 // bursts: split in wedges from its middle and squirted out from under the plate. Not again for BURST_GAP s)
 const BURST_AT = 0.85, BURST_GAP = 0.45;
+// (squashed past YIELD of its height it gives: yielded - its strain measured against itself flattened that much more,
+// as much jelly, wider - see SoftBody.cFlat - so it spreads out under the plate, a pancake, its squash kept at YIELD.
+// Held to its shape as made, the jelly couldn't: past half its height its tets crushed inside out, and pressed to 4%
+// it was a ball a third its width with 1% of its volume. Slid out over the floor and under the plate as it goes - its
+// grip on both SLIP of what it was; sprung back up to a cube over BACK_T s once the plate's off it)
+const YIELD = 0.3, FLAT_MIN = 0.04, SLIP = 0.05, BACK_T = 1.2;
+// (a cube full of liquid yielded this flat: it bursts, a water balloon)
+const LIQ_BURST = 0.4;
 
 export class PressMode {
   constructor(app) {
@@ -60,6 +69,13 @@ export class PressMode {
     this._fit = { r: 6, rc: 3, y: 1 }; // (the view's distance: all of it, its plate close; and its height)
     this._burstT = -9; // (when it last burst something)
     this.massT = 1; // (t: what it presses weighs, as a cube of its size and stuff would)
+    this.h0 = 1; // (its height as the plate came down on it; how flat it's yielded to - see YIELD - and if it can)
+    this.flat = 1;
+    this.gives = false;
+    this._grip = null; // (its grip on the floor as it was, while it's slid out: { fric, tack })
+    this._popped = false; // (full of liquid, burst already this press)
+    this._R = null; // (its turn, as made to as it lies - see _upRest)
+    this._grindT = -9; // (when shards under it were last ground to grit - see _grind)
     this.onChange = null; // (its bar: see ui/dropbar.js)
   }
 
@@ -84,7 +100,10 @@ export class PressMode {
 
   exit() {
     if (!this.on) return;
+    this._unflat();
     this.app.sb.press = null;
+    this.app.roomHold = null;
+    this.app._arena();
     this.app.audio?.loop('press', false);
     if (this.model) {
       this.app.scene.remove(this.model);
@@ -130,15 +149,129 @@ export class PressMode {
     this.weight = Math.max(1e-6, M * Math.abs(sb.p.gravity));
     // (its weight in tonnes, as a cube of its size and stuff would be: a metre of jelly, a tonne - for the gauge)
     this.massT = s * s * s * (sb.cDens?.[this.slot] || 1);
+    // (room for it to spread: flattened to 4% it's five times as wide)
+    app.roomHold = { arena: 3 * s + 2 };
+    app._arena();
     this._plate();
+  }
+
+  // (its rest frame's up, as it lies now: which way it's squashed - the turn that best takes it as made to as it is)
+  _upRest(pc) {
+    const sb = this.app.sb, x = sb.x, X = sb.X, m = sb.m, A = new Float64Array(9), R = new Float64Array(9);
+    let M = 0, cx = 0, cy = 0, cz = 0, Cx = 0, Cy = 0, Cz = 0;
+    for (const i of pc.verts) {
+      const o = i * 3, mi = m[i];
+      M += mi;
+      cx += x[o] * mi; cy += x[o + 1] * mi; cz += x[o + 2] * mi;
+      Cx += X[o] * mi; Cy += X[o + 1] * mi; Cz += X[o + 2] * mi;
+    }
+    if (!(M > 0)) return [0, 1, 0];
+    cx /= M; cy /= M; cz /= M; Cx /= M; Cy /= M; Cz /= M;
+    for (const i of pc.verts) {
+      const o = i * 3, mi = m[i], dx = (x[o] - cx) * mi, dy = (x[o + 1] - cy) * mi, dz = (x[o + 2] - cz) * mi;
+      const rx = X[o] - Cx, ry = X[o + 1] - Cy, rz = X[o + 2] - Cz;
+      A[0] += dx * rx; A[1] += dx * ry; A[2] += dx * rz;
+      A[3] += dy * rx; A[4] += dy * ry; A[5] += dy * rz;
+      A[6] += dz * rx; A[7] += dz * ry; A[8] += dz * rz;
+    }
+    polarRot(new Float64Array([0, 0, 0, 1]), A, R, 16);
+    this._R = R;
+    return [R[3], R[4], R[5]];
+  }
+
+  // (as the plate comes down on it: how tall it is, which way's up in it, whether it gives - brittle things crack)
+  _yieldStart() {
+    const app = this.app, sb = app.sb, k = this.slot;
+    let pc = null;
+    for (const q of sb.pieces) if (q && q.cube === k && (!pc || q.verts.length > pc.verts.length)) pc = q;
+    this.gives = !!pc && !app.shatter?.brittleOf(pc);
+    this.h0 = pc ? Math.max(0.05, pc.bbox[4] - pc.bbox[1]) : this.s;
+    if (pc) sb.cFlatN.set(this._upRest(pc), k * 3);
+    this.flat = sb.cFlat[k] = 1;
+    this._popped = false;
+  }
+
+  // (yielded to f: and, flattened at all, slid out - its grip on the floor and the plate next to none - its layers kept
+  // in order under the plate while it's pressed, see SoftBody._solveBounds: blended in over the first of it)
+  _setFlat(f) {
+    const sb = this.app.sb, k = this.slot, P = sb.press;
+    this.flat = sb.cFlat[k] = f;
+    if (f < 1 && !this._grip) {
+      this._grip = { fric: sb.cFric[k], tack: sb.cTack[k] };
+      sb.cFric[k] *= SLIP;
+      sb.cTack[k] = 0;
+      for (let i = 0; i < sb.nV; i++) if (sb.vCube[i] === k) sb.stick[i] = 0;
+    }
+    if (!P) return;
+    P.grip = f < 1 ? 0 : PLATE_GRIP;
+    const pressing = this.phase === 'down' || this.phase === 'hold';
+    if (pressing && f < 1 && !P.lock) P.lock = this._lock();
+    const L = P.lock;
+    if (L) {
+      // (as high as the gap, as wide as keeps all of it)
+      L.g = Math.max(FLAT_MIN, this.y / L.H);
+      L.L = 1 / Math.sqrt(L.g);
+      L.b = pressing ? Math.min(1, (1 - f) / 0.15) : 0;
+    }
+  }
+
+  // (the squash it's held to - see SoftBody._solveBounds: its rest axes, up first (n), its rest bottom's middle, and
+  // where those are now - the up straight up, the others level, about its middle on the floor)
+  _lock() {
+    const sb = this.app.sb, k = this.slot, X = sb.X, N = sb.cFlatN, R = this._R;
+    let pc = null;
+    for (const q of sb.pieces) if (q && q.cube === k && (!pc || q.verts.length > pc.verts.length)) pc = q;
+    if (!pc || !R) return null;
+    const n = [N[k * 3], N[k * 3 + 1], N[k * 3 + 2]], nl = Math.hypot(...n) || 1;
+    n[0] /= nl; n[1] /= nl; n[2] /= nl;
+    // (a rest axis across it: x, or z if x is near its up)
+    let u = Math.abs(n[0]) < 0.9 ? [1, 0, 0] : [0, 0, 1];
+    const d = u[0] * n[0] + u[1] * n[1] + u[2] * n[2];
+    u = [u[0] - d * n[0], u[1] - d * n[1], u[2] - d * n[2]];
+    const ul = Math.hypot(...u);
+    u = [u[0] / ul, u[1] / ul, u[2] / ul];
+    const w = [u[1] * n[2] - u[2] * n[1], u[2] * n[0] - u[0] * n[2], u[0] * n[1] - u[1] * n[0]];
+    // (u now, level; w now = U x up)
+    let U = [R[0] * u[0] + R[1] * u[1] + R[2] * u[2], 0, R[6] * u[0] + R[7] * u[1] + R[8] * u[2]];
+    const Ul = Math.hypot(U[0], U[2]) || 1;
+    U = [U[0] / Ul, 0, U[2] / Ul];
+    const W = [-U[2], 0, U[0]];
+    // (its rest middle, and its lowest and highest along n)
+    let M = 0, cx = 0, cy = 0, cz = 0, lo = Infinity, hi = -Infinity;
+    for (let i = 0; i < sb.nV; i++) {
+      if (sb.vCube[i] !== k || !sb.alive[i]) continue;
+      const o = i * 3, r = X[o] * n[0] + X[o + 1] * n[1] + X[o + 2] * n[2];
+      M++;
+      cx += X[o]; cy += X[o + 1]; cz += X[o + 2];
+      if (r < lo) lo = r;
+      if (r > hi) hi = r;
+    }
+    if (!M || !(hi > lo)) return null;
+    cx /= M; cy /= M; cz /= M;
+    const mid = cx * n[0] + cy * n[1] + cz * n[2], C = [cx + (lo - mid) * n[0], cy + (lo - mid) * n[1], cz + (lo - mid) * n[2]];
+    return { k, b: 0, C, u, n, w, c: [pc.com[0], 0, pc.com[2]], U, W, L: 1, g: 1, H: hi - lo };
+  }
+
+  // (back as made: its shape, its grip)
+  _unflat() {
+    const sb = this.app.sb, k = this.slot;
+    this.flat = sb.cFlat[k] = 1;
+    if (sb.press) sb.press.lock = null;
+    if (this._grip) {
+      sb.cFric[k] = this._grip.fric;
+      sb.cTack[k] = this._grip.tack;
+      this._grip = null;
+    }
+    if (sb.press) sb.press.grip = PLATE_GRIP;
   }
 
   // (the plate where it is - in the jelly's world, and drawn)
   _plate() {
     const sb = this.app.sb, h = this.model.userData.half, s = this.s;
-    if (!sb.press) sb.press = { y: this.y, x0: 0, x1: 0, z0: 0, z1: 0, grip: PLATE_GRIP, _f: 0, _n: 0 };
+    if (!sb.press) sb.press = { y: this.y, th: 0.14 * s, x0: 0, x1: 0, z0: 0, z1: 0, grip: PLATE_GRIP, lock: null, _f: 0, _n: 0 };
     const P = sb.press;
     P.y = this.y;
+    P.th = 0.14 * s;
     P.x0 = this.cx - h; P.x1 = this.cx + h;
     P.z0 = this.cz - h; P.z1 = this.cz + h;
     this.plate.position.y = this.y;
@@ -151,7 +284,9 @@ export class PressMode {
   start() {
     if (!this.on || (this.phase && this.phase !== 'hold')) return;
     if (this.phase === 'hold') return this.release();
+    this._unflat();
     this._place();
+    this._yieldStart();
     this.phase = 'down';
     this.t = 0;
     this.peak = 0;
@@ -166,6 +301,7 @@ export class PressMode {
   release() {
     if (this.phase !== 'down' && this.phase !== 'hold') return;
     this.phase = 'up';
+    if (this.app.sb.press?.lock) this.app.sb.press.lock.b = 0;
     this.t = 0;
     this.app.audio?.loop('press', false);
     this.app.audio?.whoosh(0.35);
@@ -213,8 +349,27 @@ export class PressMode {
         this._changed();
       }
     }
-    // (pressing jelly past what it holds: it bursts)
-    if ((this.phase === 'down' || this.phase === 'hold') && this.t - this._burstT > BURST_GAP) this._squeezed();
+    // (squashed past what it gives: yielded, a pancake under it - and once it's off, sprung back up)
+    if (this.gives && (this.phase === 'down' || this.phase === 'hold')) {
+      const f = Math.min(1, Math.max(FLAT_MIN, this.y / (this.h0 * (1 - YIELD))));
+      if (f < this.flat) this._setFlat(f);
+      // (full of liquid, stretched this thin: it bursts)
+      if (!this._popped && this.flat < LIQ_BURST && sb.cLiq[this.slot]) {
+        this._popped = true;
+        sb.pieces.forEach((pc, i) => {
+          if (pc && pc.cube === this.slot && pc.volume > 0.2 * s * s * s) this._burst(pc, i);
+        });
+      }
+    } else if (this.flat < 1) {
+      // (the plate off it: back up under it as it rises, no higher - sprung back at once, it was squeezed out sideways
+      // from under it and came back a cube beside the press - then the rest of the way)
+      const cap = this.phase === 'up' ? Math.max(this.flat, Math.min(1, (this.y - 0.03 * s) / this.h0)) : 1;
+      const f = Math.min(cap, this.flat + dt / BACK_T);
+      if (f >= 1) this._unflat();
+      else this._setFlat(f);
+    }
+    // (pressing jelly past what it holds: it bursts - not what's squashed evenly, see _lock: all of it kept)
+    if ((this.phase === 'down' || this.phase === 'hold') && !sb.press?.lock && this.t - this._burstT > BURST_GAP) this._squeezed();
     // (pressing hard on something brittle: it cracks - and cracks again, smaller, as it keeps coming)
     if ((this.phase === 'down' || this.phase === 'hold') && this.force > CRUSH * this.weight && app.shatter) {
       const h = this.model.userData.half;
@@ -225,18 +380,35 @@ export class PressMode {
         app.shatter.blow(i, new THREE.Vector3(pc.com[0], this.y, pc.com[2]), new THREE.Vector3(0, -1, 0), Math.min(3, 1 + this.force / (12 * this.weight)), null, 'blow');
       });
     }
+    // (shards under it thicker than the gap: ground to grit)
+    if (this.phase === 'down' && app.shatter && this.t - this._grindT > 0.2) this._grind();
     this._plate();
     // (the gap over the cube's height - for the gauge)
     this.squash = Math.min(1, this.y / Math.max(1e-6, s));
-    // (the view: all of it as it starts; coming down, closer and lower - on the gap, the jelly squashed in it)
+    // (the view: all of it as it starts; coming down, closer and lower - on the gap, the jelly squashed in it; given
+    // way, up over it and back, looking down on it spread out round the plate - side on, a pancake's a line)
     const u = Math.min(1, Math.max(0, (this.y0 - this.y) / Math.max(1e-6, this.y0 - 0.5 * s))), e = u * u * (3 - 2 * u);
+    const q = this.gives ? Math.min(1, Math.max(0, (0.85 - this.flat) / 0.5)) : 0, ep = q * q * (3 - 2 * q);
     this.frameX = this.cx;
     this.frameZ = this.cz;
     this.frameY = this._fit.y + (Math.max(0.06 * s, 0.5 * this.y) - this._fit.y) * e;
+    this.frameY += (0.1 * s - this.frameY) * ep;
     if (this.phase === 'down') {
       const g = app.orbitGoal;
       g.radius = this._fit.r + (this._fit.rc - this._fit.r) * e;
       g.phi = 0.2 + (0.02 - 0.2) * e;
+      if (ep > 0) {
+        // (back far enough for it as wide as it'll go - a phone upright, narrow)
+        const vf = THREE.MathUtils.degToRad(app._fovBase || app.camera.fov), hf = 2 * Math.atan(Math.tan(vf / 2) * (app.camera.aspect || 1));
+        const W = Math.max(2 * this.model.userData.half, s / Math.sqrt(Math.max(FLAT_MIN, (this.depth * s) / this.h0))), rp = (0.6 * W) / Math.tan(hf / 2);
+        g.radius += (Math.max(this._fit.rc, rp) - g.radius) * ep;
+        g.phi += (0.62 - g.phi) * ep;
+      }
+    } else if (this.phase === 'up') {
+      // (back down side on as it rises: from over it, the plate hid it coming back)
+      const g = app.orbitGoal;
+      g.radius = this._fit.r;
+      g.phi = 0.2;
     }
   }
 
@@ -291,6 +463,28 @@ export class PressMode {
       app.droplets?.spawn(c.clone().add(new THREE.Vector3(Math.cos(th) * 0.4 * s, 0, Math.sin(th) * 0.4 * s)), v, 0.01 + Math.random() * 0.016, col);
     }
     app.tally?.('smashed');
+  }
+
+  // (brittle shards under the plate, the gap under half as thick as they are: ground to grit - gone, a puff of glinting
+  // dust where each was. Pressed on down, a 4 cm gap, glass shards a third of a metre across were crushed through
+  // themselves - 1700 tets inside out)
+  _grind() {
+    const app = this.app, sb = app.sb, s = this.s, h = this.model.userData.half, gone = new Set(), dust = [];
+    sb.pieces.forEach((pc, i) => {
+      if (!pc || pc.bbox[4] < this.y - 0.03 * s || this.y > 0.5 * Math.cbrt(pc.volume)) return;
+      if (pc.com[0] < this.cx - h || pc.com[0] > this.cx + h || pc.com[2] < this.cz - h || pc.com[2] > this.cz + h) return;
+      const B = app.shatter.brittleOf(pc);
+      if (!B) return;
+      gone.add(i);
+      dust.push({ x: pc.com[0], z: pc.com[2], c: new THREE.Color(B.chip), n: Math.min(40, 8 + Math.round(400 * pc.volume)) });
+    });
+    if (!gone.size) return;
+    this._grindT = this.t;
+    removeTets(sb, (t) => gone.has(sb.tPiece[t]), app.allAnchors());
+    app.onTopologyChanged();
+    for (const d of dust) app.particles?.glitter(new THREE.Vector3(d.x, 0.5 * this.y, d.z), d.n, [d.c.r, d.c.g, d.c.b], 1.4);
+    app.audio?.crack(0.4);
+    app.shake(0.01);
   }
 
   // (tonnes, by the gauge: its push - as so many times its weight - and the most)

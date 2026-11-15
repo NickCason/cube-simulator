@@ -260,6 +260,9 @@ export class App {
 
     this.clock = { last: performance.now(), t: 0 };
     this.timeScale = 1;
+    // (an exhibition mode's room - its reach and its ceiling, at least - kept whatever else resizes it: { arena, ceiling }
+    // or null. See _arena)
+    this.roomHold = null;
     this.stats = { physMs: 0, frameMs: 0, frames: 0, physLast: 0, renderLast: 0 };
     // (parts of the drawing left out, for ?stats' bench - and its time then
     // taken to when the GPU's done with the frame: see ui/stats.js)
@@ -1430,9 +1433,12 @@ export class App {
     // keep the arena inside what the default view can see
     const halfV = Math.tan((this.camera.fov * Math.PI) / 360) * this.orbitGoal.radius;
     const halfW = halfV * (w / h);
-    this.sb.p.arenaRadius = Math.max(1.15, Math.min(2.3, halfW * 0.92 - 0.35));
-    this._viewArena = this.sb.p.arenaRadius;
-    if (this.cubes && this.cubes.length > 1) this._arena();
+    this._viewArena = Math.max(1.15, Math.min(2.3, halfW * 0.92 - 0.35));
+    // (a mode's room kept: resized - a slow frame's lower resolution, a phone's bar sliding - it was the view's again
+    // mid-mode, 1.2 m: Cublinko's cubes yanked in off an 11 m board through its pegs, landed ones thrown back up; a
+    // pressed pancake crushed into a ball; the collider's debris)
+    if (this.cubes && (this.cubes.length > 1 || this.roomHold)) this._arena();
+    else this.sb.p.arenaRadius = this._viewArena;
     // pixel budget: huge screens render at a lower ratio
     const budget = Math.sqrt(3.6e6 / Math.max(1, w * h));
     if (this.pixelRatio > budget) this.pixelRatio = Math.max(0.6, budget);
@@ -2537,6 +2543,12 @@ export class App {
       top = Math.max(top, L.y + (cb ? this.sizeOf(cb) : sb.p.size));
     }
     sb.p.ceiling = Math.max(4.2, top + 1.2);
+    // (a mode's room, at least)
+    const H = this.roomHold;
+    if (H) {
+      if (H.arena) sb.p.arenaRadius = Math.max(sb.p.arenaRadius, H.arena);
+      if (H.ceiling) sb.p.ceiling = Math.max(sb.p.ceiling, H.ceiling);
+    }
   }
 
   // A spot clear of the cubes there: [x, z, the height to set a cube down

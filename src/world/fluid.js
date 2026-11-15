@@ -2528,6 +2528,20 @@ export class Fluid {
           q[o + 2] *= R / r;
         }
       }
+      // (a press's plate - see PressMode: off it. Under it, kept under - or, no room for a drop there, out its
+      // nearest side; come down on it, on its top)
+      const PR = sb.press;
+      if (PR && q[o + 1] > PR.y - R_P && q[o + 1] < PR.y + PR.th + R_P && q[o] > PR.x0 - R_P && q[o] < PR.x1 + R_P && q[o + 2] > PR.z0 - R_P && q[o + 2] < PR.z1 + R_P) {
+        if (this.x[o + 1] >= PR.y + 0.5 * PR.th) q[o + 1] = PR.y + PR.th + R_P;
+        else if (PR.y - R_P >= R_P) q[o + 1] = PR.y - R_P;
+        else {
+          const dl = q[o] - PR.x0, dr = PR.x1 - q[o], db = q[o + 2] - PR.z0, df = PR.z1 - q[o + 2], mn = Math.min(dl, dr, db, df);
+          if (mn === dl) q[o] = PR.x0 - R_P;
+          else if (mn === dr) q[o] = PR.x1 + R_P;
+          else if (mn === db) q[o + 2] = PR.z0 - R_P;
+          else q[o + 2] = PR.z1 + R_P;
+        }
+      }
       if (!this.cellsN) {
         this.lastOut[o] = q[o]; this.lastOut[o + 1] = q[o + 1]; this.lastOut[o + 2] = q[o + 2];
         continue;

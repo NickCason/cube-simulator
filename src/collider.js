@@ -99,6 +99,7 @@ export class ColliderMode {
       Object.assign(app.orbitGoal, this._was.view);
       this._was = null;
     }
+    app.roomHold = null;
     app._arena();
     // (the cubes back in the room whole, each where it stands - what was left of them lay metres out, past the room's
     // edge, shoved in by it as it closed back)
@@ -163,6 +164,7 @@ export class ColliderMode {
     // shards hit it at 60 m/s, broke again and flew back in)
     sb.p.arenaRadius = Math.max(this._was?.arena ?? 2.35, this.L + 3 * s, 30);
     sb.p.ceiling = Math.max(sb.p.ceiling, this.h + 3 * s);
+    app.roomHold = { arena: sb.p.arenaRadius, ceiling: sb.p.ceiling };
     sb.p.maxSpeed = SPEED_CAP;
     app.nails?.clearAll?.();
     for (const [k, cube, x, yaw] of [[this.a, ca, -this.L, 0], [this.b, cb, this.L, Math.PI]]) {

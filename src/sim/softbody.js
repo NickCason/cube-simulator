@@ -252,6 +252,13 @@ export class SoftBody {
     this.cTack = new Float64Array(MAX_CUBES); // (0..1: how it sticks to the floor where it's touched it - see _solveBounds)
     this._pTack = new Float64Array(64); // (each piece's, this step: its cube's, or its splat's while that holds)
     this.cRigid = new Float64Array(MAX_CUBES);
+    // (each cube's give under a press - see PressMode: its strain measured against itself flattened along n, its rest
+    // frame's up - f of its height, 1/sqrt(f) as wide: as much jelly, yielded into a pancake. Held to as made, crushed
+    // under a plate it lost all but 3% of its volume, folded up into a ball. 1: as made)
+    this.cFlat = new Float64Array(MAX_CUBES).fill(1);
+    this.cFlatN = new Float64Array(MAX_CUBES * 3);
+    this._flatS = new Float64Array(MAX_CUBES * 9); // (the stretch each is yielded to, and its inverse: see _flatMat)
+    this._flatSi = new Float64Array(MAX_CUBES * 9);
     this.cDens = new Float64Array(MAX_CUBES);
     this.cAir = new Float64Array(MAX_CUBES);
     this.cBevel = new Float64Array(MAX_CUBES).fill(this.p.bevel); // (each its own edges)
@@ -576,6 +583,7 @@ export class SoftBody {
     this.cubeVersion++;
     if (this.slitOf) this.slitOf.fill(0, this.nV);
     this.cHollow[k] = 0;
+    this.cFlat[k] = 1;
     this.cav[k] = null;
     this.cHid[k] = 0;
     this.cPress[k] = 0;
@@ -2455,6 +2463,20 @@ export class SoftBody {
     }
   }
 
+  // (cube k's yield, see cFlat: S = sx I + (f - sx) n n^T and its inverse, row by row - f along n, sx = 1/sqrt(f) across)
+  _flatMat(k) {
+    const f = Math.max(1e-3, this.cFlat[k]), sx = 1 / Math.sqrt(f), N = this.cFlatN, o = k * 3;
+    let nx = N[o], ny = N[o + 1], nz = N[o + 2];
+    const l = Math.hypot(nx, ny, nz) || 1;
+    nx /= l; ny /= l; nz /= l;
+    const S = this._flatS, Si = this._flatSi, q = k * 9, a = f - sx, b = 1 / f - 1 / sx, n3 = [nx, ny, nz];
+    for (let r = 0; r < 3; r++)
+      for (let c = 0; c < 3; c++) {
+        S[q + r * 3 + c] = (r === c ? sx : 0) + a * n3[r] * n3[c];
+        Si[q + r * 3 + c] = (r === c ? 1 / sx : 0) + b * n3[r] * n3[c];
+      }
+  }
+
   _solveTets(h) {
     const { T, B, vol0, x, w, tMu, tVS, tKs, tDmg, tCube, tLq, tPr } = this;
     const HT = this.cHardTyp || (this.cHardTyp = new Float64Array(MAX_CUBES));
@@ -2471,7 +2493,9 @@ export class SoftBody {
     }
     const ih2 = 1 / (h * h);
     const nT = this.nT;
-    const aw = this._awake, tp = this.tPiece;
+    const aw = this._awake, tp = this.tPiece, FL = this.cFlat, FSi = this._flatSi;
+    let anyFlat = false;
+    for (let k = 0; k < MAX_CUBES; k++) if (FL[k] !== 1) (anyFlat = true), this._flatMat(k);
     for (let t = 0; t < nT; t++) {
       const V0 = vol0[t];
       if (V0 <= 0 || !aw[tp[t]]) continue;
@@ -2483,9 +2507,19 @@ export class SoftBody {
       const vs = tVS[t];
       const sc = vs === 1 ? 1 : 1 / Math.cbrt(vs);
       const bo = t * 9;
-      const b00 = B[bo] * sc, b01 = B[bo + 1] * sc, b02 = B[bo + 2] * sc;
-      const b10 = B[bo + 3] * sc, b11 = B[bo + 4] * sc, b12 = B[bo + 5] * sc;
-      const b20 = B[bo + 6] * sc, b21 = B[bo + 7] * sc, b22 = B[bo + 8] * sc;
+      let b00 = B[bo] * sc, b01 = B[bo + 1] * sc, b02 = B[bo + 2] * sc;
+      let b10 = B[bo + 3] * sc, b11 = B[bo + 4] * sc, b12 = B[bo + 5] * sc;
+      let b20 = B[bo + 6] * sc, b21 = B[bo + 7] * sc, b22 = B[bo + 8] * sc;
+      if (anyFlat && FL[kc] !== 1) {
+        // (yielded: measured against its rest shape stretched - B x S^-1)
+        const q = kc * 9, s0 = FSi[q], s1 = FSi[q + 1], s2 = FSi[q + 2], s3 = FSi[q + 3], s4 = FSi[q + 4], s5 = FSi[q + 5], s6 = FSi[q + 6], s7 = FSi[q + 7], s8 = FSi[q + 8];
+        let u0 = b00, u1 = b01, u2 = b02;
+        b00 = u0 * s0 + u1 * s3 + u2 * s6; b01 = u0 * s1 + u1 * s4 + u2 * s7; b02 = u0 * s2 + u1 * s5 + u2 * s8;
+        u0 = b10; u1 = b11; u2 = b12;
+        b10 = u0 * s0 + u1 * s3 + u2 * s6; b11 = u0 * s1 + u1 * s4 + u2 * s7; b12 = u0 * s2 + u1 * s5 + u2 * s8;
+        u0 = b20; u1 = b21; u2 = b22;
+        b20 = u0 * s0 + u1 * s3 + u2 * s6; b21 = u0 * s1 + u1 * s4 + u2 * s7; b22 = u0 * s2 + u1 * s5 + u2 * s8;
+      }
       const V = V0 * vs;
       // frozen (stiffer) tets stiffen in volume too, keeping lambda/mu: a stiff
       // shear term against a soft volume term rings violently
@@ -2867,11 +2901,11 @@ export class SoftBody {
   // on positions after the elastic solve fed energy into resting pieces and
   // kept them rocking forever.
   _solveBounds(h) {
-    const { x, w, m, fpen, wpen } = this;
+    const { x, px, w, m, fpen, wpen } = this;
     const R = this.p.arenaRadius, R2 = R * R, box = this.p.box;
     const top = this.p.ceiling;
     const n = this.nV;
-    const aw = this._awake, vp = this.vPiece, I = this._imp, PR = this.press;
+    const aw = this._awake, vp = this.vPiece, I = this._imp, PR = this.press, LK = PR && PR.lock && PR.lock.b > 0 ? PR.lock : null, vc = this.vCube, X = this.X;
     if (PR) PR._n++;
     // (sticky: each vertex that's touched the floor held to it - see STICK_A - by its piece's tack; and that hold
     // added to its weight's for its grip on it, see _updateVelocities: stuck, it doesn't slide either)
@@ -2902,13 +2936,42 @@ export class SoftBody {
           if (SK[i] < 0.05) SK[i] = 0;
         }
       } else if (y > top) x[o + 1] = top;
-      // (a press's plate over it - see PressMode: what's under it, up against it, pushed down to it and gripped
-      // as the floor grips - and how hard, for its gauge)
-      if (PR && x[o + 1] > PR.y && x[o] > PR.x0 && x[o] < PR.x1 && x[o + 2] > PR.z0 && x[o + 2] < PR.z1) {
-        const pen = x[o + 1] - PR.y;
-        x[o + 1] = PR.y;
-        if (PR.grip && pen > fpen[i]) fpen[i] = pen * PR.grip;
-        PR._f += (pen * m[i]) / (h * h);
+      // (squashed flat under a press's plate - see PressMode: held to it as a slick press squashes it, evenly - each
+      // point as far up it as it was up the cube as made, and out as far as keeps all of it: a pancake. Left to the
+      // tets, a 4 cm pancake's 3 mm layers inverted at every nudge from the floor or the plate, it lost its volume, and
+      // folded up into a ball. LK: { k, b, C (its rest bottom's middle), u n w (its rest axes, n up), c (that bottom
+      // now), U W (where u and w lie now, level), L (as wide), g (as high) })
+      if (LK && vc[i] === LK.k) {
+        const dx = X[o] - LK.C[0], dy = X[o + 1] - LK.C[1], dz = X[o + 2] - LK.C[2];
+        const a = (dx * LK.u[0] + dy * LK.u[1] + dz * LK.u[2]) * LK.L, c = (dx * LK.w[0] + dy * LK.w[1] + dz * LK.w[2]) * LK.L;
+        const up = Math.max(0, (dx * LK.n[0] + dy * LK.n[1] + dz * LK.n[2]) * LK.g), ey = up - x[o + 1];
+        x[o] += LK.b * (LK.c[0] + a * LK.U[0] + c * LK.W[0] - x[o]);
+        x[o + 1] += LK.b * ey;
+        x[o + 2] += LK.b * (LK.c[2] + a * LK.U[2] + c * LK.W[2] - x[o + 2]);
+        if (ey < 0 && up > 0.5 * PR.y) PR._f += (-ey * LK.b * m[i]) / (h * h);
+      }
+      // (a press's plate over it - see PressMode - a slab PR.th thick: what's under it, up against it, pushed down to
+      // it and gripped as the floor grips - and how hard, for its gauge; what's come down on it from above, on its top;
+      // in at its side, back out the nearest side. A plane over all of it, a piece flung up past its edge and over it
+      // was dragged down through it)
+      if (PR && x[o + 1] > PR.y && x[o + 1] < PR.y + PR.th && x[o] > PR.x0 && x[o] < PR.x1 && x[o + 2] > PR.z0 && x[o + 2] < PR.z1) {
+        const qx = px[o], qz = px[o + 2];
+        if (!(qx > PR.x0 && qx < PR.x1 && qz > PR.z0 && qz < PR.z1)) {
+          const dl = x[o] - PR.x0, dr = PR.x1 - x[o], db = x[o + 2] - PR.z0, df = PR.z1 - x[o + 2], mn = Math.min(dl, dr, db, df);
+          if (mn === dl) x[o] = PR.x0;
+          else if (mn === dr) x[o] = PR.x1;
+          else if (mn === db) x[o + 2] = PR.z0;
+          else x[o + 2] = PR.z1;
+        } else if (px[o + 1] < PR.y + 0.5 * PR.th) {
+          const pen = x[o + 1] - PR.y;
+          x[o + 1] = PR.y;
+          if (PR.grip && pen > fpen[i]) fpen[i] = pen * PR.grip;
+          PR._f += (pen * m[i]) / (h * h);
+        } else {
+          const pen = PR.y + PR.th - x[o + 1];
+          x[o + 1] = PR.y + PR.th;
+          if (pen > fpen[i]) fpen[i] = pen;
+        }
       }
       // (the glass room: square walls, half its width R out)
       if (box) {
@@ -3894,10 +3957,20 @@ export class SoftBody {
         A[6] += dz * rx; A[7] += dz * ry; A[8] += dz * rz;
       }
       polarRot(pc.rigQ, A, R, 4);
+      // (yielded under a press: held to its shape as yielded - see cFlat)
+      const fl = this.cFlat[pc.cube] !== 1, S = this._flatS, q9 = pc.cube * 9;
+      if (fl) this._flatMat(pc.cube);
       for (let n = 0; n < vs.length; n++) {
         const i = vs[n];
         if (w[i] === 0 || (held && held[i])) continue;
-        const o = i * 3, rx = X[o] - Cx, ry = X[o + 1] - Cy, rz = X[o + 2] - Cz;
+        const o = i * 3;
+        let rx = X[o] - Cx, ry = X[o + 1] - Cy, rz = X[o + 2] - Cz;
+        if (fl) {
+          const ux = rx, uy = ry, uz = rz;
+          rx = S[q9] * ux + S[q9 + 1] * uy + S[q9 + 2] * uz;
+          ry = S[q9 + 3] * ux + S[q9 + 4] * uy + S[q9 + 5] * uz;
+          rz = S[q9 + 6] * ux + S[q9 + 7] * uy + S[q9 + 8] * uz;
+        }
         x[o] += amt * (cx + R[0] * rx + R[1] * ry + R[2] * rz - x[o]);
         x[o + 1] += amt * (cy + R[3] * rx + R[4] * ry + R[5] * rz - x[o + 1]);
         x[o + 2] += amt * (cz + R[6] * rx + R[7] * ry + R[8] * rz - x[o + 2]);
