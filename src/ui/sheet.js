@@ -14,6 +14,7 @@ export class Sheet {
       scrim.addEventListener('click', () => current?.close());
       window.addEventListener('keydown', (e) => e.key === 'Escape' && current?.close());
     }
+    this._from = null; // (what had the focus as it opened)
     const el = (this.el = document.createElement('section'));
     el.className = `sheet ${cls}`;
     el.setAttribute('role', 'dialog');
@@ -41,6 +42,7 @@ export class Sheet {
   open() {
     if (current === this) return;
     const swap = !!current;
+    this._from = swap ? current._from : document.activeElement;
     current?.close(true);
     current = this;
     this.onOpen?.();
@@ -60,6 +62,10 @@ export class Sheet {
     if (!swap) {
       scrim.classList.remove('on');
       document.documentElement.classList.remove('sheeted');
+      // (the keyboard's focus back on what opened it - it was left on nothing)
+      const f = this._from;
+      this._from = null;
+      if (f?.isConnected && (this.el.contains(document.activeElement) || document.activeElement === document.body)) f.focus?.({ preventScroll: true });
     }
     this.onClose?.();
   }

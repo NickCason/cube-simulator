@@ -7130,3 +7130,130 @@ html.dark .flyer {
     animation: none !important;
   }
 }
+
+/* ---- phase 4: for everyone. A keyboard's focus seen; muted text dark enough to read; a phone's option rows
+   (the sieve's powders, the googly eyes') a fingertip a button - scrolling if they don't fit; and larger text,
+   a switch in the menu */
+.dock button:focus-visible,
+.sheet button:focus-visible,
+.ui-chips .ui-chip:focus-visible,
+.menu-btn:focus-visible,
+.cubby-btn:focus-visible,
+.rec-btn:focus-visible,
+.place-btn:focus-visible,
+.theme-btn:focus-visible,
+.palette button:focus-visible,
+.drop-bar button:focus-visible,
+.exhibit-pop button:focus-visible,
+.powders button:focus-visible,
+.cubl-pick button:focus-visible {
+  outline: 3px solid color-mix(in srgb, var(--jelly) 70%, #000);
+  outline-offset: 2px;
+}
+
+.palette input[type='range']:focus-visible,
+.drop-bar input[type='range']:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--jelly) 70%, #000);
+  outline-offset: 4px;
+  border-radius: 6px;
+}
+
+.sh-sub {
+  color: rgba(28, 28, 31, 0.64);
+}
+
+.tt-grp h3 {
+  color: rgba(28, 28, 31, 0.66);
+}
+
+@media (max-width: 720px) {
+  .powders {
+    max-width: calc(100vw - 16px);
+    box-sizing: border-box;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+  .powders::-webkit-scrollbar {
+    display: none;
+  }
+  .powders button {
+    flex: 0 0 auto;
+    width: 40px;
+    height: 40px;
+  }
+  body.powders-on .ui-chips,
+  body.powders-on .hint {
+    bottom: calc(var(--dock-top) + 58px);
+  }
+  body.powders-on:has(.ui-chips .ui-chip:not([hidden])) .hint {
+    bottom: calc(var(--dock-top) + 110px);
+  }
+}
+
+html.big-text .hint {
+  font-size: 15px;
+}
+
+html.big-text .dk-lbl {
+  font-size: 13.5px;
+}
+
+html.big-text .holding .hd-nm b {
+  font-size: 15px;
+}
+
+html.big-text .holding .hd-nm > span {
+  font-size: 13px;
+}
+
+html.big-text .sheet .tt-tile {
+  font-size: 13.5px;
+}
+
+html.big-text .mrow {
+  font-size: 17.5px !important;
+}
+
+html.big-text .sh-sub,
+html.big-text .cubby-btn {
+  font-size: 15px;
+}
+
+html.big-text .palette .lbl,
+html.big-text .tt-grp h3 {
+  font-size: 13px;
+}
+
+html.big-text .palette .row,
+html.big-text #ui > .palette.tune .row {
+  font-size: 14.5px;
+}
+
+html.big-text .palette .row .word {
+  font-size: 13.5px;
+}
+
+html.big-text .palette .seg .opt {
+  font-size: 14px;
+}
+
+html.big-text .drop-bar .db-h,
+html.big-text .drop-bar .cu-cap {
+  font-size: 14.5px;
+}
+
+html.big-text .drop-bar .db-go {
+  font-size: 16.5px;
+}
+
+html.big-text .ui-chips .ui-chip {
+  font-size: 15.5px;
+}
+
+html.big-text .exhibit-pop .ex-mode b {
+  font-size: 16.5px;
+}
+
+html.big-text .exhibit-pop .ex-mode em {
+  font-size: 14px;
+}

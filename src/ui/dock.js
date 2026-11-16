@@ -30,7 +30,9 @@ const I = {
   rec: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="6.5" fill="#e5333f"/></svg>',
   add: svg('<rect x="3.5" y="7" width="11" height="11" rx="2.6"/><path d="M18.5 3.5v6M15.5 6.5h6"/>'),
   tune: svg('<path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/>'),
+  text: svg('<path d="M3 18 8 6l5 12M4.8 14h6.4"/><path d="M15.5 18v-5.2a2.4 2.4 0 0 1 4.8 0V18M15.5 15h4.8"/>'),
 };
+const BIG_KEY = 'cube-sim-bigtext';
 
 export class PhoneDock {
   // (icons, tools: ui.js's ICONS and TOOL_DEFS - handed in, ui.js importing this)
@@ -43,6 +45,9 @@ export class PhoneDock {
     this.recents = [];
     this._quakeT = 0;
     this._flying = false; // (a tool on its way down from the tray: it acts once it lands)
+    try {
+      if (localStorage.getItem(BIG_KEY) === '1') document.documentElement.classList.add('big-text');
+    } catch (e) {}
     this._chipT = new WeakMap();
     try {
       const r = JSON.parse(localStorage.getItem(RECENT_KEY) || '[]');
@@ -270,6 +275,14 @@ export class PhoneDock {
 
   // ------------------------------------------------------------------ the menu
 
+  // (larger text, on or off - and kept)
+  _bigText() {
+    const on = document.documentElement.classList.toggle('big-text');
+    try {
+      localStorage.setItem(BIG_KEY, on ? '1' : '0');
+    } catch (e) {}
+  }
+
   _renderMenu() {
     const app = this.app, ui = this.ui, B = this.menu.body;
     B.textContent = '';
@@ -277,6 +290,7 @@ export class PhoneDock {
       { label: 'Places', icon: I.places, acc: '›', run: () => ui.places?.toggle() },
       { label: 'Glow mode', icon: I.glow, sw: () => app.theme === 'dark', run: () => ui.toggleTheme() },
       { label: 'Sound', icon: I.sound, sw: () => !app.audio.muted, run: () => ui.setMuted(!app.audio.muted) },
+      { label: 'Larger text', icon: I.text, sw: () => document.documentElement.classList.contains('big-text'), run: () => this._bigText() },
       ui.clips?.able && !ui.clips.recording && { label: 'Record a clip', icon: I.rec, run: () => ui.clips.start() },
       app.cubes.length < 8 && { label: 'Add a cube', icon: I.add, run: () => app.addCube() },
       { label: 'Settings', icon: I.tune, acc: '›', run: () => ui.tuneBtn?.click() },
