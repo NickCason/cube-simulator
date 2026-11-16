@@ -103,3 +103,42 @@ export class Sheet {
     }
   }
 }
+
+// A panel made a sheet on a phone (the Cubimizer, Settings, the Cubby, the stack, Places, Play: their own markup,
+// shown and hidden by `hidden`, closed their own ways): a handle on top - dragged down or flicked, it's closed;
+// dragged up, taller - most of the screen; tapped, the one height or the other. Hidden again: its first height
+export function asSheet(el, close) {
+  if (!el || el.querySelector(':scope > .pal-grab')) return;
+  const grab = document.createElement('div');
+  grab.className = 'pal-grab';
+  grab.setAttribute('aria-hidden', 'true');
+  grab.innerHTML = '<i></i>';
+  el.prepend(grab);
+  new MutationObserver(() => el.hidden && el.classList.remove('tall')).observe(el, { attributes: true, attributeFilter: ['hidden'] });
+  let y0 = null, dy = 0, t0 = 0, id = -1;
+  grab.addEventListener('pointerdown', (e) => {
+    y0 = e.clientY;
+    dy = 0;
+    t0 = performance.now();
+    id = e.pointerId;
+    grab.setPointerCapture?.(id);
+    el.classList.add('drag');
+  });
+  grab.addEventListener('pointermove', (e) => {
+    if (y0 === null || e.pointerId !== id) return;
+    dy = e.clientY - y0;
+    el.style.translate = `0 ${dy > 0 ? dy : -Math.sqrt(-dy) * 2}px`;
+  });
+  const end = (e) => {
+    if (y0 === null || e.pointerId !== id) return;
+    const v = dy / Math.max(1, performance.now() - t0);
+    y0 = null;
+    el.classList.remove('drag');
+    el.style.translate = '';
+    if (dy > 90 || (dy > 20 && v > 0.5)) close();
+    else if (dy < -30 || (dy < -10 && v < -0.4)) el.classList.add('tall');
+    else if (Math.abs(dy) < 6) el.classList.toggle('tall');
+  };
+  grab.addEventListener('pointerup', end);
+  grab.addEventListener('pointercancel', end);
+}

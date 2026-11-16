@@ -4,7 +4,7 @@
 // (more than one - their panel). The rest - places, glow, sound, a clip, another cube, the settings - in the ⋯ menu,
 // top right. Measured before (scratch/UI-AUDIT.md): 3 of the 22 tools fit the old phone dock, 2 with a stack.
 
-import { Sheet } from './sheet.js';
+import { Sheet, asSheet } from './sheet.js';
 import { fly, motion } from './motion.js';
 
 export const TOOL_GROUPS = [
@@ -97,6 +97,13 @@ export class PhoneDock {
     });
     root.appendChild(mb);
     this.tray = new Sheet(root, { cls: 'tray', title: 'Tools', sub: `${tools.length} to play with`, onOpen: () => this._opening('tray') });
+    // the panels: sheets too, on a phone - a handle each (see asSheet; the rest is CSS)
+    asSheet(ui.paletteEl, () => ui.closePalette());
+    asSheet(ui.tuneEl, () => ui.closeTune());
+    asSheet(ui.cubby?.el, () => ui.cubby.close());
+    asSheet(ui.stack?.el, () => ui.stack.close());
+    asSheet(ui.places?.el, () => ui.places.close());
+    asSheet(ui.exhibit?.pop, () => ((ui.exhibit.pop.hidden = true), ui.exhibit.btn.classList.remove('open')));
     this.menu = new Sheet(root, { cls: 'menu-sheet', title: 'Cube Simulator', onOpen: () => this._opening('menu') });
   }
 

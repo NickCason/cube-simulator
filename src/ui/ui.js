@@ -657,11 +657,29 @@ export class UI {
           this.labGroups[st.tool || group] = box;
           into = box;
         } else {
-          const h = document.createElement('div');
-          h.className = 'lbl';
-          h.textContent = group;
-          scroll.appendChild(h);
-          into = scroll;
+          // (a group of its own: folded away but for Feel - or as you left them - its rows sprung open as it's tapped.
+          // Flat, they ran to 38 sliders in a list)
+          const box = document.createElement('div'), open = this._tuneOpen().includes(group);
+          box.className = 'tgrp' + (open ? ' open' : '');
+          box.dataset.group = group;
+          box.innerHTML = `<button class="lbl tgrp-head" aria-expanded="${open}"><span></span><i class="tgrp-chev" aria-hidden="true"></i></button><div class="tgrp-body"><div class="tgrp-in"></div></div>`;
+          box.querySelector('.tgrp-head span').textContent = group;
+          const g = group;
+          box.querySelector('.tgrp-head').addEventListener('click', (e) => {
+            e.preventDefault();
+            app.audio.ui();
+            const on = box.classList.toggle('open');
+            box.querySelector('.tgrp-head').setAttribute('aria-expanded', String(on));
+            box.querySelector('.tgrp-in').inert = !on;
+            const keep = this._tuneOpen().filter((x) => x !== g);
+            if (on) keep.push(g);
+            try {
+              localStorage.setItem('cube-sim-tune-open', JSON.stringify(keep));
+            } catch (err) {}
+          });
+          scroll.appendChild(box);
+          into = box.querySelector('.tgrp-in');
+          into.inert = !open;
         }
       }
       if (st.hidden) continue; // (its own control: see below)
@@ -921,6 +939,16 @@ export class UI {
     this.cubesChanged();
   }
 
+  // (Settings' groups left open - Feel, at first)
+  _tuneOpen() {
+    try {
+      const v = JSON.parse(localStorage.getItem('cube-sim-tune-open') || 'null');
+      return Array.isArray(v) ? v : ['Feel'];
+    } catch (e) {
+      return ['Feel'];
+    }
+  }
+
   // cubes came or went: the stack's button and panel, the Cubby's ON tag
   cubesChanged() {
     const many = this.app.cubes.length > 1;
@@ -979,7 +1007,7 @@ export class UI {
   get panelCover() {
     const S = this.app.size;
     if (!S || S.w > 720) return 0;
-    const el = !this.tuneEl.hidden ? this.tuneEl : !this.paletteEl.hidden ? this.paletteEl : this.cubby && !this.cubby.el.hidden ? this.cubby.el : this.stack && !this.stack.el.hidden ? this.stack.el : null;
+    const el = [this.tuneEl, this.paletteEl, this.cubby?.el, this.stack?.el, this.places?.el, this.exhibit?.pop].find((e) => e && !e.hidden);
     if (!el) return 0;
     const r = el.getBoundingClientRect();
     return Math.max(0, (S.h - r.top) / S.h);
