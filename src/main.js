@@ -1,6 +1,10 @@
 import './style.css';
 import { App } from './app.js';
 import { Splash } from './ui/splash.js';
+import { watchErrors } from './ui/ideas.js';
+
+// (the page's errors, the last few, kept from the start: a bug report sent from the ideas box takes them along)
+watchErrors();
 
 const params = new URLSearchParams(location.search);
 const canvas = document.getElementById('stage');

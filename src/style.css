@@ -7119,3 +7119,344 @@ html.big-text .exhibit-pop .ex-mode em {
 .drop-on #ui > .powders {
   display: none !important;
 }
+
+/* ---- the ideas box (ui/ideas.js): suggest, report, dream up a tool - and what came of them */
+.idea-btn {
+  position: fixed;
+  top: max(14px, calc(env(safe-area-inset-top) + 6px));
+  right: calc(max(14px, calc(env(safe-area-inset-right) + 8px)) + 96px);
+  width: 40px;
+  height: 40px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border-radius: 50%;
+  appearance: none;
+  border: 1px solid var(--line);
+  background: var(--glass);
+  -webkit-backdrop-filter: blur(16px) saturate(1.6);
+  backdrop-filter: blur(16px) saturate(1.6);
+  box-shadow: 0 6px 18px rgba(40, 30, 20, 0.12), inset 0 1px 0 rgba(255, 255, 255, 0.85);
+  color: var(--ink);
+  cursor: pointer;
+  z-index: 20;
+}
+
+.idea-btn svg {
+  width: 21px;
+  height: 21px;
+}
+
+.splashing .idea-btn,
+.drop-on .idea-btn {
+  opacity: 0;
+  pointer-events: none;
+}
+
+@media (max-width: 720px) {
+  .idea-btn {
+    display: none;
+  }
+}
+
+.ib-kinds {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  margin: 2px 4px 10px;
+}
+
+.sheet .ib-kind {
+  display: grid;
+  justify-items: center;
+  gap: 4px;
+  padding: 10px 4px 8px;
+  border-radius: 16px;
+  background: rgba(0, 0, 0, 0.045);
+  font: 650 13px/1.1 var(--font);
+}
+
+.ib-kind svg {
+  width: 24px;
+  height: 24px;
+}
+
+.sheet .ib-kind.on {
+  background: var(--ink);
+  color: #fff;
+}
+
+.ib-text,
+.ib-name {
+  display: block;
+  width: calc(100% - 8px);
+  margin: 0 4px 8px;
+  box-sizing: border-box;
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  border-radius: 14px;
+  padding: 10px 12px;
+  font: 500 16px/1.4 var(--font);
+  color: var(--ink);
+  background: #fff;
+  resize: vertical;
+}
+
+.ib-text {
+  min-height: 110px;
+}
+
+.ib-count {
+  margin: -4px 8px 6px;
+  text-align: right;
+  font: 500 12px/1 var(--font);
+  color: rgba(28, 28, 31, 0.55);
+}
+
+.ib-count:empty {
+  display: none;
+}
+
+.ib-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0 6px 10px;
+  font: 600 14px/1.3 var(--font);
+}
+
+.ib-row input {
+  width: 20px;
+  height: 20px;
+  accent-color: var(--ink);
+}
+
+.ib-web {
+  position: absolute;
+  left: -9999px;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+}
+
+.ib-err {
+  margin: 0 6px 8px;
+  padding: 8px 12px;
+  border-radius: 12px;
+  background: #ffe7e3;
+  color: #8f2516;
+  font: 600 14px/1.35 var(--font);
+}
+
+.sheet .ib-send {
+  display: block;
+  width: calc(100% - 8px);
+  margin: 0 4px;
+  height: 50px;
+  border-radius: 16px;
+  background: var(--ink);
+  color: #fff;
+  font: 700 16px/1 var(--font);
+}
+
+.sheet .ib-send:disabled {
+  opacity: 0.6;
+}
+
+.ib-small {
+  margin: 10px 8px 4px;
+  font: 500 12px/1.4 var(--font);
+  color: rgba(28, 28, 31, 0.6);
+}
+
+.ib-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 8px 4px 0;
+}
+
+.sheet .ib-link {
+  padding: 8px 14px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.05);
+  font: 650 14px/1 var(--font);
+}
+
+.ib-thanks {
+  display: grid;
+  justify-items: center;
+  text-align: center;
+  padding: 10px 10px 4px;
+}
+
+.ib-thanks h3 {
+  margin: 14px 0 4px;
+  font: 800 20px/1.2 var(--font);
+}
+
+.ib-thanks p {
+  margin: 0 0 10px;
+  font: 500 15px/1.45 var(--font);
+  color: rgba(28, 28, 31, 0.72);
+}
+
+.ib-cube {
+  width: 54px;
+  height: 54px;
+  border-radius: 16px;
+  background: var(--jelly);
+  box-shadow: inset 0 -6px 0 rgba(0, 0, 0, 0.15), inset 0 4px 0 rgba(255, 255, 255, 0.4), 0 10px 22px color-mix(in srgb, var(--jelly) 40%, transparent);
+  animation: ib-hop 1.4s var(--sp-bouncy) 2;
+}
+
+@keyframes ib-hop {
+  0% {
+    transform: translateY(0) scale(1.2, 0.8);
+  }
+  30% {
+    transform: translateY(-26px) scale(0.92, 1.1);
+  }
+  60% {
+    transform: translateY(0) scale(1.14, 0.86);
+  }
+}
+
+.sheet .ib-again {
+  margin-top: 12px;
+  padding: 10px 18px;
+  border-radius: 14px;
+  background: rgba(0, 0, 0, 0.06);
+  font: 700 15px/1 var(--font);
+}
+
+.ib-item {
+  display: flex;
+  gap: 12px;
+  padding: 12px 8px;
+  border-bottom: 1px solid var(--line);
+}
+
+.ib-ico {
+  flex: 0 0 auto;
+  width: 36px;
+  height: 36px;
+  border-radius: 11px;
+  display: grid;
+  place-items: center;
+  background: rgba(0, 0, 0, 0.05);
+}
+
+.ib-ico svg {
+  width: 20px;
+  height: 20px;
+}
+
+.ib-body {
+  min-width: 0;
+  display: grid;
+  gap: 5px;
+}
+
+.ib-what {
+  font: 600 15px/1.35 var(--font);
+  overflow-wrap: anywhere;
+}
+
+.ib-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  font: 500 12.5px/1 var(--font);
+  color: rgba(28, 28, 31, 0.6);
+}
+
+.ib-st {
+  padding: 4px 9px;
+  border-radius: 999px;
+  font-weight: 700;
+  background: rgba(0, 0, 0, 0.06);
+  color: var(--ink);
+}
+
+.ib-st.s-look,
+.ib-st.s-wait {
+  background: #fff1c9;
+  color: #7a5300;
+}
+
+.ib-st.s-go {
+  background: #dff0ff;
+  color: #1d5f99;
+}
+
+.ib-st.s-done {
+  background: color-mix(in srgb, var(--jelly) 30%, #fff);
+  color: #134d0b;
+}
+
+.ib-st.s-no {
+  opacity: 0.7;
+}
+
+.ib-note {
+  font: 500 14px/1.4 var(--font);
+  color: rgba(28, 28, 31, 0.78);
+  white-space: pre-wrap;
+}
+
+.ib-by {
+  font-weight: 700;
+  color: var(--ink);
+}
+
+.ib-empty {
+  margin: 16px 8px;
+  font: 500 15px/1.45 var(--font);
+  color: rgba(28, 28, 31, 0.65);
+}
+
+.sheet .tt-by {
+  font: 600 11.5px/1.1 var(--font);
+  color: color-mix(in srgb, var(--g) 70%, #000);
+  margin-top: -3px;
+}
+
+html.dark .ib-text,
+html.dark .ib-name {
+  background: #1d1c22;
+  color: #f1eff4;
+  border-color: rgba(255, 255, 255, 0.14);
+}
+
+html.dark .sheet .ib-kind,
+html.dark .sheet .ib-link,
+html.dark .sheet .ib-again,
+html.dark .ib-ico,
+html.dark .ib-st {
+  background: rgba(255, 255, 255, 0.08);
+  color: #f1eff4;
+}
+
+html.dark .sheet .ib-kind.on,
+html.dark .sheet .ib-send {
+  background: #f1eff4;
+  color: #141318;
+}
+
+html.dark .ib-small,
+html.dark .ib-meta,
+html.dark .ib-thanks p,
+html.dark .ib-empty,
+html.dark .ib-count,
+html.dark .ib-note {
+  color: rgba(241, 239, 244, 0.65);
+}
+
+html.dark .ib-by {
+  color: #f1eff4;
+}
+
+html.dark .idea-btn {
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+}

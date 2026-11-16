@@ -15,6 +15,7 @@ import { SURFACES, surfaceSwatch } from '../surfaces.js';
 import { buildLine } from './buildline.js';
 import { Exhibit } from './dropbar.js';
 import { PhoneDock, toolColor } from './dock.js';
+import { IdeasBox, IDEA_ICON } from './ideas.js';
 import { initMotion } from './motion.js';
 import { act } from './acts.js';
 
@@ -935,6 +936,21 @@ export class UI {
       if (e.target instanceof HTMLInputElement || e.metaKey || e.ctrlKey || e.altKey) return;
       if ((e.key === 'k' || e.key === 'K') && !e.repeat && app.cubes.length > 1) this.stack.toggle();
     });
+    // the ideas box: suggest, report a bug, dream up a tool - and what came of it (see ideas.js, tools/inbox). A wide
+    // screen's button for it, top right; a phone's in the ⋯ menu
+    this.ideas = new IdeasBox(this, app, root);
+    const ib = document.createElement('button');
+    ib.className = 'idea-btn';
+    ib.title = 'Suggest or report';
+    ib.setAttribute('aria-label', 'Suggest something or report a bug');
+    ib.innerHTML = IDEA_ICON;
+    ib.addEventListener('click', (e) => {
+      e.stopPropagation();
+      app.audio.init();
+      app.audio.ui();
+      this.ideas.form.open();
+    });
+    root.appendChild(ib);
     // a phone's dock: the tool in hand by name, its tray, the recents, chips over it, the ⋯ menu (see dock.js)
     this.pdock = new PhoneDock(this, app, root, { icons: ICONS, tools: TOOL_DEFS });
     this.pdock.setTool(app.tool?.id || 'hand');

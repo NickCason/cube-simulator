@@ -7,6 +7,8 @@
 import { Sheet, asSheet } from './sheet.js';
 import { fly, motion } from './motion.js';
 import { act } from './acts.js';
+import { IDEA_ICON } from './ideas.js';
+import { CREDITS } from '../credits.js';
 
 export const TOOL_GROUPS = [
   { name: 'Hands', color: '#3b9cf5', ids: ['hand', 'blow', 'twist', 'magnet'] },
@@ -209,6 +211,9 @@ export class PhoneDock {
         t.style.setProperty('--i', i++);
         t.innerHTML = `<span class="tt-ic">${this.icons[id] || ''}</span><span class="tt-nm"></span>`;
         t.querySelector('.tt-nm').textContent = d?.label || id;
+        // (an idea from the box, with its sender's name on)
+        const cr = CREDITS.filter((c) => c.tool === id).pop();
+        if (cr) t.insertAdjacentHTML('beforeend', `<span class="tt-by"></span>`), (t.querySelector('.tt-by').textContent = `by ${cr.name}`);
         t.title = d?.hint?.split(' · ')[0] || '';
         t.addEventListener('click', () => this.pick(id, t.querySelector('.tt-ic')));
         grid.appendChild(t);
@@ -320,6 +325,9 @@ export class PhoneDock {
       ui.clips?.able && !ui.clips.recording && { label: 'Record a clip', icon: I.rec, run: () => ui.clips.start() },
       app.cubes.length < 8 && { label: 'Add a cube', icon: I.add, run: () => app.addCube() },
       { label: 'Settings', icon: I.tune, acc: '›', run: () => ui.tuneBtn?.click() },
+      ui.ideas && { label: 'Suggest or report', icon: IDEA_ICON, acc: '›', run: () => ui.ideas.form.open() },
+      ui.ideas?.reports.length && { label: 'Your reports', icon: I.text, acc: `${ui.ideas.reports.length}`, run: () => ui.ideas.mine.open() },
+      CREDITS.length && ui.ideas && { label: 'Ideas from you all', icon: IDEA_ICON, acc: '›', run: () => ui.ideas.credits.open() },
     ].filter(Boolean);
     rows.forEach((r, i) => {
       const b = document.createElement('button');
