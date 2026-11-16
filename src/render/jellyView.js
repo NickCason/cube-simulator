@@ -1347,7 +1347,16 @@ export class JellyView {
     this.aCoat = new THREE.BufferAttribute(this.coat, 4).setUsage(THREE.DynamicDrawUsage);
     this.aCoatM = new THREE.BufferAttribute(this.coatM, 1).setUsage(THREE.DynamicDrawUsage);
     this.aRest = new THREE.BufferAttribute(rest.slice(0, n * 3), 3);
-    this.aCube = new THREE.BufferAttribute(cube.slice(0, n), 1);
+    // (drawn, each point's look: cube's - but where a dividing cube's two halves meet, a new point on an edge from
+    // the one to the other half way between the two, so the seam runs straight over the coarse triangle - it went
+    // where each such edge's first end had put it, a zigzag. Not in cube: that's whose shape each is)
+    let look = cube;
+    if (LK !== sb.vCube) {
+      look = cube.slice(0, n);
+      for (let m = 0, k = nB; m < L1.mids.length; m += 3, k++) look[k] = (look[L1.mids[m]] + look[L1.mids[m + 1]]) / 2;
+      for (let m = 0, k = nL1; m < L2.mids.length; m += 3, k++) look[k] = (look[L2.mids[m]] + look[L2.mids[m + 1]]) / 2;
+    }
+    this.aCube = new THREE.BufferAttribute(look.slice(0, n), 1);
     // distance from the just-healed seams (see Healer._fuse, weldFieldJob)
     const weld = new Float32Array(n).fill(99);
     if (sb.weld && sb.weld.topo === sb.topoVersion) {
@@ -2387,6 +2396,7 @@ export class JellyView {
     const f = this._featSeen || (this._featSeen = new Uint8Array(MAX_CUBES)), keys = this._cubeKeys();
     f.fill(0);
     for (const pc of sb.pieces) f[pc.cube] = 1;
+    if (sb.vLook && sb.vLookK) for (const q of sb.vLookK) f[q] = 1;
     let key = 0;
     for (let k = 0; k < MAX_CUBES; k++) if (f[k]) key |= keys[k];
     return key;

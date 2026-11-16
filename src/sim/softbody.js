@@ -208,6 +208,7 @@ export class SoftBody {
     // (each point's look, drawn - a cube's slot - where it isn't its own cube's: a dividing cube's two halves, each
     // turning into its own child - see Cubiplication._twoLooks. null: each point its cube's)
     this.vLook = null;
+    this.vLookK = null; // (the slots those are: their looks' shader features wanted, no piece being of them)
     this.pushers = []; // moving flat faces pressing into the jelly (mallet head)
     this.attract = null;
     this.gravityScale = 1;

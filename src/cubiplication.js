@@ -29,6 +29,14 @@ export class Cubiplication {
     this.app = app;
     this.m = null; // the cube being fed (one at a time)
     this.fx = []; // (children arriving as something new: sparkling a while)
+    // (an exhibition's own way of it - see CublicationMode: fed this much before it divides (2: children its size),
+    // dividing over this long, how wild its mutations (null: the Cubicle's), no card nor word of its own as they're
+    // born, and told of them: onSplit(first, second, their changes))
+    this.splitAt = null;
+    this.divideT = null;
+    this.boost = null;
+    this.quiet = false;
+    this.onSplit = null;
   }
 
   get active() {
@@ -65,7 +73,7 @@ export class Cubiplication {
         G[j * 3 + 1] = sb.X[i * 3 + 1];
         G[j * 3 + 2] = sb.X[i * 3 + 2];
       });
-      this.m = { slot, R, idx, G, V: 1, g: 1, gW: 1, size0: sb.cSize[slot], bevel0: sb.cBevel[slot], h0: sb.cH[slot], topo: sb.topoVersion, feeding: false, dividing: false, u: 0, uW: -1, axis: 0, sing: 0, kids: null, pl: null, parent: null, mother: null, kB: -1, lookP: null, looks: null, eyeLinks: null };
+      this.m = { slot, R, idx, G, V: 1, g: 1, gW: 1, size0: sb.cSize[slot], bevel0: sb.cBevel[slot], h0: sb.cH[slot], topo: sb.topoVersion, feeding: false, dividing: false, u: 0, uW: -1, axis: 0, sing: 0, kids: null, pl: null, parent: null, mother: null, kA: -1, kB: -1, lookP: null, looks: null, eyeLinks: null };
       // (what it'll divide into, worked out as it's first fed: see _decide)
       this._decide(this.m);
     }
@@ -82,9 +90,11 @@ export class Cubiplication {
   feed(dv, at) {
     const m = this.m, app = this.app;
     if (!m || m.dividing) return;
-    const full = app.cubes.length >= MAX_CUBES, small = m.size0 * Math.cbrt(SPLIT_AT / 2) < MIN_CHILD;
+    const lim = this.splitAt ?? SPLIT_AT, full = app.cubes.length >= MAX_CUBES, small = m.size0 * Math.cbrt(lim / 2) < MIN_CHILD;
     // (no room for another, or too small to split: it just grows - to a point)
-    const cap = full || small ? Math.min((MAX_SIZE / m.size0) ** 3, small ? 3 : SPLIT_AT) : Infinity;
+    // (and no more than it divides at: it waits to have grown to all of that - see update - and fed on meanwhile, it
+    // swelled on and on, and divided only once it was let be)
+    const cap = full || small ? Math.min((MAX_SIZE / m.size0) ** 3, small ? 3 : lim) : lim;
     if (m.V >= cap) {
       if (full && !m.toldFull) {
         m.toldFull = true;
@@ -107,14 +117,15 @@ export class Cubiplication {
     // (cut, rebuilt or swapped meanwhile: what it was given, kept, as it is - drawn as one again)
     if (sb.topoVersion !== m.topo || app.healer.active || app.swapper.active) {
       this.m = null;
-      if (sb.vLook) (sb.vLook = null), (app.jelly.topoVersion = -1), app.applyStyle();
+      if (sb.vLook) (sb.vLook = sb.vLookK = null), (app.jelly.topoVersion = -1), app.applyStyle();
       return;
     }
     m.g += (Math.cbrt(m.V) - m.g) * Math.min(1, dt * 5);
     // (dividing once it's grown to all it's been fed - its size then is what its eyes are put on: see _beginDivide)
-    if (!m.dividing && m.V >= SPLIT_AT - 1e-9 && Math.abs(m.g - Math.cbrt(m.V)) < 0.004 && m.size0 * Math.cbrt(SPLIT_AT / 2) >= MIN_CHILD && app.cubes.length < MAX_CUBES) this._beginDivide();
+    const at = this.splitAt ?? SPLIT_AT;
+    if (!m.dividing && m.V >= at - 1e-9 && Math.abs(m.g - Math.cbrt(m.V)) < 0.004 && m.size0 * Math.cbrt(at / 2) >= MIN_CHILD && app.cubes.length < MAX_CUBES) this._beginDivide();
     if (m.dividing) {
-      m.u = Math.min(1, m.u + dt / DIVIDE_T);
+      m.u = Math.min(1, m.u + dt / (this.divideT ?? DIVIDE_T));
       // (it strains, singing higher as the neck draws out)
       m.sing -= dt;
       if (m.sing <= 0) {
@@ -201,24 +212,34 @@ export class Cubiplication {
     return { name: x.name, flavor: x.style.flavor, layers: x.style.layers, texture: x.style.texture, edges: x.style.edges, glitter: x.style.glitter || 'off', ...(x.style.glitter === 'custom' ? { glitterMix: copyGlitterMix(x.style.glitterMix) } : {}), rubik: x.style.rubik, ...(x.style.rubikState ? { rubikState: x.style.rubikState } : {}), trim: x.style.trim || 'none', tune: { ...x.tune }, tear: x.tune.tear !== false, theme: this.app.theme, eyes: x.style.eyes || [], surface: x.style.surface || 'none' };
   }
 
-  // Drawn as two from here: its half past its middle along the axis with a look of its own - another cube's slot,
-  // free, next to its own: its points' look is blended across the neck's tets, and a slot further off had the looks
-  // of the ones between in a band there - and each half's turned into its child's as it divides (see _looks), till
-  // the neck snaps. (One look till then, the two children came out of nowhere at the snap, all their differences at
-  // once.) Not a cube full of liquid: its hollow's drawn by its own cube's
+  // Drawn as two from here: each half along the axis with a look of its own, in two cube slots side by side - its
+  // own and a free one next to it, or two free ones next to each other (the cube number's blended across the triangles
+  // the halves share, and drawn as the nearer: slots far apart had the looks of the ones between in a band there; drawn
+  // flat - each triangle the look of one of its points - the seam was a comb, the neck drawn out) - and each half's
+  // turned into its child's as it divides (see _looks), till the neck snaps. (One look till then, the two children
+  // came out of nowhere at the snap, all their differences at once.) Not a cube full of liquid: its hollow's drawn by
+  // its own cube's
   _twoLooks(m) {
     const app = this.app, sb = app.sb, k = m.slot, a = m.axis;
     if (!m.kids || sb.cHollow[k]) return;
-    const used = new Set(app.cubes.map((c) => c.slot)), kB = [k + 1, k - 1].find((q) => q >= 0 && q < MAX_CUBES && !used.has(q));
-    if (kB === undefined) return;
+    const used = new Set(app.cubes.map((c) => c.slot)), free = (q) => q >= 0 && q < MAX_CUBES && !used.has(q);
+    let kA = k, kB = [k + 1, k - 1].find(free);
+    if (kB === undefined) {
+      kA = 0;
+      while (kA < MAX_CUBES - 1 && !(free(kA) && free(kA + 1))) kA++;
+      if (kA >= MAX_CUBES - 1) return;
+      kB = kA + 1;
+    }
     const L = sb.vCube.slice();
-    m.idx.forEach((i, j) => {
-      if (m.G[j * 3 + a] > 0) L[i] = kB;
-    });
-    // (its shape as its own cube's, for the drawn skin's fit to it - see JellyView.syncTopology)
-    for (const A of [sb.cSize, sb.cBevel, sb.cH, sb.cBow, sb.cLobeA, sb.cLobeP, sb.cTrimK]) A[kB] = A[k];
-    sb.cHollow[kB] = 0;
+    m.idx.forEach((i, j) => { L[i] = m.G[j * 3 + a] > 0 ? kB : kA; });
+    for (const q of [kA, kB]) {
+      if (q === k) continue;
+      for (const A of [sb.cSize, sb.cBevel, sb.cH, sb.cBow, sb.cLobeA, sb.cLobeP, sb.cTrimK]) A[q] = A[k];
+      sb.cHollow[q] = 0;
+    }
     sb.vLook = L;
+    sb.vLookK = [kA, kB];
+    m.kA = kA;
     m.kB = kB;
     app.jelly.topoVersion = -1;
   }
@@ -278,7 +299,7 @@ export class Cubiplication {
     };
     const flav = (fa, fb) => (fa.hex && fb.hex && !fa.layers && !fb.layers && fa.id !== 'rubik' && fb.id !== 'rubik' ? { ...(w < 0.5 ? fa : fb), hex: '#' + new THREE.Color(fa.hex).lerp(new THREE.Color(fb.hex), w).getHexString() } : w < 0.5 ? fa : fb);
     m.looks.forEach((L, j) => {
-      const k = j ? m.kB : m.slot;
+      const k = j ? m.kB : m.kA;
       app.jelly.setCubeLook(k, flav(P.f, L.f), mix(P.o, L.o), sb.cSize[k]);
     });
   }
@@ -346,7 +367,7 @@ export class Cubiplication {
   _split() {
     const m = this.m, app = this.app, sb = app.sb, slot = m.slot;
     this.m = null;
-    sb.vLook = null;
+    sb.vLook = sb.vLookK = null;
     const cb = app.cubes.find((c) => c.slot === slot);
     if (!cb) return;
     if (!m.kids) this._decide(m);
@@ -470,15 +491,15 @@ export class Cubiplication {
     }
     if (top >= TIER.MAJOR) setTimeout(() => app.audio?.fanfare?.(top), 260);
     const news = kids.flatMap((k) => k.changes.filter((x) => x.tier >= TIER.MAJOR).map((x) => `${k.cb.name}: ${x.label}`));
-    app.ui?.hint(news.length ? `Cubiplied! ${news[0]}` : `Cubiplied! ${cb.name} & ${cbB.name}`, 3200);
+    if (!this.quiet) app.ui?.hint(news.length ? `Cubiplied! ${news[0]}` : `Cubiplied! ${cb.name} & ${cbB.name}`, 3200);
     // the two of them, side by side (once they've landed)
-    setTimeout(() => {
+    if (!this.quiet) setTimeout(() => {
       app.ui?.cubiplied?.show({
         parent: { ...parent, gen: pl.gen },
         kids: kids.map((k) => ({ c: as(k.cb), changes: k.changes, lin: { ...k.cb.lin }, slot: k.cb.slot })),
       });
     }, 950);
-    this.onSplit?.(cb, cbB);
+    this.onSplit?.(cb, cbB, A.changes, B.changes);
   }
 
   // a child that came out as something new sparkles a while: glints off
