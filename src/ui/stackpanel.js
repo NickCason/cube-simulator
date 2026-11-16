@@ -78,7 +78,7 @@ export class StackPanel {
       }
     });
     document.addEventListener('pointerdown', (e) => {
-      if (this.el.hidden || this.el.contains(e.target) || e.target.closest('.stack-btn')) return;
+      if (this.el.hidden || this.el.contains(e.target) || e.target.closest('.stack-btn, .ui-chip.cubes')) return;
       this.close();
     });
   }

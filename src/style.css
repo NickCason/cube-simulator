@@ -6069,3 +6069,635 @@ html.dark .ct-pic,
 html.dark .cubl-pick .cpk-pic {
   background: linear-gradient(#2c2c32, #232328);
 }
+
+/* ================================================================ the UI's motion, its sheets, a phone's dock
+   (see ui/motion.js, ui/sheet.js, ui/dock.js; the why: scratch/UI-AUDIT.md) */
+:root {
+  --sp-bouncy: cubic-bezier(0.3, 1.6, 0.5, 1);
+  --t-bouncy: 700ms;
+  --sp-gentle: cubic-bezier(0.25, 1.2, 0.4, 1);
+  --t-gentle: 600ms;
+  --sp-snappy: cubic-bezier(0.2, 1, 0.3, 1);
+  --t-snappy: 350ms;
+  --dock-top: calc(max(18px, calc(env(safe-area-inset-bottom) + 8px)) + 60px);
+}
+
+/* ---- sheets: up from the bottom, springing; the room behind dimmed */
+.sheet-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 45;
+  background: rgba(20, 16, 12, 0.22);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.3s;
+}
+
+.sheet-scrim.on {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.sheet {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 46;
+  max-width: 560px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  max-height: 82vh;
+  max-height: 82dvh;
+  box-sizing: border-box;
+  padding-bottom: max(10px, env(safe-area-inset-bottom));
+  border-radius: 28px 28px 0 0;
+  background: rgba(255, 255, 255, 0.97);
+  -webkit-backdrop-filter: blur(24px) saturate(1.6);
+  backdrop-filter: blur(24px) saturate(1.6);
+  box-shadow: 0 -10px 40px rgba(40, 30, 20, 0.18);
+  color: var(--ink);
+  font-family: var(--font);
+  transform: translateY(105%);
+  visibility: hidden;
+  transition: transform var(--t-gentle) var(--sp-gentle), visibility 0s linear var(--t-gentle);
+}
+
+.sheet.open {
+  transform: none;
+  visibility: visible;
+  transition: transform var(--t-gentle) var(--sp-gentle), visibility 0s;
+}
+
+.sheet.drag {
+  transition: none;
+}
+
+.sheet button {
+  appearance: none;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: inherit;
+  padding: 0;
+  cursor: pointer;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.sh-grab {
+  display: grid;
+  place-items: center;
+  padding: 10px 0 4px;
+  cursor: grab;
+  touch-action: none;
+}
+
+.sh-grab i {
+  width: 38px;
+  height: 5px;
+  border-radius: 3px;
+  background: rgba(0, 0, 0, 0.16);
+}
+
+.sh-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 2px 20px 8px;
+  touch-action: none;
+}
+
+.sh-head h2 {
+  margin: 0;
+  font: 800 20px/1.2 var(--font);
+  letter-spacing: -0.01em;
+}
+
+.sh-sub {
+  font: 600 13px/1.2 var(--font);
+  color: rgba(28, 28, 31, 0.5);
+}
+
+.sh-body {
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  padding: 0 14px 10px;
+}
+
+/* ---- the tool tray: every tool, by kind, named - popping in a row at a time */
+.tt-grp {
+  margin: 4px 0 12px;
+}
+
+.tt-grp h3 {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 0 6px 6px;
+  font: 750 12px/1 var(--font);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: rgba(28, 28, 31, 0.55);
+}
+
+.tt-grp h3 i {
+  width: 9px;
+  height: 9px;
+  border-radius: 3px;
+  background: var(--g);
+}
+
+.tt-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.sheet .tt-tile {
+  display: grid;
+  justify-items: center;
+  gap: 6px;
+  padding: 8px 2px;
+  border-radius: 18px;
+  font: 600 12px/1.15 var(--font);
+  text-align: center;
+}
+
+.tt-ic {
+  width: 52px;
+  height: 52px;
+  border-radius: 17px;
+  display: grid;
+  place-items: center;
+  background: color-mix(in srgb, var(--g) 14%, #fff);
+  color: color-mix(in srgb, var(--g) 72%, #000);
+  box-shadow: inset 0 -3px 0 color-mix(in srgb, var(--g) 22%, transparent);
+}
+
+.tt-ic svg {
+  width: 27px;
+  height: 27px;
+}
+
+.tt-tile.cur .tt-ic {
+  background: var(--ink);
+  color: #fff;
+  box-shadow: 0 6px 14px rgba(0, 0, 0, 0.25);
+}
+
+.sheet.open .tt-tile,
+.sheet.open .mrow {
+  animation: ui-tile-in var(--t-bouncy) var(--sp-bouncy) both;
+  animation-delay: calc(var(--i) * 16ms + 70ms);
+}
+
+@keyframes ui-tile-in {
+  from {
+    opacity: 0;
+    transform: translateY(18px) scale(0.55);
+  }
+}
+
+.flyer {
+  position: fixed;
+  z-index: 60;
+  pointer-events: none;
+  display: grid;
+  place-items: center;
+  border-radius: 13px;
+  background: var(--ink);
+  color: #fff;
+  box-shadow: 0 8px 18px rgba(0, 0, 0, 0.25);
+}
+
+.flyer svg {
+  width: 24px;
+  height: 24px;
+}
+
+/* ---- the menu */
+.mrow {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  width: 100%;
+  height: 56px;
+  padding: 0 12px !important;
+  border-radius: 16px;
+  font: 600 16px/1 var(--font) !important;
+  text-align: left;
+}
+
+.mrow:hover {
+  background: rgba(0, 0, 0, 0.04);
+}
+
+.mr-ic {
+  width: 38px;
+  height: 38px;
+  flex: 0 0 auto;
+  border-radius: 12px;
+  display: grid;
+  place-items: center;
+  background: rgba(0, 0, 0, 0.05);
+}
+
+.mr-ic svg {
+  width: 21px;
+  height: 21px;
+}
+
+.mrow em {
+  margin-left: auto;
+  font: 500 20px/1 var(--font);
+  font-style: normal;
+  color: rgba(28, 28, 31, 0.35);
+}
+
+.mr-sw {
+  margin-left: auto;
+  width: 48px;
+  height: 28px;
+  border-radius: 14px;
+  background: rgba(0, 0, 0, 0.14);
+  position: relative;
+  transition: background 0.25s;
+}
+
+.mr-sw::after {
+  content: '';
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 22px;
+  height: 22px;
+  border-radius: 11px;
+  background: #fff;
+  box-shadow: 0 2px 5px rgba(0, 0, 0, 0.25);
+  transition: transform var(--t-bouncy) var(--sp-bouncy);
+}
+
+.mr-sw.on {
+  background: color-mix(in srgb, var(--jelly) 85%, #000);
+}
+
+.mr-sw.on::after {
+  transform: translateX(20px);
+}
+
+/* ---- a phone's dock: the tool in hand by name, two recents, Make, Play - the rest in the menu, chips over it.
+   (A wide screen: the dock as it was - all its tools fit) */
+.dock .holding,
+.dock .recents,
+.dk-lbl,
+.menu-btn,
+.ui-chips {
+  display: none;
+}
+
+@media (max-width: 720px) {
+  :root {
+    --dock-top: calc(max(18px, calc(env(safe-area-inset-bottom) + 8px)) + 72px);
+  }
+  .dock {
+    width: max-content;
+    max-width: calc(100vw - 16px);
+    gap: 4px;
+    padding: 6px;
+    border-radius: 24px;
+    transition: transform var(--t-bouncy) var(--sp-bouncy);
+  }
+  .dock .tools,
+  .dock .tune-btn,
+  .dock .stack-btn,
+  .dock .heal,
+  .dock .mute {
+    display: none !important;
+  }
+  .dock .sep {
+    height: 30px;
+    margin: 0 3px;
+  }
+  .dock .holding {
+    display: flex;
+    flex: 0 1 auto;
+    min-width: 0;
+    align-items: center;
+    gap: 8px;
+    height: 52px;
+    padding: 0 12px 0 6px;
+    border-radius: 18px;
+    background: var(--ink);
+    color: #fff;
+    box-shadow: 0 6px 14px rgba(0, 0, 0, 0.22);
+  }
+  .holding .hd-ic {
+    flex: 0 0 auto;
+    width: 40px;
+    height: 40px;
+    display: grid;
+    place-items: center;
+    border-radius: 13px;
+    background: rgba(255, 255, 255, 0.13);
+  }
+  .holding .hd-ic svg {
+    width: 24px;
+    height: 24px;
+  }
+  .holding .hd-nm {
+    display: grid;
+    min-width: 0;
+    text-align: left;
+    line-height: 1.15;
+  }
+  .holding .hd-nm b {
+    font: 700 13.5px/1.15 var(--font);
+    max-width: 92px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .holding .hd-nm > span {
+    font: 600 12px/1.15 var(--font);
+    opacity: 0.62;
+    white-space: nowrap;
+  }
+  .holding .hd-nm.swap {
+    animation: ui-swap var(--t-bouncy) var(--sp-bouncy);
+  }
+  .dock .recents {
+    display: flex;
+    gap: 2px;
+    flex: 0 0 auto;
+  }
+  .dock .recent {
+    width: 44px;
+    height: 44px;
+    border-radius: 14px;
+    display: grid;
+    place-items: center;
+  }
+  .dock .recent svg {
+    width: 22px;
+    height: 22px;
+  }
+  .dock .recent.new {
+    animation: ui-pop var(--t-bouncy) var(--sp-bouncy);
+  }
+  .dock .swatch-btn,
+  .dock .exhibit-btn {
+    width: 50px;
+    height: 52px;
+    border-radius: 16px;
+    display: grid;
+    place-items: center;
+    align-content: center;
+    gap: 3px;
+  }
+  .dk-lbl {
+    display: block;
+    font: 650 12px/1 var(--font);
+  }
+  /* the top: the Cubby by name; the ⋯ menu where the glow button was; recording, its red ring where Places was */
+  .cubby-btn {
+    width: auto;
+    padding: 0 15px 0 11px;
+  }
+  .cubby-btn span {
+    display: inline;
+  }
+  .place-btn,
+  .theme-btn,
+  .rec-btn:not(.on) {
+    display: none !important;
+  }
+  .rec-btn.on {
+    left: auto;
+    right: calc(max(14px, calc(env(safe-area-inset-right) + 8px)) + 48px);
+  }
+  .menu-btn {
+    display: grid;
+    place-items: center;
+    position: fixed;
+    top: max(14px, calc(env(safe-area-inset-top) + 6px));
+    right: max(14px, calc(env(safe-area-inset-right) + 8px));
+    z-index: 20;
+    width: 40px;
+    height: 40px;
+    padding: 0;
+    border-radius: 50%;
+    appearance: none;
+    border: 1px solid var(--line);
+    background: var(--glass);
+    -webkit-backdrop-filter: blur(16px) saturate(1.6);
+    backdrop-filter: blur(16px) saturate(1.6);
+    box-shadow: 0 6px 18px rgba(40, 30, 20, 0.12), inset 0 1px 0 rgba(255, 255, 255, 0.85);
+    color: var(--ink);
+    cursor: pointer;
+    touch-action: manipulation;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .menu-btn svg {
+    width: 22px;
+    height: 22px;
+  }
+  .splashing .menu-btn {
+    opacity: 0;
+  }
+  /* over the dock: what's to be done, bouncing in, breathing */
+  .ui-chips {
+    display: flex;
+    justify-content: center;
+    gap: 8px;
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: var(--dock-top);
+    z-index: 19;
+    pointer-events: none;
+    transition: opacity 0.2s;
+  }
+  .ui-chips .ui-chip {
+    pointer-events: auto;
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    height: 42px;
+    padding: 0 17px 0 13px;
+    border-radius: 21px;
+    appearance: none;
+    border: 0;
+    background: #ff6a3d;
+    color: #fff;
+    font: 700 14px/1 var(--font);
+    box-shadow: 0 8px 20px rgba(255, 106, 61, 0.38);
+    cursor: pointer;
+    touch-action: manipulation;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .ui-chips .ui-chip.alt {
+    background: var(--ink);
+    box-shadow: 0 8px 20px rgba(0, 0, 0, 0.24);
+  }
+  .ui-chips .ui-chip svg {
+    width: 18px;
+    height: 18px;
+  }
+  .ui-chips .ui-chip[hidden] {
+    display: none;
+  }
+  .ui-chips .ui-chip.in {
+    animation: ui-pop var(--t-bouncy) var(--sp-bouncy) both, ui-breathe 2.4s 0.9s ease-in-out infinite;
+  }
+  .ui-chips .ui-chip.out {
+    animation: ui-pop-out 0.3s ease-in both;
+  }
+  /* (stacked: the tool's own row over the dock, then the chips, then the hint) */
+  .hint,
+  .palette,
+  .palette.cubby,
+  .res-meter,
+  .powders {
+    bottom: var(--dock-top);
+  }
+  .hint {
+    font-size: 13px;
+  }
+  body.powders-on .ui-chips,
+  body.powders-on .hint {
+    bottom: calc(var(--dock-top) + 52px);
+  }
+  body:has(.ui-chips .ui-chip:not([hidden])) .hint {
+    bottom: calc(var(--dock-top) + 52px);
+  }
+  body.powders-on:has(.ui-chips .ui-chip:not([hidden])) .hint {
+    bottom: calc(var(--dock-top) + 104px);
+  }
+  .exhibit-pop {
+    bottom: calc(var(--dock-top) + 4px);
+  }
+  /* (a panel up: the chips make way; a sheet up: the dock sinks under it - not under the tools' tray: a tool
+     picked there flies down into it) */
+  body:has(.palette:not([hidden])) .ui-chips,
+  html.sheeted .ui-chips,
+  html.sheeted .hint {
+    opacity: 0;
+    pointer-events: none;
+  }
+  html.sheeted:not(:has(.sheet.tray.open)) .dock {
+    transform: translateX(-50%) translateY(150%);
+    transition: transform 0.26s ease-in;
+  }
+  .drop-on .ui-chips {
+    display: none;
+  }
+}
+
+@keyframes ui-swap {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.85);
+  }
+}
+
+@keyframes ui-pop {
+  from {
+    opacity: 0;
+    transform: translateY(16px) scale(0.4);
+  }
+}
+
+@keyframes ui-pop-out {
+  to {
+    opacity: 0;
+    transform: translateY(10px) scale(0.6);
+  }
+}
+
+@keyframes ui-breathe {
+  50% {
+    transform: scale(1.04, 0.97);
+  }
+}
+
+html.dark .sheet {
+  background: rgba(26, 25, 30, 0.97);
+  box-shadow: 0 -10px 40px rgba(0, 0, 0, 0.6);
+  color: #f1eff4;
+}
+
+html.dark .sh-grab i {
+  background: rgba(255, 255, 255, 0.2);
+}
+
+html.dark .sh-sub,
+html.dark .tt-grp h3,
+html.dark .mrow em {
+  color: rgba(241, 239, 244, 0.5);
+}
+
+html.dark .tt-ic {
+  background: color-mix(in srgb, var(--g) 22%, #1d1c22);
+  color: color-mix(in srgb, var(--g) 60%, #fff);
+}
+
+html.dark .tt-tile.cur .tt-ic {
+  background: #f1eff4;
+  color: #141318;
+}
+
+html.dark .mr-ic,
+html.dark .mrow:hover {
+  background: rgba(255, 255, 255, 0.07);
+}
+
+html.dark .mr-sw {
+  background: rgba(255, 255, 255, 0.18);
+}
+
+@media (max-width: 720px) {
+  html.dark .dock .holding {
+    background: #f1eff4;
+    color: #141318;
+  }
+  html.dark .holding .hd-ic {
+    background: rgba(0, 0, 0, 0.08);
+  }
+  html.dark .menu-btn {
+    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  }
+  html.dark .ui-chips .ui-chip.alt {
+    background: #f1eff4;
+    color: #141318;
+  }
+}
+
+html.dark .flyer {
+  color: #141318;
+  background: #f1eff4;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sheet.open .tt-tile,
+  .sheet.open .mrow,
+  .holding .hd-nm.swap,
+  .dock .recent.new,
+  .ui-chips .ui-chip.in,
+  .ui-chips .ui-chip.out {
+    animation: none !important;
+  }
+}
+
+/* (#ui's children take pointers - not the room-wide scrim till it's up, nor the chips' row, only its chips) */
+#ui > .sheet-scrim,
+#ui > .ui-chips {
+  pointer-events: none;
+}
+
+#ui > .sheet-scrim.on {
+  pointer-events: auto;
+}

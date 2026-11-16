@@ -14,6 +14,8 @@ import { ACNE_AMOUNTS, ACNE_SIZES, ACNE_LOOKS, copyAcne } from '../acne.js';
 import { SURFACES, surfaceSwatch } from '../surfaces.js';
 import { buildLine } from './buildline.js';
 import { Exhibit } from './dropbar.js';
+import { PhoneDock } from './dock.js';
+import { initMotion } from './motion.js';
 
 // (the googly eyes' chips: a little eye of each kind, its size, one or two)
 const EYE_PUPIL = { classic: 4, big: 5.6, tiny: 2.3, lashes: 3.8, angry: 3.6, sleepy: 3.4 };
@@ -187,6 +189,7 @@ const LIQ_COLOURS = [['', 'Jelly'], ['rainbow', 'Rainbow'], ['#ffffff', 'Clear']
 
 export class UI {
   constructor(app, root) {
+    initMotion(); // (the UI's springs and its jelly press - see motion.js)
     this.app = app;
     this.root = root;
     this.root.innerHTML = `
@@ -912,6 +915,9 @@ export class UI {
       if (e.target instanceof HTMLInputElement || e.metaKey || e.ctrlKey || e.altKey) return;
       if ((e.key === 'k' || e.key === 'K') && !e.repeat && app.cubes.length > 1) this.stack.toggle();
     });
+    // a phone's dock: the tool in hand by name, its tray, the recents, chips over it, the ⋯ menu (see dock.js)
+    this.pdock = new PhoneDock(this, app, root, { icons: ICONS, tools: TOOL_DEFS });
+    this.pdock.setTool(app.tool?.id || 'hand');
     this.cubesChanged();
   }
 
@@ -919,6 +925,7 @@ export class UI {
   cubesChanged() {
     const many = this.app.cubes.length > 1;
     this.stackBtn.hidden = !many;
+    this.pdock?.cubes(this.app.cubes.length);
     if (!many) this.stack.close();
     this.stack.render();
     this.cubby?.render();
@@ -1062,6 +1069,7 @@ export class UI {
 
   setTool(id) {
     for (const k in this.buttons) this.buttons[k].classList.toggle('active', k === id);
+    this.pdock?.setTool(id);
     this._pinLab(id);
     // (the sieve in hand: what's in it, to pick from; the googly eyes: theirs)
     this.powdersEl.hidden = id !== 'flour';
@@ -1072,7 +1080,9 @@ export class UI {
     if (!d) return;
     // (tearing off: two fingers only squish and stretch)
     const h = id === 'hand' && !this.app.tearing ? d.hint.replace('squish or pull it apart', 'squish or stretch it') : d.hint;
-    this.hint(touch ? h.replace(/\bClick\b/g, 'Tap').replace(/\bclick\b/g, 'tap') : h);
+    // (a phone: its first part only - the rest of it ran to three lines over the dock)
+    const t = touch ? h.replace(/\bClick\b/g, 'Tap').replace(/\bclick\b/g, 'tap') : h;
+    this.hint(window.matchMedia?.('(max-width: 720px)').matches ? t.split(' · ')[0] : t);
   }
 
   // Layer editor: the gradient (see gradedit.js), how many colours, the sliders
@@ -1187,6 +1197,7 @@ export class UI {
 
   setDamaged(d) {
     this.healEl.classList.toggle('pulse', d);
+    this.pdock?.setDamaged(d);
   }
 
   // The mallet's resonance: hits on the beat so far (pips), and where the

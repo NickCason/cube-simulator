@@ -1214,6 +1214,7 @@ export class App {
   shake(a) {
     if (this.reducedMotion) return;
     this._shake = Math.min(0.05, this._shake + a);
+    this.ui?.pdock?.quake(a); // (and the dock feels it)
   }
 
   // a gun's recoil: the view kicked up (a rad), and back down as it settles - see _applyOrbit
