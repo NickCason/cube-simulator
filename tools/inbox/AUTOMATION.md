@@ -26,9 +26,10 @@ page (https://ideas.rellm.net/admin). Read all of this before doing anything.
 
 ## A pass
 
-1. `cd /home/nick/cube-simulator && git status` - it must be clean, on `main`. If not, stop: Pushover
-   `bash scratch/push.sh "Ideas box" "Pass skipped: the working tree isn't clean"` and finish.
-   Then `git pull --ff-only`.
+1. `cd /home/nick/cube-simulator && git status --porcelain --untracked-files=no` must print nothing, on `main`
+   (`scratch/` is full of untracked files - those are fine; someone else's half-done edits are not). If it prints
+   anything, stop: `bash scratch/push.sh "Ideas box" "Pass skipped: someone's mid-edit in the repo"` and finish.
+   Then `git pull --ff-only`. With nothing new and nothing approved, say so and finish - that's a good pass.
 2. Read the project's memory for how things are done here:
    `~/.claude/projects/-home-nick/memory/project_cube_simulator.md` (the latest entries) and
    `reference_cube_sim_test_kit.md` (the kit: `tools/kit/`).
