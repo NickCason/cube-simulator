@@ -1108,6 +1108,7 @@ export class UI {
     this.powdersEl.hidden = id !== 'flour';
     this.eyeRow.hidden = id !== 'eyes';
     document.body.classList.toggle('powders-on', id === 'flour' || id === 'eyes');
+    this.pdock?.restack();
     const d = TOOL_DEFS.find((t) => t.id === id);
     const touch = this.app.isTouch || window.matchMedia?.('(pointer: coarse)').matches;
     if (!d) return;
@@ -1270,6 +1271,7 @@ export class UI {
       this._resT = setTimeout(() => {
         el.classList.remove('show', 'burst');
         document.body.classList.remove('res-on');
+        this.pdock?.restack();
       }, 700);
       return;
     }
@@ -1277,6 +1279,7 @@ export class UI {
       if (el.classList.contains('show') && !el.classList.contains('burst')) {
         el.classList.remove('show', 'beat');
         document.body.classList.remove('res-on');
+        this.pdock?.restack();
       }
       return;
     }
@@ -1304,6 +1307,7 @@ export class UI {
     if (!el.classList.contains('show')) {
       el.classList.add('show');
       document.body.classList.add('res-on');
+      this.pdock?.restack();
     }
   }
 

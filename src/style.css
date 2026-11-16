@@ -7114,3 +7114,8 @@ html.big-text .exhibit-pop .ex-mode em {
   position: relative;
   z-index: 1;
 }
+
+/* (in a mode, no tool's own row - the sieve's powders stayed up in Cublication) */
+.drop-on #ui > .powders {
+  display: none !important;
+}

@@ -314,6 +314,7 @@ export class App {
     this._bootAt = performance.now();
     this.paused = false;
     this.raycaster = new THREE.Raycaster();
+    this._nearV = null; // (a point projected - see _nearJelly)
     this._ndc = new THREE.Vector2();
     this.onFrame = [(sdt, dt) => this.dice.update(dt), (sdt) => this.alive.update(sdt)];
     this.damaged = false;
@@ -1511,6 +1512,46 @@ export class App {
     return this.raycaster.ray;
   }
 
+  // (screen point x, y - client px - near enough the jelly for a tool: within a margin of the jelly as it's seen -
+  // its points, a sample of each piece's, put on the screen - a third of its size; a knife's swipe, which starts
+  // off it, a little more - or by a drop of a puddle, or a nail. Its box's corners put on the screen reached right
+  // across a phone: the near ones splay out)
+  _nearJelly(x, y) {
+    const r = this.canvas.getBoundingClientRect(), cam = this.camera, v = this._nearV || (this._nearV = new THREE.Vector3());
+    const sb = this.sb, X = sb.x, k = this.tool?.id === 'knife' ? 0.4 : 0.3;
+    const put = (a, b, c) => {
+      v.set(a, b, c).project(cam);
+      return [r.left + (v.x * 0.5 + 0.5) * r.width, r.top + (-v.y * 0.5 + 0.5) * r.height];
+    };
+    for (const pc of sb.pieces) {
+      const V = pc?.verts;
+      if (!V?.length) continue;
+      const step = Math.max(1, Math.floor(V.length / 120));
+      let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity, near = Infinity;
+      for (let q = 0; q < V.length; q += step) {
+        const o = V[q] * 3, [px, py] = put(X[o], X[o + 1], X[o + 2]);
+        if (px < x0) x0 = px;
+        if (px > x1) x1 = px;
+        if (py < y0) y0 = py;
+        if (py > y1) y1 = py;
+        near = Math.min(near, Math.hypot(px - x, py - y));
+      }
+      // (inside it on the screen, or near enough its edge)
+      if ((x > x0 && x < x1 && y > y0 && y < y1) || near < Math.max(40, k * Math.max(x1 - x0, y1 - y0))) return true;
+    }
+    const fl = this.fluid, step = fl?.n ? Math.max(1, Math.floor(fl.n / 160)) : 1;
+    for (let i = 0; fl && i < fl.n; i += step) {
+      const [px, py] = put(fl.x[i * 3], fl.x[i * 3 + 1], fl.x[i * 3 + 2]);
+      if (Math.hypot(px - x, py - y) < 56) return true;
+    }
+    for (const n of this.nails?.nails || []) {
+      if (!n.tip) continue;
+      const [px, py] = put(n.tip.x, n.tip.y, n.tip.z);
+      if (Math.hypot(px - x, py - y) < 56) return true;
+    }
+    return false;
+  }
+
   pickJelly(ray) {
     const o = ray.origin, d = ray.direction;
     return this.sb.raycast(o.x, o.y, o.z, d.x, d.y, d.z);
@@ -1591,7 +1632,10 @@ export class App {
       const hit = this.pickJelly(ray);
       // (several cubes: the one you touch is the one the panels edit)
       if (hit && this.cubes.length > 1) this.selectCube(this.sb.pieces[hit.piece]?.cube ?? this.cube.slot);
-      const consumed = e.button === 0 && this.tool?.down?.(e, ray, hit);
+      // (pressed well away from the jelly - and from its puddles and nails - the view's turned, whatever's in hand: only
+      // the hand did, the rest fired at nothing, sprayed the floor, and the view stayed put)
+      const far = !hit && e.button === 0 && this.tool && this.tool.id !== 'hand' && !this._nearJelly(e.clientX, e.clientY);
+      const consumed = !far && e.button === 0 && this.tool?.down?.(e, ray, hit);
       if (consumed) mode = 'tool';
       else {
         mode = 'orbit';

@@ -42,6 +42,7 @@ export class PhoneDock {
   constructor(ui, app, root, { icons, tools }) {
     this.ui = ui;
     this.app = app;
+    this.root = root;
     this.icons = icons;
     this.defs = tools;
     this.cur = null;
@@ -114,6 +115,8 @@ export class PhoneDock {
     asSheet(ui.places?.el, () => ui.places.close());
     asSheet(ui.exhibit?.pop, () => ((ui.exhibit.pop.hidden = true), ui.exhibit.btn.classList.remove('open')));
     this.menu = new Sheet(root, { cls: 'menu-sheet', title: 'Cube Simulator', onOpen: () => this._opening('menu') });
+    window.addEventListener('resize', () => this.restack());
+    requestAnimationFrame(() => this.restack());
   }
 
   // (a sheet coming up: the panels down - and its contents as things are now)
@@ -253,9 +256,32 @@ export class PhoneDock {
       el.classList.remove('in');
       void el.offsetWidth;
       el.classList.add('in');
+      this.restack();
     } else if (!el.hidden) {
       el.classList.add('out');
-      this._chipT.set(el, setTimeout(() => ((el.hidden = true), el.classList.remove('out', 'in')), 320));
+      this._chipT.set(el, setTimeout(() => ((el.hidden = true), el.classList.remove('out', 'in'), this.restack()), 320));
+    }
+  }
+
+  // What's over a phone's dock, stacked: the tool's own row (the sieve's powders, the googly eyes'), the chips, the
+  // mallet's resonance meter, the hint - each set over the last one that's up, by their real heights (larger text and
+  // all). They each had their own height, set by hand: the meter came up under Re-cube. A wide screen: their own
+  restack() {
+    const R = this.root, layers = [...R.querySelectorAll('#ui > .powders, .ui-chips, .res-meter, #ui > .hint, .hint')];
+    const seen = new Set(), L = layers.filter((e) => !seen.has(e) && seen.add(e));
+    if (!window.matchMedia?.('(max-width: 720px)').matches) {
+      for (const el of L) el.style.bottom = '';
+      return;
+    }
+    const D = this.dock, cs = getComputedStyle(D);
+    if (cs.display === 'none') return;
+    let y = parseFloat(cs.bottom) + D.offsetHeight + 8;
+    const up = (el) => (el.classList.contains('ui-chips') ? [...el.children].some((c) => !c.hidden) : el.classList.contains('res-meter') ? el.classList.contains('show') : !el.hidden);
+    // (bottom to top: the tool's row, the chips, the meter - and the hint over whatever's up)
+    const order = (el) => (el.classList.contains('powders') ? 0 : el.classList.contains('ui-chips') ? 1 : el.classList.contains('res-meter') ? 2 : 3);
+    for (const el of L.sort((a, b) => order(a) - order(b))) {
+      el.style.bottom = `${Math.round(y)}px`;
+      if (order(el) < 3 && up(el)) y += el.offsetHeight + 8;
     }
   }
 

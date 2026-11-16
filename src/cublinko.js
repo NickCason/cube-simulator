@@ -250,10 +250,10 @@ export class CublinkoMode {
 
   // (the cubes held at the top, side by side - one, where it's to go in - their weight off till they're let go)
   _hold() {
-    const app = this.app, sb = app.sb, s = this.s, B = this.B, n = app.cubes.length, span = B.xr - B.xl - 1.6 * s;
+    const app = this.app, sb = app.sb, s = this.s, B = this.B, n = app.cubes.length, X = this._spots(n);
     app.nails?.clearAll?.();
     app.cubes.forEach((cb, i) => {
-      const x = n === 1 ? this.at * (span / 2) : B.xl + 0.8 * s + (n > 1 ? (i * span) / (n - 1) : span / 2);
+      const x = X[i];
       const size = app.sizeOf(cb);
       sb.removeCube(cb.slot);
       sb.addCube(cb.slot, x, B.pegs.top + 0.9 * s, 0, (Math.random() - 0.5) * 0.4, app.bevelOf(cb), size, app.resOf(cb));
@@ -273,6 +273,20 @@ export class CublinkoMode {
     g.phi = 0.05;
     this.frameY = B.pegs.top;
     this._frame(B.pegs.top, B.pegs.top + s, 10);
+  }
+
+  // (where each is let go: over the pegs, never past the last but one - spread round the middle a peg or two apart, as
+  // far as they'll go and keep clear of each other, each a little off its spot so it falls one way or the other, a
+  // different way each round. Spread wall to wall, the outside two started out past the last pegs and fell down the
+  // wall, grazing them - two cubes, both: 3-4 pegs touched each, a cube in the middle 20-30. One let go at Left or
+  // Right the same)
+  _spots(n) {
+    const s = this.s, dx = this.B.pegs.dx, U = 2.5 * dx;
+    if (n <= 1) return [this.at * U + (Math.random() - 0.5) * 0.3 * s];
+    const g = Math.max(1.25 * s, Math.min(2 * dx, (2 * U) / (n - 1))), L = ((n - 1) * g) / 2;
+    // (each off its spot by up to as much as keeps it 1.1 of a cube from the next: eight, a full board, 0.15)
+    const jit = Math.min(0.3 * s, g - 1.1 * s);
+    return Array.from({ length: n }, (_, i) => -L + i * g + (Math.random() - 0.5) * jit);
   }
 
   // (the view: the whole board across, from in front - a phone held upright, its width - up and down with the cubes
