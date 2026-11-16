@@ -655,3 +655,50 @@ export function makeBoard(M, B, slots, s) {
   back.castShadow = false;
   return g;
 }
+
+// The Cublication's dish (see cublication.js): a glass petri dish R across from its middle - a low glass wall round a
+// layer of pale agar, a line where the wall meets the floor (on a light floor glass alone didn't show), a ring of light
+// at its edge ('halo') and a glow on the agar ('glow') for the mode to brighten as a cube's fed and divides, and a ring
+// ('wave') it sends out across the agar at a snap. Not added light: it was invisible on the light floor
+export function makeDish(M, R, s) {
+  const g = new THREE.Group(), h = 0.3 * s;
+  const radial = (stops) => {
+    const c = document.createElement('canvas');
+    c.width = c.height = 256;
+    const x = c.getContext('2d'), gr = x.createRadialGradient(128, 128, 0, 128, 128, 128);
+    for (const [t, col] of stops) gr.addColorStop(t, col);
+    x.fillStyle = gr;
+    x.fillRect(0, 0, 256, 256);
+    const tex = new THREE.CanvasTexture(c);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    return tex;
+  };
+  const flat = (geo, mat, y, name) => {
+    const m = new THREE.Mesh(geo, mat);
+    m.rotation.x = -Math.PI / 2;
+    m.position.y = y;
+    m.renderOrder = 1;
+    if (name) m.name = name;
+    g.add(m);
+    return m;
+  };
+  // the agar: pale, a little deeper at its edge, where it climbs the wall
+  flat(new THREE.CircleGeometry(R, 96), new THREE.MeshBasicMaterial({ map: radial([[0, 'rgba(206,244,246,0.42)'], [0.78, 'rgba(184,234,242,0.32)'], [0.97, 'rgba(150,218,236,0.62)'], [1, 'rgba(150,218,236,0)']]), transparent: true, depthWrite: false }), 0.002);
+  // its glow from the middle out, and the ring of light at its edge
+  flat(new THREE.CircleGeometry(R, 96), new THREE.MeshBasicMaterial({ map: radial([[0, 'rgba(120,236,255,0.9)'], [0.45, 'rgba(110,220,255,0.35)'], [1, 'rgba(110,220,255,0)']]), transparent: true, depthWrite: false, opacity: 0 }), 0.003, 'glow');
+  flat(new THREE.RingGeometry(R - 0.07 * s, R + 0.02 * s, 120), new THREE.MeshBasicMaterial({ color: 0x38c8f0, transparent: true, depthWrite: false, opacity: 0.2 }), 0.004, 'halo');
+  flat(new THREE.RingGeometry(0.93, 1, 120), new THREE.MeshBasicMaterial({ color: 0x5fe0ff, transparent: true, depthWrite: false, opacity: 0 }), 0.005, 'wave').visible = false;
+  // where the wall stands on the floor
+  flat(new THREE.RingGeometry(R - 0.006 * s, R + 0.012 * s, 120), new THREE.MeshBasicMaterial({ color: 0x7fc4d6, transparent: true, depthWrite: false, opacity: 0.85 }), 0.006);
+  // the glass wall, and its lip
+  const glass = new THREE.MeshStandardMaterial({ color: 0xd8f4ff, roughness: 0.04, metalness: 0, transparent: true, opacity: 0.16, envMap: M.steel.envMap, envMapIntensity: 1.4, side: THREE.DoubleSide, depthWrite: false });
+  const wall = new THREE.Mesh(new THREE.CylinderGeometry(R, R, h, 120, 1, true), glass);
+  wall.position.y = h / 2;
+  wall.renderOrder = 2;
+  const lip = new THREE.Mesh(new THREE.TorusGeometry(R, 0.018 * s, 10, 160), new THREE.MeshStandardMaterial({ color: 0xeefaff, roughness: 0.05, metalness: 0, transparent: true, opacity: 0.7, envMap: M.steel.envMap, envMapIntensity: 1.6 }));
+  lip.rotation.x = Math.PI / 2;
+  lip.position.y = h;
+  lip.renderOrder = 2;
+  g.add(wall, lip);
+  return g;
+}

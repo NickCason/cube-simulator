@@ -32,6 +32,7 @@ import { Shatter } from './world/shatter.js';
 import { PressMode } from './press.js';
 import { ColliderMode } from './collider.js';
 import { CublinkoMode } from './cublinko.js';
+import { CublicationMode } from './cublication.js';
 import { copyAcne } from './acne.js';
 import { copyEyes, EYE_FACES } from './eyes.js';
 import { SURFACE, SURFACES } from './surfaces.js';
@@ -221,6 +222,7 @@ export class App {
     this.press = new PressMode(this); // (an exhibition mode: the cube under a hydraulic press)
     this.collider = new ColliderMode(this); // (an exhibition mode: two cubes fired at each other)
     this.cublinko = new CublinkoMode(this); // (an exhibition mode: Plinko with the cubes)
+    this.cublication = new CublicationMode(this); // (an exhibition mode: a cube fed and divided, again and again)
     this.onHealStart = [];
     this.onHealEnd = [];
     this.onColor = [];
@@ -1378,7 +1380,7 @@ export class App {
     // (several cubes - a stack - the view rises and backs off to keep them in)
     let fy = 0.44, fr = 1;
     // (not in an exhibition mode: each frames its own - the Collider's room made wide sent the view out 2.6 times)
-    if (this.cubes.length > 1 && !this.press?.on && !this.collider?.on && !this.cublinko?.on) {
+    if (this.cubes.length > 1 && !this.press?.on && !this.collider?.on && !this.cublinko?.on && !this.cublication?.on) {
       let top = 0;
       for (const pc of this.sb.pieces) top = Math.max(top, pc.bbox[4]);
       top = Math.min(top, this.sb.p.ceiling);
@@ -1397,7 +1399,7 @@ export class App {
       this.camera.updateProjectionMatrix();
     }
     // (or the Press, on its plate - see press.js)
-    const FM = D.on && D.frameY !== null ? D : this.press.on && this.press.frameY !== null ? this.press : this.collider.on && this.collider.frameY !== null ? this.collider : this.cublinko.on && this.cublinko.frameY !== null ? this.cublinko : null, follow = !!FM;
+    const FM = D.on && D.frameY !== null ? D : this.press.on && this.press.frameY !== null ? this.press : this.collider.on && this.collider.frameY !== null ? this.collider : this.cublinko.on && this.cublinko.frameY !== null ? this.cublinko : this.cublication.on && this.cublication.frameY !== null ? this.cublication : null, follow = !!FM;
     if (follow) fy = FM.frameY + 0.1;
     const kx = follow ? 1 - Math.exp(-dt * 6) : kf;
     this.orbit.target.x += ((follow ? FM.frameX : 0) - this.orbit.target.x) * kx;
@@ -1573,7 +1575,7 @@ export class App {
       }
       if (pointers.size > 2) return;
       // (in Drop, the Press, the Collider: no tools - a drag looks round; in Drop a tap lets it go)
-      if (this.drop.on || this.press.on || this.collider.on || this.cublinko.on) {
+      if (this.drop.on || this.press.on || this.collider.on || this.cublinko.on || this.cublication.on) {
         mode = 'orbit';
         last = { x: e.clientX, y: e.clientY };
         this._dropTap = { x: e.clientX, y: e.clientY, t: performance.now() };
@@ -1625,7 +1627,10 @@ export class App {
       pointers.delete(e.pointerId);
       if (mode === 'tool') this.tool?.up?.(e, this.rayFromClient(e.clientX, e.clientY));
       const T = this._dropTap;
-      if (T && this.drop.on && e.type === 'pointerup' && pointers.size === 0 && Math.hypot(e.clientX - T.x, e.clientY - T.y) < 12 && performance.now() - T.t < 450) this.drop.letGo();
+      const tapped = T && e.type === 'pointerup' && pointers.size === 0 && Math.hypot(e.clientX - T.x, e.clientY - T.y) < 12 && performance.now() - T.t < 450;
+      if (tapped && this.drop.on) this.drop.letGo();
+      // (in Cublication, one of the two just born tapped: that one kept)
+      if (tapped && this.cublication.on) this.cublication.tap(e.clientX, e.clientY);
       if (pointers.size === 0) this._dropTap = null;
       if (pointers.size === 0) {
         mode = null;
@@ -1701,6 +1706,7 @@ export class App {
       this.press.update(sdt);
       this.collider.update(dt);
       this.cublinko.update(sdt);
+      this.cublication.update(sdt, dt);
       this.tilt.update(dt);
       this._edgeMorphTick(dt);
       this._selRing(dt);

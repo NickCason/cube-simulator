@@ -5344,3 +5344,728 @@ html.dark .gs-all {
 .splashing .drop-bar {
   opacity: 0;
 }
+
+/* ---- Cublication (see ui/cublibar.js): its bar, its generation over the dish, the card the two are kept from, its tree */
+/* (its one setting, named over its track: side by side, the track was squeezed to nothing) */
+.cubl-bar .ps-sets {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: grid;
+}
+
+.cubl-bar .cu-mut {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.cubl-bar .cu-cap {
+  display: flex;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 0 2px;
+  font: 600 12px/1.1 var(--font);
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.cubl-bar .cu-cap b {
+  font-weight: 750;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cubl-bar .cu-tree {
+  flex: 0 0 auto;
+  width: 42px;
+  height: 42px;
+  border-radius: 13px;
+  background: rgba(0, 0, 0, 0.055);
+  color: var(--ink);
+  display: grid;
+  place-items: center;
+}
+
+.cubl-bar .cu-tree svg {
+  width: 22px;
+  height: 22px;
+}
+
+.cubl-bar .db-go {
+  padding: 0 14px;
+  font-size: 14px;
+  white-space: nowrap;
+}
+
+/* (the line: the generations in their colours, the one on show under the knob - dragged along) */
+.cubl-line {
+  position: fixed;
+  left: 50%;
+  bottom: calc(max(18px, calc(env(safe-area-inset-bottom) + 8px)) + 62px);
+  transform: translateX(-50%);
+  width: min(420px, calc(100vw - 24px));
+  box-sizing: border-box;
+  padding: 9px 14px;
+  border-radius: 16px;
+  background: var(--glass);
+  -webkit-backdrop-filter: blur(20px) saturate(1.7);
+  backdrop-filter: blur(20px) saturate(1.7);
+  border: 1px solid var(--line);
+  box-shadow: 0 6px 20px rgba(40, 30, 20, 0.12);
+  z-index: 20;
+  transition: opacity 0.3s;
+}
+
+.cubl-line[hidden] {
+  display: none;
+}
+
+.cubl-line.busy {
+  opacity: 0.45;
+  pointer-events: none;
+}
+
+.cubl-line .cl-segs {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 18px;
+  touch-action: none;
+  cursor: pointer;
+  outline: none;
+}
+
+.cubl-line .cl-segs.dense {
+  gap: 1px;
+}
+
+.cubl-line .cl-seg {
+  flex: 1 1 0;
+  min-width: 0;
+  height: 10px;
+  border-radius: 5px;
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.12);
+  transition: opacity 0.3s, height 0.3s;
+}
+
+.cubl-line .dense .cl-seg {
+  border-radius: 1.5px;
+}
+
+/* (a generation born something new: taller, lit) */
+.cubl-line .cl-seg.t2,
+.cubl-line .cl-seg.t3 {
+  height: 16px;
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.12), 0 0 8px rgba(255, 190, 60, 0.75);
+}
+
+.cubl-line .cl-seg.after {
+  opacity: 0.32;
+}
+
+.cubl-line .cl-knob {
+  position: absolute;
+  left: 0;
+  top: 50%;
+  width: 18px;
+  height: 18px;
+  margin: -11px 0 0 -11px;
+  border-radius: 6px;
+  border: 2px solid #fff;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+  pointer-events: none;
+  transition: transform 0.28s cubic-bezier(0.3, 1.45, 0.5, 1), background 0.3s;
+}
+
+.cubl-line .cl-segs:focus-visible ~ .cl-knob {
+  box-shadow: 0 0 0 3px var(--ink);
+}
+
+.cubl-hud {
+  position: fixed;
+  left: 50%;
+  top: calc(env(safe-area-inset-top) + 62px);
+  transform: translateX(-50%);
+  display: grid;
+  justify-items: center;
+  gap: 4px;
+  pointer-events: none;
+  z-index: 15;
+  color: var(--ink);
+  --cu-col: #7fdcff;
+  width: min(360px, calc(100vw - 32px));
+}
+
+.cubl-hud[hidden] {
+  display: none;
+}
+
+.cubl-hud .ch-gen {
+  position: relative;
+  width: 60px;
+  height: 60px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--glass) 92%, transparent);
+  -webkit-backdrop-filter: blur(14px) saturate(1.6);
+  backdrop-filter: blur(14px) saturate(1.6);
+  box-shadow: 0 6px 18px rgba(40, 30, 20, 0.14);
+}
+
+.cubl-hud svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  transform: rotate(-90deg);
+}
+
+.cubl-hud .ch-bg {
+  fill: none;
+  stroke: rgba(0, 0, 0, 0.08);
+  stroke-width: 4;
+}
+
+.cubl-hud .ch-fg {
+  fill: none;
+  stroke: var(--cu-col);
+  stroke-width: 4;
+  stroke-linecap: round;
+  transition: stroke-dashoffset 0.25s linear;
+  filter: drop-shadow(0 0 3px color-mix(in srgb, var(--cu-col) 70%, transparent));
+}
+
+.cubl-hud .ch-k {
+  position: absolute;
+  top: 12px;
+  font: 800 8.5px/1 var(--font);
+  letter-spacing: 0.14em;
+  opacity: 0.55;
+}
+
+.cubl-hud .ch-n {
+  margin-top: 8px;
+  font: 800 22px/1 var(--font);
+  font-variant-numeric: tabular-nums;
+}
+
+/* (dividing: the ring full, beating) */
+.cubl-hud .ch-gen.dividing {
+  animation: cu-beat 0.42s ease-in-out infinite alternate;
+}
+
+@keyframes cu-beat {
+  to {
+    transform: scale(1.08);
+    box-shadow: 0 0 22px color-mix(in srgb, var(--cu-col) 65%, transparent);
+  }
+}
+
+/* (a new generation: its number flipped in) */
+.cubl-hud .ch-gen.flip .ch-n {
+  animation: cu-flip 0.7s cubic-bezier(0.3, 1.5, 0.5, 1) both;
+}
+
+.cubl-hud .ch-gen.flip {
+  animation: cu-glow 1.1s ease-out both;
+}
+
+@keyframes cu-flip {
+  0% {
+    transform: translateY(14px) scale(0.6);
+    opacity: 0;
+  }
+  100% {
+    transform: none;
+    opacity: 1;
+  }
+}
+
+@keyframes cu-glow {
+  0% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--cu-col) 80%, transparent), 0 6px 18px rgba(40, 30, 20, 0.14);
+  }
+  100% {
+    box-shadow: 0 0 0 26px transparent, 0 6px 18px rgba(40, 30, 20, 0.14);
+  }
+}
+
+.cubl-hud .ch-name {
+  max-width: 100%;
+  padding: 3px 10px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--glass) 85%, transparent);
+  font: 700 13px/1.2 var(--font);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cubl-hud .ch-chips {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 4px;
+}
+
+.cubl-hud .cu-chip {
+  animation: cu-chip-in 0.5s cubic-bezier(0.3, 1.4, 0.5, 1) both;
+}
+
+@keyframes cu-chip-in {
+  from {
+    transform: translateY(-8px) scale(0.7);
+    opacity: 0;
+  }
+}
+
+.cu-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 100%;
+  box-sizing: border-box;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font: 650 11px/1.35 var(--font);
+  color: rgba(28, 28, 31, 0.78);
+  background: rgba(255, 255, 255, 0.78);
+  white-space: nowrap;
+}
+
+.cu-chip > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cu-chip i {
+  flex: 0 0 auto;
+}
+
+.cu-chip i {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.15);
+}
+
+.cu-chip.t0 {
+  opacity: 0.8;
+}
+
+.cu-chip.t1 {
+  color: #1d5f99;
+  background: rgba(214, 238, 255, 0.92);
+}
+
+.cu-chip.t2 {
+  color: #6b4300;
+  background: linear-gradient(90deg, #fff1b8, #ffd27a);
+  box-shadow: 0 0 10px rgba(255, 190, 60, 0.55);
+}
+
+.cu-chip.t3 {
+  color: #fff;
+  background: linear-gradient(90deg, #ff4f8b, #ffb347, #5fd068, #4fb4ff, #b06bff);
+  box-shadow: 0 0 12px rgba(176, 107, 255, 0.5);
+}
+
+.cu-chip.t2::before,
+.cu-chip.t3::before {
+  content: '\2726';
+}
+
+/* (the two just born: keep one) */
+.cubl-pick {
+  position: fixed;
+  left: 50%;
+  bottom: calc(max(18px, calc(env(safe-area-inset-bottom) + 8px)) + 62px);
+  transform: translateX(-50%);
+  width: min(420px, calc(100vw - 24px));
+  box-sizing: border-box;
+  padding: 10px 10px 8px;
+  border-radius: 20px;
+  background: var(--glass);
+  -webkit-backdrop-filter: blur(20px) saturate(1.7);
+  backdrop-filter: blur(20px) saturate(1.7);
+  border: 1px solid var(--line);
+  box-shadow: 0 10px 30px rgba(40, 30, 20, 0.16);
+  color: var(--ink);
+  z-index: 21;
+}
+
+.cubl-pick[hidden] {
+  display: none;
+}
+
+.cubl-pick.in {
+  animation: cu-card-in 0.55s cubic-bezier(0.25, 1.45, 0.45, 1) both;
+}
+
+.cubl-pick.done {
+  animation: cu-card-out 0.5s 0.4s ease-in both;
+}
+
+@keyframes cu-card-in {
+  from {
+    transform: translate(-50%, 40px) scale(0.92);
+    opacity: 0;
+  }
+}
+
+@keyframes cu-card-out {
+  to {
+    transform: translate(-50%, 24px) scale(0.96);
+    opacity: 0;
+  }
+}
+
+.cubl-pick .cpk-kicker {
+  margin: 0 4px 8px;
+  font: 800 11px/1 var(--font);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  opacity: 0.6;
+}
+
+.cubl-pick .cpk-kids {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.cubl-pick .cpk-kid {
+  appearance: none;
+  border: 0;
+  display: grid;
+  grid-template-columns: 46px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  padding: 7px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.7);
+  box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--k-col, #888) 35%, transparent);
+  color: var(--ink);
+  text-align: left;
+  font: inherit;
+  cursor: pointer;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+  transition: transform 0.35s cubic-bezier(0.3, 1.5, 0.5, 1), opacity 0.4s, box-shadow 0.3s;
+}
+
+.cubl-pick .cpk-kid:active {
+  transform: scale(0.97);
+}
+
+/* (the one it'd keep, left be) */
+.cubl-pick .cpk-kid.pref {
+  box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--k-col, #888) 75%, transparent), 0 0 14px color-mix(in srgb, var(--k-col, #888) 35%, transparent);
+}
+
+.cubl-pick .cpk-kid.kept {
+  transform: scale(1.04);
+  box-shadow: inset 0 0 0 3px var(--k-col, #888), 0 0 22px color-mix(in srgb, var(--k-col, #888) 60%, transparent);
+}
+
+.cubl-pick .cpk-kid.gone {
+  transform: translateY(-10px) scale(0.9);
+  opacity: 0.25;
+}
+
+.cubl-pick .cpk-pic {
+  display: grid;
+  place-items: center;
+  width: 46px;
+  height: 46px;
+  border-radius: 11px;
+  overflow: hidden;
+  background: linear-gradient(#efedea, #e2dfdb);
+}
+
+.cubl-pick .cpk-pic img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.cubl-pick .cpk-pic svg {
+  width: 72%;
+  height: 72%;
+}
+
+.cubl-pick .cpk-txt {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.cubl-pick .cpk-txt b {
+  font: 750 13px/1.15 var(--font);
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.cubl-pick .cpk-txt em {
+  font: 800 10px/1 var(--font);
+  font-style: normal;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #b06b00;
+}
+
+.cubl-pick .cpk-kid.t3 .cpk-txt em {
+  background: linear-gradient(90deg, #ff4f8b, #ffb347, #5fd068, #4fb4ff, #b06bff);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.cubl-pick .cpk-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+  max-height: 40px;
+  overflow: hidden;
+  min-width: 0;
+}
+
+.cubl-pick .cpk-chips .cu-chip {
+  font-size: 10px;
+  padding: 1px 6px;
+}
+
+.cubl-pick .cpk-timer {
+  height: 3px;
+  margin: 8px 6px 0;
+  border-radius: 2px;
+  background: rgba(0, 0, 0, 0.07);
+  overflow: hidden;
+}
+
+.cubl-pick .cpk-timer i {
+  display: block;
+  height: 100%;
+  background: var(--ink);
+  opacity: 0.5;
+  transform-origin: left;
+}
+
+.cubl-pick .cpk-timer.held {
+  visibility: hidden;
+}
+
+/* (the tree: the line from the first down, a spine through it, each generation's twin beside it) */
+.ct-card {
+  display: flex;
+  flex-direction: column;
+  width: min(440px, calc(100vw - 28px));
+  max-height: calc(100vh - 40px);
+  max-height: calc(100dvh - 40px);
+  box-sizing: border-box;
+}
+
+.ct-sub {
+  margin: -4px 0 10px;
+  font-size: 13px;
+  color: rgba(28, 28, 31, 0.55);
+}
+
+.ct-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  text-align: left;
+  padding: 2px 2px 6px;
+}
+
+.ct-row {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 6px;
+  --k-col: #888;
+}
+
+.ct-spine {
+  position: relative;
+  align-self: stretch;
+  display: grid;
+  place-items: center;
+}
+
+.ct-spine::before {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  margin-left: -1px;
+  background: rgba(0, 0, 0, 0.1);
+}
+
+.ct-row.first .ct-spine::before {
+  top: 50%;
+}
+
+.ct-row.last .ct-spine::before {
+  bottom: 50%;
+}
+
+.ct-spine i {
+  position: relative;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--k-col);
+  box-shadow: 0 0 0 3px #fff;
+}
+
+.ct-row.shown .ct-spine i {
+  width: 14px;
+  height: 14px;
+  box-shadow: 0 0 0 3px #fff, 0 0 10px var(--k-col);
+}
+
+.ct-me {
+  appearance: none;
+  border: 0;
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  margin: 3px 0;
+  padding: 5px 6px;
+  border-radius: 12px;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.ct-me:hover {
+  background: rgba(0, 0, 0, 0.04);
+}
+
+.ct-row.shown .ct-me {
+  background: color-mix(in srgb, var(--k-col) 14%, transparent);
+  box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--k-col) 45%, transparent);
+}
+
+.ct-pic {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  overflow: hidden;
+  border-radius: 10px;
+  background: linear-gradient(#efedea, #e2dfdb);
+}
+
+.ct-pic svg {
+  width: 72%;
+  height: 72%;
+}
+
+.ct-pic.sm {
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+}
+
+.ct-who {
+  display: grid;
+  min-width: 0;
+}
+
+.ct-who b {
+  font: 700 14px/1.2 var(--font);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ct-who em {
+  font: 500 12px/1.3 var(--font);
+  font-style: normal;
+  color: rgba(28, 28, 31, 0.6);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ct-row.t2 .ct-who em {
+  color: #a26500;
+  font-weight: 650;
+}
+
+.ct-row.t3 .ct-who em {
+  color: #8a3fd6;
+  font-weight: 700;
+}
+
+.ct-twin {
+  opacity: 0.45;
+  filter: saturate(0.7);
+}
+
+.ct-branch {
+  appearance: none;
+  border: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 4px 28px;
+  padding: 4px 10px 4px 4px;
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.045);
+  color: rgba(28, 28, 31, 0.75);
+  font: 600 12px/1.2 var(--font);
+  text-align: left;
+  cursor: pointer;
+}
+
+.ct-branch::before {
+  content: '\2937';
+  font-size: 14px;
+  opacity: 0.6;
+}
+
+html.dark .cubl-hud .ch-bg {
+  stroke: rgba(255, 255, 255, 0.12);
+}
+
+html.dark .cubl-pick .cpk-kid {
+  background: rgba(40, 40, 46, 0.85);
+}
+
+html.dark .cu-chip {
+  color: rgba(255, 255, 255, 0.85);
+  background: rgba(40, 40, 46, 0.85);
+}
+
+html.dark .ct-sub,
+html.dark .ct-who em,
+html.dark .ct-branch {
+  color: rgba(255, 255, 255, 0.6);
+}
+
+html.dark .ct-spine::before,
+html.dark .ct-branch {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+html.dark .ct-spine i {
+  box-shadow: 0 0 0 3px #1c1c20;
+}
+
+html.dark .ct-pic,
+html.dark .cubl-pick .cpk-pic {
+  background: linear-gradient(#2c2c32, #232328);
+}

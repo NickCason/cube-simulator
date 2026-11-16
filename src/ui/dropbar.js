@@ -6,6 +6,7 @@ import { PRESS_SPEED, PRESS_DEPTH } from '../press.js';
 import { COLLIDE_SPEED, COLLIDE_ANGLE } from '../collider.js';
 import { PLINKO_ROWS } from '../cublinko.js';
 import { decodeCube } from '../cubecode.js';
+import { CublicationBar, CUBL_ICON } from './cublibar.js';
 
 const EXHIBIT_ICON = `<svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="3.5" width="17" height="17" rx="5"/><path d="M10 8.6v6.8l5.6-3.4Z" fill="currentColor"/></svg>`;
 const DROP_ICON = `<svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="8" y="2.5" width="8" height="8" rx="2.2"/><path d="M12 13v5M9.5 15.6 12 18.1l2.5-2.5M4 21.5h16"/></svg>`;
@@ -35,7 +36,8 @@ export class Exhibit {
     pop.innerHTML = `<div class="ex-title">Exhibit</div><button class="ex-mode" data-mode="drop">${DROP_ICON}<span><b>Drop</b><em>Up into the sky &middot; let it fall</em></span></button>
       <button class="ex-mode" data-mode="press">${PRESS_ICON}<span><b>Press</b><em>A hydraulic press &middot; squash it flat</em></span></button>
       <button class="ex-mode" data-mode="collider">${COLLIDE_ICON}<span><b>Collider</b><em>Two cubes fired head on &middot; in slow motion</em></span></button>
-      <button class="ex-mode" data-mode="cublinko">${PLINKO_ICON}<span><b>Cublinko</b><em>Plinko with your cubes &middot; win a prize</em></span></button>`;
+      <button class="ex-mode" data-mode="cublinko">${PLINKO_ICON}<span><b>Cublinko</b><em>Plinko with your cubes &middot; win a prize</em></span></button>
+      <button class="ex-mode" data-mode="cublication">${CUBL_ICON}<span><b>Cublication</b><em>Feed it, split it, again and again &middot; watch it evolve</em></span></button>`;
     root.appendChild(pop);
     // Drop's bar
     const bar = (this.bar = document.createElement('div'));
@@ -238,9 +240,37 @@ export class Exhibit {
       else if (K.phase === 'done') K.again();
     });
     app.cublinko.onChange = (phase) => this._syncPlinko(phase);
+    // Cublication's bar, its count of generations over the dish, its card and its tree (see cublibar.js)
+    this.cu = new CublicationBar(this, app, root);
+    pop.querySelector('[data-mode="cublication"]').addEventListener('click', () => {
+      app.audio.ui();
+      this.enterCublication();
+    });
+  }
+
+  enterCublication() {
+    this.pop.hidden = true;
+    this.btn.classList.remove('open');
+    this.ui.closePalette();
+    this.ui.closeTune?.();
+    if (this.app.drop.on) this.exitDrop();
+    if (this.app.press.on) this.exitPress();
+    if (this.app.collider.on) this.exitCollider();
+    if (this.app.cublinko.on) this.exitCublinko();
+    if (!this.app.cublication.enter()) return;
+    document.documentElement.classList.add('drop-on');
+    this.cu.show();
+    this.ui.hint('Cublication · Start, and it feeds and divides by itself - keep the one you like', 3000);
+  }
+
+  exitCublication() {
+    this.app.cublication.exit();
+    document.documentElement.classList.remove('drop-on');
+    this.cu.hide();
   }
 
   enterCublinko() {
+    if (this.app.cublication.on) this.exitCublication();
     this.pop.hidden = true;
     this.btn.classList.remove('open');
     this.ui.closePalette();
@@ -290,6 +320,7 @@ export class Exhibit {
   }
 
   enterCollider() {
+    if (this.app.cublication.on) this.exitCublication();
     if (this.app.cublinko.on) this.exitCublinko();
     this.pop.hidden = true;
     this.btn.classList.remove('open');
@@ -334,6 +365,7 @@ export class Exhibit {
   }
 
   enterPress() {
+    if (this.app.cublication.on) this.exitCublication();
     if (this.app.collider.on) this.exitCollider();
     if (this.app.cublinko.on) this.exitCublinko();
     this.pop.hidden = true;
@@ -384,6 +416,7 @@ export class Exhibit {
   }
 
   enterDrop() {
+    if (this.app.cublication.on) this.exitCublication();
     if (this.app.press.on) this.exitPress();
     if (this.app.collider.on) this.exitCollider();
     if (this.app.cublinko.on) this.exitCublinko();

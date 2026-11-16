@@ -24,6 +24,22 @@ const MIN_CHILD = 0.38; // (smaller than this, a cube just grows)
 const MAX_SIZE = 1.6; // (and no bigger than this)
 const smooth = (x) => x * x * (3 - 2 * x);
 
+// (a cube's look as App.applyStyle gives it: its flavour, and all it's set to)
+export function lookOf(style, tune) {
+  const ct = TEXTURES[style.texture] || TEXTURES[DEFAULT_STYLE.texture], cs = resolveSettings(tune, ct);
+  return { f: resolveFlavor(style), o: { ...ct, ...cs, surface: style.surface, trim: style.trim, liqColor: style.liqColor || '', bevelRatio: (EDGES[style.edges] || EDGES[DEFAULT_STYLE.edges]).bevel } };
+}
+
+// (a look w of the way from P's to L's, as lookOf has them: its colour, clarity, glow, gloss, shine - all that blends,
+// blended; what can't - its surface, its trim, a layered flavour - turned half way)
+export function blendLook(P, L, w) {
+  const o = { ...(w < 0.5 ? P.o : L.o) };
+  for (const key in P.o) if (typeof P.o[key] === 'number' && typeof L.o[key] === 'number') o[key] = P.o[key] + (L.o[key] - P.o[key]) * w;
+  const fa = P.f, fb = L.f;
+  const f = fa.hex && fb.hex && !fa.layers && !fb.layers && fa.id !== 'rubik' && fb.id !== 'rubik' ? { ...(w < 0.5 ? fa : fb), hex: '#' + new THREE.Color(fa.hex).lerp(new THREE.Color(fb.hex), w).getHexString() } : w < 0.5 ? fa : fb;
+  return { f, o };
+}
+
 export class Cubiplication {
   constructor(app) {
     this.app = app;
@@ -84,6 +100,20 @@ export class Cubiplication {
   // Released: it keeps what it was given (once it has settled to it).
   stop() {
     if (this.m) this.m.feeding = false;
+  }
+
+  // Called off, before it divides: back to its size as it was, at once - nothing it was fed kept (Cublication's: a
+  // generation gone back to mid-feed). false if it's dividing
+  cancel() {
+    const m = this.m;
+    if (!m) return true;
+    if (m.dividing) return false;
+    m.V = 1;
+    m.g = 1;
+    m.u = 0;
+    this._shape();
+    this.m = null;
+    return true;
   }
 
   // A blob of jelly into it: dv, a fraction of its starting volume.
@@ -181,7 +211,7 @@ export class Cubiplication {
     this._twoLooks(m);
     this._eyesOn(m);
     app.audio?.squish(0.9, 0.8);
-    app.ui?.hint('Cubiplying…', 1600);
+    if (!this.quiet) app.ui?.hint('Cubiplying…', 1600);
   }
 
   // Its two children, worked out as it's first fed - not as the neck snaps - so each half can turn into its own as it
@@ -279,28 +309,15 @@ export class Cubiplication {
     cb.style.eyes = out;
   }
 
-  // (a cube's look as App.applyStyle gives it: its flavour, and all it's set to)
-  _lookOf(style, tune) {
-    const ct = TEXTURES[style.texture] || TEXTURES[DEFAULT_STYLE.texture], cs = resolveSettings(tune, ct);
-    return { f: resolveFlavor(style), o: { ...ct, ...cs, surface: style.surface, trim: style.trim, liqColor: style.liqColor || '', bevelRatio: (EDGES[style.edges] || EDGES[DEFAULT_STYLE.edges]).bevel } };
-  }
-
-  // Each half's look on its way from its parent's to its child's, w of the way: its colour, clarity, glow, gloss,
-  // shine - all that blends, blended; what can't (its surface, its trim, a layered flavour) turned half way
+  // Each half's look on its way from its parent's to its child's, w of the way (see blendLook)
   _looks(w) {
     const m = this.m, app = this.app, sb = app.sb;
     if (!(m?.kB >= 0) || !m.kids) return;
-    const P = m.lookP || (m.lookP = this._lookOf(m.mother.style, m.mother.tune));
-    m.looks ||= m.kids.map((K) => this._lookOf(K.style, K.tune));
-    const mix = (a, b) => {
-      const o = { ...(w < 0.5 ? a : b) };
-      for (const key in a) if (typeof a[key] === 'number' && typeof b[key] === 'number') o[key] = a[key] + (b[key] - a[key]) * w;
-      return o;
-    };
-    const flav = (fa, fb) => (fa.hex && fb.hex && !fa.layers && !fb.layers && fa.id !== 'rubik' && fb.id !== 'rubik' ? { ...(w < 0.5 ? fa : fb), hex: '#' + new THREE.Color(fa.hex).lerp(new THREE.Color(fb.hex), w).getHexString() } : w < 0.5 ? fa : fb);
+    const P = m.lookP || (m.lookP = lookOf(m.mother.style, m.mother.tune));
+    m.looks ||= m.kids.map((K) => lookOf(K.style, K.tune));
     m.looks.forEach((L, j) => {
-      const k = j ? m.kB : m.kA;
-      app.jelly.setCubeLook(k, flav(P.f, L.f), mix(P.o, L.o), sb.cSize[k]);
+      const k = j ? m.kB : m.kA, B = blendLook(P, L, w);
+      app.jelly.setCubeLook(k, B.f, B.o, sb.cSize[k]);
     });
   }
 
