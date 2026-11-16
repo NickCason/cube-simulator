@@ -22,7 +22,7 @@ export class TwistTool {
     this.app = app;
     this.id = 'twist';
     this.cursor = 'grab';
-    this.press = null; // { slot, piece, c (its little cube), fa (its face's axis), fs (its side), x, y, t }
+    this.press = null; // { slot, piece, c (its little cube), fa (its face's axis), fs (its side), x, y, t, at (where, in the world) }
     this.turn = null; // { slot, a, at, dir, t, T }
     this.queue = [];
     this.background = true; // (a turn going on finishes after a change of tool)
@@ -55,7 +55,7 @@ export class TwistTool {
     const third = sb.cSize[slot] / 3;
     const c = q.map((v) => Math.max(-1, Math.min(1, Math.round(v / third))));
     const a = q.map(Math.abs), fa = a[0] >= a[1] && a[0] >= a[2] ? 0 : a[1] >= a[2] ? 1 : 2;
-    this.press = { slot, piece: hit.piece, c, fa, fs: Math.sign(q[fa]) || 1, x: e.clientX, y: e.clientY, t: performance.now() };
+    this.press = { slot, piece: hit.piece, c, fa, fs: Math.sign(q[fa]) || 1, x: e.clientX, y: e.clientY, t: performance.now(), at: [p[0], p[1], p[2]] };
     app.audio?.ui?.();
     return true;
   }
@@ -66,19 +66,23 @@ export class TwistTool {
     const dx = e.clientX - P.x, dy = e.clientY - P.y;
     if (Math.hypot(dx, dy) < DRAG) return;
     this.press = null;
-    const app = this.app, sb = app.sb, cam = app.camera;
+    const app = this.app, sb = app.sb, cam = app.camera, rc = app.canvas.getBoundingClientRect();
     // its axes in the world, and which of the face's two the drag runs along
-    // (as each looks on screen from where it was touched)
+    // (as each looks on screen from where it was touched - in pixels: the
+    // projection's x and y each run across the whole screen, a phone's far
+    // taller than it's wide, and a face seen corner-on had its ways skewed
+    // by that - the drag could be taken for the other one, the other row
+    // turned)
     const verts = [];
     for (const pc of sb.pieces) if (pc.cube === P.slot) for (const i of pc.verts) verts.push(i);
-    const F = frameOf(sb, verts), h = sb.pieces[P.piece]?.com || [0, 0, 0];
+    const F = frameOf(sb, verts), h = P.at;
     const at = this._v.set(h[0], h[1], h[2]).project(cam), sx = at.x, sy = at.y;
     let best = -1, bs = 0, sgn = 1;
     for (let u = 0; u < 3; u++) {
       if (u === P.fa) continue;
       const s = this._w.set(h[0], h[1], h[2]).addScaledVector(F.ax[u], 0.2).project(cam);
       // (on screen: y down; the projection's y up)
-      const ux = s.x - sx, uy = -(s.y - sy), l = Math.hypot(ux, uy) || 1;
+      const ux = ((s.x - sx) * rc.width) / 2, uy = (-(s.y - sy) * rc.height) / 2, l = Math.hypot(ux, uy) || 1;
       const d = (dx * ux + dy * uy) / (l * Math.hypot(dx, dy));
       if (Math.abs(d) > bs) {
         bs = Math.abs(d);
@@ -88,11 +92,15 @@ export class TwistTool {
     }
     if (best < 0) return;
     // turned about the face's other way, the row the touch was in: whichever
-    // way round moves the touched sticker the way it was dragged
-    const A = 3 - P.fa - best, c = P.c.slice();
-    c[P.fa] = P.fs;
-    const moved = A === 0 ? [c[0], -c[2], c[1]] : A === 1 ? [c[2], c[1], -c[0]] : [-c[1], c[0], c[2]];
-    const dir = (moved[best] - c[best]) * sgn > 0 ? 1 : -1;
+    // way round moves the touched sticker the way it was dragged. Turned the
+    // right-hand way about A, a sticker on face fa (its side fs) goes along
+    // `best` as fs (A x fa).best - the same all over the face. (Worked out
+    // from where its little cube came to after a quarter turn, the row along
+    // one edge of the face hadn't moved along it at all, and turned the one
+    // way whichever way it was dragged: one turn in seven or so went
+    // backwards.)
+    const A = 3 - P.fa - best, hand = (A + 1) % 3 === P.fa ? 1 : -1;
+    const dir = sgn * P.fs * hand > 0 ? 1 : -1;
     this._start(P.slot, A, P.c[A], dir, TURN_T / (this.app.st?.twistSpeed ?? 1));
   }
 

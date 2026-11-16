@@ -12,6 +12,16 @@ export const FLAVORS = [
   { id: 'lemon', name: 'Lemon', hex: '#ffcc12' },
   { id: 'watermelon', name: 'Watermelon', hex: '#ff3f7f' },
   { id: 'cola', name: 'Cola', hex: '#7a2e0e' },
+  // (more, 2026-11-16 - "more base colors would be nice": the wheel's gaps filled - mint and lagoon between the
+  // greens and the blues, deep blueberry, dragon fruit's magenta - and the pale ones and the dark)
+  { id: 'mint', name: 'Mint', hex: '#2fd9a6' },
+  { id: 'lagoon', name: 'Blue lagoon', hex: '#10c4d8' },
+  { id: 'blueberry', name: 'Blueberry', hex: '#3b3fd6' },
+  { id: 'dragonfruit', name: 'Dragon fruit', hex: '#e3159b' },
+  { id: 'bubblegum', name: 'Bubblegum', hex: '#ff8fd1' },
+  { id: 'peach', name: 'Peach', hex: '#ffc4a6' },
+  { id: 'coconut', name: 'Coconut', hex: '#f3efe6' },
+  { id: 'licorice', name: 'Licorice', hex: '#1c1517' },
   // layered: colours come from the user's layer stack (style.layers)
   { id: 'layers', name: 'Layers', layered: true },
   // a 3x3 of stickers on every face, scrambled (style.rubik: its scramble)

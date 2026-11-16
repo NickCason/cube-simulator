@@ -511,6 +511,14 @@ const FLAVOR_WORDS = {
   lemon: ['Lemon', 'Golden', 'Sunny', 'Citron', 'Yellow'],
   watermelon: ['Watermelon', 'Pink', 'Rosy', 'Melon', 'Flamingo'],
   cola: ['Cola', 'Bronze', 'Caramel', 'Root Beer', 'Mahogany'],
+  mint: ['Mint', 'Minty', 'Seafoam', 'Spearmint', 'Jade'],
+  lagoon: ['Lagoon', 'Turquoise', 'Aqua', 'Cyan', 'Tidal'],
+  blueberry: ['Blueberry', 'Indigo', 'Navy', 'Midnight', 'Ultramarine'],
+  dragonfruit: ['Dragon Fruit', 'Magenta', 'Fuchsia', 'Pitaya', 'Orchid'],
+  bubblegum: ['Bubblegum', 'Candy Pink', 'Blush', 'Rosy', 'Cotton Candy'],
+  peach: ['Peach', 'Apricot', 'Peachy', 'Nectarine', 'Blush'],
+  coconut: ['Coconut', 'Milky', 'Pearly', 'Snowy', 'Ivory'],
+  licorice: ['Licorice', 'Onyx', 'Jet', 'Inky', 'Obsidian'],
 };
 const EDGE_WORDS = {
   sharp: ['Edgy', 'Sharp', 'Pointy', 'Crisp', 'Angular', 'Razor'],
@@ -784,7 +792,7 @@ export function cubeTraits(c, rec = null, ctx = {}) {
   } else {
     const hex = flavor.startsWith('#') ? flavor : null;
     const own = FLAVOR_WORDS[flavor];
-    const rc = readColour(hex || ({ cherry: '#d4102a', lime: '#5fce1e', blue: '#0f8cff', grape: '#7a24d4', orange: '#ff7414', lemon: '#ffcc12', watermelon: '#ff3f7f', cola: '#7a2e0e' }[flavor] || '#d4102a'));
+    const rc = readColour(hex || ({ cherry: '#d4102a', lime: '#5fce1e', blue: '#0f8cff', grape: '#7a24d4', orange: '#ff7414', lemon: '#ffcc12', watermelon: '#ff3f7f', cola: '#7a2e0e', mint: '#2fd9a6', lagoon: '#10c4d8', blueberry: '#3b3fd6', dragonfruit: '#e3159b', bubblegum: '#ff8fd1', peach: '#ffc4a6', coconut: '#f3efe6', licorice: '#1c1517' }[flavor] || '#d4102a'));
     if (own) rc.names = [...own.slice(0, 3), ...rc.names];
     colours = [rc];
     sal.colour = hex ? 0.6 : 0.45;

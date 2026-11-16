@@ -2395,7 +2395,7 @@ export class App {
     const used = new Set(this.cubes.map((cb) => cb.slot));
     let slot = 0;
     while (used.has(slot)) slot++;
-    const flavors = ['cherry', 'lime', 'blue', 'grape', 'orange', 'lemon', 'watermelon', 'cola'];
+    const flavors = ['cherry', 'lime', 'blue', 'grape', 'orange', 'lemon', 'watermelon', 'cola', 'mint', 'lagoon', 'blueberry', 'dragonfruit', 'bubblegum', 'peach', 'coconut', 'licorice'];
     const style = c
       ? { flavor: c.flavor, layers: copyLayers(c.layers), texture: c.texture, edges: EDGES[c.edges] ? c.edges : DEFAULT_STYLE.edges, glitter: c.glitter, glitterMix: c.glitter === 'custom' ? copyGlitterMix(c.glitterMix) : null, rubik: Number.isFinite(c.rubik) ? c.rubik : 1, ...(c.rubikState ? { rubikState: c.rubikState } : {}), trim: TRIM[c.trim] ? c.trim : 'none', eyes: copyEyes(c.eyes), acne: copyAcne(c.acne), surface: SURFACE[c.surface] ? c.surface : 'none' }
       : { flavor: flavors[Math.floor(Math.random() * flavors.length)], layers: copyLayers(DEFAULT_STYLE.layers), texture: 'jello', edges: DEFAULT_STYLE.edges, glitter: 'off', eyes: Math.random() < 0.12 ? copyEyes(EYE_FACES.pair) : [], surface: Math.random() < 0.2 ? SURFACES[1 + Math.floor(Math.random() * (SURFACES.length - 1))].id : 'none' };
