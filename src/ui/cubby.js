@@ -20,7 +20,9 @@ const TODAY_KEY = 'cube-sim-today-pic'; // the cube of the day's portrait, once 
 // one as a portrait, not the crop of the screen kept before there were any)
 const THUMB_PX = 320;
 const CARD = { fill: 0.8, lean: 0.07 }; // (its framing: the cube big in a little card)
-const PV = 1;
+// (2: the room's liquid kept out of them - a puddle spilt round the cube, another cube's liquid beside or on top
+// of it, were in some: all taken again, a card at a time, the next time the shelf's open)
+const PV = 2;
 const DAY_KEY = 'cube-sim-day'; // the last day the cube of the day said hello
 
 const svg = (inner, extra = '') =>
@@ -546,11 +548,11 @@ export class Cubby {
     const app = this.app;
     // (not while a cube's being swapped in or re-formed: in a moment)
     if (app.swapper.active || app.healer.active || app._themeAnim || app._placeAnim) return this._portraitsSoon(700);
-    const today = cubeOfTheDay(), code = encodeCube(today);
-    if (this._todayPic()?.code !== code) {
+    const today = cubeOfTheDay(), code = encodeCube(today), had = this._todayPic();
+    if (had?.code !== code || (had.url && had.pv !== PV)) {
       const url = app.portrait(today, THUMB_PX, CARD);
       if (url) {
-        this._today = { code, url };
+        this._today = { code, url, pv: PV };
         try {
           localStorage.setItem(TODAY_KEY, JSON.stringify(this._today));
         } catch (e) {}

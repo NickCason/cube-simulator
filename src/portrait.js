@@ -57,6 +57,7 @@ export class Portraits {
       env: F.envMap.value, floorEnv: app.floor.material.envMap, glitterEnv: G?.uniforms.envMap.value,
       glitter: G && { mode: G.mode, count: G.count, size: G.size, sparkle: G.sparkle },
       vis: app.scene.children.map((o) => o.visible), fxVis: app.fxScene.children.map((o) => o.visible),
+      liquid: app.fluid?.mesh.visible ?? false,
     };
     const urls = [];
     // (the shaders it takes: whatever's compiled that will do - none started
@@ -66,6 +67,10 @@ export class Portraits {
       // the room emptied: the floor and the lights (and, of the effects, the glitter)
       for (const o of app.scene.children) if (o !== app.floor && !o.isLight && o !== app.keyLight?.target && !o.userData.inPortrait) o.visible = false;
       for (const o of app.fxScene.children) if (o !== G?.mesh && o !== G?.meshCube && !o.userData.inPortrait) o.visible = false;
+      // ...and the room's liquid: it's a scene of its own, drawn whenever it shows (its shadow put back on with it,
+      // each frame - see App.render). Left on, a puddle spilt in the room lay round the cube in its picture, and
+      // another cube's liquid - full: a cube of it - stood beside it, or on top of it if they were stacked
+      if (app.fluid) app.fluid.mesh.visible = false;
       // nothing else going on: no rings of light, no hollows (the room's
       // cut-open bubbles), no fire, no flash, no dimming between looks, no
       // ring round a selected cube
@@ -124,6 +129,7 @@ export class Portraits {
       fx.selCol.value.w = S.selA;
       app.scene.children.forEach((o, k) => (o.visible = S.vis[k] ?? o.visible));
       app.fxScene.children.forEach((o, k) => (o.visible = S.fxVis[k] ?? o.visible));
+      if (app.fluid) app.fluid.mesh.visible = S.liquid;
       // (and the room drawn again, so the screen never sees the studio - its
       // eyes back on its cubes)
       app.eyes?.update(0);
