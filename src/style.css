@@ -7257,3 +7257,23 @@ html.big-text .exhibit-pop .ex-mode b {
 html.big-text .exhibit-pop .ex-mode em {
   font-size: 14px;
 }
+
+/* (the Cubimizer on a phone, a fingertip each: its flavours 8 a row, not 10 - 38 px, they were 30; its options and
+   its materials' names a size up) */
+@media (max-width: 720px) {
+  #ui > .palette.style-panel .chips {
+    grid-template-columns: repeat(8, 1fr);
+    gap: 7px;
+  }
+  #ui > .palette.style-panel .opt {
+    height: 36px;
+    font-size: 12.5px;
+  }
+  #ui > .palette.style-panel .mat {
+    flex-basis: 66px;
+    font-size: 12px;
+  }
+  #ui > .palette.style-panel .lbl {
+    font-size: 12px;
+  }
+}
