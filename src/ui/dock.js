@@ -42,6 +42,7 @@ export class PhoneDock {
     this.cur = null;
     this.recents = [];
     this._quakeT = 0;
+    this._flying = false; // (a tool on its way down from the tray: it acts once it lands)
     this._chipT = new WeakMap();
     try {
       const r = JSON.parse(localStorage.getItem(RECENT_KEY) || '[]');
@@ -137,7 +138,12 @@ export class PhoneDock {
 
   _renderDock(prev) {
     const id = this.cur, d = this.defs.find((t) => t.id === id);
+    this.holdIc.classList.remove('tk'); // (else the new icon, under .tk still, acted at once - in flight, hidden)
     this.holdIc.innerHTML = this.icons[id] || '';
+    this.holdIc.dataset.anim = id;
+    // (picked: it acts - the knife slashes, the mallet bonks, the torch flickers... see .tk in style.css. Flown in
+    // from the tray: once it's landed - it played hidden under the one flying)
+    if (prev && !this._flying) this._act();
     this.holdNm.querySelector('b').textContent = d?.label || id;
     this.holdBtn.setAttribute('aria-label', `${d?.label || id} in hand - all the tools`);
     if (prev && !motion.reduced) {
@@ -160,6 +166,13 @@ export class PhoneDock {
       });
       this.recentEl.appendChild(b);
     }
+  }
+
+  _act() {
+    if (motion.reduced) return;
+    this.holdIc.classList.remove('tk');
+    void this.holdIc.offsetWidth;
+    this.holdIc.classList.add('tk');
   }
 
   // ------------------------------------------------------------------ the tray
@@ -202,10 +215,16 @@ export class PhoneDock {
     app.audio.init();
     app.audio.ui();
     this.tray.close();
+    const flies = !!r && !motion.reduced && id !== this.cur;
+    this._flying = flies;
     if (id !== this.cur) app.setTool(id);
-    if (!r || motion.reduced) return;
+    this._flying = false;
+    if (!flies) return;
     this.holdIc.style.visibility = 'hidden';
-    fly(r, this.holdIc, this.icons[id], 'flyer').then(() => (this.holdIc.style.visibility = ''));
+    fly(r, this.holdIc, this.icons[id], 'flyer').then(() => {
+      this.holdIc.style.visibility = '';
+      this._act();
+    });
   }
 
   // ------------------------------------------------------------------ over the dock
@@ -241,6 +260,7 @@ export class PhoneDock {
     const now = performance.now(), dock = this.dock;
     if (now - this._quakeT < 260 || !dock || !dock.offsetParent) return;
     this._quakeT = now;
+    if (a >= 0.025) this.ui.jiggleBrand?.(); // (a big one: the logo wobbles too)
     const k = Math.min(1, a / 0.04), r = 2.4 * k, y = 4 * k, base = 'translateX(-50%)';
     dock.animate(
       [{ transform: base }, { transform: `${base} translateY(${y}px) rotate(${-r}deg)`, offset: 0.12 }, { transform: `${base} rotate(${r * 0.6}deg)`, offset: 0.36 }, { transform: `${base} rotate(${-r * 0.3}deg)`, offset: 0.62 }, { transform: base }],

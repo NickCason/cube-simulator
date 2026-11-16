@@ -6876,3 +6876,257 @@ html.dark .flyer {
     font-size: 12px;
   }
 }
+
+/* ---- phase 3: character. A tool picked acts - its icon, in the dock (and a phone's pill), plays its own little
+   scene once: the knife slashes, the mallet bonks, the torch flickers, the bomb fizzes, the guns kick... */
+.tk svg {
+  transform-origin: 50% 50%;
+}
+
+.tk[data-anim='hand'] svg {
+  transform-origin: 50% 90%;
+  animation: tk-wave 0.8s ease-out;
+}
+
+.tk[data-anim='knife'] svg {
+  animation: tk-slash 0.6s cubic-bezier(0.3, 1.4, 0.5, 1);
+}
+
+.tk[data-anim='dicer'] svg,
+.tk[data-anim='cuber'] svg {
+  animation: tk-chop 0.6s ease-out;
+}
+
+.tk[data-anim='nailgun'] svg,
+.tk[data-anim='holegun'] svg,
+.tk[data-anim='autogun'] svg,
+.tk[data-anim='shotgun'] svg,
+.tk[data-anim='gelgun'] svg {
+  transform-origin: 70% 60%;
+  animation: tk-recoil 0.55s ease-out;
+}
+
+.tk[data-anim='autogun'] svg {
+  animation: tk-recoil 0.18s ease-out 3;
+}
+
+.tk[data-anim='mallet'] svg {
+  transform-origin: 25% 85%;
+  animation: tk-bonk 0.75s ease-out;
+}
+
+.tk[data-anim='bomb'] svg {
+  animation: tk-fizz 0.7s linear;
+}
+
+.tk[data-anim='torch'] svg {
+  transform-origin: 50% 100%;
+  animation: tk-flicker 0.8s ease-in-out;
+}
+
+.tk[data-anim='freeze'] svg {
+  animation: tk-shiver 0.6s linear;
+}
+
+.tk[data-anim='acid'] svg {
+  animation: tk-drip 0.7s ease-out;
+}
+
+.tk[data-anim='eyes'] svg {
+  animation: tk-look 0.9s ease-in-out;
+}
+
+.tk[data-anim='flour'] svg {
+  animation: tk-sift 0.6s ease-in-out;
+}
+
+.tk[data-anim='baller'] svg {
+  transform-origin: 30% 70%;
+  animation: tk-scoop 0.7s ease-out;
+}
+
+.tk[data-anim='syringe'] svg {
+  animation: tk-plunge 0.6s ease-out;
+}
+
+.tk[data-anim='feed'] svg {
+  transform-origin: 70% 30%;
+  animation: tk-tip 0.7s ease-out;
+}
+
+.tk[data-anim='magnet'] svg {
+  animation: tk-pull 0.6s ease-out;
+}
+
+.tk[data-anim='twist'] svg {
+  animation: tk-spin 0.7s cubic-bezier(0.3, 1.3, 0.5, 1);
+}
+
+.tk[data-anim='blow'] svg {
+  transform-origin: 0 50%;
+  animation: tk-puff 0.6s ease-out;
+}
+
+@keyframes tk-wave {
+  20% { transform: rotate(-16deg); }
+  40% { transform: rotate(12deg); }
+  60% { transform: rotate(-8deg); }
+  80% { transform: rotate(4deg); }
+}
+
+@keyframes tk-slash {
+  0% { transform: translate(-5px, -5px) rotate(-28deg); }
+  45% { transform: translate(3px, 3px) rotate(8deg); }
+}
+
+@keyframes tk-chop {
+  20% { transform: scaleY(0.7); }
+  45% { transform: scaleY(1.1); }
+  70% { transform: scaleY(0.88); }
+}
+
+@keyframes tk-recoil {
+  15% { transform: translateX(-4px) rotate(-14deg); }
+  50% { transform: translateX(1px) rotate(4deg); }
+}
+
+@keyframes tk-bonk {
+  30% { transform: rotate(-40deg); }
+  55% { transform: rotate(16deg); }
+  75% { transform: rotate(-6deg); }
+}
+
+@keyframes tk-fizz {
+  10%, 30%, 50%, 70% { transform: rotate(-9deg) scale(1.08); }
+  20%, 40%, 60%, 80% { transform: rotate(9deg) scale(0.96); }
+}
+
+@keyframes tk-flicker {
+  20% { transform: scale(1, 1.16); filter: brightness(1.4); }
+  40% { transform: scale(1, 0.92); }
+  60% { transform: scale(1, 1.08); filter: brightness(1.2); }
+  80% { transform: scale(1, 0.97); }
+}
+
+@keyframes tk-shiver {
+  10%, 30%, 50%, 70%, 90% { transform: translateX(-2px); }
+  20%, 40%, 60%, 80% { transform: translateX(2px); }
+}
+
+@keyframes tk-drip {
+  30% { transform: translateY(4px) scaleY(1.12); }
+  60% { transform: translateY(-2px) scaleY(0.95); }
+}
+
+@keyframes tk-look {
+  25% { transform: translateX(-3px); }
+  60% { transform: translateX(3px); }
+}
+
+@keyframes tk-sift {
+  20%, 60% { transform: translate(-3px, 1px) rotate(-7deg); }
+  40%, 80% { transform: translate(3px, -1px) rotate(7deg); }
+}
+
+@keyframes tk-scoop {
+  40% { transform: rotate(-35deg) translateY(2px); }
+  70% { transform: rotate(10deg); }
+}
+
+@keyframes tk-plunge {
+  40% { transform: translateX(-4px) scaleX(0.88); }
+  70% { transform: translateX(2px); }
+}
+
+@keyframes tk-tip {
+  40% { transform: rotate(32deg); }
+  70% { transform: rotate(-8deg); }
+}
+
+@keyframes tk-pull {
+  30% { transform: scale(1.2); }
+  50% { transform: scale(0.9); }
+  70% { transform: scale(1.06); }
+}
+
+@keyframes tk-spin {
+  to { transform: rotate(360deg); }
+}
+
+@keyframes tk-puff {
+  30% { transform: scaleX(1.28); }
+  60% { transform: scaleX(0.92); }
+}
+
+/* (the jelly's colour changed: the little cube on Make wobbles, as the logo does) */
+.cube-ico.jiggle {
+  animation: gummy-jiggle 0.7s ease;
+  transform-origin: 50% 85%;
+}
+
+/* (a mode's bar springs up where the dock was; back in the lab, the dock springs back) */
+.drop-bar:not([hidden]) {
+  animation: ui-bar-in var(--t-bouncy) var(--sp-bouncy) backwards;
+}
+
+.dock {
+  animation: ui-bar-in var(--t-bouncy) var(--sp-bouncy) backwards;
+}
+
+@keyframes ui-bar-in {
+  from {
+    opacity: 0;
+    transform: translateX(-50%) translateY(28px) scale(0.9);
+  }
+}
+
+/* (a hint: bounced in) */
+.hint {
+  transition: opacity 0.3s, transform var(--t-bouncy) var(--sp-bouncy);
+}
+
+/* (a phone's sheet: what's in it rising in, one after another) */
+@media (max-width: 720px) {
+  #ui > .palette:not([hidden]) > :not(.pal-grab),
+  #ui > .exhibit-pop:not([hidden]) > * {
+    animation: ui-rise var(--t-bouncy) var(--sp-bouncy) backwards;
+  }
+  #ui > .palette > :nth-child(3),
+  #ui > .exhibit-pop > :nth-child(3) {
+    animation-delay: 35ms;
+  }
+  #ui > .palette > :nth-child(4),
+  #ui > .exhibit-pop > :nth-child(4) {
+    animation-delay: 70ms;
+  }
+  #ui > .palette > :nth-child(5),
+  #ui > .exhibit-pop > :nth-child(5) {
+    animation-delay: 105ms;
+  }
+  #ui > .palette > :nth-child(6),
+  #ui > .exhibit-pop > :nth-child(6) {
+    animation-delay: 140ms;
+  }
+  #ui > .palette > :nth-child(n + 7),
+  #ui > .exhibit-pop > :nth-child(n + 7) {
+    animation-delay: 175ms;
+  }
+}
+
+@keyframes ui-rise {
+  from {
+    opacity: 0;
+    transform: translateY(16px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tk svg,
+  .cube-ico.jiggle,
+  .drop-bar:not([hidden]),
+  .dock,
+  #ui > .palette:not([hidden]) > *,
+  #ui > .exhibit-pop:not([hidden]) > * {
+    animation: none !important;
+  }
+}
