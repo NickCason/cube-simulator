@@ -14,8 +14,9 @@ import { ACNE_AMOUNTS, ACNE_SIZES, ACNE_LOOKS, copyAcne } from '../acne.js';
 import { SURFACES, surfaceSwatch } from '../surfaces.js';
 import { buildLine } from './buildline.js';
 import { Exhibit } from './dropbar.js';
-import { PhoneDock } from './dock.js';
-import { initMotion, motion } from './motion.js';
+import { PhoneDock, toolColor } from './dock.js';
+import { initMotion } from './motion.js';
+import { act } from './acts.js';
 
 // (the googly eyes' chips: a little eye of each kind, its size, one or two)
 const EYE_PUPIL = { classic: 4, big: 5.6, tiny: 2.3, lashes: 3.8, angry: 3.6, sleepy: 3.4 };
@@ -190,6 +191,7 @@ const LIQ_COLOURS = [['', 'Jelly'], ['rainbow', 'Rainbow'], ['#ffffff', 'Clear']
 export class UI {
   constructor(app, root) {
     initMotion(); // (the UI's springs and its jelly press - see motion.js)
+    this._toolActed = null; // (the tool whose act last played - see setTool, acts.js)
     this.app = app;
     this.root = root;
     this.root.innerHTML = `
@@ -1098,13 +1100,8 @@ export class UI {
   setTool(id) {
     for (const k in this.buttons) this.buttons[k].classList.toggle('active', k === id);
     // (picked: it acts - its own little animation, see .tk in style.css)
-    const tb = this.buttons[id];
-    if (tb && !motion.reduced) {
-      tb.dataset.anim = id;
-      tb.classList.remove('tk');
-      void tb.offsetWidth;
-      tb.classList.add('tk');
-    }
+    if (id !== this._toolActed) act(this.buttons[id], id, toolColor(id));
+    this._toolActed = id;
     this.pdock?.setTool(id);
     this._pinLab(id);
     // (the sieve in hand: what's in it, to pick from; the googly eyes: theirs)

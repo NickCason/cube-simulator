@@ -6,6 +6,7 @@
 
 import { Sheet, asSheet } from './sheet.js';
 import { fly, motion } from './motion.js';
+import { act } from './acts.js';
 
 export const TOOL_GROUPS = [
   { name: 'Hands', color: '#3b9cf5', ids: ['hand', 'blow', 'twist', 'magnet'] },
@@ -15,6 +16,8 @@ export const TOOL_GROUPS = [
   { name: 'Elements', color: '#e5484d', ids: ['torch', 'freeze', 'acid'] },
   { name: 'Dress up & grow', color: '#e04f9c', ids: ['eyes', 'flour', 'syringe', 'feed'] },
 ];
+// (a tool's kind's colour - its tray group's: its act's halo)
+export const toolColor = (id) => TOOL_GROUPS.find((g) => g.ids.includes(id))?.color || '#8c8c96';
 const RECENT_KEY = 'cube-sim-recents';
 const RECENT_N = 2; // (shown: two, and the one in hand named - three and a long name ran off a phone)
 const DEFAULT_RECENTS = ['knife', 'mallet', 'eyes', 'torch'];
@@ -143,7 +146,7 @@ export class PhoneDock {
 
   _renderDock(prev) {
     const id = this.cur, d = this.defs.find((t) => t.id === id);
-    this.holdIc.classList.remove('tk'); // (else the new icon, under .tk still, acted at once - in flight, hidden)
+    this.holdIc._act?.cancel(); // (the last one's act, if it's still going: stopped - its marks gone)
     this.holdIc.innerHTML = this.icons[id] || '';
     this.holdIc.dataset.anim = id;
     // (picked: it acts - the knife slashes, the mallet bonks, the torch flickers... see .tk in style.css. Flown in
@@ -174,10 +177,7 @@ export class PhoneDock {
   }
 
   _act() {
-    if (motion.reduced) return;
-    this.holdIc.classList.remove('tk');
-    void this.holdIc.offsetWidth;
-    this.holdIc.classList.add('tk');
+    act(this.holdIc, this.cur, toolColor(this.cur));
   }
 
   // ------------------------------------------------------------------ the tray
