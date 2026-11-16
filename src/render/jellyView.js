@@ -3,6 +3,7 @@ import * as THREE from 'three';
 import { biasExp, RUBIK_COLORS, gradAt, gradSequence, GRAD_SHAPE_INDEX, rubikPack, rubikStateOf, TRIM } from '../styles.js';
 import { FREE_N, bakeFree } from '../freeform.js';
 import { MAX_CUBES, REST_STEP, TAG_FRESH, TAG_EXTERIOR, HOLLOW_SHORT } from '../sim/softbody.js';
+import { healFollow } from '../heal.js';
 
 // (cut surfaces drawn smooth - see JellyView._buildSmooth: Taubin's lambda|mu, rounds of the pair)
 const SMOOTH_L = 0.6307, SMOOTH_M = -0.6732, SMOOTH_IT = 10;
@@ -1188,8 +1189,9 @@ export class JellyView {
     };
     this._weldTex = [tex(near.segs, near.segH), tex(near.cells, near.cellH)];
     [U.uWeldSegs.value, U.uWeldCells.value] = this._weldTex;
-    U.uWeldGrid.value.set(near.origin, near.origin, near.origin, near.invC);
-    U.uWeldGridN.value = near.n;
+    // (the table's size, its longest run to search, where its lists start: see seamNearJob)
+    U.uWeldGrid.value.set(near.H, near.probes, near.lists, 0);
+    U.uWeldGridN.value = 1;
     U.uWeldUnit.value = near.unit;
   }
 
@@ -1210,6 +1212,9 @@ export class JellyView {
   }
 
   syncTopology(sb) {
+    // (a re-cube's weld and fill carried on through the change - its liquid cube made hollow, say - before it's
+    // drawn: see healFollow)
+    healFollow(sb);
     if (sb.topoVersion === this.topoVersion && sb.restVersion === this._restVersion) return false;
     this.topoVersion = sb.topoVersion;
     this._restVersion = sb.restVersion;
@@ -1367,7 +1372,7 @@ export class JellyView {
       for (const [mids, first] of [[this.mids1, nB], [this.mids2, nL1]]) {
         for (let m = 0, k = first; m < mids.length; m += 3, k++) {
           const wa = weld[mids[m]], wb = weld[mids[m + 1]];
-          weld[k] = Math.min(wa, wb) < 0.12 ? sb.weld.at(rest[k * 3], rest[k * 3 + 1], rest[k * 3 + 2]) : (wa + wb) * 0.5;
+          weld[k] = Math.min(wa, wb) < 0.12 ? sb.weld.at(rest[k * 3], rest[k * 3 + 1], rest[k * 3 + 2], Math.round(look[k])) : (wa + wb) * 0.5;
         }
       }
     }

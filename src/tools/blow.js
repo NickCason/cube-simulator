@@ -8,6 +8,7 @@ import * as THREE from 'three';
 // skin in ripples. Nothing of it is drawn but a few motes riding it, and what it does.
 const REACH = 9; // (m: as far as it blows)
 const PUSH = 16; // (m/s², a whole cube's square face met full on - a small piece, as much more as it's smaller)
+const PUSH_LIQ = 34; // (m/s², liquid out in the room met at the gust's middle: a puddle pushed along, its drops carried)
 const _o = new THREE.Vector3(), _d = new THREE.Vector3();
 
 export class BlowTool {
@@ -107,6 +108,53 @@ export class BlowTool {
       hit[vp[a]] += F;
     }
     for (let i = 0; i < pcs.length; i++) if (hit[i] > 1e-5 && pcs[i].asleep) sb.wake(i);
+    // the liquid it meets: puddles and spills out in the room pushed along it - and, blown down on, out from where it
+    // hits, as air spreads over a floor (a puddle blown on from above opens round the spot) - their surfaces rippled, a
+    // little up off them where it runs over them; and drops in the air carried. A cube's own liquid, sealed in it, left
+    // be - the gust doesn't get in; in a cube cut open, stirred, less. (It only ever pushed the jelly: a puddle sat
+    // still in a gale)
+    const fl = app.fluid;
+    if (fl?.n) {
+      const X = fl.x, V = fl.v, dIn = fl.dIn, own = fl.own, cav = sb.cav, A = PUSH_LIQ * force * gust, down = Math.max(0, -d.y);
+      let any = false;
+      for (let i = 0; i < fl.n; i++) {
+        // (in which cube - its slot + 1; 255, not looked yet: see Fluid.dIn)
+        const k = dIn[i];
+        let f = 1;
+        if (k === 255) {
+          if (own[i]) continue;
+        } else if (k) {
+          const c = cav[k - 1];
+          if (!c || c.sealed) continue;
+          f = 0.5;
+        }
+        const o3 = i * 3, rx = X[o3] - o.x, ry = X[o3 + 1] - o.y, rz = X[o3 + 2] - o.z, s = rx * d.x + ry * d.y + rz * d.z;
+        if (s <= 0 || s > REACH) continue;
+        const px = rx - s * d.x, py = ry - s * d.y, pz = rz - s * d.z, R = R0 + 0.22 * s, q = (px * px + py * py + pz * pz) / (R * R);
+        if (q > 4) continue;
+        const ripple = 0.35 + 0.65 * Math.sin(s * 13 - t * 19 + (X[o3] * 5.3 + X[o3 + 2] * 4.1)) ** 2;
+        const a = ((f * A * Math.exp(-q)) / (1 + 0.04 * s * s)) * ripple * dt;
+        // (out from the gust's line, across the floor: none right on it)
+        const out = (down * a) / (Math.sqrt(px * px + pz * pz) + 0.3 * R);
+        V[o3] += d.x * a + px * out;
+        V[o3 + 1] += d.y * a + 0.18 * a * ripple;
+        V[o3 + 2] += d.z * a + pz * out;
+        any = true;
+      }
+      if (any && fl.asleep) fl.wake();
+    }
+    // (a drop flying home to a re-cube is left to it; an ice cube, heavy and smooth, skates - pushed less)
+    for (const dr of app.droplets?.items || []) {
+      if (dr.home) continue;
+      const rx = dr.p.x - o.x, ry = dr.p.y - o.y, rz = dr.p.z - o.z, s = rx * d.x + ry * d.y + rz * d.z;
+      if (s <= 0 || s > REACH) continue;
+      const px = rx - s * d.x, py = ry - s * d.y, pz = rz - s * d.z, R = R0 + 0.22 * s, q = (px * px + py * py + pz * pz) / (R * R);
+      if (q > 4) continue;
+      const a = ((PUSH_LIQ * force * gust * Math.exp(-q)) / (1 + 0.04 * s * s)) * (dr.ice > 0.5 ? 0.3 : 1) * dt;
+      dr.v.x += d.x * a;
+      dr.v.y += d.y * a;
+      dr.v.z += d.z * a;
+    }
     // a few motes riding it (dust in the air: which way it's going)
     this.motes += dt * 55 * gust;
     const P = app.particles?.alpha;

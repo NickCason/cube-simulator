@@ -61,6 +61,21 @@ export function fitRotation(a0, a1, a2, q) {
 //   segments nearest to it, packed into float textures (see jellyView).
 // segs: 6 floats per segment.
 export function* weldFieldJob(segs, size = 1, template = null) {
+  const far = yield* seamFarJob(segs, size, template);
+  const near = yield* seamNearJob([{ k: 0, segs, size }]);
+  return { at: far.at, dist: far.dist, near };
+}
+
+// Several cubes' seams at once - each { k: its slot, segs: in its own rest space, size: as it'll be }: each its own
+// far field, and the near field all of theirs. (`at` takes the cube: at(x, y, z, k) - 99, one with none.)
+export function* weldFieldsJob(cubes) {
+  const ats = [];
+  for (const c of cubes) ats[c.k] = (yield* seamFarJob(c.segs, c.size)).at;
+  const near = yield* seamNearJob(cubes);
+  return { at: (x, y, z, k = 0) => (ats[k] ? ats[k](x, y, z) : 99), dist: null, near, cubes: cubes.map((c) => c.k) };
+}
+
+function* seamFarJob(segs, size = 1, template = null) {
   const half = (size / 2) * 1.1;
   const G = 0.05 * size, lo = -half - 0.1 * size, N = Math.ceil((2 * half + 0.2 * size) / G) + 1, NN = N * N, N3 = NN * N;
   const cell = (v) => Math.min(N - 1, Math.max(0, Math.floor((v - lo) / G)));
@@ -161,61 +176,138 @@ export function* weldFieldJob(segs, size = 1, template = null) {
       dist[i] = at(template[i * 3], template[i * 3 + 1], template[i * 3 + 2]);
     }
   }
-  // near field: cells of C reaching R past the cube; a segment is listed in
-  // a cell if it passes within R of somewhere in it
-  const R = 0.065 * size, C = 0.0275 * size, ext = size / 2 + R + C;
-  const NC = Math.ceil((2 * ext) / C), NC3 = NC * NC * NC;
-  const reach = R + C * 0.87, SL = 8;
-  // (the lists go straight into the texture's data: 2 texels a cell, 1024
-  // texels a row; -1 = no segment)
-  const W = 1024;
-  const cellH = Math.ceil((NC3 * 2) / W);
-  yield;
-  const slotS = new Float32Array(cellH * W * 4).fill(-1);
-  yield;
-  const slotD = new Float32Array(NC3 * SL).fill(Infinity);
-  yield;
-  for (let s = 0; s < nS; s++) {
-    if (s % 24 === 23) yield;
-    const o = s * 6;
-    const ax = segs[o], ay = segs[o + 1], az = segs[o + 2];
-    const ux = segs[o + 3] - ax, uy = segs[o + 4] - ay, uz = segs[o + 5] - az;
-    const uu = Math.max(ux * ux + uy * uy + uz * uz, 1e-12);
-    const r0 = (v) => Math.max(0, Math.floor((v - reach + ext) / C)), r1 = (v) => Math.min(NC - 1, Math.floor((v + reach + ext) / C));
-    const i0 = r0(Math.min(ax, ax + ux)), i1 = r1(Math.max(ax, ax + ux));
-    const j0 = r0(Math.min(ay, ay + uy)), j1 = r1(Math.max(ay, ay + uy));
-    const k0 = r0(Math.min(az, az + uz)), k1 = r1(Math.max(az, az + uz));
-    for (let i = i0; i <= i1; i++)
-      for (let j = j0; j <= j1; j++)
-        for (let k = k0; k <= k1; k++) {
-          const cx = -ext + (i + 0.5) * C - ax, cy = -ext + (j + 0.5) * C - ay, cz = -ext + (k + 0.5) * C - az;
-          const h = Math.min(1, Math.max(0, (cx * ux + cy * uy + cz * uz) / uu));
-          const d = Math.hypot(cx - ux * h, cy - uy * h, cz - uz * h);
-          if (d > reach) continue;
-          // into the cell's list, nearest first
-          const b = ((i * NC + j) * NC + k) * SL;
-          if (d >= slotD[b + SL - 1]) continue;
-          let q = SL - 1;
-          while (q > 0 && slotD[b + q - 1] > d) {
-            slotD[b + q] = slotD[b + q - 1];
-            slotS[b + q] = slotS[b + q - 1];
-            q--;
+  return { at, dist };
+}
+
+// The near field: round each cube, cells of C reaching R past it; a segment is listed in a cell if it passes
+// within R of somewhere in it. Only the cells some segment is listed in are kept - a hash table of them, by cube and
+// cell, open addressing (see weldNear in the shader, which looks them up just so). (Every cell round a cube, a grid
+// of them, was 2.7 MB a cube - eight cubes' 22, mostly empty.)
+// The texture: 1024 texels a row; texel k (0..7), cube k's grid - its corner, 1 / C, cells a side (0: no seams of
+// its), its size; then the table, H places, two a texel - a cell's key ((k * 64 + i) * 64 + j) * 64 + l (-1, an
+// empty place) and its list's number; then the lists, 2 texels each - its 8 segments' numbers, nearest first, -1
+// none. Segment numbers run through all the cubes' segments, in turn.
+const WELD_HASH = 2654435761 | 0; // (Knuth's: the shader's the same - uint multiply, then h ^= h >> 15)
+const weldHash = (key, H) => {
+  const h = Math.imul(key, WELD_HASH) >>> 0;
+  return (h ^ (h >>> 15)) & (H - 1);
+};
+function* seamNearJob(cubes) {
+  const W = 1024, SL = 8, BASE = 8;
+  let nS = 0;
+  for (const c of cubes) nS += c.segs.length / 6;
+  const params = new Float32Array(BASE * 4);
+  for (let k = 0; k < BASE; k++) params.set([0, 1, 0, 1], k * 4);
+  const cellOf = new Map(), LD = [], LS = [];
+  let s0 = 0, nE = 0, unit = 0;
+  for (const { k, segs, size } of cubes) {
+    const R = 0.065 * size, C = 0.0275 * size, ext = size / 2 + R + C;
+    const NC = Math.min(64, Math.ceil((2 * ext) / C)), reach = R + C * 0.87, n = segs.length / 6;
+    params.set([-ext, 1 / C, NC, size], k * 4);
+    unit = Math.max(unit, size);
+    for (let s = 0; s < n; s++) {
+      if (s % 24 === 23) yield;
+      const o = s * 6;
+      const ax = segs[o], ay = segs[o + 1], az = segs[o + 2];
+      const ux = segs[o + 3] - ax, uy = segs[o + 4] - ay, uz = segs[o + 5] - az;
+      const uu = Math.max(ux * ux + uy * uy + uz * uz, 1e-12);
+      const r0 = (v) => Math.max(0, Math.floor((v - reach + ext) / C)), r1 = (v) => Math.min(NC - 1, Math.floor((v + reach + ext) / C));
+      const i0 = r0(Math.min(ax, ax + ux)), i1 = r1(Math.max(ax, ax + ux));
+      const j0 = r0(Math.min(ay, ay + uy)), j1 = r1(Math.max(ay, ay + uy));
+      const l0 = r0(Math.min(az, az + uz)), l1 = r1(Math.max(az, az + uz));
+      for (let i = i0; i <= i1; i++)
+        for (let j = j0; j <= j1; j++)
+          for (let l = l0; l <= l1; l++) {
+            const cx = -ext + (i + 0.5) * C - ax, cy = -ext + (j + 0.5) * C - ay, cz = -ext + (l + 0.5) * C - az;
+            const h = Math.min(1, Math.max(0, (cx * ux + cy * uy + cz * uz) / uu));
+            const d = Math.hypot(cx - ux * h, cy - uy * h, cz - uz * h);
+            if (d > reach) continue;
+            // into the cell's list, nearest first
+            const key = ((k * 64 + i) * 64 + j) * 64 + l;
+            let e = cellOf.get(key);
+            if (e === undefined) {
+              cellOf.set(key, (e = nE++));
+              for (let q = 0; q < SL; q++) LD.push(Infinity), LS.push(-1);
+            }
+            const b = e * SL;
+            if (d >= LD[b + SL - 1]) continue;
+            let q = SL - 1;
+            while (q > 0 && LD[b + q - 1] > d) {
+              LD[b + q] = LD[b + q - 1];
+              LS[b + q] = LS[b + q - 1];
+              q--;
+            }
+            LD[b + q] = d;
+            LS[b + q] = s0 + s;
           }
-          slotD[b + q] = d;
-          slotS[b + q] = s;
-        }
+    }
+    s0 += n;
+  }
+  // the table: at most half full - and wider, if a run of it to search would be long
+  yield;
+  let H = 16;
+  while (H < nE * 2) H *= 2;
+  let cells, cellH, probes, LB;
+  for (;;) {
+    LB = BASE + H / 2;
+    cellH = Math.ceil((LB + nE * 2) / W);
+    cells = new Float32Array(cellH * W * 4).fill(-1);
+    cells.set(params);
+    cells.set(LS, LB * 4);
+    probes = 0;
+    let m = 0;
+    for (const [key, e] of cellOf) {
+      if (++m % 4096 === 0) yield;
+      let h = weldHash(key, H), p = 0;
+      while (cells[(BASE + (h >> 1)) * 4 + (h & 1) * 2] >= 0) (h = (h + 1) & (H - 1)), p++;
+      if (p > probes) probes = p;
+      const o = (BASE + (h >> 1)) * 4 + (h & 1) * 2;
+      cells[o] = key;
+      cells[o + 1] = e;
+    }
+    if (probes < 48) break;
+    H *= 2;
+    yield;
   }
   // the segments' ends, 2 texels each
   yield;
   const segH = Math.max(1, Math.ceil((nS * 2) / W));
   const segTex = new Float32Array(segH * W * 4);
-  for (let s = 0; s < nS; s++) {
-    for (let e = 0; e < 2; e++) {
-      const o = (s * 2 + e) * 4;
-      segTex[o] = segs[s * 6 + e * 3]; segTex[o + 1] = segs[s * 6 + e * 3 + 1]; segTex[o + 2] = segs[s * 6 + e * 3 + 2];
-    }
-  }
-  return { at, dist, near: { cells: slotS, cellH, segs: segTex, segH, origin: -ext, invC: 1 / C, n: NC, unit: size } };
+  let s = 0;
+  for (const { segs } of cubes)
+    for (let m = 0; m < segs.length / 6; m++, s++)
+      for (let e = 0; e < 2; e++) {
+        const o = (s * 2 + e) * 4;
+        segTex[o] = segs[m * 6 + e * 3]; segTex[o + 1] = segs[m * 6 + e * 3 + 1]; segTex[o + 2] = segs[m * 6 + e * 3 + 2];
+      }
+  return { cells, cellH, segs: segTex, segH, H, probes, lists: LB, unit: unit || 1 };
+}
+
+// The weld as SoftBody carries it (see JellyView): each vertex's distance from the seams - and `at` for any point of
+// a cube's, in its own rest space; the seams for the shader; the topology it's for. That changed - a cube full of
+// liquid made hollow as it's re-cubed, a cut while it glows - its distances are taken again (no vertex changes its
+// number - see SoftBody.rebuild - but there may be new ones, and a hollow's wall moved out): it went out before, and
+// a cube full of liquid never showed it.
+function makeWeld(sb, field, dist = null) {
+  const w = { dist, at: field.at, near: field.near, topo: -1, follow: null };
+  w.follow = () => {
+    if (w.topo === sb.topoVersion) return;
+    const n = sb.nV, X = sb.X, vc = sb.vCube;
+    if (!w.dist || w.dist.length < n) w.dist = new Float32Array(Math.max(n, sb.vCap || 0));
+    for (let i = 0; i < n; i++) w.dist[i] = w.at(X[i * 3] - vc[i] * REST_STEP, X[i * 3 + 1], X[i * 3 + 2], vc[i]);
+    w.topo = sb.topoVersion;
+  };
+  if (dist && dist.length === sb.nV) w.topo = sb.topoVersion;
+  else w.follow();
+  return w;
+}
+
+// (the weld - and what was missing filling in - carried on through a change of topology: see makeWeld. The fill
+// only while no vertex is new: each of its own is where it was)
+export function healFollow(sb) {
+  if (sb.weld && sb.weld.topo !== sb.topoVersion) sb.weld.follow?.();
+  const F = sb.fill;
+  if (F && F.topo !== sb.topoVersion && F.d.length === sb.nV) F.topo = sb.topoVersion;
 }
 
 // What's gone - scooped out, blasted off, burnt away: vertices of the cube
@@ -425,8 +517,8 @@ export class Healer {
 
   // Several cubes: each re-forms at its own home - where its pieces mostly
   // are, turned as its biggest piece, kept apart from the others - or, given
-  // a layout (a stack), in its place in that. No seams to weld or holes to
-  // fill here: the cubes come back fresh.
+  // a layout (a stack), in its place in that. No holes to fill here: the
+  // cubes come back fresh - but their seams burn in, as one cube's do.
   _startMulti(opts) {
     const app = this.app, sb = app.sb, only = this.only;
     this.homes = only >= 0 ? this._homeOne(only) : this._homes(opts.layout);
@@ -439,6 +531,7 @@ export class Healer {
       return;
     }
     this._plan();
+    this._startWeld();
     sb.attract = { targets: this.targets, n: sb.nV, rate: 0, cube: only };
     // (alone: it passes through the others, which carry on as they are)
     if (only >= 0) sb.ghostCube = only;
@@ -770,12 +863,15 @@ export class Healer {
     const app = this.app;
     const sb = app.sb;
     const U = app.jelly.frontMat.uniforms;
+    healFollow(sb);
     if (this.weldT !== undefined) {
       this.weldT += dt;
       U.uWeldT.value = this.weldT;
       if (this.weldT > 5 || !sb.weld || sb.weld.topo !== sb.topoVersion) {
         this.weldT = undefined;
         U.uWeldT.value = 99;
+        // (burnt out: no longer carried through each cut after - see healFollow)
+        sb.weld = null;
       }
     }
     if (sb.fill) {
@@ -879,13 +975,11 @@ export class Healer {
   // The seams the pieces will be welded along - where a cut face meets the
   // outside: edges shared by a cut face and an outer one (rest space, as the
   // new cube will have them) - and a job building the weld's distance field.
+  // (Several cubes: each one's own, in its own rest space, as big as it's
+  // made - see _fuseMulti. They had none: only one cube on its own burned in.)
   _startWeld() {
-    const sb = this.app.sb;
-    if (this.multi) {
-      this.weldJob = this.fillJob = null;
-      return;
-    }
-    const k = this.scaleK, X = sb.X, sTri = sb.sTri, sTag = sb.sTag, nF = sb.nF, K = sb.nV + 1;
+    const app = this.app, sb = app.sb;
+    const X = sb.X, sTri = sb.sTri, sTag = sb.sTag, nF = sb.nF, K = sb.nV + 1, vc = sb.vCube;
     const outer = new Set();
     for (let f = 0; f < nF; f++) {
       if (sTag[f] !== TAG_EXTERIOR) continue;
@@ -894,25 +988,45 @@ export class Healer {
         outer.add(a < b ? a * K + b : b * K + a);
       }
     }
+    const sizeOf = (slot) => {
+      const cb = app.cubes.find((c) => c.slot === slot);
+      return cb ? app.sizeOf(cb) : sb.cSize[slot];
+    };
     // (each seam runs along both of the pieces it parted: keep one copy)
-    const segs = [], seen = new Set();
+    const segs = new Map(), seen = new Set(), ks = new Map();
     const key = (i) => `${Math.round(X[i * 3] * 1e4)},${Math.round(X[i * 3 + 1] * 1e4)},${Math.round(X[i * 3 + 2] * 1e4)}`;
     for (let f = 0; f < nF; f++) {
       if (sTag[f] === TAG_EXTERIOR) continue;
       for (let e = 0; e < 3; e++) {
         const a = sTri[f * 3 + e], b = sTri[f * 3 + ((e + 1) % 3)];
         if (!outer.has(a < b ? a * K + b : b * K + a)) continue;
+        const c = vc[a];
+        if (this.multi && !this.homes?.has(c)) continue;
         const ka = key(a), kb = key(b), kk = ka < kb ? ka + '|' + kb : kb + '|' + ka;
         if (seen.has(kk)) continue;
         seen.add(kk);
-        segs.push(X[a * 3] * k, X[a * 3 + 1] * k, X[a * 3 + 2] * k, X[b * 3] * k, X[b * 3 + 1] * k, X[b * 3 + 2] * k);
+        let L = segs.get(c), k = ks.get(c);
+        if (!L) {
+          segs.set(c, (L = []));
+          ks.set(c, (k = this.multi ? sizeOf(c) / (sb.cSize[c] || 1) : this.scaleK));
+        }
+        const ox = c * REST_STEP;
+        L.push((X[a * 3] - ox) * k, X[a * 3 + 1] * k, X[a * 3 + 2] * k, (X[b * 3] - ox) * k, X[b * 3 + 1] * k, X[b * 3 + 2] * k);
       }
     }
     this.weldField = null;
+    if (this.multi) {
+      const cubes = [];
+      for (const [c, L] of segs) cubes.push({ k: c, segs: L, size: sizeOf(c) });
+      this.weldJob = cubes.length ? weldFieldsJob(cubes) : null;
+      this.fillJob = this.fillField = null;
+      return;
+    }
+    const k = this.scaleK, one = segs.values().next().value || [];
     const p = sb.p;
     const template = buildCubeMesh(p.res, p.size, p.bevel, sb.shapeOf(0)).pos;
     this.fillTemplate = template;
-    this.weldJob = segs.length ? weldFieldJob(segs, p.size, template) : null;
+    this.weldJob = one.length ? weldFieldJob(one, p.size, template) : null;
     // and what's missing, for the liquid fill (first: the droplets want it)
     this.fillField = null;
     this.fillJob = fillFieldJob(sb, template, k);
@@ -941,6 +1055,9 @@ export class Healer {
   // every cube fresh at its home (its bottom LIFT_FUSE up), let down gently
   _fuseMulti() {
     const app = this.app, sb = app.sb, size = sb.p.size, only = this.only;
+    // (the seams' light field, usually built during the flight already)
+    const field = this.weldField || (this.weldJob ? finish(this.weldJob) : null);
+    this.weldJob = this.weldField = null;
     sb.attract = null;
     if (only >= 0) {
       // (just it, afresh: the others as they are, their nails still in)
@@ -960,16 +1077,17 @@ export class Healer {
     sb.rebuild();
     app._syncSel();
     sb.fill = null;
-    sb.weld = null;
+    // (the weld's light spreads from where each one's seams met its outside, as one cube's does - see _fuse)
+    sb.weld = field ? makeWeld(sb, field) : null;
     sb.collisionsEnabled = true;
     sb.ghostCube = -1;
     sb.dampBoost = 1;
     sb.cBoost.fill(1);
     if (only >= 0) sb.cGrav[only] = 0;
     else sb.gravityScale = 0;
-    for (let i = 0; i < sb.nV; i++) if (only < 0 || sb.vCube[i] === only) sb.glow[i] = 0.25;
-    this.weldT = undefined;
-    app.jelly.frontMat.uniforms.uWeldT.value = 99;
+    for (let i = 0; i < sb.nV; i++) if (only < 0 || sb.vCube[i] === only) sb.glow[i] = field?.cubes.includes(sb.vCube[i]) ? 0.1 : 0.25;
+    this.weldT = field ? 0 : undefined;
+    app.jelly.frontMat.uniforms.uWeldT.value = field ? 0 : 99;
     this.fused = true;
     this.active = false;
     this.settling = true;
@@ -1041,12 +1159,7 @@ export class Healer {
     // the weld's light spreads from where the seams met the outside (the
     // jelly shader animates it from these distances; see uWeldT)
     if (field) {
-      let dist = field.dist;
-      if (!dist || dist.length !== sb.nV) {
-        dist = new Float32Array(sb.nV);
-        for (let i = 0; i < sb.nV; i++) dist[i] = field.at(sb.X[i * 3], sb.X[i * 3 + 1], sb.X[i * 3 + 2]);
-      }
-      sb.weld = { dist, at: field.at, near: field.near, topo: sb.topoVersion };
+      sb.weld = makeWeld(sb, field, field.dist);
       sb.glow.fill(0.1, 0, sb.nV);
     } else {
       sb.weld = null;

@@ -682,8 +682,8 @@ export function createJellyMaterial(env, layerUniforms) {
         bvec3 bad = equal(floatBitsToUint(c) & uvec3(0x7f800000u), uvec3(0x7f800000u));
         return any(bad) ? vec3(0.0) : clamp(c, 0.0, 64.0);
       }
-      // The healed seams: exact distance from p to the seam segments listed
-      // for its cell (1e3 if none come near).
+      // The healed seams: exact distance from p (its cube's rest space) to the seam segments listed for its cell (1e3
+      // if none come near) - each cube's cells that have any in a hash table, by cube and cell: see seamNearJob.
       float weldSeg(vec3 p, float s) {
         int j = int(s) * 2;
         vec3 a = texelFetch(uWeldSegs, ivec2(j % 1024, j / 1024), 0).xyz;
@@ -692,15 +692,36 @@ export function createJellyMaterial(env, layerUniforms) {
         float h = clamp(dot(ap, ab) / max(dot(ab, ab), 1e-12), 0.0, 1.0);
         return length(ap - ab * h);
       }
+      ivec2 weldTexel(int i) { return ivec2(i % 1024, i / 1024); }
       float weldNear(vec3 p) {
-        int n = int(uWeldGridN);
-        ivec3 c = ivec3(floor((p - uWeldGrid.xyz) * uWeldGrid.w));
+        if (uWeldGridN < 0.5) return 1e3;
+        // (this cube's cells: their corner, 1 / their size, how many a side - none, no seams of its)
+        vec4 g = texelFetch(uWeldCells, ivec2(gK, 0), 0);
+        int n = int(g.z);
+        ivec3 c = ivec3(floor((p - g.x) * g.y));
         if (n < 1 || any(lessThan(c, ivec3(0))) || any(greaterThanEqual(c, ivec3(n)))) return 1e3;
-        int id = ((c.x * n + c.y) * n + c.z) * 2;
-        vec4 s0 = texelFetch(uWeldCells, ivec2(id % 1024, id / 1024), 0);
-        vec4 s1 = texelFetch(uWeldCells, ivec2((id + 1) % 1024, (id + 1) / 1024), 0);
-        float d = 1e3;
-        if (s0.x >= 0.0) d = weldSeg(p, s0.x);
+        int key = ((gK * 64 + c.x) * 64 + c.y) * 64 + c.z, H = int(uWeldGrid.x), P = int(uWeldGrid.y), LB = int(uWeldGrid.z);
+        uint hk = uint(key) * 2654435761u;
+        hk ^= hk >> 15u;
+        int h = int(hk & uint(H - 1)), list = -1;
+        // (the search only finds its list - its segments measured once, after: inside the loop, a compiler unrolling
+        // it would have had them 48 times over)
+        for (int q = 0; q < 48; q++) {
+          if (q > P) break;
+          vec4 kv = texelFetch(uWeldCells, weldTexel(8 + (h >> 1)), 0);
+          vec2 e = (h & 1) == 0 ? kv.xy : kv.zw;
+          // (an empty place: it isn't there)
+          if (e.x < 0.0) break;
+          if (int(e.x) == key) {
+            list = int(e.y);
+            break;
+          }
+          h = (h + 1) & (H - 1);
+        }
+        if (list < 0) return 1e3;
+        int id = LB + list * 2;
+        vec4 s0 = texelFetch(uWeldCells, weldTexel(id), 0), s1 = texelFetch(uWeldCells, weldTexel(id + 1), 0);
+        float d = weldSeg(p, s0.x);
         if (s0.y >= 0.0) d = min(d, weldSeg(p, s0.y));
         if (s0.z >= 0.0) d = min(d, weldSeg(p, s0.z));
         if (s0.w >= 0.0) d = min(d, weldSeg(p, s0.w));
@@ -1520,7 +1541,8 @@ export function createJellyMaterial(env, layerUniforms) {
         // Seam distance: exact per pixel near a seam, per vertex further out.
         #ifdef JELLY_DYN
         if (uWeldT < 5.0) {
-          float t = uWeldT, U = uWeldUnit;
+          // (as wide as its own cube is big: each cube its own size)
+          float t = uWeldT, U = uWeldGridN > 0.5 ? max(texelFetch(uWeldCells, ivec2(gK, 0), 0).w, 1e-3) : uWeldUnit;
           vec3 pr = vRest / U;
           float d = min(weldNear(vRest), vWeld) / U;
           float px = clamp(fwidth(d), 2e-4, 0.02);
