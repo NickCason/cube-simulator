@@ -3,15 +3,25 @@
 // spread by the air (its box: wide over tall, most), its liquid out of it falling, the camera on it (its middle on
 // the screen, worst), the time to land; pictures (pics=1) going up, hanging, falling, hitting, after.
 import { join } from 'node:path';
-export const meta = { name: 'drop', dpr: 1, params: { cube: 'plain', height: 15, place: 'diner', pics: 0, maxFrames: 900, trace: 0, after: 30 } };
+import { CUBES } from '../kit.mjs';
+// (n: that many cubes in the room - the one on show dropped; desk=1: a wide screen, 1440 x 900)
+export const meta = { name: 'drop', dpr: 1, params: { cube: 'plain', height: 15, place: 'diner', pics: 0, maxFrames: 900, trace: 0, after: 30, n: 1, desk: 0 } };
 // (any of the Settings' keys given - mu, damping, weight, bounce, grip, liqVisc, liqSkin, liqFill ... - set on it first)
 const KEYS = ['mu', 'damping', 'weight', 'lambda', 'bounce', 'grip', 'rigidity', 'tough', 'goo', 'liquid', 'liqVisc', 'liqTension', 'liqSkin', 'liqFill', 'gravity', 'size'];
 export async function run(k, p, ctx) {
   k.dt = 1 / 30;
   const mat = Object.fromEntries(KEYS.filter((q) => q in p).map((q) => [q, p[q]]));
+  if (p.desk) (await k.page.setViewportSize({ width: 1440, height: 900 }), await k.frames(5));
   await k.load(p.cube, mat, { settle: 60, place: p.place });
+  if (p.n > 1) {
+    await k.app(async (a, [n, code]) => {
+      const m = await import('/src/cubecode.js');
+      for (let i = 1; i < n; i++) a.addCube(m.decodeCube(code), { drop: false });
+    }, [p.n, CUBES[p.cube] || p.cube]);
+    await k.frames(60);
+  }
   const page = k.page, shots = [];
-  const shot = async (tag) => p.pics && shots.push(await k.shot(join(ctx.out, `drop-${ctx.build}-s${ctx.seed}-${p.cube}-${tag}.png`)));
+  const shot = async (tag) => p.pics && shots.push(await k.shot(join(ctx.out, `drop-${ctx.build}-s${ctx.seed}-${p.cube}-n${p.n}${p.desk ? '-desk' : ''}-${tag}.png`)));
   // (through the UI: the dock's Exhibit, its card's Drop)
   await page.click('.exhibit-btn');
   await page.click('.ex-mode[data-mode="drop"]');
@@ -25,8 +35,15 @@ export async function run(k, p, ctx) {
     let out = 0;
     for (let i = 0; i < fl.n; i++) { const x = fl.x[i * 3], y = fl.x[i * 3 + 1], z = fl.x[i * 3 + 2]; if (x < b[0] - 0.05 || x > b[3] + 0.05 || y < b[1] - 0.05 || y > b[4] + 0.05 || z < b[2] - 0.05 || z > b[5] + 0.05) out++; }
     // (its middle on the screen: 0 the middle, 1 the edge)
-    const v = new a.camera.position.constructor(pc.com[0], pc.com[1], pc.com[2]).project(a.camera);
-    const r = { phase: D.phase, y: +pc.com[1].toFixed(2), alt: +D.alt.toFixed(2), v: +D.speed.toFixed(1), vy: +pc.vel[1].toFixed(2), wh: +(w / Math.max(1e-6, h)).toFixed(2), h: +h.toFixed(2), w: +w.toFixed(2), out, drops: fl.n, scr: +Math.max(Math.abs(v.x), Math.abs(v.y)).toFixed(2) };
+    const V3 = a.camera.position.constructor, v = new V3(pc.com[0], pc.com[1], pc.com[2]).project(a.camera);
+    // (how tall it looks: its box's corners on the screen, a share of the screen's height)
+    let y0 = 9, y1 = -9;
+    for (let c = 0; c < 8; c++) {
+      const q = new V3(b[c & 1 ? 3 : 0], b[c & 2 ? 4 : 1], b[c & 4 ? 5 : 2]).project(a.camera);
+      y0 = Math.min(y0, q.y);
+      y1 = Math.max(y1, q.y);
+    }
+    const r = { phase: D.phase, y: +pc.com[1].toFixed(2), alt: +D.alt.toFixed(2), v: +D.speed.toFixed(1), vy: +pc.vel[1].toFixed(2), wh: +(w / Math.max(1e-6, h)).toFixed(2), h: +h.toFixed(2), w: +w.toFixed(2), out, drops: fl.n, scr: +Math.max(Math.abs(v.x), Math.abs(v.y)).toFixed(2), tall: +((y1 - y0) / 2).toFixed(3) };
     if (tr) {
       // (traced: its hollow's volume now, its drops in it / in its jelly / neither, put back so far, asleep)
       const k = D.slot, c = sb.cav[k], id = sb.cHid[k];
@@ -52,7 +69,7 @@ export async function run(k, p, ctx) {
     }
     return r;
   }, p.trace);
-  const R = { liftFrames: 0, hangH: 0, peakV: 0, hitV: 0, maxWH: 0, minWHfall: 9, outFallMax: 0, scrWorst: 0, landFrames: 0, errors: 0 };
+  const R = { liftFrames: 0, hangH: 0, peakV: 0, hitV: 0, maxWH: 0, minWHfall: 9, outFallMax: 0, scrWorst: 0, landFrames: 0, errors: 0, tallMin: 9 };
   let f = 0, s0 = null, tapped = false, fallAt = -1, pic = {};
   const series = [];
   for (; f < p.maxFrames; f++) {
@@ -60,6 +77,7 @@ export async function run(k, p, ctx) {
     const s = await look();
     if (p.trace) series.push({ f, ...s });
     if (!s0) s0 = s;
+    if ((s.phase === 'lift' && s.alt > 1) || s.phase === 'hang' || (s.phase === 'fall' && s.alt > 0.05)) R.tallMin = Math.min(R.tallMin, s.tall);
     if (s.phase === 'lift') R.liftFrames++;
     if (s.phase === 'lift' && !pic.lift && s.alt > p.height * 0.5) (pic.lift = 1), await shot('lift');
     if (s.phase === 'hang') {
@@ -125,4 +143,4 @@ export async function run(k, p, ctx) {
   const ui = await page.evaluate(() => ({ bar: !document.querySelector('.drop-bar').hidden, go: document.querySelector('.db-go').textContent, read: document.querySelector('.db-read').textContent }));
   return { ...R, startWH: s0?.wh, frames: f, ui: `${ui.go} | ${ui.read}`, errs: k.errs.length, ...(shots.length ? { shots: shots.join(' ') } : {}) };
 }
-export const row = (r) => `lift ${r.liftFrames} frames, hung ${r.hangH} m tall | fall: peak ${r.peakV} m/s, hit ${r.hitV} | wide/tall ${r.startWH} at rest, ${r.minWHfall}..${r.maxWH} falling | liquid out falling ${r.outFallMax} | on screen worst ${r.scrWorst} | landed in ${r.landFrames} frames | bar: ${r.ui} | errors ${r.errs}`;
+export const row = (r) => `lift ${r.liftFrames} frames, hung ${r.hangH} m tall | fall: peak ${r.peakV} m/s, hit ${r.hitV} | wide/tall ${r.startWH} at rest, ${r.minWHfall}..${r.maxWH} falling | liquid out falling ${r.outFallMax} | on screen worst ${r.scrWorst}, smallest ${r.tallMin} of its height | landed in ${r.landFrames} frames | bar: ${r.ui} | errors ${r.errs}`;

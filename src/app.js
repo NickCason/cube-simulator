@@ -1381,8 +1381,14 @@ export class App {
     } else if (c.view && c.view.enabled) c.clearViewOffset();
     // (several cubes - a stack - the view rises and backs off to keep them in)
     let fy = 0.44, fr = 1;
-    // (not in an exhibition mode: each frames its own - the Collider's room made wide sent the view out 2.6 times)
-    if (this.cubes.length > 1 && !this.press?.on && !this.collider?.on && !this.cublinko?.on && !this.cublication?.on) {
+    // (in Drop: on the cube itself, wherever it is - up in the sky, falling - not eased: a cube falling at 20 m/s
+    // was two metres out of the picture)
+    const D = this.drop;
+    D.track();
+    // (not in an exhibition mode: each frames its own - the Collider's room made wide sent the view out 2.6 times;
+    // nor in Drop while it's on its cube: one of several taken 15 m up, the view backed off to keep it in with the
+    // rest - nine times as far, 26 from 45 m - and the screen went grey, sky, the cube a speck in it)
+    if (this.cubes.length > 1 && !(D.on && D.frameY !== null) && !this.press?.on && !this.collider?.on && !this.cublinko?.on && !this.cublication?.on) {
       let top = 0;
       for (const pc of this.sb.pieces) top = Math.max(top, pc.bbox[4]);
       top = Math.min(top, this.sb.p.ceiling);
@@ -1390,10 +1396,6 @@ export class App {
       fr = Math.max(1, top / 1.7, this.sb.p.arenaRadius / (this._viewArena || this.sb.p.arenaRadius));
     }
     const kf = 1 - Math.exp(-dt * 2.5);
-    // (in Drop: on the cube itself, wherever it is - up in the sky, falling - not eased: a cube falling at 20 m/s
-    // was two metres out of the picture)
-    const D = this.drop;
-    D.track();
     // (falling fast in Drop: the view widened - a fifth, at its critical speed - as speed does)
     const fov = (this._fovBase || this.camera.fov) * (1 + 0.2 * D.fovKick);
     if (Math.abs(fov - this.camera.fov) > 0.01) {
