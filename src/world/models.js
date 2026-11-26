@@ -198,21 +198,26 @@ export function makeDicer(M) {
   return shadowed(g);
 }
 
-// Cherry bomb: sphere at origin with a fuse along +Y.
+// Cherry bomb: sphere at origin with a fuse along +Y. (Its shapes made once, every bomb's: they're planted by the
+// dozen, and each its own had them made again - and never let go.)
+let BOMB_GEO = null;
 export function makeBomb(M) {
+  if (!BOMB_GEO) {
+    const curve = new THREE.CatmullRomCurve3([
+      new THREE.Vector3(0, 0.08, 0),
+      new THREE.Vector3(0.012, 0.12, 0),
+      new THREE.Vector3(0.035, 0.15, 0.01),
+      new THREE.Vector3(0.06, 0.16, 0.012),
+    ]);
+    BOMB_GEO = { ball: new THREE.SphereGeometry(0.075, 32, 20), cap: new THREE.CylinderGeometry(0.02, 0.025, 0.02, 12), fuse: new THREE.TubeGeometry(curve, 16, 0.0055, 8) };
+  }
   const g = new THREE.Group();
-  const ball = new THREE.Mesh(new THREE.SphereGeometry(0.075, 32, 20), M.bombRed);
+  const ball = new THREE.Mesh(BOMB_GEO.ball, M.bombRed);
   g.add(ball);
-  const cap = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.025, 0.02, 12), M.darkSteel);
+  const cap = new THREE.Mesh(BOMB_GEO.cap, M.darkSteel);
   cap.position.y = 0.077;
   g.add(cap);
-  const curve = new THREE.CatmullRomCurve3([
-    new THREE.Vector3(0, 0.08, 0),
-    new THREE.Vector3(0.012, 0.12, 0),
-    new THREE.Vector3(0.035, 0.15, 0.01),
-    new THREE.Vector3(0.06, 0.16, 0.012),
-  ]);
-  const fuse = new THREE.Mesh(new THREE.TubeGeometry(curve, 16, 0.0055, 8), M.fuse);
+  const fuse = new THREE.Mesh(BOMB_GEO.fuse, M.fuse);
   g.add(fuse);
   g.userData.fuseTip = new THREE.Vector3(0.06, 0.16, 0.012);
   return shadowed(g);

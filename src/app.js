@@ -2446,6 +2446,7 @@ export class App {
     this.tool?.up?.();
     this._edgeMorphTick(0, true);
     this.nails.clearAll();
+    this.tools.bomb?.clear();
     this.sb.removeCube(slot);
     this.cubes.splice(i, 1);
     // (the last one left is cube 0 again: one cube alone is always that)

@@ -951,100 +951,210 @@ export class BallerTool {
 }
 
 // ------------------------------------------------------------------ cherry bomb
+// Tap to plant one - on the jelly (stuck in, it rides along) or the floor - and as many more as you like; then
+// Boom (over the dock, or Enter) sets them all off at once: their fuses flare together, and they all go - every
+// flash, spark and puff in the one frame, one boom as big as they all are. (Each went off by itself 1.9 s after it
+// was planted, six at most: "place multiple then blow them up all at once".) Planted, they wait with any tool in
+// hand - plant, throw the cube, Boom.
+const BOMB_MAX = 40; // (a cube planted all over, and the floor round it)
+const BOMB_LIT = 0.3; // (s) the fuses' flare, all together, before the blast
+const BOMB_R = 0.24; // its crater's radius
+const BOMB_FLOOR = 0.075; // (its ball's radius: sat on the floor)
+// (their craters: one after another, each cut and what it blasted out taken away before the next - all cut in one
+// go came out pinched where two craters met, half the time - as many a frame as fit in this long, from the blast's
+// own frame on, under its flash: 15-30 ms each on a laptop, a dozen in one frame or two; a phone's three or four a
+// frame. A crater a frame - the frame drawn again each time - a dozen took twice as long)
+const BLAST_MS = 150;
+const _up = new THREE.Vector3(0, 1, 0);
+
 export class BombTool {
   constructor(app) {
     this.app = app;
     this.id = 'bomb';
     this.cursor = 'pointer';
     this.background = true;
-    this.bombs = [];
+    this.bombs = []; // { model, n, pos, a1, a2, age, vy, lit }
+    this.lit = -1; // (s) till the lit ones go; -1: none lit
+    this.blasting = []; // gone off, their craters still to make (in order)
+    this.blastN = 0; // (how many went off together: each one's push is shared out by it)
     app.anchorProviders.push(() => {
       const out = [];
       for (const b of this.bombs) if (b.a1) out.push(b.a1, b.a2);
+      for (const b of this.blasting) if (b.a1) out.push(b.a1, b.a2);
       return out;
     });
-    app.onHealStart.push(() => {
-      for (const b of this.bombs) this._defuse(b);
-      this.bombs.length = 0;
-      this.app.audio.loop('fuse', false);
-    });
+    app.onHealStart.push(() => this.clear());
+  }
+
+  // (all of them gone - fizzled: the cube re-cubed, or one taken out of the room, its body made again under them)
+  clear() {
+    for (const b of this.bombs) this._defuse(b);
+    this.bombs.length = 0;
+    this.blasting.length = 0;
+    this.lit = -1;
+    this.app.audio.loop('fuse', false);
+    this._changed();
+  }
+
+  // (planted and not yet lit - Boom's count)
+  get waiting() {
+    let n = 0;
+    for (const b of this.bombs) if (!b.lit) n++;
+    return n;
   }
 
   down(e, ray) {
     const app = this.app;
     const tg = target(app, ray);
     if (!tg.jelly && !tg.floor) return false;
-    if (this.bombs.length >= 6) return true;
+    if (this.bombs.length >= BOMB_MAX) {
+      app.ui?.hint(`That's ${BOMB_MAX} - plenty. Boom!`, 1800);
+      return true;
+    }
     const model = makeBomb(app.M);
+    model.scale.setScalar(0.01);
     app.scene.add(model);
-    const b = { model, fuse: 1.9, n: tg.normal.clone(), pos: tg.point.clone(), a1: null, a2: null };
+    const b = { model, n: tg.normal.clone(), pos: tg.point.clone(), a1: null, a2: null, age: 0, vy: 0, lit: false };
     if (tg.jelly) {
       const sb = app.sb;
       b.a1 = anchorAt(sb, tg.point.clone().addScaledVector(b.n, -0.03), tg.hit.piece);
       b.a2 = anchorAt(sb, tg.point.clone().addScaledVector(b.n, -0.13), tg.hit.piece);
       if (!b.a1 || !b.a2) b.a1 = b.a2 = null;
     }
-    if (!b.a1) b.pos.y = Math.max(b.pos.y, 0.075);
+    if (!b.a1) b.pos.y = Math.max(b.pos.y, BOMB_FLOOR);
     this.bombs.push(b);
-    this._pose(b);
-    app.audio.loop('fuse', true, { type: 'highpass', freq: 5000, q: 0.7, gain: 0.12, lfo: 31, flicker: 0.9 });
+    this._pose(b, 0);
     app.audio.pop(0.3);
+    this._changed();
     return true;
   }
 
-  _pose(b) {
+  // Boom: every bomb planted, their fuses flaring together - then they all go at once
+  detonate() {
+    if (this.lit >= 0 || !this.bombs.length) return false;
+    for (const b of this.bombs) b.lit = true;
+    this.lit = BOMB_LIT;
+    const n = this.bombs.length;
+    this.app.audio.loop('fuse', true, { type: 'highpass', freq: 5000, q: 0.7, gain: Math.min(0.3, 0.12 + 0.03 * Math.log2(n)), lfo: 31, flicker: 0.9 });
+    this._changed();
+    return true;
+  }
+
+  _changed() {
+    this.app.ui?.setBombs?.(this.waiting);
+  }
+
+  _pose(b, dt) {
     const sb = this.app.sb;
     if (b.a1 && anchorOk(sb, b.a1) && anchorOk(sb, b.a2)) {
       const p1 = sb.embedPoint(b.a1.tet, b.a1.b, _p);
       const p2 = sb.embedPoint(b.a2.tet, b.a2.b, _p2);
       b.n.set(p1[0] - p2[0], p1[1] - p2[1], p1[2] - p2[2]).normalize();
       b.pos.set(p1[0], p1[1], p1[2]).addScaledVector(b.n, 0.03 + 0.04);
-    } else if (b.a1) {
+    } else {
       b.a1 = b.a2 = null;
+      // (come loose - its jelly melted, eaten, blown away from under it: it drops, and sits on the floor upright)
+      if (b.pos.y > BOMB_FLOOR) {
+        b.vy -= 9.8 * dt;
+        b.pos.y = Math.max(BOMB_FLOOR, b.pos.y + b.vy * dt);
+        b.n.lerp(_up, Math.min(1, dt * 6)).normalize();
+      } else {
+        b.vy = 0;
+        b.n.copy(_up);
+      }
     }
     orient(b.model, b.pos, b.n);
   }
 
   update(dt) {
     const app = this.app;
-    for (let k = this.bombs.length - 1; k >= 0; k--) {
-      const b = this.bombs[k];
-      b.fuse -= dt;
-      this._pose(b);
-      const tip = b.model.userData.fuseTip.clone().multiplyScalar(Math.max(0.2, b.fuse / 1.9));
+    for (const b of this.bombs) {
+      b.age += dt;
+      this._pose(b, dt);
+      // (planted: it pops in, overshoots, settles)
+      const u = Math.min(1, b.age / 0.25);
+      b.model.scale.setScalar(u >= 1 ? 1 : Math.max(0.01, 1 + 2.70158 * Math.pow(u - 1, 3) + 1.70158 * Math.pow(u - 1, 2)));
+      if (!b.lit) continue;
+      // lit: its fuse spits, harder as it burns down
+      const k = 1 - Math.max(0, this.lit) / BOMB_LIT;
+      const tip = b.model.userData.fuseTip.clone().multiplyScalar(Math.max(0.25, 1 - 0.75 * k));
       tip.applyQuaternion(b.model.quaternion).add(b.model.position);
-      app.particles.sparks(tip, 2, 1.2, [1, 0.7, 0.3]);
-      if (b.fuse <= 0) {
-        this.bombs.splice(k, 1);
-        this.explode(b);
+      app.particles.sparks(tip, 2 + Math.round(4 * k), 1.2 + 1.5 * k, [1, 0.7, 0.3]);
+    }
+    if (this.lit >= 0) {
+      this.lit -= dt;
+      if (this.lit <= 0) {
+        const go = this.bombs.filter((b) => b.lit);
+        this.bombs = this.bombs.filter((b) => !b.lit);
+        this.lit = -1;
+        app.audio.loop('fuse', false);
+        this.explode(go);
+        this._changed();
+        return;
       }
     }
-    if (!this.bombs.length) app.audio.loop('fuse', false);
+    if (this.blasting.length) this._craters();
   }
 
   _defuse(b) {
     this.app.scene.remove(b.model);
   }
 
-  explode(b) {
+  // They go - a bomb, or a lot of them at once: each its flash, sparks and smoke, one boom as big as they all are,
+  // all now; their craters after, as many this frame as there's time for (see _craters)
+  explode(list) {
+    const bombs = Array.isArray(list) ? list : [list];
+    const n = bombs.length;
+    if (!n) return;
+    const app = this.app;
+    // (a lot at once: fewer sparks and puffs each - the screen's as full as one's was)
+    const each = 1 / Math.sqrt(n);
+    const mid = new THREE.Vector3();
+    for (const b of bombs) {
+      const p = b.pos;
+      app.scene.remove(b.model);
+      app.particles.flash(p, 1.6);
+      app.particles.flash(p, 0.6, [20, 16, 10]);
+      app.particles.sparks(p, Math.max(12, Math.round(50 * each)), 5);
+      app.particles.smoke(p, Math.max(6, Math.round(18 * each)), 0.9, 0.22, 0.6, 0.5);
+      app.glowPulse?.(p.x, p.y, p.z, 1.5);
+      app.tally?.('booms');
+      mid.add(p);
+    }
+    mid.multiplyScalar(1 / n);
+    app.audio.boom(Math.min(1.8, 1 + 0.3 * Math.log2(n)));
+    app.shake(0.05);
+    app.flash = Math.min(0.85, 0.6 + 0.04 * (n - 1));
+    app.fireAt(mid.add(new THREE.Vector3(0, 0.15, 0)), Math.min(14, 9 + 2 * Math.log2(n)));
+    this.blastN = this.blasting.length + n;
+    this.blasting.push(...bombs);
+    this._craters();
+  }
+
+  // The craters waiting, one after another while this frame has time (at least one): the body changed once for them
+  _craters() {
+    const app = this.app;
+    const t0 = performance.now();
+    let k = 0;
+    while (this.blasting.length && (k === 0 || performance.now() - t0 < BLAST_MS)) {
+      this._crater(this.blasting.shift());
+      k++;
+    }
+    app.onTopologyChanged();
+    app.markDamaged();
+  }
+
+  // A bomb's crater - where it's got to, stuck in the jelly as it's flung about - smooth and round; the jelly blasted
+  // out of it flying off as blobs; its push
+  _crater(b) {
     const app = this.app;
     const sb = app.sb;
+    this._pose(b, 0);
     const p = b.pos.clone();
-    app.scene.remove(b.model);
-    app.particles.flash(p, 1.6);
-    app.particles.flash(p, 0.6, [20, 16, 10]);
-    app.particles.sparks(p, 50, 5);
-    app.particles.smoke(p, 18, 0.9, 0.22, 0.6, 0.5);
-    app.audio.boom(1);
-    app.tally?.('booms');
-    app.glowPulse?.(p.x, p.y, p.z, 1.5);
-    app.shake(0.05);
-    app.flash = 0.6;
-    app.fireAt(p.clone().add(new THREE.Vector3(0, 0.15, 0)), 9);
     const anchors = app.allAnchors();
-    // smooth spherical crater; the blasted-out jelly becomes flying blobs
-    const R = 0.24;
-    const res = cutBody(sb, sphereField(p.x, p.y, p.z, R), { separate: 0, snap: 0.4, anchors });
+    const R = BOMB_R;
+    // (cut light: the body's built in full as what's blasted out is taken away, before the next one's cut)
+    const res = cutBody(sb, sphereField(p.x, p.y, p.z, R), { separate: 0, snap: 0.4, anchors, light: true });
     if (res.changed) {
       const inside = new Set();
       for (const pc of sb.pieces) {
@@ -1056,15 +1166,17 @@ export class BombTool {
         if (Math.hypot(cx / m - p.x, cy / m - p.y, cz / m - p.z) < R && pc.volume < 0.08) inside.add(pc.id);
       }
       let vol = 0;
-      const removed = removeTets(sb, (t) => {
+      removeTets(sb, (t) => {
         if (!inside.has(sb.tPiece[t])) return false;
         vol += sb.vol0[t];
         return true;
       }, anchors);
-      // blobs: total volume roughly matches what was blasted out
+      // blobs: total volume roughly matches what was blasted out (fewer each, the more went off: the room's drops
+      // are only so many)
       let left = vol;
       let k = 0;
-      while (left > 0 && k < 40) {
+      const most = Math.max(8, Math.min(40, Math.floor(160 / Math.max(1, this.blastN))));
+      while (left > 0 && k < most) {
         const r = 0.02 + Math.random() * 0.035;
         left -= (4 / 3) * Math.PI * r * r * r;
         const dir = new THREE.Vector3(Math.random() - 0.5, Math.random() * 0.8 + 0.1, Math.random() - 0.5).normalize();
@@ -1074,13 +1186,15 @@ export class BombTool {
         app.droplets.spawn(c, v, r);
         k++;
       }
-      void removed;
     }
-    app.onTopologyChanged();
+    if (sb.topoStale) sb.rebuild();
     const bp = app.st?.bombPower ?? 1;
+    // (a lot at once: each pushes less - all told, as hard as the square root of how many: four together twice
+    // one's, sixteen four times - or the cube left the room)
+    const n = Math.max(1, this.blastN), kp = n <= 4 ? 1 : Math.sqrt(4 / n);
     // (b.only: one cube's own blast - see Cublinko's bust - the cubes round it left be)
-    sb.radialImpulse(p.x, p.y, p.z, 1.7 * Math.sqrt(bp), 10 * bp, 2.5 * bp, 0, b.only ?? -1);
-    app.markDamaged();
+    sb.radialImpulse(p.x, p.y, p.z, 1.7 * Math.sqrt(bp), 10 * bp * kp, 2.5 * bp * kp, 0, b.only ?? -1);
+    b.a1 = b.a2 = null;
   }
 }
 

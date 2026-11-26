@@ -4471,6 +4471,127 @@ body.powders-on .hint {
   }
 }
 
+/* ---------------------------------------------------------------- the cherry bombs' Boom */
+/* (the bombs planted, waiting: one big red button over the dock, whatever's in hand - in bouncing, breathing, its
+   count jumping as more go in; pressed, it goes down with them) */
+.bomb-row {
+  padding: 0;
+  background: none;
+  border: 0;
+  box-shadow: none;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+  z-index: 19;
+}
+
+.bomb-row .bomb-go {
+  width: auto;
+  height: 44px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 8px 0 15px;
+  border-radius: 22px;
+  background: linear-gradient(#f04141, #c8161d);
+  color: #fff;
+  font: 800 15px/1 var(--font);
+  letter-spacing: 0.02em;
+  box-shadow: 0 8px 20px rgba(200, 22, 29, 0.42), inset 0 1px 0 rgba(255, 255, 255, 0.35), inset 0 -2px 0 rgba(0, 0, 0, 0.2);
+}
+
+.bomb-row .bomb-go svg {
+  width: 20px;
+  height: 20px;
+}
+
+/* (not the sieve's powder dots) */
+.bomb-row .bomb-go span,
+.bomb-row .bomb-go:hover span {
+  width: auto;
+  height: auto;
+  border-radius: 0;
+  background: none;
+  box-shadow: none;
+  transform: none;
+}
+
+.bomb-row .bomb-n {
+  min-width: 28px;
+  height: 28px;
+  padding: 0 7px;
+  box-sizing: border-box;
+  border-radius: 14px;
+  display: grid;
+  place-items: center;
+  background: #fff;
+  color: #c8161d;
+  font: 800 14px/1 var(--font);
+}
+
+.bomb-row .bomb-go:hover {
+  filter: brightness(1.07);
+}
+
+.bomb-row.in .bomb-go {
+  animation: ui-pop var(--t-bouncy) var(--sp-bouncy) both, ui-breathe 2.4s 0.9s ease-in-out infinite;
+}
+
+.bomb-row.out .bomb-go {
+  animation: ui-pop-out 0.3s ease-in both;
+}
+
+.bomb-row.fired .bomb-go {
+  animation: bomb-press 0.34s ease-in both;
+}
+
+.bomb-row .bomb-n.bump {
+  animation: bomb-bump 0.32s var(--sp-bouncy);
+}
+
+@keyframes bomb-press {
+  30% {
+    transform: translateY(3px) scale(0.9);
+    filter: brightness(1.6);
+  }
+  to {
+    transform: translateY(8px) scale(0.55);
+    opacity: 0;
+  }
+}
+
+@keyframes bomb-bump {
+  40% {
+    transform: scale(1.4);
+  }
+}
+
+/* (a wide screen: over the sieve's or the eyes' row, if that's up; the hint over Boom) */
+body.powders-on .bomb-row {
+  bottom: calc(max(18px, calc(env(safe-area-inset-bottom) + 8px)) + 112px);
+}
+
+body.bombs-on .hint {
+  bottom: calc(max(18px, calc(env(safe-area-inset-bottom) + 8px)) + 120px);
+}
+
+body.bombs-on.powders-on .hint {
+  bottom: calc(max(18px, calc(env(safe-area-inset-bottom) + 8px)) + 168px);
+}
+
+@media (max-width: 720px) {
+  /* (a phone's rows scroll sideways, clipped: not Boom - its shadow and its bounce) */
+  .powders.bomb-row {
+    overflow: visible;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bomb-row.in .bomb-go,
+  .bomb-row .bomb-n.bump {
+    animation: none;
+  }
+}
+
 /* (the googly eyes' row: little drawn eyes for chips) */
 .eye-row button svg {
   width: 24px;

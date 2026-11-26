@@ -44,6 +44,9 @@ const RESET_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" s
 const svg = (inner) =>
   `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${inner}</svg>`;
 
+// (Boom's: a plunger, pushed down, sets them off)
+const BOOM_ICON = svg('<rect x="3.5" y="13" width="17" height="7.5" rx="1.6"/><path d="M12 13V6.2"/><path d="M7.6 5.6h8.8"/><path d="M7.5 16.8h2.4"/><path d="M19.4 2.6v2.1"/><path d="M22 5.2h-2.1"/><path d="m21.2 3.4-1.1 1.1"/>');
+
 export const ICONS = {
   hand: svg(
     '<path d="M7 11.5V5.8a1.4 1.4 0 0 1 2.8 0V11"/><path d="M9.8 10.5V4.4a1.4 1.4 0 0 1 2.8 0v6.1"/><path d="M12.6 10.6V5.6a1.4 1.4 0 0 1 2.8 0v5.8"/><path d="M15.4 11.2V8.2a1.4 1.4 0 0 1 2.8 0v6.3c0 4-2.9 7-6.6 7h-.9c-2.2 0-3.7-.8-5-2.4L3.4 15.3a1.3 1.3 0 0 1 2-1.6L7 15.4V11"/>',
@@ -112,7 +115,7 @@ export const TOOL_DEFS = [
   { id: 'flour', label: 'Sieve', hint: 'Hold to sift it on · roll a cube through it to coat it · Re-cube sweeps it up', key: 'u' },
   { id: 'baller', label: 'Melon baller', hint: 'Click to scoop out a ball', key: '7' },
   { id: 'cuber', label: 'Cube cuber', hint: 'Click to scoop out a cube', key: 'c' },
-  { id: 'bomb', label: 'Cherry bomb', hint: 'Click to plant · stand back', key: '8' },
+  { id: 'bomb', label: 'Cherry bomb', hint: 'Click to plant one - or a dozen · Boom (or Enter) sets them all off at once', key: '8' },
   { id: 'syringe', label: 'Syringe', hint: 'Hold to pump it up', key: '9' },
   { id: 'feed', label: 'Add jelly', hint: 'Hold on a cube to ladle jelly in · feed it enough and it cubiplies', key: 'j' },
   { id: 'gelgun', label: 'Gel gun', hint: 'Hold to lob globs of jelly at it · they sink in and build it up · Re-cube to shake it off', key: 'e' },
@@ -350,6 +353,22 @@ export class UI {
     this.eyeUndoBtn = eyeBtn('<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 7 4.5 11.5 9 16"/><path d="M5 11.5h9a5 5 0 0 1 0 10h-2"/></svg>', 'Undo', (t) => t?.undo());
     this.eyeClearBtn = eyeBtn('<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M5 7h14M9.5 7V4.5h5V7M7 7l1 13h8l1-13"/></svg>', 'Take its eyes off', (t) => t?.clear());
     root.appendChild(this.eyeRow);
+    // the cherry bombs planted, waiting: Boom sets them all off at once - up whatever's in hand (plant them, take
+    // the hand, throw the cube - Boom). Over the dock, as the tools' rows are
+    this.bombRow = document.createElement('div');
+    this.bombRow.className = 'powders bomb-row';
+    this.bombRow.hidden = true;
+    this.bombGo = document.createElement('button');
+    this.bombGo.className = 'bomb-go';
+    this.bombGo.innerHTML = `${BOOM_ICON}<span>Boom</span><b class="bomb-n">0</b>`;
+    this.bombGo.addEventListener('click', (e) => {
+      e.stopPropagation();
+      app.audio.init();
+      app.tools?.bomb?.detonate();
+    });
+    this.bombRow.appendChild(this.bombGo);
+    root.appendChild(this.bombRow);
+    this._bombs = 0;
     const chips = this.paletteEl.querySelector('.chips');
     for (const f of FLAVORS) {
       const b = document.createElement('button');
@@ -896,6 +915,11 @@ export class UI {
         if (!e.repeat) app.setSlowMo(true);
         return;
       }
+      // (Enter: the cherry bombs planted, all set off - Enter on a button is the button's)
+      if (e.key === 'Enter') {
+        if (!e.repeat && !e.target.closest?.('button, a, [role="button"], [role="radio"]')) app.tools.bomb?.detonate();
+        return;
+      }
       const d = TOOL_DEFS.find((t) => t.key === e.key);
       // (the sieve's key with it in hand: the next powder)
       if (d && d.id === 'flour' && app.tool === app.tools.flour) app.tools.flour.nextPowder();
@@ -1104,6 +1128,45 @@ export class UI {
       const on = b.dataset.powder === id;
       b.classList.toggle('on', on);
       b.setAttribute('aria-checked', on ? 'true' : 'false');
+    }
+  }
+
+  // (the cherry bombs waiting to be set off: Boom's row, how many - in bouncing, out once they're lit)
+  setBombs(n) {
+    const was = this._bombs;
+    this._bombs = n;
+    const el = this.bombRow;
+    if (n > 0) {
+      // (none left: the count it went with stays on it, going)
+      this.bombGo.querySelector('.bomb-n').textContent = n;
+      const what = `Set off ${n === 1 ? 'the cherry bomb' : `all ${n} cherry bombs at once`}`;
+      this.bombGo.title = `${what} (Enter)`;
+      this.bombGo.setAttribute('aria-label', what);
+      clearTimeout(this._bombT);
+      el.classList.remove('out', 'fired');
+      if (el.hidden) {
+        el.hidden = false;
+        el.classList.remove('in');
+        void el.offsetWidth;
+        el.classList.add('in');
+        document.body.classList.add('bombs-on');
+        this.pdock?.restack();
+      } else if (n > was) {
+        // (another planted: the count jumps)
+        const b = this.bombGo.querySelector('.bomb-n');
+        b.classList.remove('bump');
+        void b.offsetWidth;
+        b.classList.add('bump');
+      }
+    } else if (!el.hidden && !el.classList.contains('out') && !el.classList.contains('fired')) {
+      // (set off: the button goes down with them - pressed, then away)
+      el.classList.add(was > 0 && this.app.tools?.bomb?.lit >= 0 ? 'fired' : 'out');
+      this._bombT = setTimeout(() => {
+        el.hidden = true;
+        el.classList.remove('in', 'out', 'fired');
+        document.body.classList.remove('bombs-on');
+        this.pdock?.restack();
+      }, 340);
     }
   }
 
