@@ -18,6 +18,7 @@ import { PhoneDock, toolColor } from './dock.js';
 import { IdeasBox, IDEA_ICON } from './ideas.js';
 import { initMotion } from './motion.js';
 import { act } from './acts.js';
+import { typing } from './keys.js';
 
 // (the googly eyes' chips: a little eye of each kind, its size, one or two)
 const EYE_PUPIL = { classic: 4, big: 5.6, tiny: 2.3, lashes: 3.8, angry: 3.6, sleepy: 3.4 };
@@ -889,7 +890,7 @@ export class UI {
       if (e.code === 'Space') app.setSlowMo(false);
     });
     window.addEventListener('keydown', (e) => {
-      if (e.target instanceof HTMLInputElement) return;
+      if (typing(e)) return;
       if (e.code === 'Space') {
         e.preventDefault();
         if (!e.repeat) app.setSlowMo(true);
@@ -924,7 +925,7 @@ export class UI {
       this.places.toggle();
     });
     window.addEventListener('keydown', (e) => {
-      if (e.target instanceof HTMLInputElement || e.metaKey || e.ctrlKey || e.altKey) return;
+      if (typing(e) || e.metaKey || e.ctrlKey || e.altKey) return;
       if ((e.key === 'p' || e.key === 'P') && !e.repeat) this.places.toggle();
     });
     this.stackBtn.addEventListener('click', (e) => {
@@ -933,7 +934,7 @@ export class UI {
       this.stack.toggle();
     });
     window.addEventListener('keydown', (e) => {
-      if (e.target instanceof HTMLInputElement || e.metaKey || e.ctrlKey || e.altKey) return;
+      if (typing(e) || e.metaKey || e.ctrlKey || e.altKey) return;
       if ((e.key === 'k' || e.key === 'K') && !e.repeat && app.cubes.length > 1) this.stack.toggle();
     });
     // the ideas box: suggest, report a bug, dream up a tool - and what came of it (see ideas.js, tools/inbox). A wide

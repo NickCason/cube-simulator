@@ -11,6 +11,7 @@ import { cubeOfTheDay, dayKey } from '../cotd.js';
 import { cubePicture } from './sharecard.js';
 import { qrEncode, qrSVG } from './qr.js';
 import { FighterCard } from './fighter.js';
+import { typing } from './keys.js';
 import { resolveFlavor, layerBands, TEXTURES, RUBIK_COLORS, rubikStateOf, copyGlitterMix } from '../styles.js';
 
 const KEY = 'cube-sim-cubby';
@@ -410,7 +411,7 @@ export class Cubby {
         else if (!this.el.hidden) this.close();
         return;
       }
-      if (e.target instanceof HTMLInputElement || e.metaKey || e.ctrlKey || e.altKey) return;
+      if (typing(e) || e.metaKey || e.ctrlKey || e.altKey) return;
       if ((e.key === 'b' || e.key === 'B') && !e.repeat) {
         if (this.el.hidden) this.open();
         else this.close();

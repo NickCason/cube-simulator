@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { typing } from './ui/keys.js';
 
 // Tilt & shake: tip the phone and the table tips with it - the jelly leans,
 // and slides once the pull beats its grip; shake the phone and the table
@@ -25,7 +26,7 @@ export class Tilt {
     this._orient = (e) => this._onOrient(e);
     this._motion = (e) => this._onMotion(e);
     window.addEventListener('keydown', (e) => {
-      if (e.target instanceof HTMLInputElement) return;
+      if (typing(e)) return;
       if (e.key in this.keys) {
         this.keys[e.key] = 1;
         e.preventDefault();

@@ -14,6 +14,7 @@
 
 import { REST_STEP, TAG_FRESH } from '../sim/softbody.js';
 import { EYE_STYLES, EYE_SIZES, EYE_R_MIN, EYE_R_MAX, MAX_EYES, onSurface, mirrorEye, spread, copyEyes } from '../eyes.js';
+import { typing } from '../ui/keys.js';
 
 const SAY = { cut: 'Eyes only go on the outside', glob: 'Not on a glob', full: `${MAX_EYES} eyes is plenty`, overlap: 'There’s an eye there' };
 
@@ -443,7 +444,7 @@ export class EyesTool {
   }
 
   _onKey(e) {
-    if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+    if (typing(e)) return;
     if (e.key === 'Delete' || e.key === 'Backspace') {
       const p = this._picked();
       if (!p) return;
